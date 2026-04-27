@@ -757,8 +757,8 @@ function renderEvent(ev) {
         </div>
         ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}
         <div class="sp-event-meta">
-            ${ev.location  ? `<span class="sp-event-loc"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? `<span class="sp-event-npc"><i class="fa-solid fa-user-secret"></i> ${escapeHtml(ev.npcAction)}</span>` : ''}
+            ${ev.location  ? `<span class="sp-event-loc">地点：${escapeHtml(ev.location)}</span>` : ''}
+            ${ev.npcAction ? `<span class="sp-event-npc">NPC：${escapeHtml(ev.npcAction)}</span>` : ''}
         </div>
     </div>`;
 }
