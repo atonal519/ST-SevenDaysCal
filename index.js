@@ -1,5 +1,5 @@
 import { getContext } from '../../../extensions.js';
-import { generateQuietPrompt } from '../../../../script.js';
+import { generateQuietPrompt, eventSource, event_types } from '../../../../script.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
@@ -9,7 +9,21 @@ const API_KEY    = 'sp-api-cfg';
 const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
 const FAB_KEY     = 'sp-fab-show';
-const CACHE_KEY   = 'sp-cache';
+
+function getCacheKey() {
+    const chatId = getContext().chatId;
+    return chatId ? `sp-cache-${chatId}` : null;
+}
+
+function loadCachedForCurrentChat() {
+    const key = getCacheKey();
+    if (!key) return null;
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) return renderSchedule(saved.raw, saved.userName || '用户');
+    } catch { /* ignore corrupt cache */ }
+    return null;
+}
 
 let currentTheme   = localStorage.getItem(THEME_KEY) || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night');
 let cachedSchedule = null;
@@ -30,11 +44,14 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
-    // Restore cached schedule from previous session
-    try {
-        const saved = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-        if (saved?.raw) cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户');
-    } catch { /* ignore corrupt cache */ }
+    // Load cache whenever the active chat changes (including initial load)
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        cachedSchedule = loadCachedForCurrentChat();
+        if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
+            if (cachedSchedule) setBody(cachedSchedule);
+            else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>暂无日程，点击右下角生成</p></div>`);
+        }
+    });
     // Auto-follow system theme changes (only when user hasn't manually set a preference)
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
         if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? 'day' : 'night');
@@ -328,7 +345,8 @@ async function runGenerate() {
         const raw      = await generate(ctx, userName, charName);
         const html     = renderSchedule(raw, userName);
         cachedSchedule = html;
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ raw, userName, ts: Date.now() }));
+        const cacheKey = getCacheKey();
+        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName, ts: Date.now() }));
         isGenerating   = false;
         setExtBtnState('done');
 
