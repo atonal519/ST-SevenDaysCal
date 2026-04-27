@@ -511,6 +511,13 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* ─── Mobile: floating panel (same as desktop, touch-draggable) ──────────────── */
 @media (max-width: 640px) {
+    /* Mobile open animation — must include translateX(-50%) so fill-mode:both
+       doesn't clobber the centering transform when the animation freezes */
+    @keyframes sp-sheet-in-mobile {
+        from { transform: translateX(-50%) scale(0.92) translateY(10px); opacity: 0; }
+        to   { transform: translateX(-50%) scale(1)    translateY(0);    opacity: 1; }
+    }
+
     /* Root is a full-screen pass-through — sheet floats freely inside */
     .sp-root {
         position       : fixed;
@@ -528,17 +535,18 @@ select.sp-input { appearance: none; cursor: pointer; }
 
     /* Sheet floats centered, same rounding as desktop, touch-draggable */
     .sp-sheet {
-        position     : fixed;
-        top          : 70px;
-        left         : 50%;
-        right        : auto;
-        bottom       : auto;
-        transform    : translateX(-50%);
-        width        : min(340px, calc(100dvw - 20px));
-        max-width    : min(340px, calc(100dvw - 20px));
-        max-height   : calc(100dvh - 90px);
-        border-radius: 16px;
-        pointer-events: all;
+        position        : fixed;
+        top             : 70px;
+        left            : 50%;
+        right           : auto;
+        bottom          : auto;
+        transform       : translateX(-50%);
+        width           : min(340px, calc(100dvw - 20px));
+        max-width       : min(340px, calc(100dvw - 20px));
+        max-height      : calc(100dvh - 90px);
+        border-radius   : 16px;
+        pointer-events  : all;
+        animation-name  : sp-sheet-in-mobile;
     }
 
     .sp-topbar        { cursor: grab; }
