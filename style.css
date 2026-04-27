@@ -438,9 +438,14 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-toast-error { background: #4e2020; color: #ffb3b3; }
 
 /* ─── FAB ────────────────────────────────────────────────────────────────────── */
+/* Use top+dvh to work around html{-webkit-transform:translateZ(0)} on ST,
+   which makes html the containing block for fixed children and collapses its
+   height to 0 on mobile (body:fixed), causing bottom-anchored elements to
+   appear above the viewport. */
 #sp-fab {
     position: fixed;
-    bottom  : 80px;
+    top     : calc(100dvh - 80px - 44px);
+    bottom  : auto;
     right   : 16px;
     z-index : 2000000;
 }
@@ -503,7 +508,12 @@ select.sp-input { appearance: none; cursor: pointer; }
 @media (max-width: 640px) {
     .sp-root {
         position       : fixed;
-        inset          : 0;
+        top            : 0;
+        left           : 0;
+        right          : auto;
+        bottom         : auto;
+        width          : 100dvw;
+        height         : 100dvh;
         display        : flex;
         align-items    : flex-end;
         justify-content: center;
@@ -532,7 +542,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     .sp-resize-handle { display: none; }
 
     #sp-fab {
-        bottom: 100px;
-        right : 14px;
+        top  : calc(100dvh - 100px - 44px);
+        bottom: auto;
+        right: 14px;
     }
 }

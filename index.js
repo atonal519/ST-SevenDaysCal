@@ -7,8 +7,9 @@ const FAB_ID     = 'sp-fab';
 const THEME_KEY  = 'sp-theme';
 const API_KEY    = 'sp-api-cfg';
 const POS_KEY    = 'sp-pos';
-const SIZE_KEY   = 'sp-size';
-const FAB_KEY    = 'sp-fab-show';
+const SIZE_KEY    = 'sp-size';
+const FAB_KEY     = 'sp-fab-show';
+const CACHE_KEY   = 'sp-cache';
 
 let currentTheme   = localStorage.getItem(THEME_KEY) || 'night';
 let cachedSchedule = null;
@@ -27,6 +28,11 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
+    // Restore cached schedule from previous session
+    try {
+        const saved = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+        if (saved?.raw) cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户');
+    } catch { /* ignore corrupt cache */ }
 });
 
 // ─── Config helpers ───────────────────────────────────────────────────────────
@@ -84,7 +90,7 @@ function injectFab() {
     const mobile = isMobile();
     const posStyle = (!mobile && savedPos)
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
-        : `bottom:${mobile ? 100 : 80}px;right:${mobile ? 14 : 16}px;`;
+        : '';  // CSS handles default position via calc(100dvh - ...)
     const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() ? '' : 'display:none'}">
         <button class="sp-fab-btn sp-${currentTheme}" title="七日日程"
             style="width:44px;height:44px;border-radius:50%;background:#3a3648;color:#d0bcff;border:1.5px solid rgba(208,188,255,0.35);display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);transform:translateZ(0);clip:auto;">
@@ -98,12 +104,24 @@ function injectFab() {
     window.addEventListener('resize', () => {
         const nowMobile = isMobile();
         if (nowMobile && !wasMobile) {
-            // desktop → mobile: reset position to mobile defaults (keep position:fixed + z-index)
+            // desktop → mobile: clear all inline position so CSS (dvh-based) takes over
             const fab = document.getElementById(FAB_ID);
-            if (fab) { fab.style.left = ''; fab.style.top = ''; fab.style.right = '14px'; fab.style.bottom = '100px'; }
+            if (fab) { fab.style.left = ''; fab.style.top = ''; fab.style.right = ''; fab.style.bottom = ''; }
             const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
             if (sheet) { sheet.style.left = ''; sheet.style.top = ''; sheet.style.right = '';
                          sheet.style.width = ''; sheet.style.height = ''; sheet.style.maxHeight = ''; }
+        } else if (!nowMobile && wasMobile) {
+            // mobile → desktop: restore saved drag position if any
+            const fab = document.getElementById(FAB_ID);
+            if (fab) {
+                const sp = JSON.parse(localStorage.getItem('sp-fab-pos') || 'null');
+                if (sp) {
+                    fab.style.left   = Math.min(sp.left, window.innerWidth  - 60) + 'px';
+                    fab.style.top    = Math.min(sp.top,  window.innerHeight - 60) + 'px';
+                    fab.style.right  = 'auto';
+                    fab.style.bottom = 'auto';
+                }
+            }
         }
         wasMobile = nowMobile;
     });
@@ -290,6 +308,7 @@ async function runGenerate() {
         const raw      = await generate(ctx, userName, charName);
         const html     = renderSchedule(raw, userName);
         cachedSchedule = html;
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ raw, userName, ts: Date.now() }));
         isGenerating   = false;
         setExtBtnState('done');
 
