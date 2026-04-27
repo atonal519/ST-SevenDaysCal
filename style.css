@@ -73,6 +73,7 @@
     flex-shrink  : 0;
     cursor       : grab;
     user-select  : none;
+    touch-action : none;
 }
 .sp-topbar:active { cursor: grabbing; }
 
@@ -279,6 +280,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding       : 10px 0 14px;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
+    touch-action  : pan-y;
+    -webkit-overflow-scrolling: touch;
 }
 .sp-day-panel::-webkit-scrollbar       { width: 4px; }
 .sp-day-panel::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
@@ -537,7 +540,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     }
 
     .sp-topbar        { cursor: grab; }
-    .sp-resize-handle { display: none; }
+    /* Resize handle visible on mobile — touch-action:none so touch drag isn't intercepted */
+    .sp-resize-handle { display: flex; touch-action: none; }
 
     #sp-fab {
         top   : calc(100dvh - 100px - 44px);

@@ -18,6 +18,8 @@ let settingsOpen   = false;
 let dragState      = null;
 let resizeState    = null;
 let resizeRAF      = null;
+let fabDragged     = false;
+let fabDragState   = null;
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -130,40 +132,32 @@ function injectFab() {
         wasMobile = nowMobile;
     });
 
-    let fabDragged = false;
-    let fabDragState = null;
-
-    $(`#${FAB_ID}`).on('mousedown touchstart', function (e) {
+    $(`#${FAB_ID}`).on('mousedown', function (e) {
         fabDragged = false;
         const el   = document.getElementById(FAB_ID);
         const rect = el.getBoundingClientRect();
-        const cx   = e.touches ? e.touches[0].clientX : e.clientX;
-        const cy   = e.touches ? e.touches[0].clientY : e.clientY;
-        fabDragState = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
+        fabDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top };
         $(document)
-            .on('mousemove.fabdrag touchmove.fabdrag', function (ev) {
+            .on('mousemove.fabdrag', function (ev) {
                 if (!fabDragState) return;
-                const ex = ev.touches ? ev.touches[0].clientX : ev.clientX;
-                const ey = ev.touches ? ev.touches[0].clientY : ev.clientY;
-                if (Math.abs(ex - fabDragState.startX) > 5 || Math.abs(ey - fabDragState.startY) > 5) fabDragged = true;
+                if (Math.abs(ev.clientX - fabDragState.startX) > 5 || Math.abs(ev.clientY - fabDragState.startY) > 5) fabDragged = true;
                 if (!fabDragged) return;
-                ev.preventDefault();
                 const f = document.getElementById(FAB_ID);
-                f.style.left   = Math.max(0, Math.min(fabDragState.origLeft + ex - fabDragState.startX, window.innerWidth  - f.offsetWidth))  + 'px';
-                f.style.top    = Math.max(0, Math.min(fabDragState.origTop  + ey - fabDragState.startY, window.innerHeight - f.offsetHeight)) + 'px';
+                f.style.left   = Math.max(0, Math.min(fabDragState.origLeft + ev.clientX - fabDragState.startX, window.innerWidth  - f.offsetWidth))  + 'px';
+                f.style.top    = Math.max(0, Math.min(fabDragState.origTop  + ev.clientY - fabDragState.startY, window.innerHeight - f.offsetHeight)) + 'px';
                 f.style.right  = 'auto';
                 f.style.bottom = 'auto';
             })
-            .on('mouseup.fabdrag touchend.fabdrag', function () {
-                if (fabDragged) {
-                    const f = document.getElementById(FAB_ID);
-                    const r = f.getBoundingClientRect();
-                    localStorage.setItem('sp-fab-pos', JSON.stringify({ left: r.left, top: r.top }));
-                }
-                fabDragState = null;
-                $(document).off('mousemove.fabdrag touchmove.fabdrag mouseup.fabdrag touchend.fabdrag');
-            });
+            .on('mouseup.fabdrag', onFabDragEnd);
     });
+    document.getElementById(FAB_ID).addEventListener('touchstart', function (e) {
+        fabDragged = false;
+        const el   = document.getElementById(FAB_ID);
+        const rect = el.getBoundingClientRect();
+        fabDragState = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, origLeft: rect.left, origTop: rect.top };
+        document.addEventListener('touchmove', onFabTouchMove, { passive: false });
+        document.addEventListener('touchend', onFabDragEnd);
+    }, { passive: true });
 
     $(`#${FAB_ID} .sp-fab-btn`).on('click', function () {
         if (!fabDragged) {
@@ -172,7 +166,31 @@ function injectFab() {
     });
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// Named FAB touch handlers (need stable references for removeEventListener)
+function onFabTouchMove(ev) {
+    if (!fabDragState) return;
+    const ex = ev.touches[0].clientX;
+    const ey = ev.touches[0].clientY;
+    if (Math.abs(ex - fabDragState.startX) > 5 || Math.abs(ey - fabDragState.startY) > 5) fabDragged = true;
+    if (!fabDragged) return;
+    ev.preventDefault();
+    const f = document.getElementById(FAB_ID);
+    f.style.left   = Math.max(0, Math.min(fabDragState.origLeft + ex - fabDragState.startX, window.innerWidth  - f.offsetWidth))  + 'px';
+    f.style.top    = Math.max(0, Math.min(fabDragState.origTop  + ey - fabDragState.startY, window.innerHeight - f.offsetHeight)) + 'px';
+    f.style.right  = 'auto';
+    f.style.bottom = 'auto';
+}
+function onFabDragEnd() {
+    if (fabDragged) {
+        const f = document.getElementById(FAB_ID);
+        const r = f.getBoundingClientRect();
+        localStorage.setItem('sp-fab-pos', JSON.stringify({ left: r.left, top: r.top }));
+    }
+    fabDragState = null;
+    $(document).off('mousemove.fabdrag mouseup.fabdrag');
+    document.removeEventListener('touchmove', onFabTouchMove);
+    document.removeEventListener('touchend', onFabDragEnd);
+}
 
 function injectModal() {
     const cfg = loadCfg();
@@ -252,14 +270,13 @@ function injectModal() {
         $('.sp-days-track').css('transform', `translateX(-${idx * 100 / 7}%)`);
     });
 
-    // Drag
-    $('#sp-drag-handle')
-        .on('mousedown',  onDragStart)
-        .on('touchstart', onDragStart, { passive: false });
+    // Drag — touchstart must be non-passive to allow preventDefault
+    $('#sp-drag-handle').on('mousedown', onDragStart);
+    document.getElementById('sp-drag-handle').addEventListener('touchstart', onDragStart, { passive: false });
 
-    // Resize
-    $('#sp-resize-handle')
-        .on('mousedown', onResizeStart);
+    // Resize — show on mobile too, add touch support
+    $('#sp-resize-handle').on('mousedown', onResizeStart);
+    document.getElementById('sp-resize-handle').addEventListener('touchstart', onResizeStart, { passive: false });
 
     restorePositionAndSize();
 }
@@ -495,13 +512,16 @@ function onDragStart(e) {
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     dragState = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
-    $(document).on('mousemove.spdrag touchmove.spdrag', onDragMove)
-               .on('mouseup.spdrag  touchend.spdrag',   onDragEnd);
+    // Mouse via jQuery; touch via native (passive:false needed for preventDefault)
+    $(document).on('mousemove.spdrag', onDragMove).on('mouseup.spdrag', onDragEnd);
+    document.addEventListener('touchmove', onDragMove, { passive: false });
+    document.addEventListener('touchend',  onDragEnd);
     $('#sp-drag-handle').css('cursor', 'grabbing');
 }
 
 function onDragMove(e) {
     if (!dragState) return;
+    e.preventDefault();
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
@@ -518,35 +538,42 @@ function onDragEnd() {
     const rect  = sheet.getBoundingClientRect();
     localStorage.setItem(POS_KEY, JSON.stringify({ left: rect.left, top: rect.top }));
     dragState = null;
-    $(document).off('mousemove.spdrag touchmove.spdrag mouseup.spdrag touchend.spdrag');
+    $(document).off('mousemove.spdrag mouseup.spdrag');
+    document.removeEventListener('touchmove', onDragMove);
+    document.removeEventListener('touchend',  onDragEnd);
     $('#sp-drag-handle').css('cursor', 'grab');
 }
 
 // ─── Resize ───────────────────────────────────────────────────────────────────
 
 function onResizeStart(e) {
-    if (isMobile()) return;
     e.preventDefault();
     e.stopPropagation();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     sheet.style.willChange = 'width, height';
     document.body.style.userSelect = 'none';
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
     resizeState = {
-        startX: e.clientX, startY: e.clientY,
+        startX: cx, startY: cy,
         origW : sheet.offsetWidth, origH : sheet.offsetHeight,
     };
-    $(document).on('mousemove.spresize', onResizeMove)
-               .on('mouseup.spresize',   onResizeEnd);
+    $(document).on('mousemove.spresize', onResizeMove).on('mouseup.spresize', onResizeEnd);
+    document.addEventListener('touchmove', onResizeMove, { passive: false });
+    document.addEventListener('touchend',  onResizeEnd);
 }
 
 function onResizeMove(e) {
     if (!resizeState) return;
+    e.preventDefault();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
     if (resizeRAF) return;
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-        const w = Math.max(280, Math.min(700, resizeState.origW + e.clientX - resizeState.startX));
-        const h = Math.max(300, Math.min(window.innerHeight * 0.92, resizeState.origH + e.clientY - resizeState.startY));
+        const w = Math.max(280, Math.min(700, resizeState.origW + cx - resizeState.startX));
+        const h = Math.max(300, Math.min(window.innerHeight * 0.92, resizeState.origH + cy - resizeState.startY));
         sheet.style.width     = w + 'px';
         sheet.style.height    = h + 'px';
         sheet.style.maxHeight = h + 'px';
@@ -562,6 +589,8 @@ function onResizeEnd() {
     localStorage.setItem(SIZE_KEY, JSON.stringify({ width: sheet.offsetWidth, height: sheet.offsetHeight }));
     resizeState = null;
     $(document).off('mousemove.spresize mouseup.spresize');
+    document.removeEventListener('touchmove', onResizeMove);
+    document.removeEventListener('touchend',  onResizeEnd);
 }
 
 function restorePositionAndSize() {
