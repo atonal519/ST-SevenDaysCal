@@ -1,5 +1,5 @@
 import { getContext } from '../../../extensions.js';
-import { generateQuietPrompt, eventSource, event_types } from '../../../../script.js';
+import { generateQuietPrompt, eventSource, event_types, substituteParams } from '../../../../script.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
@@ -10,15 +10,17 @@ const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
 const FAB_KEY     = 'sp-fab-show';
 
-function getCacheKey() {
+function getCacheKey(view, charName) {
     const chatId = getContext().chatId;
     if (!chatId) return null;
-    if (currentView === 'char' && charViewName) return `sp-cache-${chatId}-char-${charViewName}`;
+    const v = view ?? currentView;
+    const c = charName ?? charViewName;
+    if (v === 'char' && c) return `sp-cache-${chatId}-char-${c}`;
     return `sp-cache-${chatId}-user`;
 }
 
-function loadCachedForCurrentChat() {
-    const key = getCacheKey();
+function loadCachedForCurrentChat(view, charName) {
+    const key = getCacheKey(view, charName);
     if (!key) return null;
     try {
         const saved = JSON.parse(localStorage.getItem(key) || 'null');
@@ -107,10 +109,11 @@ function setExtBtnState(state) {
     const $btn = $('#sp-open-btn');
     $btn.removeClass('sp-btn-generating sp-btn-done');
     if (state) $btn.addClass(`sp-btn-${state}`);
-    // Mirror to FAB
     const $fab = $(`#${FAB_ID} .sp-fab-btn`);
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
+    // Lock/unlock view toggle during generation
+    $('.sp-view-toggle').toggleClass('sp-locked', state === 'generating');
 }
 
 // ─── FAB ─────────────────────────────────────────────────────────────────────
@@ -285,12 +288,22 @@ function injectModal() {
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
     $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
+        if (isGenerating) return;
         const view = $(this).data('view');
-        if (view === currentView) return;
+        if (view === currentView && !(view === 'char' && !charViewName)) return;
         if (view === 'char') {
-            switchToCharView();
+            if (charViewName) {
+                // Already have a confirmed char — load directly, no picker
+                setView('char', charViewName);
+                if (cachedSchedule) setBody(cachedSchedule);
+                else showEmptyGenerate();
+            } else {
+                switchToCharView();
+            }
         } else {
             setView('user', null);
+            if (cachedSchedule) setBody(cachedSchedule);
+            else showEmptyGenerate();
         }
     });
 
@@ -325,11 +338,13 @@ function guessCharName(ctx) {
     const msgs = (ctx.chat || []).filter(m => !m.is_user).slice(-20);
     const counts = {};
     for (const m of msgs) {
-        // Match lines like "角色名：" or "角色名:" (Chinese RP attribution format)
-        const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n]{1,12})[：:]/gm)];
+        const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n*#]{1,12})[：:]/gm)];
         for (const match of matches) {
             const name = match[1].trim();
-            if (name) counts[name] = (counts[name] || 0) + 1;
+            // Skip names with markdown or template chars
+            if (name && !/[*#<>{}\[\]|\\]/.test(name)) {
+                counts[name] = (counts[name] || 0) + 1;
+            }
         }
     }
     const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
@@ -345,6 +360,8 @@ function setView(view, charName) {
 }
 
 function switchToCharView() {
+    currentView  = 'char';
+    charViewName = null;
     const ctx     = getContext();
     const guessed = guessCharName(ctx);
     setBody(`<div class="sp-char-picker">
@@ -359,8 +376,9 @@ function switchToCharView() {
     $('.sp-view-btn').removeClass('sp-view-active');
     $(`.sp-view-btn[data-view="char"]`).addClass('sp-view-active');
 
-    $('#sp-char-name-input').on('keydown', e => { if (e.key === 'Enter') confirmCharView(); });
-    $('#sp-char-name-confirm').on('click', confirmCharView);
+    // off() before on() to prevent duplicate bindings on repeated calls
+    $('#sp-char-name-input').off('keydown.charview').on('keydown.charview', e => { if (e.key === 'Enter') confirmCharView(); });
+    $('#sp-char-name-confirm').off('click.charview').on('click.charview', confirmCharView);
     setTimeout(() => { $('#sp-char-name-input').focus().select(); }, 50);
 }
 
@@ -371,7 +389,13 @@ function confirmCharView() {
     if (cachedSchedule) {
         setBody(cachedSchedule);
     } else {
-        triggerGenerate();
+        // Show loading immediately — don't rely on triggerGenerate to do it
+        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p></div>`);
+        if (!isGenerating) {
+            isGenerating = true;
+            setExtBtnState('generating');
+            runGenerate();
+        }
     }
 }
 
@@ -384,8 +408,16 @@ function openSchedule() {
     } else if (cachedSchedule) {
         setBody(cachedSchedule);
     } else {
-        triggerGenerate();
+        showEmptyGenerate();
     }
+}
+
+function showEmptyGenerate() {
+    setBody(`<div class="sp-empty">
+        <i class="fa-regular fa-calendar"></i>
+        <button class="sp-gen-btn" id="sp-gen-now">生成日程</button>
+    </div>`);
+    $('#sp-gen-now').on('click', triggerGenerate);
 }
 
 function showPanel() {
@@ -407,39 +439,60 @@ function setBody(html) { $('#sp-body').html(html); }
 
 function triggerGenerate() {
     if (isGenerating) return;
+    // Clear current view's cache so stale data doesn't linger
+    const key = getCacheKey();
+    if (key) localStorage.removeItem(key);
+    cachedSchedule = null;
     isGenerating = true;
     setExtBtnState('generating');
-    showPanel();
+    if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
     setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p></div>`);
     runGenerate();
 }
 
 async function runGenerate() {
+    // Snapshot view state at generation start — user may switch views while awaiting
+    const viewSnap = currentView;
+    const charSnap = charViewName;
     try {
         const ctx      = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
-        const subject  = currentView === 'char' ? charName : userName;
-        const raw      = await generate(ctx, userName, charName, currentView);
+        const userName = substituteParams(ctx.name1 || '{{user}}') || '用户';
+        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const subject  = viewSnap === 'char' ? charName : userName;
+        const raw      = await generate(ctx, userName, charName, viewSnap);
         const html     = renderSchedule(raw, subject);
-        cachedSchedule = html;
-        const cacheKey = getCacheKey();
+
+        const cacheKey = getCacheKey(viewSnap, charSnap);
         if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName: subject, ts: Date.now() }));
-        isGenerating   = false;
+        isGenerating = false;
         setExtBtnState('done');
 
-        if ($(`#${MODAL_ID}`).is(':visible')) {
-            setBody(html);
+        // Always preserve charViewName so TA tab can load directly next time
+        if (viewSnap === 'char') charViewName = charSnap;
+
+        const stillOnView = currentView === viewSnap && charViewName === charSnap;
+        if (stillOnView) {
+            cachedSchedule = html;
+            if ($(`#${MODAL_ID}`).is(':visible')) setBody(html);
+            else showToast('日程已生成，点击查看', () => { showPanel(); setBody(html); });
         } else {
-            showToast('日程已生成，点击查看', () => { showPanel(); setBody(cachedSchedule); });
+            showToast('日程已生成，点击查看', () => {
+                setView(viewSnap, charSnap);
+                cachedSchedule = html;
+                showPanel();
+                setBody(html);
+            });
         }
         setTimeout(() => setExtBtnState(null), 6000);
     } catch (err) {
         isGenerating = false;
         setExtBtnState(null);
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
-        if ($(`#${MODAL_ID}`).is(':visible')) { setBody(errHtml); }
-        else { showToast('日程生成失败，请重试', null, true); }
+        if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap && charViewName === charSnap) {
+            setBody(errHtml);
+        } else {
+            showToast('日程生成失败，请重试', null, true);
+        }
     }
 }
 
@@ -470,7 +523,10 @@ function buildMessages(ctx, prompt, userName, charName) {
         char.personality ? `【性格】${char.personality}` : '',
         char.scenario    ? `【场景】${char.scenario}`    : '',
     ].filter(Boolean).join('\n\n');
-    const history = (ctx.chat ?? []).slice(-40).map(m => ({ role: m.is_user ? 'user' : 'assistant', content: m.mes ?? '' }));
+    const history = (ctx.chat ?? []).slice(-40).map(m => ({
+        role   : m.is_user ? 'user' : 'assistant',
+        content: substituteParams(m.mes ?? ''),
+    }));
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
 }
 
@@ -478,6 +534,7 @@ function buildPrompt(userName, charName, perspective = 'user') {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;
     return `请暂停角色扮演，以写作助手身份完成以下任务（内容仅作参考，不出现在正文）：
+【重要】无论剧情使用何种语言，所有输出内容必须使用中文（人名、地名可保留原文）。
 
 根据以上剧情背景与世界设定，为 ${subject} 规划接下来七天的日程安排。
 
