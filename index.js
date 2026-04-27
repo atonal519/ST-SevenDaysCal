@@ -427,7 +427,10 @@ function showEmptyGenerate() {
 }
 
 function showPanel() {
-    const $root = $(`#${MODAL_ID}`);
+    const $root  = $(`#${MODAL_ID}`);
+    const sheet  = document.querySelector(`#${MODAL_ID} .sp-sheet`);
+    // Clear inline animation so the CSS open-animation replays on every show
+    if (sheet) sheet.style.animation = '';
     $root.stop(true).css({ display: 'block', opacity: 0 })
          .animate({ opacity: 1 }, 180);
     setTimeout(positionPanel, 0);
@@ -660,15 +663,24 @@ function onDragStart(e) {
     if ($(e.target).closest('.sp-icon-btn, .sp-view-btn').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-    const rect  = sheet.getBoundingClientRect();
-    if (sheet.style.transform !== 'none' && (sheet.style.left === '' || sheet.style.left === '50%')) {
+
+    // Snap from CSS-transform centering to explicit px coords for drag math.
+    // MUST cancel the CSS animation first — animation fill-mode has higher cascade
+    // priority than inline styles, so transform:'none' alone won't override it.
+    if (sheet.style.transform !== 'none') {
+        sheet.style.animation = 'none';           // kill fill-mode translateX(-50%)
+        const snap = sheet.getBoundingClientRect(); // read with CSS transform still active
         sheet.style.transform = 'none';
-        sheet.style.left = rect.left + 'px';
-        sheet.style.top  = rect.top  + 'px';
+        sheet.style.right     = 'auto';
+        sheet.style.left      = snap.left + 'px';
+        sheet.style.top       = snap.top  + 'px';
     }
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    dragState = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
+
+    const cx   = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy   = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = sheet.getBoundingClientRect(); // read AFTER snap
+    dragState  = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
+
     $(document).on('mousemove.spdrag', onDragMove).on('mouseup.spdrag', onDragEnd);
     document.addEventListener('touchmove', onDragMove, { passive: false });
     document.addEventListener('touchend',  onDragEnd);
