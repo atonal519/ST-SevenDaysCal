@@ -144,7 +144,9 @@ function injectFab() {
     });
 
     $(`#${FAB_ID} .sp-fab-btn`).on('click', function () {
-        if (!fabDragged) openSchedule();
+        if (!fabDragged) {
+            $(`#${MODAL_ID}`).is(':visible') ? closePanel() : openSchedule();
+        }
     });
 }
 
