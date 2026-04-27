@@ -375,6 +375,7 @@ function buildPrompt(userName, charName) {
 【输出格式（严格遵守，只输出以下结构）】
 <!-- 日程思考：（根据当前剧情思考安排，100字以上） -->
 <calendar_widget>
+StartDate: YYYY-MM-DD （若剧情中能明确或合理推断故事当前日期则填写，格式如 2024-03-15；若完全无法确定则省略此行）
 Day: 1
 Event: type|title|description|time|location|npc_action
 Event: type|title|description|time|location|npc_action
@@ -612,11 +613,10 @@ const TYPE_META = {
 };
 
 function renderSchedule(raw, userName) {
-    const days = parseCalendar(raw);
+    const { days, startDate } = parseCalendar(raw);
     if (days.length === 0) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
 
     const WEEKDAYS = ['周日','周一','周二','周三','周四','周五','周六'];
-    const today    = new Date();
 
     const header = `<div class="sp-schedule-header">
         <span class="sp-user-chip">${escapeHtml(userName)}</span>
@@ -624,10 +624,12 @@ function renderSchedule(raw, userName) {
     </div>`;
 
     const tabs = days.map((_, i) => {
-        const d = new Date(today); d.setDate(today.getDate() + i);
+        const wdLabel = startDate
+            ? (() => { const d = new Date(startDate); d.setDate(startDate.getDate() + i); return WEEKDAYS[d.getDay()]; })()
+            : '';
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
             <span class="sp-tab-num">${i + 1}</span>
-            <span class="sp-tab-wd">${WEEKDAYS[d.getDay()]}</span>
+            ${wdLabel ? `<span class="sp-tab-wd">${wdLabel}</span>` : ''}
         </button>`;
     }).join('');
 
@@ -646,6 +648,15 @@ function renderSchedule(raw, userName) {
 function parseCalendar(raw) {
     const m = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const content = m ? m[1] : raw;
+
+    // Extract optional StartDate
+    const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
+    let startDate = null;
+    if (dateMatch) {
+        const d = new Date(dateMatch[1]);
+        if (!isNaN(d)) startDate = d;
+    }
+
     const days = []; let cur = null;
     for (const line of content.split('\n')) {
         const t = line.trim();
@@ -664,7 +675,7 @@ function parseCalendar(raw) {
         }
     }
     if (cur) days.push(cur);
-    return days.filter(d => d.events.length > 0);
+    return { days: days.filter(d => d.events.length > 0), startDate };
 }
 
 function renderEvent(ev) {
