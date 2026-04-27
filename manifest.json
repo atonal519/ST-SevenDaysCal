@@ -1,0 +1,11 @@
+{
+    "display_name": "七日日程规划",
+    "name": "schedule-planner",
+    "version": "1.0.0",
+    "description": "根据当前对话上下文与世界设定，生成接下来七天的日程安排。",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "",
+    "homePage": "",
+    "requires": []
+}
