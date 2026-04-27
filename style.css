@@ -559,3 +559,77 @@ select.sp-input { appearance: none; cursor: pointer; }
         right : 14px;
     }
 }
+
+/* ─── View toggle (我 / TA) ──────────────────────────────────────────────────── */
+.sp-view-toggle {
+    display      : flex;
+    gap          : 2px;
+    background   : var(--sp-surface);
+    border-radius: 8px;
+    padding      : 2px;
+    margin       : 0 8px;
+    flex-shrink  : 0;
+    transition   : opacity 0.15s;
+}
+.sp-view-toggle.sp-locked {
+    pointer-events: none;
+    opacity       : 0.4;
+}
+.sp-view-btn {
+    padding      : 3px 10px;
+    border        : none;
+    background    : transparent;
+    color         : var(--sp-subtle);
+    border-radius : 6px;
+    cursor        : pointer;
+    font-size     : 0.78rem;
+    font-weight   : 500;
+    transition    : background 0.12s, color 0.12s;
+    white-space   : nowrap;
+}
+.sp-view-btn:hover   { background: var(--sp-surface-high); color: var(--sp-on-surface); }
+.sp-view-active      { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; }
+
+/* ─── Char picker ────────────────────────────────────────────────────────────── */
+.sp-char-picker {
+    display       : flex;
+    flex-direction: column;
+    gap           : 12px;
+    padding       : 28px 20px 20px;
+    flex          : 1;
+}
+.sp-char-picker-hint {
+    font-size : 0.85rem;
+    color     : var(--sp-on-surface);
+    margin    : 0;
+    display   : flex;
+    align-items: center;
+    gap       : 7px;
+}
+.sp-char-picker-hint i { color: var(--sp-primary); }
+.sp-char-picker-row {
+    display: flex;
+    gap    : 8px;
+}
+.sp-char-picker-row .sp-input { flex: 1; }
+.sp-char-picker-sub {
+    font-size: 0.75rem;
+    color    : var(--sp-subtle);
+    margin   : -4px 0 0;
+}
+
+/* ─── Empty-state generate button ───────────────────────────────────────────── */
+.sp-gen-btn {
+    margin-top   : 4px;
+    padding      : 8px 24px;
+    background   : var(--sp-primary);
+    color        : var(--sp-on-primary);
+    border       : none;
+    border-radius: 99px;
+    cursor       : pointer;
+    font-size    : 0.88rem;
+    font-weight  : 500;
+    transition   : opacity 0.15s, transform 0.1s;
+}
+.sp-gen-btn:hover  { opacity: 0.88; }
+.sp-gen-btn:active { transform: scale(0.96); }

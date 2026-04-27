@@ -1,5 +1,5 @@
 import { getContext } from '../../../extensions.js';
-import { generateQuietPrompt, eventSource, event_types } from '../../../../script.js';
+import { generateQuietPrompt, eventSource, event_types, substituteParams } from '../../../../script.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
@@ -10,13 +10,18 @@ const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
 const FAB_KEY     = 'sp-fab-show';
 
-function getCacheKey() {
+// view: 'user' | 'char'   charName: confirmed char name
+function getCacheKey(view, charName) {
     const chatId = getContext().chatId;
-    return chatId ? `sp-cache-${chatId}` : null;
+    if (!chatId) return null;
+    const v = view ?? currentView;
+    const c = charName ?? charViewName;
+    if (v === 'char' && c) return `sp-cache-${chatId}-char-${c}`;
+    return `sp-cache-${chatId}-user`;
 }
 
-function loadCachedForCurrentChat() {
-    const key = getCacheKey();
+function loadCachedForCurrentChat(view, charName) {
+    const key = getCacheKey(view, charName);
     if (!key) return null;
     try {
         const saved = JSON.parse(localStorage.getItem(key) || 'null');
@@ -34,6 +39,8 @@ let resizeState    = null;
 let resizeRAF      = null;
 let fabDragged     = false;
 let fabDragState   = null;
+let currentView    = 'user';  // 'user' | 'char'
+let charViewName   = null;    // confirmed char name; preserved when switching to user view
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -44,15 +51,18 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
-    // Load cache whenever the active chat changes (including initial load)
+    // Reset view state and reload cache on chat switch
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        currentView  = 'user';
+        charViewName = null;
+        $('.sp-view-btn').removeClass('sp-view-active');
+        $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
             if (cachedSchedule) setBody(cachedSchedule);
             else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>暂无日程，点击右下角生成</p></div>`);
         }
     });
-    // Auto-follow system theme changes (only when user hasn't manually set a preference)
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
         if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? 'day' : 'night');
     });
@@ -99,21 +109,21 @@ function setExtBtnState(state) {
     const $btn = $('#sp-open-btn');
     $btn.removeClass('sp-btn-generating sp-btn-done');
     if (state) $btn.addClass(`sp-btn-${state}`);
-    // Mirror to FAB
     const $fab = $(`#${FAB_ID} .sp-fab-btn`);
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
+    // Lock view toggle while generating to prevent mid-flight view switches
+    $('.sp-view-toggle').toggleClass('sp-locked', state === 'generating');
 }
 
 // ─── FAB ─────────────────────────────────────────────────────────────────────
 
 function injectFab() {
     const savedPos = JSON.parse(localStorage.getItem('sp-fab-pos') || 'null');
-    // Mobile: always use CSS defaults; desktop: restore dragged position if available
     const mobile = isMobile();
     const posStyle = (!mobile && savedPos)
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
-        : '';  // CSS handles default position via calc(100dvh - ...)
+        : '';
     const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() ? '' : 'display:none'}">
         <button class="sp-fab-btn sp-${currentTheme}" title="七日日程"
             style="width:44px;height:44px;border-radius:50%;background:#3a3648;color:#d0bcff;border:1.5px solid rgba(208,188,255,0.35);display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);transform:translateZ(0);clip:auto;">
@@ -122,19 +132,16 @@ function injectFab() {
     </div>`;
     document.documentElement.insertAdjacentHTML('beforeend', html);
 
-    // On viewport resize, clear desktop inline styles when entering mobile
     let wasMobile = isMobile();
     window.addEventListener('resize', () => {
         const nowMobile = isMobile();
         if (nowMobile && !wasMobile) {
-            // desktop → mobile: clear all inline position so CSS (dvh-based + centering) takes over
             const fab = document.getElementById(FAB_ID);
             if (fab) { fab.style.left = ''; fab.style.top = ''; fab.style.right = ''; fab.style.bottom = ''; }
             const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
             if (sheet) { sheet.style.left = ''; sheet.style.top = ''; sheet.style.right = '';
                          sheet.style.transform = ''; sheet.style.width = ''; sheet.style.height = ''; sheet.style.maxHeight = ''; }
         } else if (!nowMobile && wasMobile) {
-            // mobile → desktop: restore saved drag position if any
             const fab = document.getElementById(FAB_ID);
             if (fab) {
                 const sp = JSON.parse(localStorage.getItem('sp-fab-pos') || 'null');
@@ -183,7 +190,6 @@ function injectFab() {
     });
 }
 
-// Named FAB touch handlers (need stable references for removeEventListener)
 function onFabTouchMove(ev) {
     if (!fabDragState) return;
     const ex = ev.touches[0].clientX;
@@ -218,6 +224,10 @@ function injectModal() {
             <div class="sp-sheet">
                 <div class="sp-topbar" id="sp-drag-handle">
                     <span class="sp-topbar-title">七日日程</span>
+                    <div class="sp-view-toggle">
+                        <button class="sp-view-btn sp-view-active" data-view="user">我</button>
+                        <button class="sp-view-btn" data-view="char">TA</button>
+                    </div>
                     <div class="sp-topbar-actions">
                         <button class="sp-icon-btn sp-settings-btn" title="设置"><i class="fa-solid fa-gear"></i></button>
                         <button class="sp-icon-btn sp-theme-btn"    title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
@@ -269,9 +279,30 @@ function injectModal() {
 
     $(`#${MODAL_ID} .sp-close-btn`).on('click',    closePanel);
     $(`#${MODAL_ID} .sp-theme-btn`).on('click',    toggleTheme);
-    $(`#${MODAL_ID} .sp-regen-btn`).on('click',    triggerGenerate);
+    $(`#${MODAL_ID} .sp-regen-btn`).on('click',    onRegenClick);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
+
+    // View toggle: 我 / TA
+    $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
+        if (isGenerating) return;
+        const view = $(this).data('view');
+        if (view === currentView) return;
+        if (view === 'char') {
+            if (charViewName) {
+                // Already confirmed a char — load directly without picker
+                setView('char', charViewName);
+                if (cachedSchedule) setBody(cachedSchedule);
+                else showEmptyGenerate();
+            } else {
+                switchToCharView();
+            }
+        } else {
+            setView('user');
+            if (cachedSchedule) setBody(cachedSchedule);
+            else showEmptyGenerate();
+        }
+    });
 
     $('#sp-cfg-save').on('click',      saveSettings);
     $('#sp-key-toggle').on('click',    toggleKeyVisibility);
@@ -287,15 +318,91 @@ function injectModal() {
         $('.sp-days-track').css('transform', `translateX(-${idx * 100 / 7}%)`);
     });
 
-    // Drag — touchstart must be non-passive to allow preventDefault
     $('#sp-drag-handle').on('mousedown', onDragStart);
     document.getElementById('sp-drag-handle').addEventListener('touchstart', onDragStart, { passive: false });
-
-    // Resize — show on mobile too, add touch support
     $('#sp-resize-handle').on('mousedown', onResizeStart);
     document.getElementById('sp-resize-handle').addEventListener('touchstart', onResizeStart, { passive: false });
 
     restorePositionAndSize();
+}
+
+// ─── View (我 / TA) ───────────────────────────────────────────────────────────
+
+function onRegenClick() {
+    if (isGenerating) return;
+    if (currentView === 'char') {
+        // Clear char cache and re-show picker so user can pick a different char.
+        // Stash the name first — switchToCharView reads charViewName for pre-fill.
+        const key = getCacheKey();
+        if (key) localStorage.removeItem(key);
+        cachedSchedule = null;
+        switchToCharView();   // pre-fills with current charViewName (or guesses)
+        charViewName   = null; // clear after picker is rendered
+    } else {
+        triggerGenerate();
+    }
+}
+
+function guessCharName(ctx) {
+    const msgs = (ctx.chat || []).filter(m => !m.is_user).slice(-20);
+    const counts = {};
+    for (const m of msgs) {
+        const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n*#]{1,12})[：:]/gm)];
+        for (const match of matches) {
+            const name = match[1].trim();
+            if (name && !/[*#<>{}\[\]|\\]/.test(name)) counts[name] = (counts[name] || 0) + 1;
+        }
+    }
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] || ctx.name2 || '';
+}
+
+function setView(view, charName) {
+    currentView = view;
+    // Only update charViewName when entering char view — preserve it on user view
+    // so switching back to TA reloads the same character without showing the picker
+    if (view === 'char') charViewName = charName || null;
+    $('.sp-view-btn').removeClass('sp-view-active');
+    $(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
+    cachedSchedule = loadCachedForCurrentChat();
+}
+
+function switchToCharView() {
+    currentView = 'char';
+    const ctx     = getContext();
+    // Prefer previously confirmed name; fall back to guessing from chat messages
+    const guessed = charViewName || guessCharName(ctx);
+    setBody(`<div class="sp-char-picker">
+        <p class="sp-char-picker-hint"><i class="fa-solid fa-user-pen"></i> 输入要查看日程的角色名</p>
+        <div class="sp-char-picker-row">
+            <input id="sp-char-name-input" class="sp-input" type="text"
+                   placeholder="角色名" value="${escapeAttr(guessed)}">
+            <button id="sp-char-name-confirm" class="sp-save-btn">确认</button>
+        </div>
+        ${guessed ? `<p class="sp-char-picker-sub">根据近期对话预填，可直接修改</p>` : ''}
+    </div>`);
+    $('.sp-view-btn').removeClass('sp-view-active');
+    $(`.sp-view-btn[data-view="char"]`).addClass('sp-view-active');
+    // .off().on() prevents duplicate bindings on repeated calls
+    $('#sp-char-name-input').off('keydown.charview').on('keydown.charview', e => { if (e.key === 'Enter') confirmCharView(); });
+    $('#sp-char-name-confirm').off('click.charview').on('click.charview', confirmCharView);
+    setTimeout(() => { $('#sp-char-name-input').focus().select(); }, 50);
+}
+
+function confirmCharView() {
+    const name = $('#sp-char-name-input').val().trim();
+    if (!name) { $('#sp-char-name-input').focus(); return; }
+    setView('char', name);
+    if (cachedSchedule) {
+        setBody(cachedSchedule);
+    } else {
+        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p></div>`);
+        if (!isGenerating) {
+            isGenerating = true;
+            setExtBtnState('generating');
+            runGenerate();
+        }
+    }
 }
 
 // ─── Open / close ─────────────────────────────────────────────────────────────
@@ -307,8 +414,16 @@ function openSchedule() {
     } else if (cachedSchedule) {
         setBody(cachedSchedule);
     } else {
-        triggerGenerate();
+        showEmptyGenerate();
     }
+}
+
+function showEmptyGenerate() {
+    setBody(`<div class="sp-empty">
+        <i class="fa-regular fa-calendar"></i>
+        <button class="sp-gen-btn" id="sp-gen-now">生成日程</button>
+    </div>`);
+    $('#sp-gen-now').on('click', triggerGenerate);
 }
 
 function showPanel() {
@@ -330,48 +445,68 @@ function setBody(html) { $('#sp-body').html(html); }
 
 function triggerGenerate() {
     if (isGenerating) return;
+    const key = getCacheKey();
+    if (key) localStorage.removeItem(key);
+    cachedSchedule = null;
     isGenerating = true;
     setExtBtnState('generating');
-    showPanel();
+    if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
     setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p></div>`);
     runGenerate();
 }
 
 async function runGenerate() {
+    // Snapshot view state — user may switch views while the request is in flight
+    const viewSnap = currentView;
+    const charSnap = charViewName;
     try {
         const ctx      = getContext();
+        // ctx.name1 is the user's display name set in ST persona; no template processing needed
         const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const raw      = await generate(ctx, userName, charName);
-        const html     = renderSchedule(raw, userName);
-        cachedSchedule = html;
-        const cacheKey = getCacheKey();
-        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName, ts: Date.now() }));
-        isGenerating   = false;
+        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const subject  = viewSnap === 'char' ? charName : userName;
+        const raw      = await generate(ctx, userName, charName, viewSnap);
+        const html     = renderSchedule(raw, subject);
+
+        const cacheKey = getCacheKey(viewSnap, charSnap);
+        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName: subject, ts: Date.now() }));
+        isGenerating = false;
         setExtBtnState('done');
 
-        if ($(`#${MODAL_ID}`).is(':visible')) {
-            setBody(html);
+        // Restore snapshot so cache key stays consistent
+        if (viewSnap === 'char') charViewName = charSnap;
+
+        const stillOnView = currentView === viewSnap &&
+            (viewSnap !== 'char' || charViewName === charSnap);
+        if (stillOnView) {
+            cachedSchedule = html;
+            if ($(`#${MODAL_ID}`).is(':visible')) setBody(html);
+            else showToast('日程已生成，点击查看', () => { showPanel(); setBody(html); });
         } else {
-            showToast('日程已生成，点击查看', () => { showPanel(); setBody(cachedSchedule); });
+            showToast('日程已生成，点击查看', () => {
+                setView(viewSnap, charSnap);
+                cachedSchedule = html;
+                showPanel();
+                setBody(html);
+            });
         }
         setTimeout(() => setExtBtnState(null), 6000);
     } catch (err) {
         isGenerating = false;
         setExtBtnState(null);
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
-        if ($(`#${MODAL_ID}`).is(':visible')) { setBody(errHtml); }
-        else { showToast('日程生成失败，请重试', null, true); }
+        if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap) setBody(errHtml);
+        else showToast('日程生成失败，请重试', null, true);
     }
 }
 
-async function generate(ctx, userName, charName) {
+async function generate(ctx, userName, charName, perspective = 'user') {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) {
         if (!settingsOpen) toggleSettings();
         throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
     }
-    const prompt = buildPrompt(userName, charName);
+    const prompt = buildPrompt(userName, charName, perspective);
     return callCustomApi(ctx, prompt, cfg, userName, charName);
 }
 
@@ -392,14 +527,21 @@ function buildMessages(ctx, prompt, userName, charName) {
         char.personality ? `【性格】${char.personality}` : '',
         char.scenario    ? `【场景】${char.scenario}`    : '',
     ].filter(Boolean).join('\n\n');
-    const history = (ctx.chat ?? []).slice(-40).map(m => ({ role: m.is_user ? 'user' : 'assistant', content: m.mes ?? '' }));
+    // substituteParams resolves {{user}}/{{char}} templates in chat messages
+    const history = (ctx.chat ?? []).slice(-40).map(m => ({
+        role   : m.is_user ? 'user' : 'assistant',
+        content: substituteParams(m.mes ?? ''),
+    }));
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
 }
 
-function buildPrompt(userName, charName) {
+function buildPrompt(userName, charName, perspective = 'user') {
+    const subject   = perspective === 'char' ? charName : userName;
+    const companion = perspective === 'char' ? userName : charName;
     return `请暂停角色扮演，以写作助手身份完成以下任务（内容仅作参考，不出现在正文）：
+【重要】无论剧情使用何种语言，所有输出内容必须使用中文（人名、地名可保留原文）。
 
-根据以上剧情背景与世界设定，为 ${userName} 规划接下来七天的日程安排。
+根据以上剧情背景与世界设定，为 ${subject} 规划接下来七天的日程安排。
 
 【具体规则】
 1. 时间跨度：必须生成包含今日起连续未来 7 天的日程，禁止遗漏任何一天。
@@ -408,8 +550,8 @@ function buildPrompt(userName, charName) {
 4. 字段规范（每行一个 Event）：
    格式：Event: type|title|description|time|location|npc_action
    - type：world / major / user / character
-   - description：${userName} 视角，生活化口吻，30字以上
-   - npc_action：${charName} 同期行动，30字以上
+   - description：${subject} 视角，生活化口吻，30字以上
+   - npc_action：${companion} 同期行动，30字以上
 
 【输出格式（严格遵守，只输出以下结构）】
 <!-- 日程思考：（根据当前剧情思考安排，100字以上） -->
@@ -491,7 +633,6 @@ function saveSettings() {
     saveCfg({ url: $('#sp-cfg-url').val().trim().replace(/\/$/, ''), key, model: $('#sp-cfg-model').val().trim() });
     $k.data('real', key).val(maskKey(key)).attr('type', 'password');
     const $m = $('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
-    // Reload notice
     const hasApi = !!(loadCfg().url && loadCfg().key);
     $('.sp-api-notice')
         .removeClass('sp-notice-ok sp-notice-warn')
@@ -499,7 +640,6 @@ function saveSettings() {
         .html(`<i class="fa-solid ${hasApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
             ${hasApi ? '已配置独立 API，后台生成不影响聊天'
                      : '未配置独立 API：生成期间将<b>占用聊天通道</b>'}`);
-    // Auto-close settings panel after save
     setTimeout(() => { if (settingsOpen) toggleSettings(); }, 400);
 }
 
@@ -517,11 +657,10 @@ function toggleTheme() {
 // ─── Drag ─────────────────────────────────────────────────────────────────────
 
 function onDragStart(e) {
-    if ($(e.target).closest('.sp-icon-btn').length) return;
+    if ($(e.target).closest('.sp-icon-btn, .sp-view-btn').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     const rect  = sheet.getBoundingClientRect();
-    // If CSS centering via transform is active, snap to explicit coords first
     if (sheet.style.transform !== 'none' && (sheet.style.left === '' || sheet.style.left === '50%')) {
         sheet.style.transform = 'none';
         sheet.style.left = rect.left + 'px';
@@ -530,7 +669,6 @@ function onDragStart(e) {
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     dragState = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
-    // Mouse via jQuery; touch via native (passive:false needed for preventDefault)
     $(document).on('mousemove.spdrag', onDragMove).on('mouseup.spdrag', onDragEnd);
     document.addEventListener('touchmove', onDragMove, { passive: false });
     document.addEventListener('touchend',  onDragEnd);
@@ -718,7 +856,6 @@ function parseCalendar(raw) {
     const m = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const content = m ? m[1] : raw;
 
-    // Extract optional StartDate
     const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
     let startDate = null;
     if (dateMatch) {
