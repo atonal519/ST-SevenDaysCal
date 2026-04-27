@@ -104,12 +104,12 @@ function injectFab() {
     window.addEventListener('resize', () => {
         const nowMobile = isMobile();
         if (nowMobile && !wasMobile) {
-            // desktop → mobile: clear all inline position so CSS (dvh-based) takes over
+            // desktop → mobile: clear all inline position so CSS (dvh-based + centering) takes over
             const fab = document.getElementById(FAB_ID);
             if (fab) { fab.style.left = ''; fab.style.top = ''; fab.style.right = ''; fab.style.bottom = ''; }
             const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
             if (sheet) { sheet.style.left = ''; sheet.style.top = ''; sheet.style.right = '';
-                         sheet.style.width = ''; sheet.style.height = ''; sheet.style.maxHeight = ''; }
+                         sheet.style.transform = ''; sheet.style.width = ''; sheet.style.height = ''; sheet.style.maxHeight = ''; }
         } else if (!nowMobile && wasMobile) {
             // mobile → desktop: restore saved drag position if any
             const fab = document.getElementById(FAB_ID);
@@ -274,11 +274,10 @@ function openSchedule() {
 }
 
 function showPanel() {
-    // jQuery fadeIn forces display:block — bypass it to preserve mobile display:flex
     const $root = $(`#${MODAL_ID}`);
-    $root.stop(true).css({ display: isMobile() ? 'flex' : 'block', opacity: 0 })
+    $root.stop(true).css({ display: 'block', opacity: 0 })
          .animate({ opacity: 1 }, 180);
-    if (!isMobile()) setTimeout(positionPanel, 0);
+    setTimeout(positionPanel, 0);
 }
 
 function closePanel() {
@@ -474,11 +473,16 @@ function toggleTheme() {
 // ─── Drag ─────────────────────────────────────────────────────────────────────
 
 function onDragStart(e) {
-    if (isMobile()) return;
     if ($(e.target).closest('.sp-icon-btn').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     const rect  = sheet.getBoundingClientRect();
+    // If CSS centering via transform is active, snap to explicit coords first
+    if (sheet.style.transform !== 'none' && (sheet.style.left === '' || sheet.style.left === '50%')) {
+        sheet.style.transform = 'none';
+        sheet.style.left = rect.left + 'px';
+        sheet.style.top  = rect.top  + 'px';
+    }
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     dragState = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };

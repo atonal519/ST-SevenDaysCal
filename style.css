@@ -504,8 +504,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     color: var(--sp-primary, #d0bcff) !important;
 }
 
-/* ─── Mobile: full-screen modal ──────────────────────────────────────────────── */
+/* ─── Mobile: floating panel (same as desktop, touch-draggable) ──────────────── */
 @media (max-width: 640px) {
+    /* Root is a full-screen pass-through — sheet floats freely inside */
     .sp-root {
         position       : fixed;
         top            : 0;
@@ -514,36 +515,33 @@ select.sp-input { appearance: none; cursor: pointer; }
         bottom         : auto;
         width          : 100dvw;
         height         : 100dvh;
-        display        : flex;
-        align-items    : flex-end;
-        justify-content: center;
+        pointer-events : none;
     }
 
-    .sp-backdrop {
-        display        : block;
-        position       : absolute;
-        inset          : 0;
-        background     : rgba(0,0,0,0.55);
-        backdrop-filter: blur(4px);
-    }
+    /* No dimmed backdrop — tapping outside passes through to ST */
+    .sp-backdrop { display: none; }
 
+    /* Sheet floats centered, same rounding as desktop, touch-draggable */
     .sp-sheet {
-        position     : relative;
-        top          : auto;
+        position     : fixed;
+        top          : 70px;
+        left         : 50%;
         right        : auto;
-        left         : auto;
-        width        : 100%;
-        max-width    : 100%;
-        max-height   : 88vh;
-        border-radius: 20px 20px 0 0;
+        bottom       : auto;
+        transform    : translateX(-50%);
+        width        : min(340px, calc(100dvw - 20px));
+        max-width    : min(340px, calc(100dvw - 20px));
+        max-height   : calc(100dvh - 90px);
+        border-radius: 16px;
+        pointer-events: all;
     }
 
-    .sp-topbar       { cursor: default; }
+    .sp-topbar        { cursor: grab; }
     .sp-resize-handle { display: none; }
 
     #sp-fab {
-        top  : calc(100dvh - 100px - 44px);
+        top   : calc(100dvh - 100px - 44px);
         bottom: auto;
-        right: 14px;
+        right : 14px;
     }
 }
