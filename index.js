@@ -536,7 +536,9 @@ function onDragEnd() {
     if (!dragState) return;
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     const rect  = sheet.getBoundingClientRect();
-    localStorage.setItem(POS_KEY, JSON.stringify({ left: rect.left, top: rect.top }));
+    if (!isMobile()) {
+        localStorage.setItem(POS_KEY, JSON.stringify({ left: rect.left, top: rect.top }));
+    }
     dragState = null;
     $(document).off('mousemove.spdrag mouseup.spdrag');
     document.removeEventListener('touchmove', onDragMove);
@@ -615,6 +617,13 @@ function restorePositionAndSize() {
 function positionPanel() {
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     if (!sheet) return;
+    if (isMobile()) {
+        sheet.style.left      = '';
+        sheet.style.top       = '';
+        sheet.style.right     = '';
+        sheet.style.transform = '';
+        return;
+    }
     const pos = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
     if (pos) {
         sheet.style.left  = Math.min(pos.left, window.innerWidth  - sheet.offsetWidth)  + 'px';
@@ -661,11 +670,16 @@ function renderSchedule(raw, userName) {
     </div>`;
 
     const tabs = days.map((_, i) => {
-        const wdLabel = startDate
-            ? (() => { const d = new Date(startDate); d.setDate(startDate.getDate() + i); return WEEKDAYS[d.getDay()]; })()
-            : '';
+        let numLabel = String(i + 1);
+        let wdLabel = '';
+        if (startDate) {
+            const d = new Date(startDate);
+            d.setDate(d.getDate() + i);
+            wdLabel  = WEEKDAYS[d.getDay()];
+            numLabel = `${d.getMonth() + 1}/${d.getDate()}`;
+        }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
-            <span class="sp-tab-num">${i + 1}</span>
+            <span class="sp-tab-num">${numLabel}</span>
             ${wdLabel ? `<span class="sp-tab-wd">${wdLabel}</span>` : ''}
         </button>`;
     }).join('');

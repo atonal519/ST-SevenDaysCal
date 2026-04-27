@@ -258,18 +258,20 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-direction : column;
     align-items    : center;
     gap            : 2px;
-    padding        : 6px 2px;
+    padding        : 5px 1px;
     background     : transparent;
     border         : 1px solid var(--sp-divider);
     border-radius  : 8px;
     cursor         : pointer;
     color          : var(--sp-subtle);
     transition     : background 0.12s, color 0.12s, border-color 0.12s;
+    min-width      : 0;
+    overflow       : hidden;
 }
 .sp-tab:hover      { background: var(--sp-surface-high); color: var(--sp-on-surface); }
 .sp-tab-active     { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; border-color: var(--sp-primary) !important; }
-.sp-tab-num        { font-family: 'Roboto Mono', monospace; font-size: 0.85rem; font-weight: 600; line-height: 1; }
-.sp-tab-wd         { font-size: 0.62rem; opacity: 0.8; line-height: 1; }
+.sp-tab-num        { font-family: 'Roboto Mono', monospace; font-size: 0.65rem; font-weight: 500; line-height: 1; white-space: nowrap; }
+.sp-tab-wd         { font-size: 0.60rem; opacity: 0.8; line-height: 1; }
 
 /* ─── Days sliding track ─────────────────────────────────────────────────────── */
 .sp-days-wrap  { flex: 1; overflow: hidden; min-height: 0; }
