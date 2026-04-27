@@ -11,7 +11,7 @@ const SIZE_KEY    = 'sp-size';
 const FAB_KEY     = 'sp-fab-show';
 const CACHE_KEY   = 'sp-cache';
 
-let currentTheme   = localStorage.getItem(THEME_KEY) || 'night';
+let currentTheme   = localStorage.getItem(THEME_KEY) || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night');
 let cachedSchedule = null;
 let isGenerating   = false;
 let settingsOpen   = false;
@@ -33,6 +33,10 @@ jQuery(async () => {
         const saved = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
         if (saved?.raw) cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户');
     } catch { /* ignore corrupt cache */ }
+    // Auto-follow system theme changes (only when user hasn't manually set a preference)
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+        if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? 'day' : 'night');
+    });
 });
 
 // ─── Config helpers ───────────────────────────────────────────────────────────
@@ -464,11 +468,15 @@ function saveSettings() {
     setTimeout(() => { if (settingsOpen) toggleSettings(); }, 400);
 }
 
+function applyTheme(theme) {
+    currentTheme = theme;
+    $(`#${MODAL_ID}`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
+    $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
+}
+
 function toggleTheme() {
-    currentTheme = currentTheme === 'night' ? 'day' : 'night';
+    applyTheme(currentTheme === 'night' ? 'day' : 'night');
     localStorage.setItem(THEME_KEY, currentTheme);
-    $(`#${MODAL_ID}`).removeClass('sp-night sp-day').addClass(`sp-${currentTheme}`);
-    $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${currentTheme}`);
 }
 
 // ─── Drag ─────────────────────────────────────────────────────────────────────
