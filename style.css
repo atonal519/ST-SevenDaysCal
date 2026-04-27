@@ -86,86 +86,6 @@
 }
 .sp-topbar-actions { display: flex; gap: 2px; }
 
-/* ─── View toggle (我 / TA) ──────────────────────────────────────────────────── */
-.sp-view-toggle {
-    display    : flex;
-    background : var(--sp-surface);
-    border-radius: 6px;
-    padding    : 2px;
-    gap        : 2px;
-    margin     : 0 8px;
-}
-.sp-view-btn {
-    padding      : 3px 11px;
-    background   : transparent;
-    border       : none;
-    border-radius: 4px;
-    cursor       : pointer;
-    font-size    : 0.78rem;
-    font-weight  : 500;
-    color        : var(--sp-subtle);
-    transition   : background 0.12s, color 0.12s;
-    line-height  : 1.4;
-}
-.sp-view-btn:hover   { color: var(--sp-on-surface); }
-.sp-view-active      { background: var(--sp-primary) !important; color: var(--sp-on-primary) !important; }
-.sp-view-toggle.sp-locked { pointer-events: none; opacity: 0.4; }
-
-/* ─── Char picker ────────────────────────────────────────────────────────────── */
-.sp-char-picker {
-    display        : flex;
-    flex-direction : column;
-    align-items    : center;
-    justify-content: center;
-    gap            : 10px;
-    padding        : 40px 24px;
-    flex           : 1;
-}
-.sp-char-picker-hint {
-    font-size  : 0.88rem;
-    color      : var(--sp-on-surface);
-    margin     : 0;
-    display    : flex;
-    align-items: center;
-    gap        : 6px;
-}
-.sp-char-picker-row {
-    display: flex;
-    gap    : 8px;
-    width  : 100%;
-}
-.sp-char-picker-row .sp-input { flex: 1; }
-.sp-char-picker-sub { font-size: 0.73rem; color: var(--sp-subtle); margin: 0; }
-
-/* ─── View picker (首次打开选视角) ──────────────────────────────────────────── */
-.sp-view-picker {
-    display        : flex;
-    flex-direction : column;
-    align-items    : center;
-    justify-content: center;
-    gap            : 16px;
-    padding        : 40px 24px;
-    flex           : 1;
-}
-.sp-view-picker-hint { font-size: 0.85rem; color: var(--sp-subtle); margin: 0; }
-.sp-view-picker-btns { display: flex; gap: 12px; }
-.sp-view-pick-btn {
-    display        : flex;
-    flex-direction : column;
-    align-items    : center;
-    gap            : 8px;
-    padding        : 18px 28px;
-    background     : var(--sp-surface);
-    border         : 1px solid var(--sp-divider);
-    border-radius  : 12px;
-    cursor         : pointer;
-    color          : var(--sp-subtle);
-    font-size      : 0.85rem;
-    transition     : background 0.15s, color 0.15s, border-color 0.15s;
-}
-.sp-view-pick-btn i    { font-size: 1.4rem; }
-.sp-view-pick-btn:hover { background: var(--sp-surface-high); color: var(--sp-on-surface); border-color: var(--sp-primary); }
-
 .sp-icon-btn {
     width          : 32px;
     height         : 32px;
@@ -452,19 +372,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-empty i { font-size: 2rem; opacity: 0.35; }
 .sp-empty p { font-size: 0.85rem; margin: 0; }
-.sp-gen-btn {
-    margin-top   : 4px;
-    padding      : 8px 28px;
-    background   : var(--sp-primary);
-    color        : var(--sp-on-primary);
-    border       : none;
-    border-radius: 99px;
-    cursor       : pointer;
-    font-size    : 0.88rem;
-    font-weight  : 500;
-    transition   : opacity 0.15s;
-}
-.sp-gen-btn:hover { opacity: 0.88; }
 
 .sp-raw {
     color      : var(--sp-on-surface);
