@@ -86,11 +86,12 @@ function injectFab() {
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
         : `bottom:${mobile ? 100 : 80}px;right:${mobile ? 14 : 16}px;`;
     const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() ? '' : 'display:none'}">
-        <button class="sp-fab-btn sp-${currentTheme}" title="七日日程">
+        <button class="sp-fab-btn sp-${currentTheme}" title="七日日程"
+            style="width:44px;height:44px;border-radius:50%;background:#3a3648;color:#d0bcff;border:1.5px solid rgba(208,188,255,0.35);display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);transform:translateZ(0);clip:auto;">
             <i class="fa-solid fa-calendar-days"></i>
         </button>
     </div>`;
-    $('body').append(html);
+    document.documentElement.insertAdjacentHTML('beforeend', html);
 
     // On viewport resize, clear desktop inline styles when entering mobile
     let wasMobile = isMobile();
@@ -203,7 +204,7 @@ function injectModal() {
                 </div>
             </div>
         </div>`;
-    $('body').append(html);
+    document.documentElement.insertAdjacentHTML('beforeend', html);
 
     if (cfg.key) $('#sp-cfg-key').val(maskKey(cfg.key)).data('real', cfg.key);
 
@@ -562,7 +563,7 @@ function positionPanel() {
 // ─── Toast (top) ──────────────────────────────────────────────────────────────
 
 function injectToastContainer() {
-    if (!$('#sp-toast-wrap').length) $('body').append('<div id="sp-toast-wrap"></div>');
+    if (!$('#sp-toast-wrap').length) document.documentElement.insertAdjacentHTML('beforeend', '<div id="sp-toast-wrap"></div>');
 }
 
 function showToast(msg, onClick, isError = false) {

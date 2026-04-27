@@ -458,16 +458,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition    : transform 0.15s, box-shadow 0.15s, color 0.15s;
 }
 .sp-fab-btn.sp-night {
-    background: rgba(208,188,255,0.12);
-    border    : 1.5px solid rgba(208,188,255,0.3);
+    background: #3a3648;
+    border    : 1.5px solid rgba(208,188,255,0.4);
     color     : #d0bcff;
-    backdrop-filter: blur(8px);
 }
 .sp-fab-btn.sp-day {
-    background: rgba(103,80,164,0.12);
-    border    : 1.5px solid rgba(103,80,164,0.3);
-    color     : #6750a4;
-    backdrop-filter: blur(8px);
+    background: #6750a4;
+    border    : none;
+    color     : #ffffff;
 }
 .sp-fab-btn:hover {
     transform : scale(1.1);
