@@ -12,7 +12,9 @@ const FAB_KEY     = 'sp-fab-show';
 
 function getCacheKey() {
     const chatId = getContext().chatId;
-    return chatId ? `sp-cache-${chatId}` : null;
+    if (!chatId) return null;
+    if (currentView === 'char' && charViewName) return `sp-cache-${chatId}-char-${charViewName}`;
+    return `sp-cache-${chatId}-user`;
 }
 
 function loadCachedForCurrentChat() {
@@ -34,6 +36,8 @@ let resizeState    = null;
 let resizeRAF      = null;
 let fabDragged     = false;
 let fabDragState   = null;
+let currentView    = 'user';  // 'user' | 'char'
+let charViewName   = null;    // confirmed char name for TA view
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -46,6 +50,10 @@ jQuery(async () => {
     injectToastContainer();
     // Load cache whenever the active chat changes (including initial load)
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        currentView    = 'user';
+        charViewName   = null;
+        $('.sp-view-btn').removeClass('sp-view-active');
+        $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
             if (cachedSchedule) setBody(cachedSchedule);
@@ -218,6 +226,10 @@ function injectModal() {
             <div class="sp-sheet">
                 <div class="sp-topbar" id="sp-drag-handle">
                     <span class="sp-topbar-title">七日日程</span>
+                    <div class="sp-view-toggle">
+                        <button class="sp-view-btn sp-view-active" data-view="user">我</button>
+                        <button class="sp-view-btn" data-view="char">TA</button>
+                    </div>
                     <div class="sp-topbar-actions">
                         <button class="sp-icon-btn sp-settings-btn" title="设置"><i class="fa-solid fa-gear"></i></button>
                         <button class="sp-icon-btn sp-theme-btn"    title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
@@ -272,6 +284,15 @@ function injectModal() {
     $(`#${MODAL_ID} .sp-regen-btn`).on('click',    triggerGenerate);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
+    $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
+        const view = $(this).data('view');
+        if (view === currentView) return;
+        if (view === 'char') {
+            switchToCharView();
+        } else {
+            setView('user', null);
+        }
+    });
 
     $('#sp-cfg-save').on('click',      saveSettings);
     $('#sp-key-toggle').on('click',    toggleKeyVisibility);
@@ -296,6 +317,62 @@ function injectModal() {
     document.getElementById('sp-resize-handle').addEventListener('touchstart', onResizeStart, { passive: false });
 
     restorePositionAndSize();
+}
+
+// ─── View (user / char) ───────────────────────────────────────────────────────
+
+function guessCharName(ctx) {
+    const msgs = (ctx.chat || []).filter(m => !m.is_user).slice(-20);
+    const counts = {};
+    for (const m of msgs) {
+        // Match lines like "角色名：" or "角色名:" (Chinese RP attribution format)
+        const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n]{1,12})[：:]/gm)];
+        for (const match of matches) {
+            const name = match[1].trim();
+            if (name) counts[name] = (counts[name] || 0) + 1;
+        }
+    }
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] || ctx.name2 || '';
+}
+
+function setView(view, charName) {
+    currentView  = view;
+    charViewName = charName || null;
+    $('.sp-view-btn').removeClass('sp-view-active');
+    $(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
+    cachedSchedule = loadCachedForCurrentChat();
+}
+
+function switchToCharView() {
+    const ctx     = getContext();
+    const guessed = guessCharName(ctx);
+    setBody(`<div class="sp-char-picker">
+        <p class="sp-char-picker-hint"><i class="fa-solid fa-user-pen"></i> 输入要查看日程的角色名</p>
+        <div class="sp-char-picker-row">
+            <input id="sp-char-name-input" class="sp-input" type="text"
+                   placeholder="角色名" value="${escapeAttr(guessed)}">
+            <button id="sp-char-name-confirm" class="sp-save-btn">确认</button>
+        </div>
+        ${guessed ? `<p class="sp-char-picker-sub">根据近期对话预填，可直接修改</p>` : ''}
+    </div>`);
+    $('.sp-view-btn').removeClass('sp-view-active');
+    $(`.sp-view-btn[data-view="char"]`).addClass('sp-view-active');
+
+    $('#sp-char-name-input').on('keydown', e => { if (e.key === 'Enter') confirmCharView(); });
+    $('#sp-char-name-confirm').on('click', confirmCharView);
+    setTimeout(() => { $('#sp-char-name-input').focus().select(); }, 50);
+}
+
+function confirmCharView() {
+    const name = $('#sp-char-name-input').val().trim();
+    if (!name) { $('#sp-char-name-input').focus(); return; }
+    setView('char', name);
+    if (cachedSchedule) {
+        setBody(cachedSchedule);
+    } else {
+        triggerGenerate();
+    }
 }
 
 // ─── Open / close ─────────────────────────────────────────────────────────────
@@ -341,12 +418,13 @@ async function runGenerate() {
     try {
         const ctx      = getContext();
         const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const raw      = await generate(ctx, userName, charName);
-        const html     = renderSchedule(raw, userName);
+        const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const subject  = currentView === 'char' ? charName : userName;
+        const raw      = await generate(ctx, userName, charName, currentView);
+        const html     = renderSchedule(raw, subject);
         cachedSchedule = html;
         const cacheKey = getCacheKey();
-        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName, ts: Date.now() }));
+        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, userName: subject, ts: Date.now() }));
         isGenerating   = false;
         setExtBtnState('done');
 
@@ -365,13 +443,13 @@ async function runGenerate() {
     }
 }
 
-async function generate(ctx, userName, charName) {
+async function generate(ctx, userName, charName, perspective = 'user') {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) {
         if (!settingsOpen) toggleSettings();
         throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
     }
-    const prompt = buildPrompt(userName, charName);
+    const prompt = buildPrompt(userName, charName, perspective);
     return callCustomApi(ctx, prompt, cfg, userName, charName);
 }
 
@@ -396,10 +474,12 @@ function buildMessages(ctx, prompt, userName, charName) {
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
 }
 
-function buildPrompt(userName, charName) {
+function buildPrompt(userName, charName, perspective = 'user') {
+    const subject   = perspective === 'char' ? charName : userName;
+    const companion = perspective === 'char' ? userName : charName;
     return `请暂停角色扮演，以写作助手身份完成以下任务（内容仅作参考，不出现在正文）：
 
-根据以上剧情背景与世界设定，为 ${userName} 规划接下来七天的日程安排。
+根据以上剧情背景与世界设定，为 ${subject} 规划接下来七天的日程安排。
 
 【具体规则】
 1. 时间跨度：必须生成包含今日起连续未来 7 天的日程，禁止遗漏任何一天。
@@ -408,8 +488,8 @@ function buildPrompt(userName, charName) {
 4. 字段规范（每行一个 Event）：
    格式：Event: type|title|description|time|location|npc_action
    - type：world / major / user / character
-   - description：${userName} 视角，生活化口吻，30字以上
-   - npc_action：${charName} 同期行动，30字以上
+   - description：${subject} 视角，生活化口吻，30字以上
+   - npc_action：${companion} 同期行动，30字以上
 
 【输出格式（严格遵守，只输出以下结构）】
 <!-- 日程思考：（根据当前剧情思考安排，100字以上） -->
@@ -517,7 +597,7 @@ function toggleTheme() {
 // ─── Drag ─────────────────────────────────────────────────────────────────────
 
 function onDragStart(e) {
-    if ($(e.target).closest('.sp-icon-btn').length) return;
+    if ($(e.target).closest('.sp-icon-btn, .sp-view-btn').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     const rect  = sheet.getBoundingClientRect();
