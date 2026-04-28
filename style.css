@@ -327,34 +327,39 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap        : 3px;
     font-size  : 0.68rem;
     font-weight: 600;
-    padding    : 2px 6px;
-    border-radius: 99px;
     flex-shrink: 0;
 }
 .sp-type-world     { border-left: 3px solid #4fc3f7; }
 .sp-type-major     { border-left: 3px solid #ffb74d; }
 .sp-type-character { border-left: 3px solid #f48fb1; }
-.sp-type-world     .sp-type-badge { background: rgba(79,195,247,0.15);  color: #4fc3f7; }
-.sp-type-major     .sp-type-badge { background: rgba(255,183,77,0.15);  color: #ffb74d; }
-.sp-type-character .sp-type-badge { background: rgba(244,143,177,0.15); color: #f48fb1; }
+.sp-type-world     .sp-type-badge { color: #4fc3f7; }
+.sp-type-major     .sp-type-badge { color: #ffb74d; }
+.sp-type-character .sp-type-badge { color: #f48fb1; }
 
 .sp-event-title { font-size: 0.88rem; font-weight: 500; color: var(--sp-on-surface); flex: 1; }
 .sp-event-time  { font-family: 'Roboto Mono', monospace; font-size: 0.73rem; color: var(--sp-subtle); flex-shrink: 0; }
 .sp-event-desc  { font-size: 0.82rem; color: var(--sp-on-surface); opacity: 0.8; line-height: 1.55; margin: 3px 0 5px; }
-.sp-event-meta  { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.sp-event-loc,
-.sp-event-npc   {
+.sp-event-meta  { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.sp-event-loc   {
     display      : inline-flex;
     align-items  : center;
-    gap          : 4px;
-    font-size    : 0.72rem;
+    gap          : 3px;
+    font-size    : 0.70rem;
     color        : var(--sp-subtle);
     background   : var(--sp-hover-bg);
     border-radius: 99px;
-    padding      : 2px 8px;
+    padding      : 1px 7px;
     line-height  : 1.4;
 }
-.sp-event-npc   { font-style: italic; }
+.sp-event-npc   {
+    display    : inline-flex;
+    align-items: center;
+    gap        : 4px;
+    font-size  : 0.72rem;
+    color      : var(--sp-subtle);
+    line-height: 1.4;
+    font-style : italic;
+}
 
 /* ─── States ─────────────────────────────────────────────────────────────────── */
 .sp-loading {

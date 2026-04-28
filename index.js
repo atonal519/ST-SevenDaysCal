@@ -1396,7 +1396,7 @@ function renderEvent(ev) {
         ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}
         <div class="sp-event-meta">
             ${ev.location  ? `<span class="sp-event-loc"><i class="fa-solid fa-location-dot"></i>${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? `<span class="sp-event-npc"><i class="fa-solid fa-user-group"></i>${escapeHtml(ev.npcAction)}</span>` : ''}
+            ${ev.npcAction ? `<span class="sp-event-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>` : ''}
         </div>
     </div>`;
 }
