@@ -849,6 +849,7 @@ function buildOutlinePrompt(userName, charName, perspective = 'user') {
 【字段说明】
 Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: 这一幕实际发生了什么
+Subtext: 这一幕里某人没有说出口的那句话，或某个下意识的动作所隐含的情绪
 Think: 创作思考
 
 - 推演时间：相对时间，如"数日后""某个深夜""不知何时"
@@ -856,6 +857,7 @@ Think: 创作思考
 - 所属故事线：主线 / 情感线 / 双线交叉
 - 结果：这个节点的结局或影响，一句话
 - Scene：100字以上，写清楚发生了什么、谁做了什么、说了什么或没说什么
+- Subtext：一句话，具体到某个人、某个瞬间，是潜台词而非总结
 - Think：200-300字，必须覆盖：① 如何体现情感萌点/剧情模式 ② ${subject} 此刻的心理状态 ③ 对主线和情感线各自的推进作用 ④ 在螺旋进退中处于哪个位置
 
 【输出格式（严格遵守，只输出以下结构，禁止省略 outline_widget 标签）】
@@ -863,15 +865,19 @@ Think: 创作思考
 <outline_widget>
 Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: 场景内容…
+Subtext: 没说出口的话或隐含动作…
 Think: 思考内容…
 Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: 场景内容…
+Subtext: 没说出口的话或隐含动作…
 Think: 思考内容…
 Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: 场景内容…
+Subtext: 没说出口的话或隐含动作…
 Think: 思考内容…
 Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: 场景内容…
+Subtext: 没说出口的话或隐含动作…
 Think: 思考内容…
 （继续，每个弧线阶段1个节点，共8个，质量优先）
 </outline_widget>`;}
@@ -895,10 +901,13 @@ function parseOutline(raw) {
                 line   : (parts[3] || '').trim(),
                 outcome: (parts[4] || '').trim(),
                 scene  : '',
+                subtext: '',
                 think  : '',
             };
         } else if (/^Scene\s*:/i.test(t) && cur) {
             cur.scene = t.replace(/^Scene\s*:\s*/i, '').trim();
+        } else if (/^Subtext\s*:/i.test(t) && cur) {
+            cur.subtext = t.replace(/^Subtext\s*:\s*/i, '').trim();
         } else if (/^Think\s*:/i.test(t) && cur) {
             cur.think = t.replace(/^Think\s*:\s*/i, '').trim();
         }
@@ -927,6 +936,7 @@ function renderOutline(raw) {
             <div class="sp-beat-title">${escapeHtml(b.title)}</div>
             ${b.outcome ? `<div class="sp-beat-outcome">${escapeHtml(cleanText(b.outcome))}</div>` : ''}
             ${b.scene   ? `<div class="sp-beat-scene">${escapeHtml(cleanText(b.scene))}</div>` : ''}
+            ${b.subtext ? `<div class="sp-beat-subtext">"${escapeHtml(cleanText(b.subtext))}"</div>` : ''}
             ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(cleanText(b.think))}</p></details>` : ''}
         </div>`;
     }).join('');

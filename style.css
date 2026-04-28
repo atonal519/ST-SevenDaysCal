@@ -727,6 +727,15 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-left  : 2px solid var(--sp-primary);
     opacity      : 0.9;
 }
+.sp-beat-subtext {
+    font-size   : 0.80rem;
+    font-style  : italic;
+    color       : var(--sp-subtle);
+    margin      : 5px 0 4px;
+    padding-left: 10px;
+    border-left : 2px solid var(--sp-divider);
+    line-height : 1.5;
+}
 .sp-beat-think          { margin-top: 4px; }
 .sp-beat-think summary  {
     cursor     : pointer;
