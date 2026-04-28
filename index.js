@@ -448,17 +448,23 @@ function onRegenClick() {
 }
 
 function guessCharName(ctx) {
+    // Priority 1: char card name
+    if (ctx.name2) return ctx.name2;
+    // Priority 2: most frequent "Name:" pattern in recent AI messages
+    const NOISE = new Set(['series','chapter','note','summary','part','vol','act','scene',
+                           'title','author','narrator','system','user','assistant','ai']);
     const msgs = (ctx.chat || []).filter(m => !m.is_user).slice(-20);
     const counts = {};
     for (const m of msgs) {
         const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n*#]{1,12})[：:]/gm)];
         for (const match of matches) {
             const name = match[1].trim();
-            if (name && !/[*#<>{}\[\]|\\]/.test(name)) counts[name] = (counts[name] || 0) + 1;
+            if (name && !/[*#<>{}\[\]|\\]/.test(name) && !NOISE.has(name.toLowerCase()))
+                counts[name] = (counts[name] || 0) + 1;
         }
     }
     const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    return sorted[0]?.[0] || ctx.name2 || '';
+    return sorted[0]?.[0] || '';
 }
 
 function setView(view, charName) {
