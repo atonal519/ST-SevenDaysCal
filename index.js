@@ -39,8 +39,16 @@ let resizeState    = null;
 let resizeRAF      = null;
 let fabDragged     = false;
 let fabDragState   = null;
-let currentView    = 'user';  // 'user' | 'char'
-let charViewName   = null;    // confirmed char name; preserved when switching to user view
+let currentView        = 'user';  // 'user' | 'char'
+let charViewName       = null;    // confirmed char name; preserved when switching to user view
+let outlineMode         = false;
+let isGeneratingOutline = false;
+let cachedOutline       = null;
+let outlineChatHistory  = [];
+let isOutlineChatting   = false;
+let isFullscreen        = false;
+const _injectTexts      = {};
+let   _injectIdSeq      = 0;
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -55,10 +63,17 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         currentView  = 'user';
         charViewName = null;
+        outlineMode  = false;
+        cachedOutline = null;
+        outlineChatHistory = [];
         $('.sp-view-btn').removeClass('sp-view-active');
         $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
+            $('#sp-outline-wrap').hide();
+            $('#sp-body').show();
+            $(`#${MODAL_ID} .sp-outline-btn`).removeClass('sp-btn-active');
+            $('#sp-chat-msgs').empty();
             if (cachedSchedule) setBody(cachedSchedule);
             else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>暂无日程，点击右下角生成</p></div>`);
         }
@@ -227,8 +242,10 @@ function injectModal() {
                     <div class="sp-view-toggle">
                         <button class="sp-view-btn sp-view-active" data-view="user">我</button>
                         <button class="sp-view-btn" data-view="char">TA</button>
+                        <button class="sp-view-btn" data-view="outline">大纲</button>
                     </div>
                     <div class="sp-topbar-actions">
+                        <button class="sp-icon-btn sp-maximize-btn" title="全屏"><i class="fa-solid fa-expand"></i></button>
                         <button class="sp-icon-btn sp-settings-btn" title="设置"><i class="fa-solid fa-gear"></i></button>
                         <button class="sp-icon-btn sp-theme-btn"    title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
                         <button class="sp-icon-btn sp-regen-btn"    title="重新生成"><i class="fa-solid fa-rotate-right"></i></button>
@@ -268,6 +285,22 @@ function injectModal() {
                     <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>点击右上角刷新按钮生成日程</p></div>
                 </div>
 
+                <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
+                    <div class="sp-outline-beats" id="sp-outline-beats">
+                        <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>点击右上角生成按钮生成大纲</p></div>
+                    </div>
+                    <div class="sp-outline-divider" id="sp-outline-divider">
+                        <i class="fa-solid fa-grip-lines"></i>
+                    </div>
+                    <div class="sp-outline-chat" id="sp-outline-chat">
+                        <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
+                        <div class="sp-chat-input-row">
+                            <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
+                            <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="sp-resize-handle" id="sp-resize-handle">
                     <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
                 </div>
@@ -280,17 +313,51 @@ function injectModal() {
     $(`#${MODAL_ID} .sp-close-btn`).on('click',    closePanel);
     $(`#${MODAL_ID} .sp-theme-btn`).on('click',    toggleTheme);
     $(`#${MODAL_ID} .sp-regen-btn`).on('click',    onRegenClick);
+    $(`#${MODAL_ID} .sp-maximize-btn`).on('click', toggleFullscreen);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
 
-    // View toggle: 我 / TA
+    // Outline chat
+    function doSendChat() {
+        const msg = $('#sp-chat-input').val().trim();
+        if (msg && !isOutlineChatting) { $('#sp-chat-input').val(''); sendOutlineChat(msg); }
+    }
+    $('#sp-chat-send').on('click', doSendChat);
+    $('#sp-chat-input').on('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSendChat(); } });
+
+    // Inject buttons (event delegation)
+    $(`#sp-body, #sp-outline-wrap`).on('click', '.sp-inject-btn', function () {
+        const text = _injectTexts[$(this).data('iid')];
+        if (text) injectToST(text);
+    });
+
+    // View toggle: 我 / TA / 大纲
     $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
         if (isGenerating) return;
         const view = $(this).data('view');
-        if (view === currentView) return;
+
+        if (view === 'outline') {
+            if (outlineMode) return;
+            outlineMode = true;
+            $('.sp-view-btn').removeClass('sp-view-active');
+            $(this).addClass('sp-view-active');
+            $('#sp-body').hide();
+            $('#sp-outline-wrap').css('display', 'flex');
+            cachedOutline = loadCachedOutlineForCurrentChat();
+            if (cachedOutline) setOutlineBody(cachedOutline);
+            return;
+        }
+
+        // Leaving outline mode
+        if (outlineMode) {
+            outlineMode = false;
+            $('#sp-outline-wrap').hide();
+            $('#sp-body').show();
+        }
+
+        if (view === currentView && !outlineMode) return;
         if (view === 'char') {
             if (charViewName) {
-                // Already confirmed a char — load directly without picker
                 setView('char', charViewName);
                 if (cachedSchedule) setBody(cachedSchedule);
                 else showEmptyGenerate();
@@ -312,10 +379,11 @@ function injectModal() {
         .on('blur',  () => { const r = $('#sp-cfg-key').data('real') || $('#sp-cfg-key').val(); if (r) $('#sp-cfg-key').data('real', r).val(maskKey(r)); });
 
     $('#sp-body').on('click', '.sp-tab', function () {
-        const idx = parseInt($(this).data('day'));
+        const idx   = parseInt($(this).data('day'));
+        const total = parseInt($('.sp-days-track').data('total')) || 4;
         $('.sp-tab').removeClass('sp-tab-active');
         $(this).addClass('sp-tab-active');
-        $('.sp-days-track').css('transform', `translateX(-${idx * 100 / 7}%)`);
+        $('.sp-days-track').css('transform', `translateX(-${idx * 100 / total}%)`);
     });
 
     $('#sp-drag-handle').on('mousedown', onDragStart);
@@ -323,12 +391,48 @@ function injectModal() {
     $('#sp-resize-handle').on('mousedown', onResizeStart);
     document.getElementById('sp-resize-handle').addEventListener('touchstart', onResizeStart, { passive: false });
 
-    restorePositionAndSize();
+    // Outline divider drag
+    let divState = null;
+    const divEl  = document.getElementById('sp-outline-divider');
+    const chatEl = document.getElementById('sp-outline-chat');
+    function onDivStart(e) {
+        e.preventDefault();
+        const savedH = parseInt(localStorage.getItem('sp-outline-chat-h')) || 210;
+        chatEl.style.height = savedH + 'px';
+        divState = { startY: e.touches ? e.touches[0].clientY : e.clientY, startH: chatEl.offsetHeight };
+        document.addEventListener('mousemove', onDivMove);
+        document.addEventListener('mouseup',   onDivEnd);
+        document.addEventListener('touchmove', onDivMove, { passive: false });
+        document.addEventListener('touchend',  onDivEnd);
+    }
+    function onDivMove(e) {
+        if (!divState) return;
+        e.preventDefault();
+        const cy   = e.touches ? e.touches[0].clientY : e.clientY;
+        const newH = Math.max(80, Math.min(420, divState.startH + divState.startY - cy));
+        chatEl.style.height = newH + 'px';
+    }
+    function onDivEnd() {
+        if (!divState) return;
+        localStorage.setItem('sp-outline-chat-h', chatEl.offsetHeight);
+        divState = null;
+        document.removeEventListener('mousemove', onDivMove);
+        document.removeEventListener('mouseup',   onDivEnd);
+        document.removeEventListener('touchmove', onDivMove);
+        document.removeEventListener('touchend',  onDivEnd);
+    }
+    divEl.addEventListener('mousedown',  onDivStart);
+    divEl.addEventListener('touchstart', onDivStart, { passive: false });
+    restoreOutlineChatHeight();
 }
 
 // ─── View (我 / TA) ───────────────────────────────────────────────────────────
 
 function onRegenClick() {
+    if (outlineMode) {
+        triggerGenerateOutline();
+        return;
+    }
     if (isGenerating) return;
     if (currentView === 'char') {
         // Clear char cache and re-show picker so user can pick a different char.
@@ -359,12 +463,14 @@ function guessCharName(ctx) {
 
 function setView(view, charName) {
     currentView = view;
-    // Only update charViewName when entering char view — preserve it on user view
-    // so switching back to TA reloads the same character without showing the picker
     if (view === 'char') charViewName = charName || null;
     $('.sp-view-btn').removeClass('sp-view-active');
     $(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
     cachedSchedule = loadCachedForCurrentChat();
+    cachedOutline  = loadCachedOutlineForCurrentChat();
+    outlineChatHistory = [];
+    $('#sp-chat-msgs').empty();
+    if (outlineMode && cachedOutline) setOutlineBody(cachedOutline);
 }
 
 function switchToCharView() {
@@ -538,44 +644,320 @@ function buildMessages(ctx, prompt, userName, charName) {
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
 }
 
+// ─── Outline cache helpers ────────────────────────────────────────────────────
+
+function getOutlineCacheKey(view, charName) {
+    const chatId = getContext().chatId;
+    if (!chatId) return null;
+    const v = view ?? currentView;
+    const c = charName ?? charViewName;
+    if (v === 'char' && c) return `sp-cache-${chatId}-outline-char-${c}`;
+    return `sp-cache-${chatId}-outline-user`;
+}
+
+function loadCachedOutlineForCurrentChat(view, charName) {
+    const key = getOutlineCacheKey(view, charName);
+    if (!key) return null;
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) return renderOutline(saved.raw);
+    } catch { /* ignore */ }
+    return null;
+}
+
+// ─── Inject ───────────────────────────────────────────────────────────────────
+
+function makeInjectBtn(text) {
+    const id = ++_injectIdSeq;
+    _injectTexts[id] = text;
+    return `<button class="sp-inject-btn" data-iid="${id}" title="注入到输入框"><i class="fa-solid fa-arrow-right-to-bracket"></i></button>`;
+}
+
+function injectToST(text) {
+    const $ta = $('#send_textarea');
+    if (!$ta.length) { showToast('找不到输入框', null, true); return; }
+    $ta.val(text).trigger('input');
+    showToast('已注入到输入框');
+}
+
+// ─── Outline chat ─────────────────────────────────────────────────────────────
+
+function appendChatMsg(role, content) {
+    const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新大纲]');
+    const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
+    $('<div>').addClass(`sp-chat-msg ${cls}`)
+        .html(escapeHtml(display).replace(/\n/g, '<br>'))
+        .appendTo('#sp-chat-msgs');
+    const el = document.getElementById('sp-chat-msgs');
+    if (el) el.scrollTop = el.scrollHeight;
+}
+
+function buildOutlineChatMessages(userMsg) {
+    const ctx      = getContext();
+    const userName = ctx.name1 || '用户';
+    const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
+    let outlineCtx = '';
+    try {
+        const key  = getOutlineCacheKey();
+        const saved = key && JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) outlineCtx = `\n当前大纲：\n${saved.raw}\n`;
+    } catch { /* ignore */ }
+    const sys = `你是一位故事创作顾问，正在帮助用户完善 ${userName} 与 ${charName} 的故事大纲。${outlineCtx}
+请以创作顾问身份回答，不要扮演任何角色。如果用户要求修改大纲，在回复末尾输出完整的新大纲（格式与原大纲完全一致，使用 <outline_widget>...</outline_widget> 包裹）。`;
+    return [{ role: 'system', content: sys }, ...outlineChatHistory, { role: 'user', content: userMsg }];
+}
+
+async function sendOutlineChat(userMsg) {
+    if (isOutlineChatting) return;
+    appendChatMsg('user', userMsg);
+    outlineChatHistory.push({ role: 'user', content: userMsg });
+    isOutlineChatting = true;
+    const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').text('…').appendTo('#sp-chat-msgs');
+    const el = document.getElementById('sp-chat-msgs');
+    if (el) el.scrollTop = el.scrollHeight;
+    try {
+        const cfg = loadCfg();
+        if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); throw new Error('请先配置 API'); }
+        const res = await fetch(`${cfg.url}/chat/completions`, {
+            method : 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+            body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages: buildOutlineChatMessages(userMsg), max_tokens: 4096 }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const reply = (await res.json()).choices?.[0]?.message?.content ?? '';
+        outlineChatHistory.push({ role: 'assistant', content: reply });
+        $dots.remove();
+        appendChatMsg('ai', reply);
+        if (/<outline_widget/i.test(reply)) {
+            const pendingRaw = reply;
+            const $btn = $('<button class="sp-apply-outline-btn">应用此大纲</button>');
+            $btn.on('click', () => {
+                const html = renderOutline(pendingRaw);
+                setOutlineBody(html);
+                cachedOutline = html;
+                const key = getOutlineCacheKey();
+                if (key) localStorage.setItem(key, JSON.stringify({ raw: pendingRaw, ts: Date.now() }));
+                $btn.text('✓ 已应用').prop('disabled', true);
+            });
+            $('<div class="sp-chat-msg sp-chat-msg-system sp-apply-row"></div>').append($btn).appendTo('#sp-chat-msgs');
+            const el2 = document.getElementById('sp-chat-msgs');
+            if (el2) el2.scrollTop = el2.scrollHeight;
+        }
+    } catch (err) {
+        $dots.remove();
+        appendChatMsg('system', `发送失败：${err.message}`);
+    }
+    isOutlineChatting = false;
+}
+
+
+
+function toggleOutlineMode() {
+    outlineMode = !outlineMode;
+    $('.sp-view-btn').removeClass('sp-view-active');
+    if (outlineMode) {
+        $(`.sp-view-btn[data-view="outline"]`).addClass('sp-view-active');
+        $('#sp-body').hide();
+        $('#sp-outline-wrap').css('display', 'flex');
+        cachedOutline = loadCachedOutlineForCurrentChat();
+        if (cachedOutline) setOutlineBody(cachedOutline);
+    } else {
+        $(`.sp-view-btn[data-view="${currentView}"]`).addClass('sp-view-active');
+        $('#sp-outline-wrap').hide();
+        $('#sp-body').show();
+    }
+}
+
+function setOutlineBody(html) { $('#sp-outline-beats').html(html); }
+
+// ─── Outline generation ───────────────────────────────────────────────────────
+
+function triggerGenerateOutline() {
+    if (isGeneratingOutline) return;
+    const key = getOutlineCacheKey();
+    if (key) localStorage.removeItem(key);
+    cachedOutline = null;
+    isGeneratingOutline = true;
+    setOutlineBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在构思大纲…</p></div>`);
+    runGenerateOutline();
+}
+
+async function runGenerateOutline() {
+    const viewSnap = currentView;
+    const charSnap = charViewName;
+    try {
+        const ctx      = getContext();
+        const userName = ctx.name1 || '用户';
+        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const cfg = loadCfg();
+        if (!cfg.url || !cfg.key) {
+            if (!settingsOpen) toggleSettings();
+            throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
+        }
+        const prompt   = buildOutlinePrompt(userName, charName, viewSnap);
+        const raw      = await callCustomApi(ctx, prompt, cfg, userName, charName);
+        const html     = renderOutline(raw);
+        const cacheKey = getOutlineCacheKey(viewSnap, charSnap);
+        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, ts: Date.now() }));
+        isGeneratingOutline = false;
+        cachedOutline = html;
+        if (outlineMode) setOutlineBody(html);
+        else showToast('大纲已生成，点击查看', () => { if (!outlineMode) toggleOutlineMode(); showPanel(); });
+    } catch (err) {
+        isGeneratingOutline = false;
+        const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
+        if (outlineMode) setOutlineBody(errHtml);
+        else showToast('大纲生成失败，请重试', null, true);
+    }
+}
+
+function buildOutlinePrompt(userName, charName, perspective = 'user') {
+    const subject   = perspective === 'char' ? charName : userName;
+    const companion = perspective === 'char' ? userName : charName;
+    return `请暂停角色扮演，以编剧顾问身份根据以上剧情，为 ${subject} 与 ${companion} 的故事生成大纲。
+【重要】所有输出必须使用中文（人名、地名可保留原文）。
+
+【第一步：故事基础分析】
+生成节点之前，先在注释中梳理以下内容（200字以上）：
+① 初始状态：${subject} 与 ${companion} 当前的关系状态、情感现状、未解决的张力
+② 情感萌点：这段关系的核心吸引力或矛盾模式（如"互相吸引却为保护自己而互相伤害"）
+③ 短期目标 / 长期目标：两人各自或共同想要达成的事
+④ 剧情模式：这是什么类型的故事？情感推进的节奏规律是什么？（如"靠近→试探→受伤→退后→忍不住再靠近"的拉扯循环）
+⑤ 两条故事线：主线（外部目标/生活事件）和情感线（关系推进轨迹）各自的走向
+
+【第二步：生成关键节点，目标 12 个左右】
+节点必须基于上述分析，体现你确定的剧情模式。
+情感线需要螺旋推进（进一步→退半步→再进一步），不能让关系线性发展。
+节点要足够细腻，完整覆盖故事弧线：开场状态→情感萌动→第一次靠近→误解或退后→危机爆发→关键转折→余震→新的平衡。每个阶段至少需要 1-2 个节点来撑开，不要跳步。
+
+【标题要求】富有文学性，避免平铺直叙。参考：《一枝花的约定》《裂缝里的光》《你不在的那个冬天》《第一次说谎》
+
+【字段说明】
+Beat: 推演时间|标题|类型|所属故事线|结果
+Scene: 这一幕实际发生了什么
+Think: 创作思考
+
+- 推演时间：相对时间，如"数日后""某个深夜""不知何时"
+- 类型：节点性质，如冲突、突破、转折、试探、退后、揭示等
+- 所属故事线：主线 / 情感线 / 双线交叉
+- 结果：这个节点的结局或影响，一句话
+- Scene：100字以上，写清楚发生了什么、谁做了什么、说了什么或没说什么
+- Think：200-300字，必须覆盖：① 如何体现情感萌点/剧情模式 ② ${subject} 此刻的心理状态 ③ 对主线和情感线各自的推进作用 ④ 在螺旋进退中处于哪个位置
+
+【输出格式（严格遵守，只输出以下结构，禁止省略 outline_widget 标签）】
+<!-- 故事分析：（第一步的分析，200字以上） -->
+<outline_widget>
+Beat: 推演时间|标题|类型|所属故事线|结果
+Scene: 场景内容…
+Think: 思考内容…
+Beat: 推演时间|标题|类型|所属故事线|结果
+Scene: 场景内容…
+Think: 思考内容…
+Beat: 推演时间|标题|类型|所属故事线|结果
+Scene: 场景内容…
+Think: 思考内容…
+Beat: 推演时间|标题|类型|所属故事线|结果
+Scene: 场景内容…
+Think: 思考内容…
+（继续，每个弧线阶段至少 1-2 个节点，共约 12 个）
+</outline_widget>`;}
+
+// ─── Outline parse / render ───────────────────────────────────────────────────
+
+function parseOutline(raw) {
+    const m = raw.match(/<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i);
+    const content = m ? m[1] : raw;  // fallback: parse raw directly if no widget tag
+    const beats = []; let cur = null;
+    for (const line of content.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        if (/^Beat\s*:/i.test(t)) {
+            if (cur) beats.push(cur);
+            const parts = t.replace(/^Beat\s*:\s*/i, '').split('|');
+            cur = {
+                time   : (parts[0] || '').trim(),
+                title  : (parts[1] || '').trim(),
+                type   : (parts[2] || '').trim(),
+                line   : (parts[3] || '').trim(),
+                outcome: (parts[4] || '').trim(),
+                scene  : '',
+                think  : '',
+            };
+        } else if (/^Scene\s*:/i.test(t) && cur) {
+            cur.scene = t.replace(/^Scene\s*:\s*/i, '').trim();
+        } else if (/^Think\s*:/i.test(t) && cur) {
+            cur.think = t.replace(/^Think\s*:\s*/i, '').trim();
+        }
+    }
+    if (cur) beats.push(cur);
+    return beats;
+}
+
+function renderOutline(raw) {
+    const beats = parseOutline(raw);
+    if (beats.length === 0) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+    return beats.map((b, i) => {
+        const injectParts = [`【剧情节点参考】`, `${b.time}·《${b.title}》${b.type ? '·' + b.type : ''}${b.line ? '（' + b.line + '）' : ''}`];
+        if (b.scene)   injectParts.push(b.scene);
+        if (b.outcome) injectParts.push(`结果：${b.outcome}`);
+        const injectBtn = makeInjectBtn(injectParts.join('\n'));
+        return `
+        <div class="sp-beat">
+            <div class="sp-beat-head">
+                <span class="sp-beat-index">${i + 1}</span>
+                <span class="sp-beat-time">${escapeHtml(b.time)}</span>
+                ${b.type ? `<span class="sp-beat-type">${escapeHtml(b.type)}</span>` : ''}
+                ${b.line ? `<span class="sp-beat-line">${escapeHtml(b.line)}</span>` : ''}
+                ${injectBtn}
+            </div>
+            <div class="sp-beat-title">${escapeHtml(b.title)}</div>
+            ${b.outcome ? `<div class="sp-beat-outcome">${escapeHtml(b.outcome)}</div>` : ''}
+            ${b.scene   ? `<div class="sp-beat-scene">${escapeHtml(b.scene)}</div>` : ''}
+            ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(b.think)}</p></details>` : ''}
+        </div>`;
+    }).join('');
+}
+
+
 function buildPrompt(userName, charName, perspective = 'user') {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;
-    return `请暂停角色扮演，以写作助手身份完成以下任务（内容仅作参考，不出现在正文）：
-【重要】无论剧情使用何种语言，所有输出内容必须使用中文（人名、地名可保留原文）。
+    return `请暂停角色扮演，以旁观者视角根据以上剧情，为 ${subject} 生成日程。
+【重要】所有输出必须使用中文（人名、地名可保留原文）。
 
-根据以上剧情背景与世界设定，为 ${subject} 规划接下来七天的日程安排。
+事件分三类：
+- main（明线）：${subject} 直接卷入、正在推进的事件
+- hidden（暗线）：隐含的伏笔、悬而未决的走向
+- bond（羁绊）：${subject} 与 ${companion} 之间可能发生或加深的事件
 
-【具体规则】
-1. 时间跨度：必须生成包含今日起连续未来 7 天的日程，禁止遗漏任何一天。
-2. 事件数量：每天安排 2 到 5 个事件，总计 15-30 个事件。
-3. 内容来源：基于当前对话剧情、世界观设定以及角色关系合理推演。
-4. 字段规范（每行一个 Event）：
-   格式：Event: type|title|description|time|location|npc_action
-   - type：world / major / user / character
-   - description：${subject} 视角，生活化口吻，30字以上
-   - npc_action：${companion} 同期行动，30字以上
+Day 1-3 每天生成 1 到 3 个事件；Future 块生成 5 到 10 个事件，时间跨度不限。
+
+【字段说明】
+格式：Event: type|title|description|time|location|对方动态
+- type 只能是 main / hidden / bond
+- description：${subject} 视角，生活化口吻，30字以上
+- 对方动态：${companion} 同期行动，30字以上
 
 【输出格式（严格遵守，只输出以下结构）】
-<!-- 日程思考：（根据当前剧情思考安排，100字以上） -->
+<!-- 日程思考：（结合剧情推演安排，100字以上） -->
 <calendar_widget>
-StartDate: YYYY-MM-DD （若剧情中能明确或合理推断故事当前日期则填写，格式如 2024-03-15；若完全无法确定则省略此行）
+StartDate: YYYY-MM-DD（可从剧情推断则填写，否则省略此行）
 Day: 1
-Event: type|title|description|time|location|npc_action
-Event: type|title|description|time|location|npc_action
+Event: type|title|description|time|location|对方动态
+Event: type|title|description|time|location|对方动态
 Day: 2
-Event: type|title|description|time|location|npc_action
+Event: type|title|description|time|location|对方动态
+Event: type|title|description|time|location|对方动态
 Day: 3
-Event: type|title|description|time|location|npc_action
-Day: 4
-Event: type|title|description|time|location|npc_action
-Day: 5
-Event: type|title|description|time|location|npc_action
-Day: 6
-Event: type|title|description|time|location|npc_action
-Day: 7
-Event: type|title|description|time|location|npc_action
-</calendar_widget>`;
+Event: type|title|description|time|location|对方动态
+Event: type|title|description|time|location|对方动态
+Future:
+Event: type|title|description|time|location|对方动态
+</calendar_widget>
+
+【Future 说明】
+Future 块收录剧情中出现的未来事项，时间不限。
+允许基于剧情走向合理推测，但不能凭空捏造剧情中从未提及的约定或承诺。`;
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -650,6 +1032,35 @@ function applyTheme(theme) {
     currentTheme = theme;
     $(`#${MODAL_ID}`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
     $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
+}
+
+function toggleFullscreen() {
+    isFullscreen = !isFullscreen;
+    const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
+    const $icon = $(`#${MODAL_ID} .sp-maximize-btn i`);
+    if (isFullscreen) {
+        sheet.dataset.prevLeft    = sheet.style.left;
+        sheet.dataset.prevTop     = sheet.style.top;
+        sheet.dataset.prevWidth   = sheet.style.width;
+        sheet.dataset.prevHeight  = sheet.style.height;
+        sheet.dataset.prevMaxH    = sheet.style.maxHeight;
+        sheet.style.animation     = 'none';
+        sheet.style.left          = '10px';
+        sheet.style.top           = '10px';
+        sheet.style.right         = 'auto';
+        sheet.style.transform     = 'none';
+        sheet.style.width         = (window.innerWidth  - 20) + 'px';
+        sheet.style.height        = (window.innerHeight - 20) + 'px';
+        sheet.style.maxHeight     = (window.innerHeight - 20) + 'px';
+        $icon.removeClass('fa-expand').addClass('fa-compress');
+    } else {
+        sheet.style.left      = sheet.dataset.prevLeft     || '';
+        sheet.style.top       = sheet.dataset.prevTop      || '';
+        sheet.style.width     = sheet.dataset.prevWidth    || '';
+        sheet.style.height    = sheet.dataset.prevHeight   || '';
+        sheet.style.maxHeight = sheet.dataset.prevMaxH     || '';
+        $icon.removeClass('fa-compress').addClass('fa-expand');
+    }
 }
 
 function toggleTheme() {
@@ -742,8 +1153,8 @@ function onResizeMove(e) {
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-        const w = Math.max(280, Math.min(700, resizeState.origW + cx - resizeState.startX));
-        const h = Math.max(300, Math.min(window.innerHeight * 0.92, resizeState.origH + cy - resizeState.startY));
+        const w = Math.max(280, Math.min(window.innerWidth * 0.9, resizeState.origW + cx - resizeState.startX));
+        const h = Math.max(300, Math.min(window.innerHeight * 0.95, resizeState.origH + cy - resizeState.startY));
         sheet.style.width     = w + 'px';
         sheet.style.height    = h + 'px';
         sheet.style.maxHeight = h + 'px';
@@ -761,6 +1172,12 @@ function onResizeEnd() {
     $(document).off('mousemove.spresize mouseup.spresize');
     document.removeEventListener('touchmove', onResizeMove);
     document.removeEventListener('touchend',  onResizeEnd);
+}
+
+function restoreOutlineChatHeight() {
+    const h = parseInt(localStorage.getItem('sp-outline-chat-h')) || 210;
+    const el = document.getElementById('sp-outline-chat');
+    if (el) el.style.height = h + 'px';
 }
 
 function restorePositionAndSize() {
@@ -820,21 +1237,22 @@ function showToast(msg, onClick, isError = false) {
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 const TYPE_META = {
-    world    : { icon: 'fa-earth-asia', label: '世界',  cls: 'sp-type-world'     },
-    major    : { icon: 'fa-star',       label: '大事',  cls: 'sp-type-major'     },
-    user     : { icon: 'fa-user',       label: '个人',  cls: 'sp-type-user'      },
-    character: { icon: 'fa-heart',      label: 'NPC',   cls: 'sp-type-character' },
+    main  : { icon: 'fa-bolt',      label: '明线', cls: 'sp-type-world'     },
+    hidden: { icon: 'fa-eye-slash', label: '暗线', cls: 'sp-type-major'     },
+    bond  : { icon: 'fa-heart',     label: '羁绊', cls: 'sp-type-character' },
 };
 
 function renderSchedule(raw, userName) {
-    const { days, startDate } = parseCalendar(raw);
-    if (days.length === 0) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+    const { days, future, startDate } = parseCalendar(raw);
+    const hasFuture = future && future.events.length > 0;
+    if (days.length === 0 && !hasFuture) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
 
     const WEEKDAYS = ['周日','周一','周二','周三','周四','周五','周六'];
+    const totalTabs = days.length + (hasFuture ? 1 : 0);
 
     const header = `<div class="sp-schedule-header">
         <span class="sp-user-chip">${escapeHtml(userName)}</span>
-        <span class="sp-schedule-label">的七日日程</span>
+        <span class="sp-schedule-label">的日程</span>
     </div>`;
 
     const tabs = days.map((_, i) => {
@@ -850,18 +1268,24 @@ function renderSchedule(raw, userName) {
             <span class="sp-tab-num">${numLabel}</span>
             ${wdLabel ? `<span class="sp-tab-wd">${wdLabel}</span>` : ''}
         </button>`;
-    }).join('');
+    });
+    if (hasFuture) tabs.push(`<button class="sp-tab" data-day="${days.length}">
+        <span class="sp-tab-num">未来</span>
+    </button>`);
 
     const panels = days.map(day =>
-        `<div class="sp-day-panel">${day.events.map(renderEvent).join('')}</div>`
-    ).join('');
+        `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${day.events.map(renderEvent).join('')}</div>`
+    );
+    if (hasFuture) panels.push(
+        `<div class="sp-day-panel sp-future-panel" style="width:calc(100%/${totalTabs})">${future.events.map(renderEvent).join('')}</div>`
+    );
 
-    const debug = days.length < 7 ? `
+    const debug = days.length < 3 ? `
         <details class="sp-debug"><summary>⚠ 仅解析到 ${days.length} 天</summary>
         <pre class="sp-debug-raw">${escapeHtml(raw)}</pre></details>` : '';
 
-    return `${header}<div class="sp-tab-bar">${tabs}</div>
-        <div class="sp-days-wrap"><div class="sp-days-track">${panels}</div></div>${debug}`;
+    return `${header}<div class="sp-tab-bar" data-total="${totalTabs}">${tabs.join('')}</div>
+        <div class="sp-days-wrap"><div class="sp-days-track" data-total="${totalTabs}" style="width:${totalTabs * 100}%">${panels.join('')}</div></div>${debug}`;
 }
 
 function parseCalendar(raw) {
@@ -875,12 +1299,17 @@ function parseCalendar(raw) {
         if (!isNaN(d)) startDate = d;
     }
 
-    const days = []; let cur = null;
+    const days = []; let cur = null; let inFuture = false; let future = null;
     for (const line of content.split('\n')) {
         const t = line.trim();
         if (!t || t.startsWith('<!--')) continue;
         if (/^Day\s*:?\s*\d+/i.test(t) || /^第[一二三四五六七\d]+天/.test(t)) {
-            if (cur) days.push(cur); cur = { events: [] }; continue;
+            if (cur && !inFuture) days.push(cur);
+            cur = { events: [] }; inFuture = false; continue;
+        }
+        if (/^Future\s*:/i.test(t) || /^未来\s*:/i.test(t)) {
+            if (cur && !inFuture) days.push(cur);
+            future = { events: [] }; cur = future; inFuture = true; continue;
         }
         if (/^Event\s*:/i.test(t)) {
             if (!cur) cur = { events: [] };
@@ -892,22 +1321,30 @@ function parseCalendar(raw) {
             });
         }
     }
-    if (cur) days.push(cur);
-    return { days: days.filter(d => d.events.length > 0), startDate };
+    if (cur && !inFuture) days.push(cur);
+    return { days: days.filter(d => d.events.length > 0), future, startDate };
 }
 
 function renderEvent(ev) {
-    const meta = TYPE_META[ev.type] || TYPE_META.user;
+    const meta = TYPE_META[ev.type] || TYPE_META.main;
+    const injectParts = ['【日程参考】'];
+    if (ev.time) injectParts.push(`时间：${ev.time}`);
+    injectParts.push(ev.title);
+    if (ev.desc)      injectParts.push(ev.desc);
+    if (ev.location)  injectParts.push(`地点：${ev.location}`);
+    if (ev.npcAction) injectParts.push(`对方：${ev.npcAction}`);
+    const injectBtn = makeInjectBtn(injectParts.join('\n'));
     return `<div class="sp-event ${meta.cls}">
         <div class="sp-event-head">
             <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>
             <span class="sp-event-title">${escapeHtml(ev.title)}</span>
             ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
+            ${injectBtn}
         </div>
         ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}
         <div class="sp-event-meta">
             ${ev.location  ? `<span class="sp-event-loc">地点：${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? `<span class="sp-event-npc">NPC：${escapeHtml(ev.npcAction)}</span>` : ''}
+            ${ev.npcAction ? `<span class="sp-event-npc">对方：${escapeHtml(ev.npcAction)}</span>` : ''}
         </div>
     </div>`;
 }

@@ -2,36 +2,40 @@
 
 /* ─── Design tokens ─────────────────────────────────────────────────────────── */
 .sp-night {
-    --sp-sheet-bg     : #1c1b1f;
-    --sp-surface      : #2b2930;
-    --sp-surface-high : #36343b;
-    --sp-primary      : #d0bcff;
-    --sp-on-primary   : #381e72;
-    --sp-on-surface   : #e6e1e5;
-    --sp-subtle       : #938f99;
-    --sp-divider      : rgba(255,255,255,0.08);
-    --sp-shadow       : 0 8px 40px rgba(0,0,0,0.7), 0 2px 10px rgba(0,0,0,0.5);
+    --sp-sheet-bg     : #272829;
+    --sp-surface      : #61677A;
+    --sp-surface-high : #757B8E;
+    --sp-primary      : #A8A49E;
+    --sp-on-primary   : #272829;
+    --sp-on-surface   : #D8D9DA;
+    --sp-subtle       : #9A9EA8;
+    --sp-divider      : rgba(221,216,208,0.12);
+    --sp-shadow       : 0 8px 40px rgba(0,0,0,0.65), 0 2px 10px rgba(0,0,0,0.45);
     --sp-card-shadow  : 0 2px 6px rgba(0,0,0,0.4);
-    --sp-chip-bg      : #4a4458;
-    --sp-spinner-color: #d0bcff;
-    --sp-neon-color   : #d0bcff;
-    --sp-neon-glow    : rgba(208,188,255,0.6);
+    --sp-chip-bg      : rgba(168,164,158,0.18);
+    --sp-spinner-color: #D8D9DA;
+    --sp-neon-color   : #D8D9DA;
+    --sp-neon-glow    : rgba(216,217,218,0.4);
+    --sp-hover-bg     : rgba(255,255,255,0.06);
+    --sp-chat-bg      : #FFF6E0;
+    --sp-chat-accent  : #61677A;
 }
 .sp-day {
-    --sp-sheet-bg     : #f5f0eb;
-    --sp-surface      : #ede8e2;
-    --sp-surface-high : #e4ddd5;
-    --sp-primary      : #6750a4;
-    --sp-on-primary   : #ffffff;
-    --sp-on-surface   : #2c2a28;
-    --sp-subtle       : #6b6460;
+    --sp-sheet-bg     : #F6F4E8;
+    --sp-surface      : #E5EEE4;
+    --sp-surface-high : #C0E1D2;
+    --sp-primary      : #DC9B9B;
+    --sp-on-primary   : #3e1f1f;
+    --sp-on-surface   : #2c2e2a;
+    --sp-subtle       : #7a8078;
     --sp-divider      : rgba(0,0,0,0.08);
-    --sp-shadow       : 0 8px 40px rgba(0,0,0,0.14), 0 2px 10px rgba(0,0,0,0.08);
-    --sp-card-shadow  : 0 1px 4px rgba(0,0,0,0.1);
-    --sp-chip-bg      : #e0d8f0;
-    --sp-spinner-color: #6750a4;
-    --sp-neon-color   : #6750a4;
-    --sp-neon-glow    : rgba(103,80,164,0.5);
+    --sp-shadow       : 0 8px 40px rgba(0,0,0,0.12), 0 2px 10px rgba(0,0,0,0.07);
+    --sp-card-shadow  : 0 1px 4px rgba(0,0,0,0.09);
+    --sp-chip-bg      : rgba(220,155,155,0.22);
+    --sp-spinner-color: #DC9B9B;
+    --sp-neon-color   : #DC9B9B;
+    --sp-neon-glow    : rgba(220,155,155,0.5);
+    --sp-hover-bg     : rgba(220,155,155,0.10);
 }
 
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
@@ -268,16 +272,22 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width      : 0;
     overflow       : hidden;
 }
-.sp-tab:hover      { background: var(--sp-surface-high); color: var(--sp-on-surface); }
+.sp-tab:hover      { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
 .sp-tab-active     { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; border-color: var(--sp-primary) !important; }
+/* 夜间：底部描边 + 极淡暖底，不占用 surface 色系 */
+.sp-night .sp-tab-active  { background: rgba(221,216,208,0.10) !important; color: #DDD8D0 !important; border-color: transparent !important; box-shadow: inset 0 -2px 0 #DDD8D0 !important; }
+/* 日间：底部描边粉色，区分开 #C0E1D2 的聊天框和 surface 色系 */
+.sp-day   .sp-tab-active  { background: rgba(220,155,155,0.12) !important; color: #b06060 !important; border-color: transparent !important; box-shadow: inset 0 -2px 0 #DC9B9B !important; }
 .sp-tab-num        { font-family: 'Roboto Mono', monospace; font-size: 0.65rem; font-weight: 500; line-height: 1; white-space: nowrap; }
 .sp-tab-wd         { font-size: 0.60rem; opacity: 0.8; line-height: 1; }
 
 /* ─── Days sliding track ─────────────────────────────────────────────────────── */
 .sp-days-wrap  { flex: 1; overflow: hidden; min-height: 0; }
-.sp-days-track { display: flex; width: 700%; height: 100%; transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.sp-days-track { display: flex; width: 400%; height: 100%; transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
 .sp-day-panel  {
-    width         : calc(100% / 7);
+    width         : calc(100% / 4);
+    height        : 100%;
+    min-height    : 0;
     overflow-y    : auto;
     padding       : 10px 0 14px;
     scrollbar-width: thin;
@@ -295,7 +305,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition   : background 0.1s;
 }
 .sp-event:last-child { border-bottom: none; }
-.sp-event:hover      { background: var(--sp-surface-high); }
+.sp-event:hover      { background: var(--sp-hover-bg); }
 
 .sp-event-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; }
 
@@ -311,11 +321,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-type-world     { border-left: 3px solid #4fc3f7; }
 .sp-type-major     { border-left: 3px solid #ffb74d; }
-.sp-type-user      { border-left: 3px solid var(--sp-primary); }
 .sp-type-character { border-left: 3px solid #f48fb1; }
 .sp-type-world     .sp-type-badge { background: rgba(79,195,247,0.15);  color: #4fc3f7; }
 .sp-type-major     .sp-type-badge { background: rgba(255,183,77,0.15);  color: #ffb74d; }
-.sp-type-user      .sp-type-badge { background: rgba(208,188,255,0.15); color: var(--sp-primary); }
 .sp-type-character .sp-type-badge { background: rgba(244,143,177,0.15); color: #f48fb1; }
 
 .sp-event-title { font-size: 0.88rem; font-weight: 500; color: var(--sp-on-surface); flex: 1; }
@@ -428,8 +436,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items: center;
     gap        : 8px;
     padding    : 10px 18px;
-    background : #323036;
-    color      : #e6e1e5;
+    background : #61677A;
+    color      : #e8ddd5;
     border-radius: 99px;
     font-size  : 0.85rem;
     box-shadow : 0 4px 16px rgba(0,0,0,0.4);
@@ -468,14 +476,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition    : transform 0.15s, box-shadow 0.15s, color 0.15s;
 }
 .sp-fab-btn.sp-night {
-    background: #3a3648;
-    border    : 1.5px solid rgba(208,188,255,0.4);
-    color     : #d0bcff;
+    background: #61677A;
+    border    : 1.5px solid rgba(221,216,208,0.4);
+    color     : #DDD8D0;
 }
 .sp-fab-btn.sp-day {
-    background: #6750a4;
-    border    : none;
-    color     : #ffffff;
+    background: #DC9B9B;
+    border    : 1.5px solid rgba(176,96,96,0.3);
+    color     : #3e1f1f;
 }
 .sp-fab-btn:hover {
     transform : scale(1.1);
@@ -587,8 +595,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition    : background 0.12s, color 0.12s;
     white-space   : nowrap;
 }
-.sp-view-btn:hover   { background: var(--sp-surface-high); color: var(--sp-on-surface); }
+.sp-view-btn:hover   { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
 .sp-view-active      { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; }
+.sp-night .sp-view-active { background: rgba(221,216,208,0.10) !important; color: #DDD8D0 !important; box-shadow: inset 0 -2px 0 #DDD8D0 !important; }
+.sp-day   .sp-view-active { background: rgba(220,155,155,0.12) !important; color: #b06060 !important; box-shadow: inset 0 -2px 0 #DC9B9B !important; }
 
 /* ─── Char picker ────────────────────────────────────────────────────────────── */
 .sp-char-picker {
@@ -633,3 +643,211 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-gen-btn:hover  { opacity: 0.88; }
 .sp-gen-btn:active { transform: scale(0.96); }
+
+/* ─── Outline wrap ───────────────────────────────────────────────────────────── */
+.sp-outline-wrap {
+    flex          : 1;
+    overflow      : hidden;
+    display       : none;
+    flex-direction: column;
+}
+
+/* ─── Beat cards ─────────────────────────────────────────────────────────────── */
+.sp-beat {
+    padding      : 12px 16px;
+    border-bottom: 1px solid var(--sp-divider);
+    transition   : background 0.1s;
+}
+.sp-beat:last-child { border-bottom: none; }
+.sp-beat:hover      { background: var(--sp-hover-bg); }
+
+.sp-beat-head {
+    display    : flex;
+    align-items: center;
+    gap        : 7px;
+    flex-wrap  : wrap;
+    margin-bottom: 6px;
+}
+.sp-beat-index {
+    width          : 20px;
+    height         : 20px;
+    background     : var(--sp-chip-bg);
+    color          : var(--sp-primary);
+    border-radius  : 50%;
+    font-size      : 0.7rem;
+    font-weight    : 700;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    flex-shrink    : 0;
+}
+.sp-beat-time {
+    font-family: 'Roboto Mono', monospace;
+    font-size  : 0.72rem;
+    color      : var(--sp-subtle);
+}
+.sp-beat-type {
+    font-size    : 0.68rem;
+    font-weight  : 600;
+    padding      : 2px 7px;
+    border-radius: 99px;
+    background   : rgba(208,188,255,0.15);
+    color        : var(--sp-primary);
+}
+.sp-beat-line {
+    font-size    : 0.68rem;
+    font-weight  : 500;
+    padding      : 2px 7px;
+    border-radius: 99px;
+    background   : rgba(79,195,247,0.12);
+    color        : #4fc3f7;
+}
+.sp-beat-title {
+    font-size    : 0.95rem;
+    font-weight  : 600;
+    color        : var(--sp-on-surface);
+    line-height  : 1.4;
+    margin-bottom: 5px;
+}
+.sp-beat-outcome {
+    font-size  : 0.82rem;
+    color      : var(--sp-on-surface);
+    opacity    : 0.75;
+    line-height: 1.5;
+    margin-bottom: 5px;
+}
+.sp-beat-scene {
+    font-size    : 0.82rem;
+    color        : var(--sp-on-surface);
+    line-height  : 1.65;
+    margin-bottom: 6px;
+    padding      : 7px 10px;
+    background   : var(--sp-surface);
+    border-radius: 6px;
+    border-left  : 2px solid var(--sp-primary);
+    opacity      : 0.9;
+}
+.sp-beat-think          { margin-top: 4px; }
+.sp-beat-think summary  {
+    cursor     : pointer;
+    font-size  : 0.73rem;
+    color      : var(--sp-subtle);
+    padding    : 2px 0;
+    user-select: none;
+    list-style : none;
+}
+.sp-beat-think summary:hover { color: var(--sp-on-surface); }
+.sp-beat-think p {
+    margin     : 6px 0 0;
+    font-size  : 0.78rem;
+    line-height: 1.65;
+    color      : var(--sp-subtle);
+}
+
+/* ─── Outline beats (scrollable top half) ────────────────────────────────────── */
+.sp-outline-beats {
+    flex           : 1;
+    min-height     : 0;
+    overflow-y     : auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sp-divider) transparent;
+}
+.sp-outline-beats::-webkit-scrollbar       { width: 4px; }
+.sp-outline-beats::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+
+/* ─── Outline chat (fixed bottom section) ────────────────────────────────────── */
+.sp-outline-divider {
+    flex-shrink    : 0;
+    height         : 18px;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    cursor         : ns-resize;
+    color          : var(--sp-chat-accent);
+    font-size      : 0.6rem;
+    background     : var(--sp-chat-bg);
+    border-top     : 2px solid var(--sp-chat-accent);
+    user-select    : none;
+    touch-action   : none;
+    opacity        : 0.8;
+    transition     : opacity 0.15s;
+}
+.sp-outline-divider:hover { opacity: 1; }
+
+.sp-outline-chat {
+    flex-shrink   : 0;
+    height        : 210px;
+    display       : flex;
+    flex-direction: column;
+    background    : var(--sp-chat-bg);
+}
+.sp-night { --sp-chat-bg: #D2C1B6; --sp-chat-accent: #4A7090; }
+.sp-day   { --sp-chat-bg: #C0E1D2; --sp-chat-accent: #C0E1D2; }
+.sp-chat-msgs {
+    flex           : 1;
+    overflow-y     : auto;
+    padding        : 8px 12px;
+    display        : flex;
+    flex-direction : column;
+    gap            : 5px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sp-divider) transparent;
+}
+.sp-chat-msgs::-webkit-scrollbar       { width: 3px; }
+.sp-chat-msgs::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+.sp-chat-input-row {
+    display    : flex;
+    gap        : 6px;
+    padding    : 7px 10px;
+    border-top : 1px solid var(--sp-divider);
+    flex-shrink: 0;
+}
+.sp-chat-input-row .sp-input { flex: 1; font-size: 0.82rem; padding: 5px 10px; }
+.sp-chat-msg {
+    font-size    : 0.81rem;
+    line-height  : 1.55;
+    padding      : 5px 9px;
+    border-radius: 8px;
+    max-width    : 90%;
+    word-break   : break-word;
+}
+.sp-chat-msg-user   { background: #61677A; color: #D8D9DA;  align-self: flex-end; }
+.sp-chat-msg-ai     { background: #f0e8e0; color: #2a3a45; align-self: flex-start; }
+.sp-chat-msg-system { font-size: 0.72rem; color: #6a5a52; align-self: center; font-style: italic; }
+.sp-chat-thinking   { opacity: 0.45; }
+.sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; }
+.sp-apply-outline-btn {
+    padding      : 4px 14px;
+    background   : var(--sp-primary);
+    color        : var(--sp-on-primary);
+    border       : none;
+    border-radius: 99px;
+    cursor       : pointer;
+    font-size    : 0.78rem;
+    font-weight  : 500;
+    transition   : opacity 0.15s;
+}
+.sp-apply-outline-btn:hover    { opacity: 0.85; }
+.sp-apply-outline-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ─── Inject button ──────────────────────────────────────────────────────────── */
+.sp-inject-btn {
+    width          : 22px;
+    height         : 22px;
+    border         : none;
+    background     : transparent;
+    color          : var(--sp-subtle);
+    cursor         : pointer;
+    border-radius  : 4px;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    font-size      : 0.68rem;
+    flex-shrink    : 0;
+    opacity        : 0;
+    transition     : opacity 0.15s, color 0.15s, background 0.15s;
+    margin-left    : auto;
+}
+.sp-event:hover .sp-inject-btn,
+.sp-beat:hover  .sp-inject-btn  { opacity: 1; }
+.sp-inject-btn:hover             { color: var(--sp-primary); background: var(--sp-surface-high); }
