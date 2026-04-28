@@ -19,6 +19,8 @@
     --sp-hover-bg     : rgba(255,255,255,0.06);
     --sp-chat-bg      : #FFF6E0;
     --sp-chat-accent  : #61677A;
+    --sp-char-color   : #9EC8CC;
+    --sp-chip-char-bg : rgba(158,200,204,0.15);
 }
 .sp-day {
     --sp-sheet-bg     : #F6F4E8;
@@ -36,6 +38,8 @@
     --sp-neon-color   : #DC9B9B;
     --sp-neon-glow    : rgba(220,155,155,0.5);
     --sp-hover-bg     : rgba(220,155,155,0.10);
+    --sp-char-color   : #5C9EA0;
+    --sp-chip-char-bg : rgba(92,158,160,0.15);
 }
 
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
@@ -83,9 +87,8 @@
 
 .sp-topbar-title {
     flex          : 1;
-    font-size     : 1rem;
-    font-weight   : 500;
-    color         : var(--sp-on-surface);
+    font-size     : 1.15rem;
+    color         : var(--sp-primary);
     letter-spacing: 0.01em;
 }
 .sp-topbar-actions { display: flex; gap: 2px; }
@@ -246,6 +249,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding       : 2px 9px;
     border-radius : 99px;
 }
+.sp-char-chip {
+    background    : var(--sp-chip-char-bg);
+    color         : var(--sp-char-color);
+    font-weight   : 600;
+    font-size     : 0.82rem;
+    padding       : 2px 9px;
+    border-radius : 99px;
+}
 .sp-schedule-label { color: var(--sp-subtle); font-size: 0.85rem; }
 
 /* ─── Tab bar ────────────────────────────────────────────────────────────────── */
@@ -257,11 +268,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-bottom: 1px solid var(--sp-divider);
 }
 .sp-tab {
-    flex           : 1;
-    display        : flex;
-    flex-direction : column;
-    align-items    : center;
-    gap            : 2px;
+    flex             : 1;
+    display          : flex;
+    flex-direction   : column;
+    align-items      : center;
+    justify-content  : center;
+    gap              : 2px;
     padding        : 5px 1px;
     background     : transparent;
     border         : 1px solid var(--sp-divider);
@@ -329,9 +341,19 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-event-title { font-size: 0.88rem; font-weight: 500; color: var(--sp-on-surface); flex: 1; }
 .sp-event-time  { font-family: 'Roboto Mono', monospace; font-size: 0.73rem; color: var(--sp-subtle); flex-shrink: 0; }
 .sp-event-desc  { font-size: 0.82rem; color: var(--sp-on-surface); opacity: 0.8; line-height: 1.55; margin: 3px 0 5px; }
-.sp-event-meta  { display: flex; flex-wrap: wrap; gap: 8px; }
+.sp-event-meta  { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .sp-event-loc,
-.sp-event-npc   { font-size: 0.72rem; color: var(--sp-subtle); display: flex; align-items: center; gap: 3px; line-height: 1.4; }
+.sp-event-npc   {
+    display      : inline-flex;
+    align-items  : center;
+    gap          : 4px;
+    font-size    : 0.72rem;
+    color        : var(--sp-subtle);
+    background   : var(--sp-hover-bg);
+    border-radius: 99px;
+    padding      : 2px 8px;
+    line-height  : 1.4;
+}
 .sp-event-npc   { font-style: italic; }
 
 /* ─── States ─────────────────────────────────────────────────────────────────── */
@@ -354,6 +376,21 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 @keyframes sp-spin { to { transform: rotate(360deg); } }
 .sp-loading-text { color: var(--sp-subtle); font-size: 0.88rem; margin: 0; font-weight: 300; }
+.sp-abort-btn {
+    margin-top   : 4px;
+    padding      : 4px 14px;
+    background   : transparent;
+    border       : 1px solid var(--sp-divider);
+    border-radius: 99px;
+    color        : var(--sp-subtle);
+    font-size    : 0.76rem;
+    cursor       : pointer;
+    display      : flex;
+    align-items  : center;
+    gap          : 5px;
+    transition   : background 0.12s, color 0.12s;
+}
+.sp-abort-btn:hover { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
 
 .sp-error {
     display        : flex;
