@@ -925,9 +925,9 @@ function renderOutline(raw) {
                 ${injectBtn}
             </div>
             <div class="sp-beat-title">${escapeHtml(b.title)}</div>
-            ${b.outcome ? `<div class="sp-beat-outcome">${escapeHtml(b.outcome)}</div>` : ''}
-            ${b.scene   ? `<div class="sp-beat-scene">${escapeHtml(b.scene)}</div>` : ''}
-            ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(b.think)}</p></details>` : ''}
+            ${b.outcome ? `<div class="sp-beat-outcome">${escapeHtml(cleanText(b.outcome))}</div>` : ''}
+            ${b.scene   ? `<div class="sp-beat-scene">${escapeHtml(cleanText(b.scene))}</div>` : ''}
+            ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(cleanText(b.think))}</p></details>` : ''}
         </div>`;
     }).join('');
 }
@@ -1368,3 +1368,16 @@ function renderEvent(ev) {
 
 function escapeHtml(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function escapeAttr(s)  { return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function cleanText(s) {
+    return String(s)
+        .replace(/<ruby[^>]*>[\s\S]*?<\/ruby>/gi, (m) =>
+            m.replace(/<rt[^>]*>[\s\S]*?<\/rt>/gi, '').replace(/<\/?ruby[^>]*>/gi, ''))
+        .replace(/<rt[^>]*>[\s\S]*?<\/rt>/gi, '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/\*(.+?)\*/g, '$1')
+        .replace(/_{1,2}(.+?)_{1,2}/g, '$1')
+        .replace(/~~(.+?)~~/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .trim();
+}
