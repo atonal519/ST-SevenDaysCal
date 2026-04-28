@@ -376,7 +376,7 @@ function injectModal() {
     $('#sp-fetch-models').on('click',  fetchModels);
     $('#sp-cfg-key')
         .on('focus', () => { const r = $('#sp-cfg-key').data('real'); if (r) $('#sp-cfg-key').val(r); })
-        .on('blur',  () => { const r = $('#sp-cfg-key').data('real') || $('#sp-cfg-key').val(); if (r) $('#sp-cfg-key').data('real', r).val(maskKey(r)); });
+        .on('blur',  () => { const r = $('#sp-cfg-key').val().trim() || $('#sp-cfg-key').data('real') || ''; if (r) $('#sp-cfg-key').data('real', r).val(maskKey(r)); });
 
     $('#sp-body').on('click', '.sp-tab', function () {
         const idx   = parseInt($(this).data('day'));
