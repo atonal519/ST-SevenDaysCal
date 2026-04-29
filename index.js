@@ -122,9 +122,20 @@ function injectExtButton() {
             <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开日程表"></div>
             <span>日程表</span>
         </div>`;
-    $('#sp_wand_container').append(wandHtml);
 
-    $('#sp-open-btn, #sp_open_wand').on('click', openSchedule);
+    function mountWandBtn() {
+        const c = document.getElementById('sp_wand_container') || document.getElementById('extensionsMenu');
+        if (!c || document.getElementById('sp_open_wand')) return false;
+        c.insertAdjacentHTML('beforeend', wandHtml);
+        document.getElementById('sp_open_wand')?.addEventListener('click', openSchedule);
+        return true;
+    }
+    if (!mountWandBtn()) {
+        const obs = new MutationObserver(() => { if (mountWandBtn()) obs.disconnect(); });
+        obs.observe(document.body, { childList: true, subtree: true });
+    }
+
+    $('#sp-open-btn').on('click', openSchedule);
     $('#sp-fab-check').on('change', function () {
         localStorage.setItem(FAB_KEY, this.checked ? 'true' : 'false');
         $(`#${FAB_ID}`).toggle(this.checked);
@@ -655,7 +666,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
 }
 
 async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null) {
-    const messages = buildMessages(ctx, prompt, userName, charName);
+    const messages = await buildMessages(ctx, prompt, userName, charName);
     const res = await fetch(`${cfg.url}/chat/completions`, {
         method : 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
@@ -666,11 +677,36 @@ async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null
     return (await res.json()).choices?.[0]?.message?.content ?? '';
 }
 
-function buildMessages(ctx, prompt, userName, charName) {
+async function buildWorldInfoContext(ctx) {
+    const parts = [];
+    // 1. 角色卡内嵌 lorebook（character_book）
     const char = ctx.characters?.[ctx.characterId] ?? {};
-    const sys  = [`你正在扮演 ${charName}。`, char.description,
+    const charBook = char.data?.character_book;
+    if (charBook?.entries?.length) {
+        const entries = charBook.entries
+            .filter(e => !e.disabled)
+            .map(e => e.content)
+            .filter(Boolean);
+        if (entries.length) parts.push(`【角色世界书】\n${entries.join('\n\n')}`);
+    }
+    // 2. 全局激活的世界书（尽量大的预算以包含所有条目）
+    try {
+        const wiData = await ctx.getWorldInfoPrompt(ctx.chat ?? [], 999999, true);
+        if (wiData?.worldInfoString) parts.push(`【世界书】\n${wiData.worldInfoString}`);
+    } catch { /* ignore */ }
+    return parts.join('\n\n');
+}
+
+async function buildMessages(ctx, prompt, userName, charName) {
+    const char = ctx.characters?.[ctx.characterId] ?? {};
+    const wiContext = await buildWorldInfoContext(ctx);
+    const sys  = [
+        `你是一位旁观者和叙事分析助手，负责以第三人称视角分析 ${userName} 与 ${charName} 的故事。`,
+        `不要扮演任何角色，不要使用第一人称。所有输出必须以第三人称叙述。`,
+        char.description ? `【${charName} 的背景资料】\n${char.description}` : '',
         char.personality ? `【性格】${char.personality}` : '',
         char.scenario    ? `【场景】${char.scenario}`    : '',
+        wiContext,
     ].filter(Boolean).join('\n\n');
     // Only take the last 10 AI replies (+ their paired user messages) to avoid
     // anchoring on dates from early in the conversation.
@@ -736,7 +772,7 @@ function appendChatMsg(role, content) {
     if (el) el.scrollTop = el.scrollHeight;
 }
 
-function buildOutlineChatMessages(userMsg) {
+async function buildOutlineChatMessages(userMsg) {
     const ctx      = getContext();
     const userName = ctx.name1 || '用户';
     const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
@@ -746,8 +782,11 @@ function buildOutlineChatMessages(userMsg) {
         const saved = key && JSON.parse(localStorage.getItem(key) || 'null');
         if (saved?.raw) outlineCtx = `\n当前大纲：\n${saved.raw}\n`;
     } catch { /* ignore */ }
-    const sys = `你是一位故事创作顾问，正在帮助用户完善 ${userName} 与 ${charName} 的故事大纲。${outlineCtx}
-请以创作顾问身份回答，不要扮演任何角色。如果用户要求修改大纲，在回复末尾输出完整的新大纲（格式与原大纲完全一致，使用 <outline_widget>...</outline_widget> 包裹）。`;
+    const wiContext = await buildWorldInfoContext(ctx);
+    const sys = [`你是一位故事创作顾问，正在帮助用户完善 ${userName} 与 ${charName} 的故事大纲。${outlineCtx}`,
+        wiContext,
+        `请以创作顾问身份回答，不要扮演任何角色。如果用户要求修改大纲，在回复末尾输出完整的新大纲（格式与原大纲完全一致，使用 <outline_widget>...</outline_widget> 包裹）。`,
+    ].filter(Boolean).join('\n');
     return [{ role: 'system', content: sys }, ...outlineChatHistory, { role: 'user', content: userMsg }];
 }
 
@@ -765,7 +804,7 @@ async function sendOutlineChat(userMsg) {
         const res = await fetch(`${cfg.url}/chat/completions`, {
             method : 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
-            body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages: buildOutlineChatMessages(userMsg), max_tokens: 4096 }),
+            body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages: await buildOutlineChatMessages(userMsg), max_tokens: 4096 }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const reply = (await res.json()).choices?.[0]?.message?.content ?? '';
@@ -863,61 +902,46 @@ async function runGenerateOutline() {
 }
 
 function buildOutlinePrompt(userName, charName, perspective = 'user') {
-    const subject   = perspective === 'char' ? charName : userName;
-    const companion = perspective === 'char' ? userName : charName;
-    return `请暂停角色扮演，以编剧顾问身份根据以上剧情，为 ${subject} 与 ${companion} 的故事生成大纲。
+    const subject = perspective === 'char' ? charName : userName;
+    return `请暂停角色扮演，以编剧顾问身份根据以上剧情，为当前故事生成大纲。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 
 【第一步：故事基础分析】
-生成节点之前，先在注释中梳理以下内容（200字以上）：
-① 初始状态：${subject} 与 ${companion} 当前的关系状态、情感现状、未解决的张力
-② 情感萌点：这段关系的核心吸引力或矛盾模式（如"互相吸引却为保护自己而互相伤害"）
-③ 短期目标 / 长期目标：两人各自或共同想要达成的事
-④ 剧情模式：这是什么类型的故事？情感推进的节奏规律是什么？（如"靠近→试探→受伤→退后→忍不住再靠近"的拉扯循环）
-⑤ 两条故事线：主线（外部目标/生活事件）和情感线（关系推进轨迹）各自的走向
-⑥ 两个角色各自的行为模式和语言风格特征，确保节点中的人物表现符合原设
+生成节点之前，先在注释中梳理以下内容（300字以上）：
+① 当前状态：故事中主要人物（包括 ${subject} 及其他关键角色）的现状、各自目标、未解决的矛盾
+② 角色主次关系：核心主角、重要配角、对立势力及其在剧情中的权重
+③ 情感萌点/核心吸引力：这个故事中最抓人的戏剧张力是什么？（如“互相利用却暗生情愫”、“共同御敌但理念冲突”、“救赎与被救赎”）
+④ 外部环境现状与发展趋势：当前势力平衡、社会危机、即将发生的大事件等，以及若无干预的自然走向
+⑤ 剧情模式：这是什么类型的故事？内部驱动力是什么？（如“外部压迫下的生存斗争 + 内部关系演变”或“个人复仇与救赎之旅”）
+⑥ 故事线汇总：至少列出两条故事线——【主线】（外部目标、任务、对抗外部势力）和【情感线】（主要人物之间的情感关系变化）。如有必要可增加个人成长线、势力斗争线等。
+⑦ 各主要角色的行为模式与语言风格特征，确保节点中的人物表现符合原设
 
 【第二步：生成关键节点，目标 8 个】
 节点必须基于上述分析，体现你确定的剧情模式。
-情感线需要螺旋推进（进一步→退半步→再进一步），不能让关系线性发展。
-节点要覆盖完整故事弧线：开场状态→情感萌动→第一次靠近→误解或退后→危机爆发→关键转折→余震→新的平衡。每个阶段1个节点，保证每个节点的 Scene 和 Think 内容充实，不要压缩质量来堆数量。
+- 故事线需要螺旋推进（进→退→再进），不可直线发展。
+- 节点覆盖完整故事弧线：开局状态 → 摩擦/试探 → 第一次推进 → 受挫/退后 → 危机爆发 → 关键转折 → 余波 → 新平衡。每个阶段1个节点。
+- 每个节点的 Scene 和 Think 内容充实，不压缩质量。
 
-【标题要求】10字以内，有文学出处感——可以是：真实古诗词原句或改编、真实歌词改编、知名小说/影视台词化用。各节点标题风格不要全部相同，古诗词/歌词/小说三类至少各用一次。不要自造没有出处的文艺短语。标题部分请切换回创作者视角，水准参考你在正文中给章节起标题的感觉。
+【标题要求】10字以内，有文学出处感——来自真实古诗词原句或改编、真实歌词改编、知名小说/影视台词化用。各节点标题风格不要全部相同，古诗词/歌词/小说三类至少各用一次。不要自造没有出处的文艺短语。
 
 【字段说明】
 Beat: 推演时间|标题|类型|所属故事线|结果
-Scene: 这一幕实际发生了什么
-Subtext: 这一幕里某人没有说出口的那句话，或某个下意识的动作所隐含的情绪
-Think: 创作思考
+Scene: 这一幕实际发生了什么（80-120字）
+Subtext: 这一幕里某人没有说出口的那句话，或某个下意识的动作所隐含的情绪（不超过40字）
+Think: 创作思考（100-150字），必须覆盖：
+ ① 如何体现核心吸引力和剧情模式
+ ② 主要角色（至少一个）此刻的心理状态
+ ③ 对各故事线的推进作用
+ ④ 在螺旋进退中处于哪个位置（相对于前一个节点）
 
-- 推演时间：相对时间，如"数日后""某个深夜""不知何时"
-- 类型：节点性质，如冲突、突破、转折、试探、退后、揭示等
-- 所属故事线：主线 / 情感线 / 双线交叉
-- 结果：这个节点的结局或影响，一句话
-- Scene：100-150字，写清楚发生了什么、谁做了什么、说了什么或没说什么
-- Subtext：一句话，不超过40字，具体到某个人、某个瞬间，是潜台词而非总结
-- Think：100-150字，每点一句话，必须覆盖：① 如何体现情感萌点/剧情模式 ② ${subject} 此刻的心理状态 ③ 对主线和情感线各自的推进作用 ④ 在螺旋进退中处于哪个位置
-
-【输出格式（严格遵守，只输出以下结构，禁止省略 outline_widget 标签）】
-<!-- 故事分析：（第一步的分析，200字以上） -->
+【输出格式（严格遵守）】
+<!-- 故事分析：（第一步的分析，300字以上） -->
 <outline_widget>
 Beat: 推演时间|标题|类型|所属故事线|结果
-Scene: 场景内容…
-Subtext: 没说出口的话或隐含动作…
-Think: 思考内容…
-Beat: 推演时间|标题|类型|所属故事线|结果
-Scene: 场景内容…
-Subtext: 没说出口的话或隐含动作…
-Think: 思考内容…
-Beat: 推演时间|标题|类型|所属故事线|结果
-Scene: 场景内容…
-Subtext: 没说出口的话或隐含动作…
-Think: 思考内容…
-Beat: 推演时间|标题|类型|所属故事线|结果
-Scene: 场景内容…
-Subtext: 没说出口的话或隐含动作…
-Think: 思考内容…
-（继续，每个弧线阶段1个节点，共8个，质量优先）
+Scene: …
+Subtext: …
+Think: …
+（共8个节点，每节点重复上述结构）
 </outline_widget>`;}
 
 // ─── Outline parse / render ───────────────────────────────────────────────────
