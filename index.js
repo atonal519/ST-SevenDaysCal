@@ -98,7 +98,7 @@ function injectExtButton() {
     const html = `
         <div id="${PLUGIN_ID}-settings" class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>七日日程规划</b>
+                <b>日程表</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
@@ -115,7 +115,15 @@ function injectExtButton() {
             </div>
         </div>`;
     $('#extensions_settings').append(html);
-    $('#sp-open-btn').on('click', openSchedule);
+
+    const wandHtml = `
+        <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
+            <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开日程表"></div>
+            <span>日程表</span>
+        </div>`;
+    $('#sp_wand_container').append(wandHtml);
+
+    $('#sp-open-btn, #sp_open_wand').on('click', openSchedule);
     $('#sp-fab-check').on('change', function () {
         localStorage.setItem(FAB_KEY, this.checked ? 'true' : 'false');
         $(`#${FAB_ID}`).toggle(this.checked);
@@ -126,10 +134,14 @@ function setExtBtnState(state) {
     const $btn = $('#sp-open-btn');
     $btn.removeClass('sp-btn-generating sp-btn-done');
     if (state) $btn.addClass(`sp-btn-${state}`);
+
+    const $wandBtn = $('#sp_open_wand');
+    $wandBtn.removeClass('sp-btn-generating sp-btn-done');
+    if (state) $wandBtn.addClass(`sp-btn-${state}`);
+
     const $fab = $(`#${FAB_ID} .sp-fab-btn`);
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
-    // Lock view toggle while generating to prevent mid-flight view switches
     $('.sp-view-toggle').toggleClass('sp-locked', state === 'generating');
 }
 
@@ -142,7 +154,7 @@ function injectFab() {
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
         : '';
     const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() ? '' : 'display:none'}">
-        <button class="sp-fab-btn sp-${currentTheme}" title="七日日程"
+        <button class="sp-fab-btn sp-${currentTheme}" title="日程表"
             style="width:44px;height:44px;border-radius:50%;background:#3a3648;color:#d0bcff;border:1.5px solid rgba(208,188,255,0.35);display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);transform:translateZ(0);clip:auto;">
             <i class="fa-solid fa-calendar-days"></i>
         </button>
