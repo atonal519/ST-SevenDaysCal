@@ -51,6 +51,7 @@ let scheduleAbortController = null;
 let outlineAbortController  = null;
 const _injectTexts      = {};
 let   _injectIdSeq      = 0;
+let viewportSyncBound   = false;
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -565,7 +566,10 @@ function showPanel() {
     if (sheet) sheet.style.animation = '';
     $root.stop(true).css({ display: 'block', opacity: 0 })
          .animate({ opacity: 1 }, 180);
-    setTimeout(positionPanel, 0);
+    setTimeout(() => {
+        positionPanel();
+        syncMobileViewport();
+    }, 0);
 }
 
 function closePanel() {
@@ -1061,8 +1065,11 @@ async function fetchModels() {
 
 function toggleSettings() {
     settingsOpen = !settingsOpen;
-    $('#sp-settings-panel').slideToggle(200);
+    $('#sp-settings-panel').slideToggle(200, () => {
+        syncMobileViewport();
+    });
     $(`#${MODAL_ID} .sp-settings-btn`).toggleClass('sp-btn-active', settingsOpen);
+    syncMobileViewport();
 }
 
 function toggleKeyVisibility() {
@@ -1270,6 +1277,8 @@ function positionPanel() {
         sheet.style.top       = '';
         sheet.style.right     = '';
         sheet.style.transform = '';
+        syncMobileViewport();
+        bindViewportSync();
         return;
     }
     const pos = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
@@ -1278,6 +1287,34 @@ function positionPanel() {
         sheet.style.top   = Math.min(pos.top,  window.innerHeight - 60) + 'px';
         sheet.style.right = 'auto';
     }
+}
+
+function bindViewportSync() {
+    if (viewportSyncBound) return;
+    viewportSyncBound = true;
+    const onViewportChange = () => syncMobileViewport();
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('orientationchange', onViewportChange);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', onViewportChange);
+        window.visualViewport.addEventListener('scroll', onViewportChange);
+    }
+}
+
+function syncMobileViewport() {
+    if (!isMobile()) return;
+    const root = document.getElementById(MODAL_ID);
+    const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
+    if (!root || !sheet || root.style.display === 'none') return;
+
+    const vv = window.visualViewport;
+    const vh = Math.max(320, Math.round((vv?.height || window.innerHeight)));
+    const top = 70;
+    const bottomGap = 20;
+    const maxH = Math.max(260, vh - top - bottomGap);
+
+    sheet.style.top = `${top}px`;
+    sheet.style.maxHeight = `${maxH}px`;
 }
 
 // ─── Toast (top) ──────────────────────────────────────────────────────────────
