@@ -1,5 +1,12 @@
 import { getContext } from '../../../extensions.js';
 import { generateQuietPrompt, eventSource, event_types, substituteParams } from '../../../../script.js';
+import {
+    buildCreativeChatHistoryKey,
+    buildCreativeChatSystemPrompt,
+    buildOutlineCacheKey as buildOutlineScopedCacheKey,
+    buildScheduleCacheKey,
+    getCreativeChatPlaceholder,
+} from './state.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
@@ -10,14 +17,14 @@ const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
 const FAB_KEY     = 'sp-fab-show';
 
+let lastDebugPayload = null;
+
 // view: 'user' | 'char'   charName: confirmed char name
 function getCacheKey(view, charName) {
     const chatId = getContext().chatId;
-    if (!chatId) return null;
     const v = view ?? currentView;
     const c = charName ?? charViewName;
-    if (v === 'char' && c) return `sp-cache-${chatId}-char-${c}`;
-    return `sp-cache-${chatId}-user`;
+    return buildScheduleCacheKey(chatId, v, c);
 }
 
 function loadCachedForCurrentChat(view, charName) {
@@ -76,6 +83,7 @@ jQuery(async () => {
             $('#sp-outline-wrap').hide();
             $('#sp-body').show();
             $(`#${MODAL_ID} .sp-outline-btn`).removeClass('sp-btn-active');
+            updateCreativeChatModeUI();
             $('#sp-chat-msgs').empty();
             if (cachedSchedule) setBody(cachedSchedule);
             else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>暂无日程，点击右下角生成</p></div>`);
@@ -313,7 +321,7 @@ function injectModal() {
 
                 <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
                     <div class="sp-outline-beats" id="sp-outline-beats">
-                        <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>点击右上角生成按钮生成大纲</p></div>
+                        <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>
                     </div>
                     <div class="sp-outline-divider" id="sp-outline-divider">
                         <i class="fa-solid fa-grip-lines"></i>
@@ -326,6 +334,14 @@ function injectModal() {
                         </div>
                     </div>
                 </div>
+
+                <details class="sp-debug-drawer" id="sp-debug-drawer">
+                    <summary class="sp-debug-summary">🐛 AI 输入</summary>
+                    <pre class="sp-debug-pre" id="sp-debug-pre">（尚未发送请求）</pre>
+                    <div class="sp-debug-actions">
+                        <button class="sp-debug-copy-btn">复制</button>
+                    </div>
+                </details>
 
                 <div class="sp-resize-handle" id="sp-resize-handle">
                     <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
@@ -342,6 +358,18 @@ function injectModal() {
     $(`#${MODAL_ID} .sp-maximize-btn`).on('click', toggleFullscreen);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
+    document.getElementById('sp-debug-drawer').addEventListener('toggle', function () {
+        if (this.open) {
+            document.getElementById('sp-debug-pre').textContent =
+                lastDebugPayload ? JSON.stringify(lastDebugPayload, null, 2) : '（尚未发送请求）';
+        }
+    });
+    $(`#${MODAL_ID} .sp-debug-copy-btn`).on('click', function () {
+        if (!lastDebugPayload) return;
+        navigator.clipboard.writeText(JSON.stringify(lastDebugPayload, null, 2))
+            .then(() => { $(this).text('已复制 ✓'); setTimeout(() => $(this).text('复制'), 2000); })
+            .catch(() => {});
+    });
 
     // Outline chat
     function doSendChat() {
@@ -350,6 +378,7 @@ function injectModal() {
     }
     $('#sp-chat-send').on('click', doSendChat);
     $('#sp-chat-input').on('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSendChat(); } });
+    $('#sp-outline-beats').on('click', '#sp-gen-outline-now', triggerGenerateOutline);
 
     // Inject buttons (event delegation)
     $(`#sp-body, #sp-outline-wrap`).on('click', '.sp-inject-btn', function () {
@@ -373,8 +402,12 @@ function injectModal() {
             $(this).addClass('sp-view-active');
             $('#sp-body').hide();
             $('#sp-outline-wrap').css('display', 'flex');
+            loadCreativeChatHistory();
+            updateCreativeChatModeUI();
+            renderCreativeChatHistory();
             cachedOutline = loadCachedOutlineForCurrentChat();
             if (cachedOutline) setOutlineBody(cachedOutline);
+            else setOutlineBody(renderEmptyOutlineState());
             return;
         }
 
@@ -507,7 +540,13 @@ function setView(view, charName) {
     cachedSchedule = loadCachedForCurrentChat();
     cachedOutline  = loadCachedOutlineForCurrentChat();
     outlineChatHistory = [];
-    $('#sp-chat-msgs').empty();
+    if (outlineMode) {
+        loadCreativeChatHistory();
+        updateCreativeChatModeUI();
+        renderCreativeChatHistory();
+    } else {
+        $('#sp-chat-msgs').empty();
+    }
     if (outlineMode && cachedOutline) setOutlineBody(cachedOutline);
 }
 
@@ -667,6 +706,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
 
 async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null) {
     const messages = await buildMessages(ctx, prompt, userName, charName);
+    lastDebugPayload = { model: cfg.model || 'gpt-4o-mini', messages };
     const res = await fetch(`${cfg.url}/chat/completions`, {
         method : 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
@@ -728,11 +768,47 @@ async function buildMessages(ctx, prompt, userName, charName) {
 
 function getOutlineCacheKey(view, charName) {
     const chatId = getContext().chatId;
-    if (!chatId) return null;
     const v = view ?? currentView;
     const c = charName ?? charViewName;
-    if (v === 'char' && c) return `sp-cache-${chatId}-outline-char-${c}`;
-    return `sp-cache-${chatId}-outline-user`;
+    return buildOutlineScopedCacheKey(chatId, v, c);
+}
+
+function getCreativeChatHistoryKey(view, charName) {
+    const chatId = getContext().chatId;
+    return buildCreativeChatHistoryKey(chatId, view ?? currentView, charName ?? charViewName);
+}
+
+function loadCreativeChatHistory(view, charName) {
+    const key = getCreativeChatHistoryKey(view, charName);
+    if (!key) {
+        outlineChatHistory = [];
+        return outlineChatHistory;
+    }
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || '[]');
+        outlineChatHistory = Array.isArray(saved) ? saved.filter(item => item?.role && item?.content) : [];
+    } catch {
+        outlineChatHistory = [];
+    }
+    return outlineChatHistory;
+}
+
+function saveCreativeChatHistory(view, charName) {
+    const key = getCreativeChatHistoryKey(view, charName);
+    if (!key) return;
+    localStorage.setItem(key, JSON.stringify(outlineChatHistory));
+}
+
+function updateCreativeChatModeUI() {
+    $('#sp-chat-input').attr('placeholder', getCreativeChatPlaceholder());
+}
+
+function renderCreativeChatHistory() {
+    const $msgs = $('#sp-chat-msgs');
+    $msgs.empty();
+    for (const msg of outlineChatHistory) {
+        appendChatMsg(msg.role === 'assistant' ? 'ai' : msg.role, msg.content);
+    }
 }
 
 function loadCachedOutlineForCurrentChat(view, charName) {
@@ -780,13 +856,15 @@ async function buildOutlineChatMessages(userMsg) {
     try {
         const key  = getOutlineCacheKey();
         const saved = key && JSON.parse(localStorage.getItem(key) || 'null');
-        if (saved?.raw) outlineCtx = `\n当前大纲：\n${saved.raw}\n`;
+        if (saved?.raw) outlineCtx = saved.raw;
     } catch { /* ignore */ }
     const wiContext = await buildWorldInfoContext(ctx);
-    const sys = [`你是一位故事创作顾问，正在帮助用户完善 ${userName} 与 ${charName} 的故事大纲。${outlineCtx}`,
+    const sys = buildCreativeChatSystemPrompt({
+        userName,
+        charName,
+        outlineRaw: outlineCtx,
         wiContext,
-        `请以创作顾问身份回答，不要扮演任何角色。如果用户要求修改大纲，在回复末尾输出完整的新大纲（格式与原大纲完全一致，使用 <outline_widget>...</outline_widget> 包裹）。`,
-    ].filter(Boolean).join('\n');
+    });
     return [{ role: 'system', content: sys }, ...outlineChatHistory, { role: 'user', content: userMsg }];
 }
 
@@ -794,6 +872,7 @@ async function sendOutlineChat(userMsg) {
     if (isOutlineChatting) return;
     appendChatMsg('user', userMsg);
     outlineChatHistory.push({ role: 'user', content: userMsg });
+    saveCreativeChatHistory();
     isOutlineChatting = true;
     const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').text('…').appendTo('#sp-chat-msgs');
     const el = document.getElementById('sp-chat-msgs');
@@ -809,6 +888,7 @@ async function sendOutlineChat(userMsg) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const reply = (await res.json()).choices?.[0]?.message?.content ?? '';
         outlineChatHistory.push({ role: 'assistant', content: reply });
+        saveCreativeChatHistory();
         $dots.remove();
         appendChatMsg('ai', reply);
         if (/<outline_widget/i.test(reply)) {
@@ -842,13 +922,21 @@ function toggleOutlineMode() {
         $(`.sp-view-btn[data-view="outline"]`).addClass('sp-view-active');
         $('#sp-body').hide();
         $('#sp-outline-wrap').css('display', 'flex');
+        loadCreativeChatHistory();
+        updateCreativeChatModeUI();
+        renderCreativeChatHistory();
         cachedOutline = loadCachedOutlineForCurrentChat();
         if (cachedOutline) setOutlineBody(cachedOutline);
+        else setOutlineBody(renderEmptyOutlineState());
     } else {
         $(`.sp-view-btn[data-view="${currentView}"]`).addClass('sp-view-active');
         $('#sp-outline-wrap').hide();
         $('#sp-body').show();
     }
+}
+
+function renderEmptyOutlineState() {
+    return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>`;
 }
 
 function setOutlineBody(html) { $('#sp-outline-beats').html(html); }
@@ -1489,3 +1577,4 @@ function cleanText(s) {
         .replace(/`([^`]+)`/g, '$1')
         .trim();
 }
+
