@@ -685,6 +685,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-gen-btn:hover  { opacity: 0.88; }
 .sp-gen-btn:active { transform: scale(0.96); }
+.sp-outline-gen-btn {
+    margin-top: 6px;
+}
 
 /* ─── Outline wrap ───────────────────────────────────────────────────────────── */
 .sp-outline-wrap {
@@ -902,3 +905,64 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-event:hover .sp-inject-btn,
 .sp-beat:hover  .sp-inject-btn  { opacity: 1; }
 .sp-inject-btn:hover             { color: var(--sp-primary); background: var(--sp-surface-high); }
+
+/* ─── Debug drawer ───────────────────────────────────────────────────────────── */
+.sp-debug-drawer {
+    border-top     : 1px solid var(--sp-divider);
+    margin-top     : 4px;
+    padding        : 0;
+    flex-shrink    : 0;
+}
+.sp-debug-summary {
+    display        : flex;
+    align-items    : center;
+    gap            : 6px;
+    padding        : 5px 10px;
+    font-size      : 0.72rem;
+    color          : var(--sp-subtle);
+    cursor         : pointer;
+    user-select    : none;
+    list-style     : none;
+}
+.sp-debug-summary::-webkit-details-marker { display: none; }
+.sp-debug-summary::before {
+    content        : '▶';
+    font-size      : 0.6rem;
+    transition     : transform 0.15s;
+    display        : inline-block;
+}
+.sp-debug-drawer[open] .sp-debug-summary::before {
+    transform      : rotate(90deg);
+}
+.sp-debug-summary:hover { color: var(--sp-on-surface); }
+.sp-debug-pre {
+    margin         : 0;
+    padding        : 8px 10px;
+    font-family    : 'Roboto Mono', monospace;
+    font-size      : 0.7rem;
+    color          : var(--sp-on-surface);
+    background     : rgba(0,0,0,0.25);
+    border-radius  : 0 0 8px 8px;
+    max-height     : 260px;
+    overflow-y     : auto;
+    white-space    : pre-wrap;
+    word-break     : break-all;
+}
+.sp-debug-actions {
+    display        : flex;
+    justify-content: flex-start;
+    padding        : 4px 40px 8px 10px;
+}
+.sp-debug-copy-btn {
+    padding        : 2px 8px;
+    min-width      : 0;
+    border         : 1px solid var(--sp-divider);
+    border-radius  : 4px;
+    background     : transparent;
+    color          : var(--sp-subtle);
+    font-size      : 0.7rem;
+    cursor         : pointer;
+    transition     : color 0.15s, border-color 0.15s;
+}
+.sp-debug-copy-btn:hover { color: var(--sp-on-surface); border-color: var(--sp-surface-high); }
+
