@@ -91,7 +91,7 @@
     color         : var(--sp-primary);
     letter-spacing: 0.01em;
 }
-.sp-topbar-actions { display: flex; gap: 2px; }
+.sp-topbar-actions { display: flex; gap: 2px; flex-shrink: 0; }
 
 .sp-icon-btn {
     width          : 32px;
@@ -258,6 +258,30 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius : 99px;
 }
 .sp-schedule-label { color: var(--sp-subtle); font-size: 0.85rem; }
+
+/* ─── Panel toolbar / per-panel refresh ──────────────────────────────────────── */
+.sp-panel-toolbar {
+    display        : flex;
+    justify-content: flex-end;
+    padding        : 8px 14px 4px;
+    flex-shrink    : 0;
+}
+.sp-schedule-header .sp-panel-refresh { margin-left: auto; }
+.sp-panel-refresh {
+    width          : 28px;
+    height         : 28px;
+    border         : none;
+    background     : transparent;
+    color          : var(--sp-subtle);
+    border-radius  : 50%;
+    cursor         : pointer;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    font-size      : 0.8rem;
+    transition     : background 0.15s, color 0.15s;
+}
+.sp-panel-refresh:hover { background: var(--sp-surface-high); color: var(--sp-on-surface); }
 
 /* ─── Tab bar ────────────────────────────────────────────────────────────────── */
 .sp-tab-bar {
@@ -445,15 +469,16 @@ select.sp-input { appearance: none; cursor: pointer; }
     position       : absolute;
     bottom         : 0;
     right          : 0;
-    width          : 28px;
-    height         : 28px;
+    width          : 44px;
+    height         : 44px;
     display        : flex;
-    align-items    : center;
-    justify-content: center;
+    align-items    : flex-end;
+    justify-content: flex-end;
+    padding        : 8px;
     cursor         : se-resize;
     color          : var(--sp-subtle);
-    font-size      : 0.7rem;
-    opacity        : 0.4;
+    font-size      : 0.8rem;
+    opacity        : 0.5;
     transition     : opacity 0.15s, color 0.15s;
     border-radius  : 0 0 20px 0;
     z-index        : 10;
@@ -696,6 +721,23 @@ select.sp-input { appearance: none; cursor: pointer; }
     display       : none;
     flex-direction: column;
 }
+
+.sp-lines-wrap {
+    flex          : 1;
+    overflow      : hidden;
+    display       : none;
+    flex-direction: column;
+}
+
+.sp-lines-list {
+    flex           : 1;
+    min-height     : 0;
+    overflow-y     : auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sp-divider) transparent;
+}
+.sp-lines-list::-webkit-scrollbar       { width: 4px; }
+.sp-lines-list::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
 
 /* ─── Beat cards ─────────────────────────────────────────────────────────────── */
 .sp-beat {
@@ -965,4 +1007,120 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition     : color 0.15s, border-color 0.15s;
 }
 .sp-debug-copy-btn:hover { color: var(--sp-on-surface); border-color: var(--sp-surface-high); }
+
+/* ─── Settings interval row ──────────────────────────────────────────────────── */
+.sp-interval-row {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
+    margin-bottom : 8px;
+}
+.sp-interval-label {
+    font-size : 0.78rem;
+    color     : var(--sp-subtle);
+}
+.sp-mode-row {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
+}
+.sp-mode-opt {
+    display    : flex;
+    align-items: center;
+    gap        : 6px;
+    font-size  : 0.78rem;
+    color      : var(--sp-on-surface);
+    cursor     : pointer;
+}
+.sp-mode-opt input[type="radio"] { cursor: pointer; flex-shrink: 0; }
+.sp-interval-input {
+    width     : 46px !important;
+    text-align: center;
+}
+
+/* ─── Storylines inline block (appended to AI messages) ─────────────────────── */
+.sp-lines-inline {
+    margin-top    : 12px;
+    border-radius : 8px;
+    overflow      : hidden;
+    font-family   : inherit;
+    font-size     : 0.78rem;
+    color         : inherit;
+    background    : rgba(128,128,128,0.07);
+    border        : 1px solid rgba(128,128,128,0.15);
+}
+.sp-inline-summary {
+    display      : flex;
+    align-items  : center;
+    gap          : 8px;
+    padding      : 6px 10px;
+    cursor       : pointer;
+    list-style   : none;
+    user-select  : none;
+    opacity      : 0.75;
+}
+.sp-inline-summary::-webkit-details-marker { display: none; }
+.sp-inline-summary:hover { opacity: 1; }
+.sp-inline-title {
+    font-size     : 0.72rem;
+    font-weight   : 600;
+    letter-spacing: 0.04em;
+}
+.sp-inline-count {
+    font-size: 0.68rem;
+    opacity  : 0.6;
+}
+.sp-inline-body {
+    padding: 4px 0 6px;
+}
+.sp-inline-line {
+    padding      : 6px 10px;
+    border-bottom: 1px solid rgba(128,128,128,0.12);
+}
+.sp-inline-line:last-child { border-bottom: none; }
+.sp-inline-head {
+    display      : flex;
+    align-items  : center;
+    gap          : 5px;
+    flex-wrap    : wrap;
+    margin-bottom: 3px;
+}
+.sp-inline-stage {
+    font-size  : 0.68rem;
+    font-weight: 700;
+    /* color set via inline style (STAGE_COLORS) */
+}
+.sp-inline-type {
+    font-size    : 0.65rem;
+    padding      : 1px 5px;
+    border-radius: 99px;
+    opacity      : 0.7;
+    background   : rgba(128,128,128,0.15);
+}
+.sp-inline-dots {
+    font-size     : 0.6rem;
+    letter-spacing: -1px;
+    opacity       : 0.45;
+}
+.sp-inline-when {
+    font-size: 0.65rem;
+    opacity  : 0.5;
+}
+.sp-inline-name {
+    font-size  : 0.8rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.sp-inline-desc {
+    font-size  : 0.72rem;
+    line-height: 1.5;
+    margin-top : 2px;
+    opacity    : 0.65;
+}
+.sp-inline-empty {
+    padding   : 6px 10px;
+    font-size : 0.72rem;
+    opacity   : 0.4;
+}
+
 

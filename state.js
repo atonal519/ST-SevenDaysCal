@@ -15,6 +15,12 @@ export function buildOutlineCacheKey(chatId, view = 'user', charName = '') {
     return `sp-cache-${chatId}-outline-user`;
 }
 
+export function buildStorylinesCacheKey(chatId, view = 'user', charName = '') {
+    if (!chatId) return null;
+    if (view === 'char' && charName) return `sp-cache-${chatId}-lines-char-${normalizeScopePart(charName)}`;
+    return `sp-cache-${chatId}-lines-user`;
+}
+
 export function buildCreativeChatHistoryKey(chatId, view = 'user', charName = '') {
     if (!chatId) return null;
     if (view === 'char' && charName) return `sp-cache-${chatId}-creative-chat-char-${normalizeScopePart(charName)}`;

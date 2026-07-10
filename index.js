@@ -1,21 +1,29 @@
-import { getContext } from '../../../extensions.js';
-import { generateQuietPrompt, eventSource, event_types, substituteParams } from '../../../../script.js';
+import { getContext, extension_settings } from '../../../extensions.js';
+import { generateQuietPrompt, eventSource, event_types, substituteParams, saveSettingsDebounced } from '../../../../script.js';
 import {
     buildCreativeChatHistoryKey,
     buildCreativeChatSystemPrompt,
     buildOutlineCacheKey as buildOutlineScopedCacheKey,
     buildScheduleCacheKey,
+    buildStorylinesCacheKey as buildLinesScopedCacheKey,
     getCreativeChatPlaceholder,
 } from './state.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
 const FAB_ID     = 'sp-fab';
-const THEME_KEY  = 'sp-theme';
-const API_KEY    = 'sp-api-cfg';
 const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
-const FAB_KEY     = 'sp-fab-show';
+
+// Default plugin settings (stored in ST's settings.json via extension_settings)
+const DEFAULT_SETTINGS = {
+    apiUrl  : '',
+    apiKey  : '',
+    apiModel: '',
+    fabShow : true,
+    linesInterval: 2,
+    linesMode: 'turns',  // 'turns' | 'days'
+};
 
 let lastDebugPayload = null;
 
@@ -37,7 +45,30 @@ function loadCachedForCurrentChat(view, charName) {
     return null;
 }
 
-let currentTheme   = localStorage.getItem(THEME_KEY) || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night');
+// ─── ST theme detection ───────────────────────────────────────────────────────
+// Read ST's --SmartThemeBodyColor (text color on documentElement) to decide
+// dark vs light. If it's bright → panel uses dark (night); if dim → light (day).
+function detectSTTheme() {
+    try {
+        const raw = getComputedStyle(document.documentElement)
+            .getPropertyValue('--SmartThemeBodyColor').trim();
+        if (raw) {
+            // Parse rgb/rgba/hex, get perceived luminance
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 1;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = raw;
+            ctx.fillRect(0, 0, 1, 1);
+            const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+            // Relative luminance (sRGB)
+            const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            return lum > 127 ? 'night' : 'day';  // bright text → dark bg (night)
+        }
+    } catch { /* ignore */ }
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night';
+}
+
+let currentTheme   = detectSTTheme();
 let cachedSchedule = null;
 let isGenerating   = false;
 let settingsOpen   = false;
@@ -53,7 +84,11 @@ let isGeneratingOutline = false;
 let cachedOutline       = null;
 let outlineChatHistory  = [];
 let isOutlineChatting   = false;
-let isFullscreen        = false;
+let linesMode           = false;
+let isGeneratingLines   = false;
+let cachedLines         = null;
+let linesAbortController = null;
+let linesAiMsgCounter   = 0;   // counts AI messages since last lines advancement
 let scheduleAbortController = null;
 let outlineAbortController  = null;
 const _injectTexts      = {};
@@ -69,6 +104,8 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
+    // Back-fill inline blocks for any messages already rendered at startup
+    setTimeout(backfillLinesInlineBlocks, 800);
     // Reset view state and reload cache on chat switch
     eventSource.on(event_types.CHAT_CHANGED, () => {
         currentView  = 'user';
@@ -76,55 +113,204 @@ jQuery(async () => {
         outlineMode  = false;
         cachedOutline = null;
         outlineChatHistory = [];
+        linesMode    = false;
+        cachedLines  = null;
+        linesAiMsgCounter = 0;
+        lastDetectedDay   = null;
         $('.sp-view-btn').removeClass('sp-view-active');
         $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
             $('#sp-outline-wrap').hide();
+            $('#sp-lines-wrap').hide();
             $('#sp-body').show();
             $(`#${MODAL_ID} .sp-outline-btn`).removeClass('sp-btn-active');
             updateCreativeChatModeUI();
             $('#sp-chat-msgs').empty();
             if (cachedSchedule) setBody(cachedSchedule);
-            else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>暂无日程，点击右下角生成</p></div>`);
+            else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>`);
         }
+        // Back-fill inline blocks for newly loaded chat
+        setTimeout(backfillLinesInlineBlocks, 300);
     });
-    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
-        if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? 'day' : 'night');
+    // Auto-advance storylines, then append inline block to every AI message
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+        let shouldAdvance = false;
+        if (getLinesMode() === 'days') {
+            // Time-based: advance when the in-game date appears to have changed
+            shouldAdvance = detectInGameDayChange(messageId);
+        } else {
+            // Turn-based: count AI messages, advance every N
+            linesAiMsgCounter++;
+            const interval = getLinesInterval();
+            if (linesAiMsgCounter >= interval) { linesAiMsgCounter = 0; shouldAdvance = true; }
+        }
+        appendLinesInlineBlock(messageId, shouldAdvance);
     });
+    // Track ST theme changes via MutationObserver on documentElement style
+    new MutationObserver(() => {
+        const t = detectSTTheme();
+        if (t !== currentTheme) applyTheme(t);
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
 });
 
 // ─── Config helpers ───────────────────────────────────────────────────────────
 
-function loadCfg() { try { return JSON.parse(localStorage.getItem(API_KEY)) || {}; } catch { return {}; } }
-function saveCfg(c) { localStorage.setItem(API_KEY, JSON.stringify(c)); }
+// ─── Plugin settings (persisted in ST's settings.json) ────────────────────────
+
+function getSettings() {
+    if (!extension_settings[PLUGIN_ID]) extension_settings[PLUGIN_ID] = { ...DEFAULT_SETTINGS };
+    return extension_settings[PLUGIN_ID];
+}
+
+function loadCfg() {
+    const s = getSettings();
+    return { url: s.apiUrl || '', key: s.apiKey || '', model: s.apiModel || '' };
+}
+
+function saveCfg(c) {
+    const s = getSettings();
+    s.apiUrl   = c.url   || '';
+    s.apiKey   = c.key   || '';
+    s.apiModel = c.model || '';
+    saveSettingsDebounced();
+}
+
+function fabEnabled() { return getSettings().fabShow !== false; }
+
+function getLinesInterval() {
+    const v = parseInt(getSettings().linesInterval, 10);
+    return Number.isFinite(v) && v >= 1 ? v : 2;
+}
+
+function saveLinesInterval(n) {
+    getSettings().linesInterval = Math.max(1, parseInt(n, 10) || 2);
+    saveSettingsDebounced();
+}
+
+function getLinesMode() {
+    return getSettings().linesMode === 'days' ? 'days' : 'turns';
+}
+
+function saveLinesMode(mode) {
+    getSettings().linesMode = (mode === 'days') ? 'days' : 'turns';
+    saveSettingsDebounced();
+}
+
 function maskKey(k) { return k.length <= 8 ? '•'.repeat(k.length) : '•'.repeat(k.length - 4) + k.slice(-4); }
-function fabEnabled() { return localStorage.getItem(FAB_KEY) !== 'false'; }
+
+// ─── Time-based day-change detection ─────────────────────────────────────────
+// Scans the last few AI messages for date/time expressions and detects when the
+// in-game calendar date has advanced. Heuristic: look for Chinese date patterns
+// (第N天, 周X, N月N日, 今天/明天/昨天 transitions) and compare consecutive messages.
+let _lastDetectedDay = null;
+
+function detectInGameDayChange(messageId) {
+    const msgs = getContext().chat || [];
+    // Only look at AI messages; find the one just before this one too
+    const aiMsgs = msgs.filter(m => !m.is_user);
+    if (aiMsgs.length < 1) return false;
+
+    const DAY_PATTERNS = [
+        /第\s*(\d+)\s*[天日]/,
+        /([一二三四五六七八九十百千\d]+)\s*月\s*([一二三四五六七八九十百千\d]+)\s*[日号]/,
+        /星期([一二三四五六日天])|周([一二三四五六日天])/,
+        /今天|明天|后天|大后天/,
+        /day\s*(\d+)/i,
+    ];
+
+    function extractDay(text) {
+        for (const p of DAY_PATTERNS) {
+            const m = text.match(p);
+            if (m) return m[0];
+        }
+        return null;
+    }
+
+    const currentMsg = aiMsgs[aiMsgs.length - 1];
+    const currentDay = extractDay(currentMsg?.mes || '');
+    if (!currentDay) return false;
+
+    if (currentDay !== _lastDetectedDay) {
+        _lastDetectedDay = currentDay;
+        return true;  // day changed → trigger advance
+    }
+    return false;
+}
+
+// ─── Storylines inline block (appended to AI messages) ────────────────────────
+
+async function appendLinesInlineBlock(messageId, shouldAdvance) {
+    // Only gate generation on API being configured; display runs regardless
+    const cfg = loadCfg();
+    if (shouldAdvance && !isGeneratingLines && cfg.url && cfg.key) {
+        await runGenerateLines(true /* silent */);
+    }
+
+    const msgEl = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
+    if (!msgEl) return;
+
+    // Remove any previously injected block for this message
+    const existing = msgEl.querySelector('.sp-lines-inline');
+    if (existing) existing.remove();
+
+    const raw = (() => {
+        try {
+            const key = getLinesCacheKey();
+            const saved = key && JSON.parse(localStorage.getItem(key) || 'null');
+            return saved?.raw || '';
+        } catch { return ''; }
+    })();
+
+    const block = document.createElement('details');
+    block.className = 'sp-lines-inline';
+
+    const lines = raw ? parseLines(raw) : [];
+    if (lines.length) {
+        const linesHtml = lines.map(l => {
+            const levelNum = parseInt(l.level, 10);
+            const level    = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
+            const dots     = '●'.repeat(level) + '○'.repeat(4 - level);
+            const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
+            return `<div class="sp-inline-line">
+                <div class="sp-inline-head">
+                    <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
+                    ${l.type ? `<span class="sp-inline-type">${escapeHtml(l.type)}</span>` : ''}
+                    <span class="sp-inline-dots">${dots}</span>
+                    ${l.when ? `<span class="sp-inline-when">${escapeHtml(l.when)}</span>` : ''}
+                </div>
+                <div class="sp-inline-name">${escapeHtml(l.name)}</div>
+                ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
+            </div>`;
+        }).join('');
+        block.innerHTML = `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
+    } else {
+        block.innerHTML = `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
+    }
+
+    msgEl.appendChild(block);
+}
+
+// Back-fill inline blocks on all existing AI messages (no generation, just render from cache)
+async function backfillLinesInlineBlocks() {
+    // Only back-fill the most recent AI messages visible in the DOM.
+    // Injecting every historical message is wasteful — they'd all show the
+    // same cached snapshot, and iterating hundreds of elements is slow.
+    const BACKFILL_LIMIT = 10;
+    const els = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].slice(-BACKFILL_LIMIT);
+    for (const mesEl of els) {
+        const mesId = mesEl.getAttribute('mesid');
+        if (mesId == null) continue;
+        const msgEl = mesEl.querySelector('.mes_text');
+        if (!msgEl || msgEl.querySelector('.sp-lines-inline')) continue;
+        await appendLinesInlineBlock(mesId, false);
+    }
+}
 
 // ─── Extensions panel ─────────────────────────────────────────────────────────
 
 function injectExtButton() {
-    const html = `
-        <div id="${PLUGIN_ID}-settings" class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>日程表</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content">
-                <div class="sp-ext-row">
-                    <button id="sp-open-btn" class="menu_button menu_button_icon">
-                        <i class="fa-solid fa-calendar-days"></i>
-                        <span>打开日程</span>
-                    </button>
-                    <label class="sp-toggle-label">
-                        <input type="checkbox" id="sp-fab-check" ${fabEnabled() ? 'checked' : ''}>
-                        悬浮按钮
-                    </label>
-                </div>
-            </div>
-        </div>`;
-    $('#extensions_settings').append(html);
-
+    // No drawer content — panel opened via magic wand or FAB
     const wandHtml = `
         <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
             <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开日程表"></div>
@@ -142,19 +328,9 @@ function injectExtButton() {
         const obs = new MutationObserver(() => { if (mountWandBtn()) obs.disconnect(); });
         obs.observe(document.body, { childList: true, subtree: true });
     }
-
-    $('#sp-open-btn').on('click', openSchedule);
-    $('#sp-fab-check').on('change', function () {
-        localStorage.setItem(FAB_KEY, this.checked ? 'true' : 'false');
-        $(`#${FAB_ID}`).toggle(this.checked);
-    });
 }
 
 function setExtBtnState(state) {
-    const $btn = $('#sp-open-btn');
-    $btn.removeClass('sp-btn-generating sp-btn-done');
-    if (state) $btn.addClass(`sp-btn-${state}`);
-
     const $wandBtn = $('#sp_open_wand');
     $wandBtn.removeClass('sp-btn-generating sp-btn-done');
     if (state) $wandBtn.addClass(`sp-btn-${state}`);
@@ -277,13 +453,12 @@ function injectModal() {
                         <button class="sp-view-btn sp-view-active" data-view="user">我</button>
                         <button class="sp-view-btn" data-view="char">TA</button>
                         <button class="sp-view-btn" data-view="outline">大纲</button>
+                        <button class="sp-view-btn" data-view="lines">线</button>
                     </div>
                     <div class="sp-topbar-actions">
-                        <button class="sp-icon-btn sp-maximize-btn" title="全屏"><i class="fa-solid fa-expand"></i></button>
+                        <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮"><i class="fa-regular fa-circle-dot"></i></button>
                         <button class="sp-icon-btn sp-settings-btn" title="设置"><i class="fa-solid fa-gear"></i></button>
-                        <button class="sp-icon-btn sp-theme-btn"    title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
-                        <button class="sp-icon-btn sp-regen-btn"    title="重新生成"><i class="fa-solid fa-rotate-right"></i></button>
-                        <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark" style="font-size:1rem"></i></button>
                     </div>
                 </div>
 
@@ -311,12 +486,19 @@ function injectModal() {
                             <i class="fa-solid fa-list"></i>
                         </button>
                     </div>
+                    <div class="sp-interval-row">
+                        <label class="sp-interval-label">事件线推进策略</label>
+                        <div class="sp-mode-row">
+                            <label class="sp-mode-opt"><input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}> 回合制（每 <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}"> 条推进）</label>
+                            <label class="sp-mode-opt"><input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}> 时间制（按聊天内容中的游戏日推进）</label>
+                        </div>
+                    </div>
                     <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
                     <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
                 </div>
 
                 <div class="sp-body" id="sp-body">
-                    <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>点击右上角刷新按钮生成日程</p></div>
+                    <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>
                 </div>
 
                 <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
@@ -332,6 +514,12 @@ function injectModal() {
                             <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
                             <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
                         </div>
+                    </div>
+                </div>
+
+                <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
+                    <div class="sp-lines-list" id="sp-lines-list">
+                        <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>
                     </div>
                 </div>
 
@@ -353,10 +541,14 @@ function injectModal() {
     if (cfg.key) $('#sp-cfg-key').val(maskKey(cfg.key)).data('real', cfg.key);
 
     $(`#${MODAL_ID} .sp-close-btn`).on('click',    closePanel);
-    $(`#${MODAL_ID} .sp-theme-btn`).on('click',    toggleTheme);
-    $(`#${MODAL_ID} .sp-regen-btn`).on('click',    onRegenClick);
-    $(`#${MODAL_ID} .sp-maximize-btn`).on('click', toggleFullscreen);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
+    $(`#${MODAL_ID} .sp-fab-toggle-btn`).on('click', function () {
+        const nowEnabled = !fabEnabled();
+        getSettings().fabShow = nowEnabled;
+        saveSettingsDebounced();
+        $(`#${FAB_ID}`).toggle(nowEnabled);
+        $(this).toggleClass('sp-btn-active', nowEnabled);
+    });
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
     document.getElementById('sp-debug-drawer').addEventListener('toggle', function () {
         if (this.open) {
@@ -379,9 +571,13 @@ function injectModal() {
     $('#sp-chat-send').on('click', doSendChat);
     $('#sp-chat-input').on('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSendChat(); } });
     $('#sp-outline-beats').on('click', '#sp-gen-outline-now', triggerGenerateOutline);
+    $('#sp-lines-list').on('click', '#sp-gen-lines-now', triggerGenerateLines);
+    $('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
+    $('#sp-outline-beats').on('click', '.sp-refresh-outline', triggerGenerateOutline);
+    $('#sp-lines-list').on('click', '.sp-refresh-lines', triggerGenerateLines);
 
     // Inject buttons (event delegation)
-    $(`#sp-body, #sp-outline-wrap`).on('click', '.sp-inject-btn', function () {
+    $(`#sp-body, #sp-outline-wrap, #sp-lines-wrap`).on('click', '.sp-inject-btn', function () {
         const text = _injectTexts[$(this).data('iid')];
         if (text) injectToST(text);
     });
@@ -389,8 +585,9 @@ function injectModal() {
     // Abort buttons (event delegation)
     $('#sp-body').on('click', '#sp-abort-generate', () => scheduleAbortController?.abort());
     $('#sp-outline-beats').on('click', '#sp-abort-outline', () => outlineAbortController?.abort());
+    $('#sp-lines-list').on('click', '#sp-abort-lines', () => linesAbortController?.abort());
 
-    // View toggle: 我 / TA / 大纲
+    // View toggle: 我 / TA / 大纲 / 线
     $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
         if (isGenerating) return;
         const view = $(this).data('view');
@@ -398,9 +595,11 @@ function injectModal() {
         if (view === 'outline') {
             if (outlineMode) return;
             outlineMode = true;
+            linesMode = false;
             $('.sp-view-btn').removeClass('sp-view-active');
             $(this).addClass('sp-view-active');
             $('#sp-body').hide();
+            $('#sp-lines-wrap').hide();
             $('#sp-outline-wrap').css('display', 'flex');
             loadCreativeChatHistory();
             updateCreativeChatModeUI();
@@ -411,16 +610,36 @@ function injectModal() {
             return;
         }
 
-        // Leaving outline mode
-        let wasOutline = false;
-        if (outlineMode) {
+        if (view === 'lines') {
+            if (linesMode) return;
+            linesMode = true;
             outlineMode = false;
-            wasOutline = true;
+            $('.sp-view-btn').removeClass('sp-view-active');
+            $(this).addClass('sp-view-active');
+            $('#sp-body').hide();
             $('#sp-outline-wrap').hide();
-            $('#sp-body').show();
+            $('#sp-lines-wrap').css('display', 'flex');
+            cachedLines = loadCachedLinesForCurrentChat();
+            if (cachedLines) setLinesBody(cachedLines);
+            else setLinesBody(renderEmptyLinesState());
+            return;
         }
 
-        if (view === currentView && !wasOutline) return;
+        // Leaving outline/lines mode
+        let wasExtra = false;
+        if (outlineMode) {
+            outlineMode = false;
+            wasExtra = true;
+            $('#sp-outline-wrap').hide();
+        }
+        if (linesMode) {
+            linesMode = false;
+            wasExtra = true;
+            $('#sp-lines-wrap').hide();
+        }
+        if (wasExtra) $('#sp-body').show();
+
+        if (view === currentView && !wasExtra) return;
         if (view === 'char') {
             if (charViewName) {
                 setView('char', charViewName);
@@ -1068,8 +1287,9 @@ function parseOutline(raw) {
 
 function renderOutline(raw) {
     const beats = parseOutline(raw);
-    if (beats.length === 0) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
-    return beats.map((b, i) => {
+    const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-outline" title="重新生成大纲"><i class="fa-solid fa-rotate-right"></i></button></div>`;
+    if (beats.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+    const cards = beats.map((b, i) => {
         const injectParts = [`【剧情节点参考】`, `${b.time}·《${b.title}》${b.type ? '·' + b.type : ''}${b.line ? '（' + b.line + '）' : ''}`];
         if (b.scene)   injectParts.push(b.scene);
         if (b.outcome) injectParts.push(`结果：${b.outcome}`);
@@ -1090,6 +1310,169 @@ function renderOutline(raw) {
             ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(cleanText(b.think))}</p></details>` : ''}
         </div>`;
     }).join('');
+    return toolbar + cards;
+}
+
+
+// ─── Storylines (事件线) ─────────────────────────────────────────────────────
+
+function getLinesCacheKey(view, charName) {
+    const chatId = getContext().chatId;
+    const v = view ?? currentView;
+    const c = charName ?? charViewName;
+    return buildLinesScopedCacheKey(chatId, v, c);
+}
+
+function loadCachedLinesForCurrentChat(view, charName) {
+    const key = getLinesCacheKey(view, charName);
+    if (!key) return null;
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) return renderLines(saved.raw);
+    } catch { /* ignore corrupt cache */ }
+    return null;
+}
+
+function setLinesBody(html) { $('#sp-lines-list').html(html); }
+
+function renderEmptyLinesState() {
+    return `<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>`;
+}
+
+function triggerGenerateLines() {
+    if (isGeneratingLines) return;
+    isGeneratingLines = true;
+    setLinesBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在推演事件线…</p><button class="sp-abort-btn" id="sp-abort-lines"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+    runGenerateLines();
+}
+
+async function runGenerateLines(silent = false) {
+    const viewSnap = currentView;
+    const charSnap = charViewName;
+    linesAbortController = new AbortController();
+    try {
+        const ctx      = getContext();
+        const userName = ctx.name1 || '用户';
+        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const cfg = loadCfg();
+        if (!cfg.url || !cfg.key) {
+            if (!silent && !settingsOpen) toggleSettings();
+            throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
+        }
+        const cacheKey = getLinesCacheKey(viewSnap, charSnap);
+        let previousRaw = '';
+        try {
+            const saved = cacheKey && JSON.parse(localStorage.getItem(cacheKey) || 'null');
+            if (saved?.raw) previousRaw = saved.raw;
+        } catch { /* ignore corrupt cache */ }
+        const prompt = buildLinesPrompt(userName, charName, viewSnap, previousRaw);
+        const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, linesAbortController.signal);
+        const html   = renderLines(raw);
+        if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, ts: Date.now() }));
+        isGeneratingLines = false;
+        linesAbortController = null;
+        cachedLines = html;
+        if (linesMode) setLinesBody(html);
+        else if (!silent) showToast('事件线已生成，点击查看', () => {
+            if (!linesMode) $('.sp-view-btn[data-view="lines"]').trigger('click');
+            showPanel();
+        });
+    } catch (err) {
+        isGeneratingLines = false;
+        linesAbortController = null;
+        if (err.name === 'AbortError') {
+            if (linesMode) setLinesBody(`<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>已中止</p></div>`);
+            return;
+        }
+        if (!silent) {
+            const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
+            if (linesMode) setLinesBody(errHtml);
+            else showToast('事件线生成失败，请重试', null, true);
+        }
+    }
+}
+
+function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '') {
+    const subject = perspective === 'char' ? charName : userName;
+    return `请暂停角色扮演，以编剧顾问身份根据以上剧情，追踪当前故事中正在发生的"事件线"。
+【重要】所有输出必须使用中文（人名、地名可保留原文）。
+
+事件线是指独立于 ${subject} 直接行动之外、正在自行发展的多阶段进程——阴谋、冲突升级、外部危机、他人的计划等。每条事件线属于以下两类之一，并处于对应阶段之一：
+- 冲突类：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
+- 推进类：筹备 → 执行 → 关键 → 已完成（或已失败）
+
+【当前已追踪的事件线】
+${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 2-4 条正在发生或即将发生的事件线，若剧情中暂时看不出明显的多阶段进程，也可以只给 1-2 条）'}
+
+请基于以上已有事件线和最新剧情进展更新它们：可能推进到下一阶段、可能受挫停滞在原阶段、可能达到终结阶段。如果剧情里出现了新的多阶段进程，可以新增，但总数不要超过 6 条；已经收尾且不再重要的事件线（如已经处于终结阶段一段时间）直接不要输出，视为自然收尾。
+
+【输出格式（严格遵守）】
+<storylines_widget>
+Line: 名称|类型(冲突/推进)|阶段|等级(1-4，数字越大越重要)|最近进展的时间点（如"今天上午""三天后""下周一"，锚定在故事内具体时间，不要用"第N轮"这类说法）
+Desc: 当前状态与可能走向（60-100字）
+（每条事件线重复上面两行）
+</storylines_widget>`;
+}
+
+// ─── Storylines parse / render ────────────────────────────────────────────────
+
+function parseLines(raw) {
+    const m = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
+    const content = m ? m[1] : raw;  // fallback: parse raw directly if no widget tag
+    const lines = []; let cur = null;
+    for (const rawLine of content.split('\n')) {
+        const t = rawLine.trim();
+        if (!t) continue;
+        if (/^Line\s*:/i.test(t)) {
+            if (cur) lines.push(cur);
+            const parts = t.replace(/^Line\s*:\s*/i, '').split('|');
+            cur = {
+                name : (parts[0] || '').trim(),
+                type : (parts[1] || '').trim(),
+                stage: (parts[2] || '').trim(),
+                level: (parts[3] || '').trim(),
+                when : (parts[4] || '').trim(),
+                desc : '',
+            };
+        } else if (/^Desc\s*:/i.test(t) && cur) {
+            cur.desc = t.replace(/^Desc\s*:\s*/i, '').trim();
+        }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+}
+
+const STAGE_COLORS = {
+    萌芽: '#d6b85a', 发酵: '#d98a3d', 逼近: '#cf5f3f', 已爆发: '#b93f3f', 已消散: '#888888',
+    筹备: '#7de9d9', 执行: '#58e8b3', 关键: '#2a8a5d', 已完成: '#1b5e3b', 已失败: '#888888',
+};
+
+function renderLines(raw) {
+    const lines = parseLines(raw);
+    const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-lines" title="重新生成事件线"><i class="fa-solid fa-rotate-right"></i></button></div>`;
+    if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+    const cards = lines.map(l => {
+        const levelNum  = parseInt(l.level, 10);
+        const level     = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
+        const dots      = '●'.repeat(level) + '○'.repeat(4 - level);
+        const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
+        const injectParts = [`【事件线参考】${l.name}（${l.type}·${l.stage}）`];
+        if (l.desc) injectParts.push(l.desc);
+        const injectBtn = makeInjectBtn(injectParts.join('\n'));
+        return `
+        <div class="sp-beat">
+            <div class="sp-beat-head">
+                <span class="sp-beat-type" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
+                ${l.type ? `<span class="sp-beat-line">${escapeHtml(l.type)}</span>` : ''}
+                <span class="sp-beat-time">${dots}</span>
+                ${l.when ? `<span class="sp-beat-time">${escapeHtml(l.when)}</span>` : ''}
+                ${injectBtn}
+            </div>
+            <div class="sp-beat-title">${escapeHtml(l.name)}</div>
+            ${l.desc ? `<div class="sp-beat-scene">${escapeHtml(cleanText(l.desc))}</div>` : ''}
+        </div>`;
+    }).join('');
+    return toolbar + cards;
 }
 
 
@@ -1198,6 +1581,8 @@ function toggleKeyVisibility() {
 function saveSettings() {
     const $k = $('#sp-cfg-key'), key = ($k.data('real') || $k.val()).trim();
     saveCfg({ url: $('#sp-cfg-url').val().trim().replace(/\/$/, ''), key, model: $('#sp-cfg-model').val().trim() });
+    saveLinesInterval($('#sp-lines-interval').val());
+    saveLinesMode($('input[name="sp-lines-mode"]:checked').val());
     $k.data('real', key).val(maskKey(key)).attr('type', 'password');
     const $m = $('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
     const hasApi = !!(loadCfg().url && loadCfg().key);
@@ -1214,40 +1599,6 @@ function applyTheme(theme) {
     currentTheme = theme;
     $(`#${MODAL_ID}`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
     $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
-}
-
-function toggleFullscreen() {
-    isFullscreen = !isFullscreen;
-    const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-    const $icon = $(`#${MODAL_ID} .sp-maximize-btn i`);
-    if (isFullscreen) {
-        sheet.dataset.prevLeft    = sheet.style.left;
-        sheet.dataset.prevTop     = sheet.style.top;
-        sheet.dataset.prevWidth   = sheet.style.width;
-        sheet.dataset.prevHeight  = sheet.style.height;
-        sheet.dataset.prevMaxH    = sheet.style.maxHeight;
-        sheet.style.animation     = 'none';
-        sheet.style.left          = '10px';
-        sheet.style.top           = '10px';
-        sheet.style.right         = 'auto';
-        sheet.style.transform     = 'none';
-        sheet.style.width         = (window.innerWidth  - 20) + 'px';
-        sheet.style.height        = (window.innerHeight - 20) + 'px';
-        sheet.style.maxHeight     = (window.innerHeight - 20) + 'px';
-        $icon.removeClass('fa-expand').addClass('fa-compress');
-    } else {
-        sheet.style.left      = sheet.dataset.prevLeft     || '';
-        sheet.style.top       = sheet.dataset.prevTop      || '';
-        sheet.style.width     = sheet.dataset.prevWidth    || '';
-        sheet.style.height    = sheet.dataset.prevHeight   || '';
-        sheet.style.maxHeight = sheet.dataset.prevMaxH     || '';
-        $icon.removeClass('fa-compress').addClass('fa-expand');
-    }
-}
-
-function toggleTheme() {
-    applyTheme(currentTheme === 'night' ? 'day' : 'night');
-    localStorage.setItem(THEME_KEY, currentTheme);
 }
 
 // ─── Drag ─────────────────────────────────────────────────────────────────────
@@ -1335,8 +1686,8 @@ function onResizeMove(e) {
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-        const w = Math.max(280, Math.min(window.innerWidth * 0.9, resizeState.origW + cx - resizeState.startX));
-        const h = Math.max(300, Math.min(window.innerHeight * 0.95, resizeState.origH + cy - resizeState.startY));
+        const w = Math.max(280, Math.min(window.innerWidth - 10, resizeState.origW + cx - resizeState.startX));
+        const h = Math.max(300, Math.min(window.innerHeight - 10, resizeState.origH + cy - resizeState.startY));
         sheet.style.width     = w + 'px';
         sheet.style.height    = h + 'px';
         sheet.style.maxHeight = h + 'px';
@@ -1466,6 +1817,7 @@ function renderSchedule(raw, userName, perspective = 'user') {
     const header = `<div class="sp-schedule-header">
         <span class="${chipCls}">${escapeHtml(userName)}</span>
         <span class="sp-schedule-label">的日程</span>
+        <button class="sp-panel-refresh sp-refresh-schedule" title="重新生成日程"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
 
     const tabs = days.map((_, i) => {
