@@ -246,20 +246,7 @@ function detectInGameDayChange(messageId) {
 
 // ─── Storylines inline block (appended to AI messages) ────────────────────────
 
-async function appendLinesInlineBlock(messageId, shouldAdvance) {
-    // Only gate generation on API being configured; display runs regardless
-    const cfg = loadCfg();
-    if (shouldAdvance && !isGeneratingLines && cfg.url && cfg.key) {
-        await runGenerateLines(true /* silent */);
-    }
-
-    const msgEl = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
-    if (!msgEl) return;
-
-    // Remove any previously injected block for this message
-    const existing = msgEl.querySelector('.sp-lines-inline');
-    if (existing) existing.remove();
-
+function _buildLinesBlockHtml() {
     const raw = (() => {
         try {
             const key = getLinesCacheKey();
@@ -267,17 +254,12 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
             return saved?.raw || '';
         } catch { return ''; }
     })();
-
-    const block = document.createElement('details');
-    block.className = 'sp-lines-inline';
-
     const lines = raw ? parseLines(raw) : [];
     if (lines.length) {
         const linesHtml = lines.map(l => {
             const levelNum = parseInt(l.level, 10);
             const level    = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
             const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
-            // Beads: filled squares for active level, faint for remainder
             const beadsHtml = Array.from({length: 4}, (_, i) =>
                 `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
             ).join('');
@@ -292,12 +274,32 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
                 ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
             </div>`;
         }).join('');
-        block.innerHTML = `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
-    } else {
-        block.innerHTML = `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
+        return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
     }
+    return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
+}
 
+async function appendLinesInlineBlock(messageId, shouldAdvance) {
+    const msgEl = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
+    if (!msgEl) return;
+
+    // Immediately render current cached state so the block always appears
+    const existing = msgEl.querySelector('.sp-lines-inline');
+    if (existing) existing.remove();
+    const block = document.createElement('details');
+    block.className = 'sp-lines-inline';
+    block.innerHTML = _buildLinesBlockHtml();
     msgEl.appendChild(block);
+
+    // If we need to advance, run generation and then update the same block in-place
+    const cfg = loadCfg();
+    if (shouldAdvance && !isGeneratingLines && cfg.url && cfg.key) {
+        await runGenerateLines(true /* silent */);
+        // Re-render into the same block element (it may still be in the DOM)
+        if (block.isConnected) {
+            block.innerHTML = _buildLinesBlockHtml();
+        }
+    }
 }
 
 // Back-fill inline blocks on all existing AI messages (no generation, just render from cache)

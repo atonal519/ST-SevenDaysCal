@@ -1104,16 +1104,40 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity      : 0.75;
 }
 /* ─── Bead level indicator ─────────────────────────── */
-.sp-inline-dots  { display: flex; align-items: center; gap: 2px; margin: 0 1px; }
-.sp-bead {
-    display      : inline-block;
-    width        : 5px;
-    height       : 5px;
-    border-radius: 1px;
-    background   : rgba(128,128,128,0.2);
-    flex-shrink  : 0;
+/* A horizontal thread with beads strung on it: ○—○—●—● */
+.sp-inline-dots {
+    display     : flex;
+    align-items : center;
+    position    : relative;
+    margin      : 0 2px;
+    gap         : 0;
 }
-.sp-bead-on { opacity: 1; /* color set via inline style */ }
+.sp-inline-dots::before {
+    content   : '';
+    position  : absolute;
+    left      : 3px;
+    right     : 3px;
+    top       : 50%;
+    height    : 1px;
+    background: rgba(128,128,128,0.25);
+    transform : translateY(-50%);
+}
+.sp-bead {
+    position     : relative;
+    display      : inline-block;
+    width        : 7px;
+    height       : 7px;
+    border-radius: 50%;
+    border       : 1.5px solid rgba(128,128,128,0.35);
+    background   : transparent;
+    flex-shrink  : 0;
+    margin       : 0 2px;
+    box-sizing   : border-box;
+}
+.sp-bead-on {
+    border-color: transparent;
+    /* fill color set via inline style background */
+}
 
 .sp-inline-when {
     font-size: 0.63rem;
