@@ -133,17 +133,23 @@ jQuery(async () => {
         // Back-fill inline blocks for newly loaded chat
         setTimeout(backfillLinesInlineBlocks, 300);
     });
-    // Auto-advance storylines, then append inline block to every AI message
+    // Auto-advance storylines, then append inline block to every AI message.
+    // NOTE: shouldAdvance triggers generation BEFORE appending the current block,
+    // so the current (newest, still-unstable) message is NOT included in the LLM
+    // context. The advance fires when the PREVIOUS message tips the counter over,
+    // and this message just gets the freshly-generated result injected.
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
         let shouldAdvance = false;
         if (getLinesMode() === 'days') {
             // Time-based: advance when the in-game date appears to have changed
-            shouldAdvance = detectInGameDayChange(messageId);
+            // (use the previous message's text, not the current one)
+            shouldAdvance = detectInGameDayChange(messageId, /* excludeCurrent */ true);
         } else {
-            // Turn-based: count AI messages, advance every N
-            linesAiMsgCounter++;
+            // Turn-based: advance when counter hits interval,
+            // increment AFTER deciding so the current message is excluded
             const interval = getLinesInterval();
             if (linesAiMsgCounter >= interval) { linesAiMsgCounter = 0; shouldAdvance = true; }
+            linesAiMsgCounter++;
         }
         appendLinesInlineBlock(messageId, shouldAdvance);
     });
@@ -270,13 +276,16 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
         const linesHtml = lines.map(l => {
             const levelNum = parseInt(l.level, 10);
             const level    = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
-            const dots     = '●'.repeat(level) + '○'.repeat(4 - level);
             const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
-            return `<div class="sp-inline-line">
+            // Beads: filled squares for active level, faint for remainder
+            const beadsHtml = Array.from({length: 4}, (_, i) =>
+                `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
+            ).join('');
+            return `<div class="sp-inline-line" style="border-left:3px solid ${stageColor}20">
                 <div class="sp-inline-head">
                     <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                     ${l.type ? `<span class="sp-inline-type">${escapeHtml(l.type)}</span>` : ''}
-                    <span class="sp-inline-dots">${dots}</span>
+                    <span class="sp-inline-dots">${beadsHtml}</span>
                     ${l.when ? `<span class="sp-inline-when">${escapeHtml(l.when)}</span>` : ''}
                 </div>
                 <div class="sp-inline-name">${escapeHtml(l.name)}</div>
@@ -489,8 +498,16 @@ function injectModal() {
                     <div class="sp-interval-row">
                         <label class="sp-interval-label">事件线推进策略</label>
                         <div class="sp-mode-row">
-                            <label class="sp-mode-opt"><input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}> 回合制（每 <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}"> 条推进）</label>
-                            <label class="sp-mode-opt"><input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}> 时间制（按聊天内容中的游戏日推进）</label>
+                            <label class="sp-mode-opt">
+                                <input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}>
+                                <span>回合制，每</span>
+                                <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}">
+                                <span>条推进一次</span>
+                            </label>
+                            <label class="sp-mode-opt">
+                                <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
+                                <span>时间制，按游戏内日期推进</span>
+                            </label>
                         </div>
                     </div>
                     <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
@@ -1454,17 +1471,19 @@ function renderLines(raw) {
     const cards = lines.map(l => {
         const levelNum  = parseInt(l.level, 10);
         const level     = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
-        const dots      = '●'.repeat(level) + '○'.repeat(4 - level);
         const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
+        const beadsHtml = Array.from({length: 4}, (_, i) =>
+            `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
+        ).join('');
         const injectParts = [`【事件线参考】${l.name}（${l.type}·${l.stage}）`];
         if (l.desc) injectParts.push(l.desc);
         const injectBtn = makeInjectBtn(injectParts.join('\n'));
         return `
-        <div class="sp-beat">
+        <div class="sp-beat" style="border-left:3px solid ${stageColor}30">
             <div class="sp-beat-head">
                 <span class="sp-beat-type" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                 ${l.type ? `<span class="sp-beat-line">${escapeHtml(l.type)}</span>` : ''}
-                <span class="sp-beat-time">${dots}</span>
+                <span class="sp-beat-time">${beadsHtml}</span>
                 ${l.when ? `<span class="sp-beat-time">${escapeHtml(l.when)}</span>` : ''}
                 ${injectBtn}
             </div>

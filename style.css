@@ -1022,15 +1022,17 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-mode-row {
     display       : flex;
     flex-direction: column;
-    gap           : 6px;
+    gap           : 8px;
 }
 .sp-mode-opt {
     display    : flex;
     align-items: center;
-    gap        : 6px;
+    flex-wrap  : wrap;
+    gap        : 5px;
     font-size  : 0.78rem;
     color      : var(--sp-on-surface);
     cursor     : pointer;
+    line-height: 1.6;
 }
 .sp-mode-opt input[type="radio"] { cursor: pointer; flex-shrink: 0; }
 .sp-interval-input {
@@ -1043,7 +1045,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-top    : 12px;
     border-radius : 8px;
     overflow      : hidden;
-    font-family   : inherit;
+    font-family   : -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
     font-size     : 0.78rem;
     color         : inherit;
     background    : rgba(128,128,128,0.07);
@@ -1053,29 +1055,32 @@ select.sp-input { appearance: none; cursor: pointer; }
     display      : flex;
     align-items  : center;
     gap          : 8px;
-    padding      : 6px 10px;
+    padding      : 7px 10px;
     cursor       : pointer;
     list-style   : none;
     user-select  : none;
-    opacity      : 0.75;
+    opacity      : 0.7;
 }
 .sp-inline-summary::-webkit-details-marker { display: none; }
 .sp-inline-summary:hover { opacity: 1; }
 .sp-inline-title {
-    font-size     : 0.72rem;
-    font-weight   : 600;
-    letter-spacing: 0.04em;
+    font-size     : 0.7rem;
+    font-weight   : 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity       : 0.6;
 }
 .sp-inline-count {
-    font-size: 0.68rem;
-    opacity  : 0.6;
+    font-size : 0.68rem;
+    opacity   : 0.5;
 }
 .sp-inline-body {
-    padding: 4px 0 6px;
+    padding: 2px 0 6px;
 }
 .sp-inline-line {
-    padding      : 6px 10px;
-    border-bottom: 1px solid rgba(128,128,128,0.12);
+    padding      : 7px 10px 7px 12px;
+    border-bottom: 1px solid rgba(128,128,128,0.10);
+    /* border-left set via inline style using stage color */
 }
 .sp-inline-line:last-child { border-bottom: none; }
 .sp-inline-head {
@@ -1086,41 +1091,51 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-bottom: 3px;
 }
 .sp-inline-stage {
-    font-size  : 0.68rem;
+    font-size  : 0.65rem;
     font-weight: 700;
+    letter-spacing: 0.02em;
     /* color set via inline style (STAGE_COLORS) */
 }
 .sp-inline-type {
-    font-size    : 0.65rem;
+    font-size    : 0.62rem;
     padding      : 1px 5px;
     border-radius: 99px;
-    opacity      : 0.7;
-    background   : rgba(128,128,128,0.15);
+    background   : rgba(128,128,128,0.13);
+    opacity      : 0.75;
 }
-.sp-inline-dots {
-    font-size     : 0.6rem;
-    letter-spacing: -1px;
-    opacity       : 0.45;
+/* ─── Bead level indicator ─────────────────────────── */
+.sp-inline-dots  { display: flex; align-items: center; gap: 2px; margin: 0 1px; }
+.sp-bead {
+    display      : inline-block;
+    width        : 5px;
+    height       : 5px;
+    border-radius: 1px;
+    background   : rgba(128,128,128,0.2);
+    flex-shrink  : 0;
 }
+.sp-bead-on { opacity: 1; /* color set via inline style */ }
+
 .sp-inline-when {
-    font-size: 0.65rem;
-    opacity  : 0.5;
+    font-size: 0.63rem;
+    opacity  : 0.45;
+    margin-left: 2px;
 }
 .sp-inline-name {
-    font-size  : 0.8rem;
+    font-size  : 0.82rem;
     font-weight: 600;
-    line-height: 1.3;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
 }
 .sp-inline-desc {
     font-size  : 0.72rem;
-    line-height: 1.5;
-    margin-top : 2px;
-    opacity    : 0.65;
+    line-height: 1.55;
+    margin-top : 3px;
+    opacity    : 0.6;
 }
 .sp-inline-empty {
     padding   : 6px 10px;
     font-size : 0.72rem;
-    opacity   : 0.4;
+    opacity   : 0.35;
 }
 
 
