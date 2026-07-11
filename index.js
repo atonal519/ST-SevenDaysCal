@@ -302,20 +302,17 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
     }
 }
 
-// Back-fill inline blocks on all existing AI messages (no generation, just render from cache)
+// Back-fill: only pin the latest AI message — history doesn't need stale snapshots.
 async function backfillLinesInlineBlocks() {
-    // Only back-fill the most recent AI messages visible in the DOM.
-    // Injecting every historical message is wasteful — they'd all show the
-    // same cached snapshot, and iterating hundreds of elements is slow.
-    const BACKFILL_LIMIT = 10;
-    const els = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].slice(-BACKFILL_LIMIT);
-    for (const mesEl of els) {
-        const mesId = mesEl.getAttribute('mesid');
-        if (mesId == null) continue;
-        const msgEl = mesEl.querySelector('.mes_text');
-        if (!msgEl || msgEl.querySelector('.sp-lines-inline')) continue;
-        await appendLinesInlineBlock(mesId, false);
-    }
+    const lastMesEl = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].at(-1);
+    if (!lastMesEl) return;
+    const mesId = lastMesEl.getAttribute('mesid');
+    if (mesId == null) return;
+    const msgEl = lastMesEl.querySelector('.mes_text');
+    if (!msgEl) return;
+    // Remove stale block if present (e.g. from previous chat session)
+    msgEl.querySelector('.sp-lines-inline')?.remove();
+    await appendLinesInlineBlock(mesId, false);
 }
 
 // ─── Extensions panel ─────────────────────────────────────────────────────────
@@ -376,7 +373,8 @@ function injectFab() {
             if (fab) { fab.style.left = ''; fab.style.top = ''; fab.style.right = ''; fab.style.bottom = ''; }
             const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
             if (sheet) { sheet.style.left = ''; sheet.style.top = ''; sheet.style.right = '';
-                         sheet.style.transform = ''; sheet.style.width = ''; sheet.style.height = ''; sheet.style.maxHeight = ''; }
+                         sheet.style.transform = ''; sheet.style.width = ''; sheet.style.height = '';
+                         sheet.style.maxHeight = ''; sheet.style.maxWidth = ''; }
         } else if (!nowMobile && wasMobile) {
             const fab = document.getElementById(FAB_ID);
             if (fab) {
@@ -473,48 +471,81 @@ function injectModal() {
                     </div>
                 </div>
 
-                <div id="sp-settings-panel" class="sp-settings-panel" style="display:none">
-                    <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
-                        <i class="fa-solid ${hasCustomApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
-                        ${hasCustomApi
-                            ? '已配置独立 API，后台生成不影响聊天'
-                            : '未配置独立 API：生成期间将<b>占用聊天通道</b>，无法同时聊天'}
+                <!-- Settings overlay: covers the sheet, scrollable, three sections -->
+                <div id="sp-settings-overlay" class="sp-settings-overlay" style="display:none">
+                    <div class="sp-settings-header">
+                        <span class="sp-settings-title"><i class="fa-solid fa-gear"></i> 设置</span>
+                        <button class="sp-icon-btn sp-settings-close-btn" title="关闭设置"><i class="fa-solid fa-xmark"></i></button>
                     </div>
-                    <p class="sp-cfg-hint">自定义 API（留空则使用酒馆当前模型）</p>
-                    <input id="sp-cfg-url"   class="sp-input" type="url"
-                           placeholder="Base URL，如 https://api.openai.com/v1"
-                           value="${escapeAttr(cfg.url || '')}">
-                    <div class="sp-key-row">
-                        <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
-                               placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
-                        <button id="sp-key-toggle" class="sp-eye-btn"><i class="fa-solid fa-eye"></i></button>
+                    <div class="sp-settings-body">
+
+                        <!-- Section 1: API -->
+                        <details class="sp-settings-section" open>
+                            <summary class="sp-settings-section-title">API 配置</summary>
+                            <div class="sp-settings-section-body">
+                                <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
+                                    <i class="fa-solid ${hasCustomApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
+                                    ${hasCustomApi
+                                        ? '已配置独立 API，后台生成不影响聊天'
+                                        : '未配置独立 API：生成期间将<b>占用聊天通道</b>，无法同时聊天'}
+                                </div>
+                                <p class="sp-cfg-hint">留空则使用酒馆当前模型</p>
+                                <input id="sp-cfg-url" class="sp-input" type="url"
+                                       placeholder="Base URL，如 https://api.openai.com/v1"
+                                       value="${escapeAttr(cfg.url || '')}">
+                                <div class="sp-key-row">
+                                    <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
+                                           placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
+                                    <button id="sp-key-toggle" class="sp-eye-btn"><i class="fa-solid fa-eye"></i></button>
+                                </div>
+                                <div class="sp-model-row">
+                                    <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
+                                           placeholder="模型名称，如 gpt-4o-mini"
+                                           value="${escapeAttr(cfg.model || '')}">
+                                    <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
+                                        <i class="fa-solid fa-list"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </details>
+
+                        <!-- Section 2: 功能设置 -->
+                        <details class="sp-settings-section">
+                            <summary class="sp-settings-section-title">功能设置</summary>
+                            <div class="sp-settings-section-body">
+                                <p class="sp-cfg-hint">平行事件推进策略</p>
+                                <div class="sp-mode-row">
+                                    <label class="sp-mode-opt">
+                                        <input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}>
+                                        <span>回合制，每</span>
+                                        <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}">
+                                        <span>条 AI 回复推进一次</span>
+                                    </label>
+                                    <label class="sp-mode-opt">
+                                        <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
+                                        <span>时间制，按游戏内日期变化推进</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+
+                        <!-- Section 3: 世界书筛选 -->
+                        <details class="sp-settings-section" id="sp-wi-section">
+                            <summary class="sp-settings-section-title">世界书筛选</summary>
+                            <div class="sp-settings-section-body" id="sp-wi-body">
+                                <p class="sp-cfg-hint">仅处理角色卡内置世界书。勾选的条目会传给 AI，取消勾选则跳过。按角色保存。</p>
+                                <div id="sp-wi-list" class="sp-wi-list">
+                                    <span class="sp-cfg-hint">（打开设置时自动加载）</span>
+                                </div>
+                            </div>
+                        </details>
+
+                    </div><!-- /sp-settings-body -->
+                    <div class="sp-settings-footer">
+                        <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+                        <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
                     </div>
-                    <div class="sp-model-row">
-                        <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
-                               placeholder="模型名称，如 gpt-4o-mini"
-                               value="${escapeAttr(cfg.model || '')}">
-                        <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
-                            <i class="fa-solid fa-list"></i>
-                        </button>
-                    </div>
-                    <div class="sp-interval-row">
-                        <label class="sp-interval-label">事件线推进策略</label>
-                        <div class="sp-mode-row">
-                            <label class="sp-mode-opt">
-                                <input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}>
-                                <span>回合制，每</span>
-                                <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}">
-                                <span>条推进一次</span>
-                            </label>
-                            <label class="sp-mode-opt">
-                                <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
-                                <span>时间制，按游戏内日期推进</span>
-                            </label>
-                        </div>
-                    </div>
-                    <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
-                    <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
-                </div>
+                </div><!-- /sp-settings-overlay -->
 
                 <div class="sp-body" id="sp-body">
                     <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>
@@ -561,6 +592,7 @@ function injectModal() {
 
     $(`#${MODAL_ID} .sp-close-btn`).on('click',    closePanel);
     $(`#${MODAL_ID} .sp-settings-btn`).on('click', toggleSettings);
+    $(`#${MODAL_ID} .sp-settings-close-btn`).on('click', toggleSettings);
     $(`#${MODAL_ID} .sp-fab-toggle-btn`).on('click', function () {
         const nowEnabled = !fabEnabled();
         getSettings().fabShow = nowEnabled;
@@ -955,24 +987,121 @@ async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null
     return (await res.json()).choices?.[0]?.message?.content ?? '';
 }
 
-async function buildWorldInfoContext(ctx) {
-    const parts = [];
-    // 1. 角色卡内嵌 lorebook（character_book）
+// ─── World-info entry filter (per character) ──────────────────────────────────
+// Stores disabled entry uids per character in extension_settings.
+// Structure: extension_settings[PLUGIN_ID].wiFilter = { [characterId]: [key, ...] }
+// where key = "worldName::uid" to survive re-imports and name collisions.
+
+function getWiFilter() {
+    const s = getSettings();
+    if (!s.wiFilter) s.wiFilter = {};
+    return s.wiFilter;
+}
+
+function getDisabledKeys(characterId) {
+    if (!characterId) return new Set();
+    return new Set(getWiFilter()[characterId] || []);
+}
+
+function setDisabledKeys(characterId, disabledSet) {
+    if (!characterId) return;
+    getWiFilter()[characterId] = [...disabledSet];
+    saveSettingsDebounced();
+}
+
+// Resolve the list of world-book names to load for the current character.
+// Priority: character.data.extensions.world (primary linked), then character_book.name.
+function getLinkedWorldNames(ctx) {
+    const names = new Set();
     const char = ctx.characters?.[ctx.characterId] ?? {};
-    const charBook = char.data?.character_book;
-    if (charBook?.entries?.length) {
-        const entries = charBook.entries
-            .filter(e => !e.disabled)
-            .map(e => e.content)
-            .filter(Boolean);
-        if (entries.length) parts.push(`【角色世界书】\n${entries.join('\n\n')}`);
+    const primary = String(char.data?.extensions?.world || '').trim();
+    if (primary) names.add(primary);
+    // Fallback: some cards only have the embedded name without linking
+    const embeddedName = String(char.data?.character_book?.name || '').trim();
+    if (embeddedName && !primary) names.add(embeddedName);
+    return [...names];
+}
+
+// Returns live world-info entries for the current character. Uses ctx.loadWorldInfo
+// (the live editable copy), NOT ctx.characters[].data.character_book (stale snapshot).
+// Fallback to character_book if no linked world book exists.
+// Each item: { key, uid, label, preview, content, source, embedded }
+async function getCharBookEntries(ctx) {
+    const items = [];
+    const seen = new Set();
+
+    // 1. Primary linked world book(s) via loadWorldInfo — live state
+    const worldNames = getLinkedWorldNames(ctx);
+    for (const name of worldNames) {
+        try {
+            const data = await ctx.loadWorldInfo(name);
+            if (!data?.entries) continue;
+            for (const [uid, entry] of Object.entries(data.entries)) {
+                if (entry?.disable) continue;
+                const label = entry.comment
+                    || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
+                    || `条目 ${uid}`;
+                const preview = String(entry.content || '')
+                    .replace(/\s+/g, ' ')
+                    .slice(0, 120);
+                const key = `${name}::${uid}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                items.push({
+                    key, uid,
+                    label,
+                    preview,
+                    content: entry.content || '',
+                    source : name,
+                    embedded: false,
+                });
+            }
+        } catch { /* ignore individual load failure */ }
     }
-    // 2. 全局激活的世界书（尽量大的预算以包含所有条目）
-    try {
-        const wiData = await ctx.getWorldInfoPrompt(ctx.chat ?? [], 999999, true);
-        if (wiData?.worldInfoString) parts.push(`【世界书】\n${wiData.worldInfoString}`);
-    } catch { /* ignore */ }
-    return parts.join('\n\n');
+
+    // 2. Fallback: character_book embedded in the card (only if no external world worked)
+    if (items.length === 0) {
+        const char = ctx.characters?.[ctx.characterId] ?? {};
+        const charBook = char.data?.character_book;
+        if (charBook?.entries?.length) {
+            const bookName = charBook.name || '角色内置世界书';
+            for (const e of charBook.entries) {
+                if (e.disabled) continue;
+                const uid = String(e.uid ?? e.id ?? '');
+                const label = e.comment
+                    || (Array.isArray(e.key) ? e.key.join(', ') : e.key)
+                    || `条目 ${uid}`;
+                const preview = String(e.content || '')
+                    .replace(/\s+/g, ' ')
+                    .slice(0, 120);
+                const key = `${bookName}::${uid}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                items.push({
+                    key, uid,
+                    label,
+                    preview,
+                    content: e.content || '',
+                    source : bookName,
+                    embedded: true,
+                });
+            }
+        }
+    }
+
+    return items;
+}
+
+async function buildWorldInfoContext(ctx) {
+    const characterId = ctx.characterId;
+    const disabledKeys = getDisabledKeys(characterId);
+    const entries = await getCharBookEntries(ctx);
+    const kept = entries
+        .filter(e => !disabledKeys.has(e.key))
+        .map(e => e.content)
+        .filter(Boolean);
+    if (!kept.length) return '';
+    return `【角色世界书】\n${kept.join('\n\n')}`;
 }
 
 async function buildMessages(ctx, prompt, userName, charName) {
@@ -1416,14 +1545,20 @@ function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw 
     return `请暂停角色扮演，以编剧顾问身份根据以上剧情，追踪当前故事中正在发生的"事件线"。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 
-事件线是指独立于 ${subject} 直接行动之外、正在自行发展的多阶段进程——阴谋、冲突升级、外部危机、他人的计划等。每条事件线属于以下两类之一，并处于对应阶段之一：
+事件线是指独立于 ${subject} 直接行动之外、正在自行发展的多阶段进程——阴谋、外部危机、他人的计划等。每条事件线属于以下两类之一，并处于对应阶段之一：
 - 冲突类：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
 - 推进类：筹备 → 执行 → 关键 → 已完成（或已失败）
 
-【当前已追踪的事件线】
-${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 2-4 条正在发生或即将发生的事件线，若剧情中暂时看不出明显的多阶段进程，也可以只给 1-2 条）'}
+【叙事节奏约束——必须遵守】
+- 事件线推进必须忠实于剧情实际进展，禁止自行臆造"冲突升级""矛盾激化""爆发"等剧情中没有发生的内容。
+- 现实中大多数事件都是缓慢发酵的，非特殊剧情下不应在一次推进中跳跃两个及以上阶段。
+- 已有事件线如果剧情中没有明显进展信号，应保持原阶段，在 Desc 中注明"暂无变化"即可，不要强行推进。
+- 冲突类事件线尤其需要克制：只有剧情中出现了明确的激化迹象（对话、行动、外部事件），才能从"萌芽"进入"发酵"；切勿将小摩擦直接渲染为即将爆发的危机。
 
-请基于以上已有事件线和最新剧情进展更新它们：可能推进到下一阶段、可能受挫停滞在原阶段、可能达到终结阶段。如果剧情里出现了新的多阶段进程，可以新增，但总数不要超过 6 条；已经收尾且不再重要的事件线（如已经处于终结阶段一段时间）直接不要输出，视为自然收尾。
+【当前已追踪的事件线】
+${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 2-4 条正在发生或即将发生的事件线，若剧情中暂时看不出明显的多阶段进程，也可以只给 1-2 条。初次生成时冲突类事件线等级不宜超过 2）'}
+
+请基于以上已有事件线和最新剧情进展更新它们：可能推进到下一阶段、可能受挫停滞在原阶段、可能达到终结阶段。如果剧情里出现了新的多阶段进程，可以新增，但总数不要超过 6 条；已经收尾且不再重要的事件线直接不要输出，视为自然收尾。
 
 【输出格式（严格遵守）】
 <storylines_widget>
@@ -1468,7 +1603,10 @@ const STAGE_COLORS = {
 
 function renderLines(raw) {
     const lines = parseLines(raw);
-    const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-lines" title="重新生成事件线"><i class="fa-solid fa-rotate-right"></i></button></div>`;
+    const toolbar = `<div class="sp-schedule-header">
+        <span class="sp-user-chip">平行事件</span>
+        <button class="sp-panel-refresh sp-refresh-lines" title="重新生成事件线"><i class="fa-solid fa-rotate-right"></i></button>
+    </div>`;
     if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
     const cards = lines.map(l => {
         const levelNum  = parseInt(l.level, 10);
@@ -1581,11 +1719,147 @@ async function fetchModels() {
 
 function toggleSettings() {
     settingsOpen = !settingsOpen;
-    $('#sp-settings-panel').slideToggle(200, () => {
-        syncMobileViewport();
-    });
+    const $overlay = $('#sp-settings-overlay');
+    if (settingsOpen) {
+        renderWiList();   // async, fire-and-forget — fills list when done
+        $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
+    } else {
+        $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
+    }
     $(`#${MODAL_ID} .sp-settings-btn`).toggleClass('sp-btn-active', settingsOpen);
     syncMobileViewport();
+}
+
+// Render world-info entry checklist for the current character into #sp-wi-list.
+// Perf: builds one HTML string + inserts once, uses event delegation on the list root.
+let _wiEntryCache = new Map();   // key → entry object, for eye-button popup lookup
+
+async function renderWiList() {
+    const ctx = getContext();
+    const characterId = ctx.characterId;
+    const $list = $('#sp-wi-list');
+    $list.html('<span class="sp-cfg-hint">正在加载世界书条目…</span>');
+
+    let entries;
+    try {
+        entries = await getCharBookEntries(ctx);
+    } catch (err) {
+        $list.html(`<span class="sp-cfg-hint">加载失败：${escapeHtml(err.message || '未知错误')}</span>`);
+        return;
+    }
+
+    if (!entries.length) {
+        $list.html('<span class="sp-cfg-hint">当前角色没有绑定世界书条目</span>');
+        return;
+    }
+
+    // Cache entries for the eye-button popup
+    _wiEntryCache = new Map(entries.map(e => [e.key, e]));
+
+    const disabledKeys = getDisabledKeys(characterId);
+
+    // Group by source
+    const groups = new Map();
+    for (const e of entries) {
+        if (!groups.has(e.source)) groups.set(e.source, []);
+        groups.get(e.source).push(e);
+    }
+
+    // Build HTML in one pass
+    const parts = [];
+    parts.push(`<div class="sp-wi-all-row">
+        <label class="sp-wi-toggle-all">
+            <input type="checkbox" id="sp-wi-select-all"> 全选 / 全不选
+        </label>
+        <span class="sp-wi-count">${entries.length} 条</span>
+    </div>`);
+
+    for (const [source, group] of groups) {
+        parts.push(`<div class="sp-wi-group">
+            <div class="sp-wi-source-label">${escapeHtml(source)} <span class="sp-wi-group-count">${group.length} 条</span></div>
+            <div class="sp-wi-items">`);
+        for (const e of group) {
+            const checked = !disabledKeys.has(e.key);
+            parts.push(`<div class="sp-wi-card${checked ? '' : ' sp-wi-card-off'}" data-key="${escapeAttr(e.key)}" role="button" tabindex="0">
+                <div class="sp-wi-card-head">
+                    <input type="checkbox" class="sp-wi-cb" data-key="${escapeAttr(e.key)}"${checked ? ' checked' : ''}>
+                    <span class="sp-wi-label">${escapeHtml(e.label)}</span>
+                </div>
+                <div class="sp-wi-card-body">
+                    <div class="sp-wi-preview">${e.preview ? escapeHtml(e.preview) + '…' : '<span class="sp-wi-empty">（无内容）</span>'}</div>
+                    <button class="sp-wi-view-btn" type="button" title="查看全文" data-key="${escapeAttr(e.key)}"><i class="fa-regular fa-eye"></i></button>
+                </div>
+            </div>`);
+        }
+        parts.push(`</div></div>`);
+    }
+
+    // Single DOM write
+    $list[0].innerHTML = parts.join('');
+
+    // Event delegation — one handler for the whole list, regardless of entry count
+    $list.off('.wi').on('click.wi', '.sp-wi-view-btn', function (ev) {
+        ev.stopPropagation();
+        const key = $(this).data('key');
+        const entry = _wiEntryCache.get(key);
+        if (entry) showWiEntryFull(entry);
+    }).on('click.wi', '.sp-wi-card', function (ev) {
+        if ($(ev.target).closest('.sp-wi-view-btn').length) return;
+        const $card = $(this);
+        const $cb   = $card.find('.sp-wi-cb');
+        if (ev.target !== $cb[0]) {
+            $cb.prop('checked', !$cb.prop('checked'));
+        }
+        $card.toggleClass('sp-wi-card-off', !$cb.prop('checked'));
+        syncWiSelectAll();
+    }).on('keydown.wi', '.sp-wi-card', function (ev) {
+        if (ev.key !== ' ' && ev.key !== 'Enter') return;
+        ev.preventDefault();
+        const $card = $(this);
+        const $cb   = $card.find('.sp-wi-cb');
+        $cb.prop('checked', !$cb.prop('checked'));
+        $card.toggleClass('sp-wi-card-off', !$cb.prop('checked'));
+        syncWiSelectAll();
+    }).on('change.wi', '#sp-wi-select-all', function () {
+        const checked = this.checked;
+        $list.find('.sp-wi-cb').prop('checked', checked);
+        $list.find('.sp-wi-card').toggleClass('sp-wi-card-off', !checked);
+    });
+
+    syncWiSelectAll();
+}
+
+function syncWiSelectAll() {
+    const $cbs = $('#sp-wi-list .sp-wi-cb');
+    if (!$cbs.length) return;
+    const total   = $cbs.length;
+    const checked = $cbs.filter(':checked').length;
+    const $all = $('#sp-wi-select-all')[0];
+    if (!$all) return;
+    $all.checked       = checked === total;
+    $all.indeterminate = checked > 0 && checked < total;
+}
+
+// Full-text popup for a single world-info entry
+function showWiEntryFull(entry) {
+    $('#sp-wi-fullview').remove();
+    const $overlay = $(`<div id="sp-wi-fullview" class="sp-wi-fullview">
+        <div class="sp-wi-fullview-sheet">
+            <div class="sp-wi-fullview-head">
+                <div class="sp-wi-fullview-title">
+                    <div class="sp-wi-fullview-source">${escapeHtml(entry.source)}</div>
+                    <div class="sp-wi-fullview-label">${escapeHtml(entry.label)}</div>
+                </div>
+                <button class="sp-icon-btn sp-wi-fullview-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="sp-wi-fullview-body">${escapeHtml(entry.content || '').replace(/\n/g, '<br>')}</div>
+        </div>
+    </div>`);
+    $overlay.on('click', function (e) {
+        if (e.target === this) $overlay.remove();
+    });
+    $overlay.find('.sp-wi-fullview-close').on('click', () => $overlay.remove());
+    $(`#${MODAL_ID} .sp-sheet`).append($overlay);
 }
 
 function toggleKeyVisibility() {
@@ -1604,10 +1878,19 @@ function saveSettings() {
     saveCfg({ url: $('#sp-cfg-url').val().trim().replace(/\/$/, ''), key, model: $('#sp-cfg-model').val().trim() });
     saveLinesInterval($('#sp-lines-interval').val());
     saveLinesMode($('input[name="sp-lines-mode"]:checked').val());
+    // Save world-info entry filter for current character
+    const ctx = getContext();
+    if (ctx.characterId != null) {
+        const disabled = new Set();
+        $('#sp-wi-list .sp-wi-cb').each(function () {
+            if (!this.checked) disabled.add($(this).data('key'));
+        });
+        setDisabledKeys(ctx.characterId, disabled);
+    }
     $k.data('real', key).val(maskKey(key)).attr('type', 'password');
     const $m = $('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
     const hasApi = !!(loadCfg().url && loadCfg().key);
-    $('.sp-api-notice')
+    $('#sp-settings-overlay .sp-api-notice')
         .removeClass('sp-notice-ok sp-notice-warn')
         .addClass(hasApi ? 'sp-notice-ok' : 'sp-notice-warn')
         .html(`<i class="fa-solid ${hasApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
@@ -1701,17 +1984,31 @@ function onResizeStart(e) {
 function onResizeMove(e) {
     if (!resizeState) return;
     e.preventDefault();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    const touch = e.touches?.[0] ?? e.changedTouches?.[0];
+    const cx = touch ? touch.clientX : e.clientX;
+    const cy = touch ? touch.clientY : e.clientY;
     if (resizeRAF) return;
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-        const w = Math.max(280, Math.min(window.innerWidth - 10, resizeState.origW + cx - resizeState.startX));
+        const mobile = isMobile();
+        // On mobile, we ALSO override max-width (CSS media query caps it at 340px);
+        // without this, inline width can't exceed the cap.
+        const maxW = mobile
+            ? Math.min(window.innerWidth - 10, 500)
+            : window.innerWidth - 10;
+        const w = Math.max(280, Math.min(maxW, resizeState.origW + cx - resizeState.startX));
         const h = Math.max(300, Math.min(window.innerHeight - 10, resizeState.origH + cy - resizeState.startY));
         sheet.style.width     = w + 'px';
         sheet.style.height    = h + 'px';
         sheet.style.maxHeight = h + 'px';
+        if (mobile) {
+            sheet.style.maxWidth = w + 'px';
+            // Recenter after resize: keep translateX(-50%) if still set, else pin left
+            if (!sheet.style.left || sheet.style.left === '50%') {
+                sheet.style.left = '50%';
+            }
+        }
     });
 }
 
@@ -1749,6 +2046,7 @@ function restorePositionAndSize() {
             sheet.style.width     = size.width  + 'px';
             sheet.style.height    = size.height + 'px';
             sheet.style.maxHeight = size.height + 'px';
+            if (isMobile()) sheet.style.maxWidth = size.width + 'px';
         }
     }, 0);
 }

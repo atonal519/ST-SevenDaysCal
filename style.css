@@ -1,4 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap');
+/* Load Roboto Mono only — for date/monospace fields.
+   For text, we use the system stack (defined below in --sp-font)
+   so mobile OS default fonts (PingFang / HarmonyOS / Roboto etc.) are used
+   without introducing a squished web font. */
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap');
+
+/* System font stack with CJK fallbacks — used everywhere as body font */
+:root {
+    --sp-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+               'Hiragino Sans GB', 'HarmonyOS Sans SC', 'Microsoft YaHei',
+               'Noto Sans SC', 'Noto Sans CJK SC', 'Helvetica Neue', Helvetica,
+               Arial, sans-serif;
+}
 
 /* ─── Design tokens ─────────────────────────────────────────────────────────── */
 .sp-night {
@@ -46,7 +58,7 @@
 .sp-root {
     position  : fixed;
     z-index   : 2000001;
-    font-family: 'Roboto', system-ui, sans-serif;
+    font-family: var(--sp-font);
 }
 
 .sp-backdrop { display: none; }
@@ -152,19 +164,332 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-api-notice i { margin-top: 1px; flex-shrink: 0; }
 
-/* ─── Settings panel ─────────────────────────────────────────────────────────── */
-.sp-settings-panel {
-    flex-shrink   : 0;
+/* ─── Settings overlay (全覆盖设置页) ──────────────────────────────────────── */
+.sp-settings-overlay {
+    position      : absolute;
+    inset         : 0;
+    z-index       : 20;
+    background    : var(--sp-sheet-bg);
+    border-radius : inherit;
+    display       : none;
+    flex-direction: column;
+    overflow      : hidden;
+}
+
+.sp-settings-header {
+    display      : flex;
+    align-items  : center;
+    padding      : 14px 16px 12px;
+    border-bottom: 1px solid var(--sp-divider);
+    flex-shrink  : 0;
+    gap          : 8px;
+}
+.sp-settings-title {
+    flex      : 1;
+    font-size : 0.95rem;
+    font-weight: 600;
+    color     : var(--sp-on-surface);
+    display   : flex;
+    align-items: center;
+    gap       : 7px;
+}
+.sp-settings-title i { color: var(--sp-subtle); font-size: 0.85rem; }
+
+.sp-settings-body {
+    flex           : 1;
+    min-height     : 0;
+    overflow-y     : auto;
+    padding        : 8px 0 4px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sp-divider) transparent;
+    -webkit-overflow-scrolling: touch;
+}
+.sp-settings-body::-webkit-scrollbar       { width: 4px; }
+.sp-settings-body::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+
+.sp-settings-footer {
+    display     : flex;
+    align-items : center;
+    gap         : 10px;
+    padding     : 10px 16px 14px;
+    border-top  : 1px solid var(--sp-divider);
+    flex-shrink : 0;
+}
+
+/* ─── Settings sections (collapsible) ───────────────────────────────────────── */
+.sp-settings-section {
+    border-bottom: 1px solid var(--sp-divider);
+}
+.sp-settings-section:last-child { border-bottom: none; }
+
+.sp-settings-section-title {
+    display      : flex;
+    align-items  : center;
+    padding      : 11px 16px;
+    font-size    : 0.82rem;
+    font-weight  : 600;
+    color        : var(--sp-on-surface);
+    cursor       : pointer;
+    user-select  : none;
+    list-style   : none;
+    gap          : 8px;
+}
+.sp-settings-section-title::-webkit-details-marker { display: none; }
+.sp-settings-section-title::before {
+    content    : '▶';
+    font-size  : 0.58rem;
+    color      : var(--sp-subtle);
+    transition : transform 0.18s;
+    display    : inline-block;
+    flex-shrink: 0;
+}
+.sp-settings-section[open] .sp-settings-section-title::before { transform: rotate(90deg); }
+.sp-settings-section-title:hover { background: var(--sp-hover-bg); }
+
+.sp-settings-section-body {
     display       : flex;
     flex-direction: column;
     gap           : 8px;
-    padding       : 14px 16px;
-    border-bottom : 1px solid var(--sp-divider);
+    padding       : 4px 16px 14px;
     background    : var(--sp-surface);
 }
-.sp-cfg-hint { font-size: 0.75rem; color: var(--sp-subtle); margin: 0 0 2px; }
-.sp-key-row  { display: flex; gap: 6px; }
-.sp-key-input { flex: 1; }
+
+/* ─── World-info entry checklist ─────────────────────────────────────────────── */
+.sp-wi-list {
+    display       : flex;
+    flex-direction: column;
+    gap           : 10px;
+}
+.sp-wi-all-row {
+    display    : flex;
+    align-items: center;
+    gap        : 8px;
+    padding    : 4px 2px 8px;
+    border-bottom: 1px solid var(--sp-divider);
+}
+.sp-wi-toggle-all {
+    display    : flex;
+    align-items: center;
+    gap        : 6px;
+    font-size  : 0.78rem;
+    color      : var(--sp-on-surface);
+    cursor     : pointer;
+    user-select: none;
+    font-weight: 500;
+}
+.sp-wi-count {
+    font-size : 0.72rem;
+    color     : var(--sp-subtle);
+    margin-left: auto;
+    opacity   : 0.7;
+}
+
+/* Group by source */
+.sp-wi-group {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
+}
+.sp-wi-source-label {
+    display      : flex;
+    align-items  : baseline;
+    gap          : 8px;
+    font-size    : 0.72rem;
+    font-weight  : 700;
+    color        : var(--sp-primary);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding      : 4px 2px 2px;
+}
+.sp-wi-group-count {
+    font-size  : 0.68rem;
+    font-weight: 400;
+    color      : var(--sp-subtle);
+    opacity    : 0.65;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.sp-wi-items {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
+}
+
+/* Individual entry card */
+.sp-wi-card {
+    background   : var(--sp-sheet-bg);
+    border       : 1px solid var(--sp-divider);
+    border-radius: 8px;
+    padding      : 8px 10px;
+    display      : flex;
+    flex-direction: column;
+    gap          : 4px;
+    cursor       : pointer;
+    user-select  : none;
+    transition   : opacity 0.15s, border-color 0.15s, background 0.1s;
+    outline      : none;
+}
+.sp-wi-card:hover       { border-color: var(--sp-surface-high); background: var(--sp-hover-bg); }
+.sp-wi-card:focus-visible { border-color: var(--sp-primary); }
+.sp-wi-card-off         { opacity: 0.45; }
+.sp-wi-card-off:hover   { opacity: 0.6; }
+
+.sp-wi-card-head {
+    display    : flex;
+    align-items: center;
+    gap        : 8px;
+}
+.sp-wi-card-head input[type="checkbox"] {
+    flex-shrink: 0;
+    cursor     : pointer;
+    width      : 15px;
+    height     : 15px;
+    accent-color: var(--sp-primary);
+    margin     : 0;
+}
+.sp-wi-label {
+    font-size  : 0.85rem;
+    font-weight: 500;
+    color      : var(--sp-on-surface);
+    line-height: 1.35;
+    word-break : break-word;
+    flex       : 1;
+    min-width  : 0;
+}
+.sp-wi-card-off .sp-wi-label { text-decoration: line-through; }
+
+.sp-wi-card-body {
+    display    : flex;
+    align-items: flex-start;
+    gap        : 8px;
+    padding-left: 23px;   /* align under label, past checkbox */
+}
+.sp-wi-preview {
+    font-size  : 0.75rem;
+    color      : var(--sp-subtle);
+    line-height: 1.55;
+    flex       : 1;
+    min-width  : 0;
+    word-break : break-word;
+    opacity    : 0.85;
+    display    : -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow   : hidden;
+}
+.sp-wi-empty {
+    opacity    : 0.5;
+    font-style : italic;
+}
+.sp-wi-view-btn {
+    flex-shrink  : 0;
+    width        : 26px;
+    height       : 26px;
+    background   : transparent;
+    border       : 1px solid var(--sp-divider);
+    border-radius: 6px;
+    color        : var(--sp-subtle);
+    cursor       : pointer;
+    display      : flex;
+    align-items  : center;
+    justify-content: center;
+    font-size    : 0.72rem;
+    transition   : background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sp-wi-view-btn:hover {
+    background  : var(--sp-hover-bg);
+    color       : var(--sp-primary);
+    border-color: var(--sp-primary);
+}
+
+/* Full-text popup — floats over the whole sheet */
+.sp-wi-fullview {
+    position        : absolute;
+    inset           : 0;
+    z-index         : 30;
+    background      : rgba(0,0,0,0.5);
+    display         : flex;
+    align-items     : center;
+    justify-content : center;
+    padding         : 16px;
+    animation       : sp-wi-fullview-in 0.15s ease-out;
+}
+@keyframes sp-wi-fullview-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.sp-wi-fullview-sheet {
+    background   : var(--sp-sheet-bg);
+    border-radius: 12px;
+    max-width    : 100%;
+    max-height   : 100%;
+    display      : flex;
+    flex-direction: column;
+    width        : 100%;
+    box-shadow   : var(--sp-shadow);
+    overflow     : hidden;
+}
+.sp-wi-fullview-head {
+    display     : flex;
+    align-items : flex-start;
+    gap         : 8px;
+    padding     : 12px 14px 10px;
+    border-bottom: 1px solid var(--sp-divider);
+    flex-shrink : 0;
+}
+.sp-wi-fullview-title {
+    flex     : 1;
+    min-width: 0;
+}
+.sp-wi-fullview-source {
+    font-size    : 0.65rem;
+    font-weight  : 700;
+    color        : var(--sp-primary);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+    opacity      : 0.8;
+}
+.sp-wi-fullview-label {
+    font-size  : 0.92rem;
+    font-weight: 600;
+    color      : var(--sp-on-surface);
+    line-height: 1.35;
+    word-break : break-word;
+}
+.sp-wi-fullview-body {
+    flex           : 1;
+    overflow-y     : auto;
+    padding        : 12px 14px 14px;
+    font-size      : 0.82rem;
+    line-height    : 1.65;
+    color          : var(--sp-on-surface);
+    white-space    : pre-wrap;
+    word-break     : break-word;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sp-divider) transparent;
+    -webkit-overflow-scrolling: touch;
+}
+.sp-wi-fullview-body::-webkit-scrollbar       { width: 4px; }
+.sp-wi-fullview-body::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+
+/* ─── Settings panel (OLD — keep only for backwards reference, now hidden) ──── */
+.sp-settings-panel { display: none !important; }
+
+/* ─── Interval / mode selector ───────────────────────────────────────────────── */
+.sp-interval-input  { width: 46px !important; text-align: center; }
+.sp-mode-row        { display: flex; flex-direction: column; gap: 8px; }
+.sp-mode-opt {
+    display    : flex;
+    align-items: center;
+    flex-wrap  : wrap;
+    gap        : 5px;
+    font-size  : 0.78rem;
+    color      : var(--sp-on-surface);
+    cursor     : pointer;
+    line-height: 1.6;
+}
+.sp-mode-opt input[type="radio"] { cursor: pointer; flex-shrink: 0; }
 .sp-input {
     width        : 100%;
     padding      : 7px 11px;
@@ -173,7 +498,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: 8px;
     color        : var(--sp-on-surface);
     font-size    : 0.85rem;
-    font-family  : 'Roboto', sans-serif;
+    font-family  : var(--sp-font);
     outline      : none;
     box-sizing   : border-box;
     transition   : border-color 0.15s;
@@ -484,6 +809,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     z-index        : 10;
 }
 .sp-resize-handle:hover { opacity: 1; color: var(--sp-primary); }
+/* Raise the handle above the settings overlay (z:20) so the sheet stays resizable
+   with settings open. The full-text popup (z:30) still masks it — that's fine,
+   the popup is modal, close it first. */
+.sp-resize-handle { z-index: 25; }
 
 /* ─── Toast (top) ────────────────────────────────────────────────────────────── */
 #sp-toast-wrap {
@@ -1008,44 +1337,17 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-debug-copy-btn:hover { color: var(--sp-on-surface); border-color: var(--sp-surface-high); }
 
-/* ─── Settings interval row ──────────────────────────────────────────────────── */
-.sp-interval-row {
-    display       : flex;
-    flex-direction: column;
-    gap           : 6px;
-    margin-bottom : 8px;
-}
-.sp-interval-label {
-    font-size : 0.78rem;
-    color     : var(--sp-subtle);
-}
-.sp-mode-row {
-    display       : flex;
-    flex-direction: column;
-    gap           : 8px;
-}
-.sp-mode-opt {
-    display    : flex;
-    align-items: center;
-    flex-wrap  : wrap;
-    gap        : 5px;
-    font-size  : 0.78rem;
-    color      : var(--sp-on-surface);
-    cursor     : pointer;
-    line-height: 1.6;
-}
-.sp-mode-opt input[type="radio"] { cursor: pointer; flex-shrink: 0; }
-.sp-interval-input {
-    width     : 46px !important;
-    text-align: center;
-}
+/* ─── cfg-hint (shared) ──────────────────────────────────────────────────────── */
+.sp-cfg-hint { font-size: 0.75rem; color: var(--sp-subtle); margin: 0 0 2px; }
+.sp-key-row  { display: flex; gap: 6px; }
+.sp-key-input { flex: 1; }
 
 /* ─── Storylines inline block (appended to AI messages) ─────────────────────── */
 .sp-lines-inline {
     margin-top    : 12px;
     border-radius : 8px;
     overflow      : hidden;
-    font-family   : -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
+    font-family   : var(--sp-font);
     font-size     : 0.78rem;
     color         : inherit;
     background    : rgba(128,128,128,0.07);
