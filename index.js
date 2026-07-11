@@ -263,15 +263,21 @@ function _buildLinesBlockHtml() {
             const beadsHtml = Array.from({length: 4}, (_, i) =>
                 `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
             ).join('');
-            return `<div class="sp-inline-line" style="border-left:3px solid ${stageColor}20">
+            return `<div class="sp-inline-line${l.stall ? ' sp-line-stall' : ''}" style="border-left:3px solid ${stageColor}20">
                 <div class="sp-inline-head">
                     <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                     ${l.type ? `<span class="sp-inline-type">${escapeHtml(l.type)}</span>` : ''}
                     <span class="sp-inline-dots">${beadsHtml}</span>
                     ${l.when ? `<span class="sp-inline-when">${escapeHtml(l.when)}</span>` : ''}
+                    ${l.stall ? `<span class="sp-line-stall-tag sp-inline-stall">停滞</span>` : ''}
+                    ${agencyBadge(l.agency)}
                 </div>
                 <div class="sp-inline-name">${escapeHtml(l.name)}</div>
                 ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
+                ${l.next ? `<div class="sp-line-next sp-inline-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}">
+                    <span class="sp-line-next-tag">${l.stall ? '⏸ 恢复条件' : '→ 下一步'}</span>
+                    <span class="sp-line-next-text">${escapeHtml(cleanText(l.next))}</span>
+                </div>` : ''}
             </div>`;
         }).join('');
         return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
@@ -279,13 +285,19 @@ function _buildLinesBlockHtml() {
     return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
 }
 
+// Remove inline lines block from ALL AI messages — enforces "only the latest floor holds it".
+function _removeAllInlineBlocks() {
+    document.querySelectorAll('#chat .sp-lines-inline').forEach(el => el.remove());
+}
+
 async function appendLinesInlineBlock(messageId, shouldAdvance) {
     const msgEl = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
     if (!msgEl) return;
 
+    // Enforce single-copy: nuke any prior inline block on any floor (including this one)
+    _removeAllInlineBlocks();
+
     // Immediately render current cached state so the block always appears
-    const existing = msgEl.querySelector('.sp-lines-inline');
-    if (existing) existing.remove();
     const block = document.createElement('details');
     block.className = 'sp-lines-inline';
     block.innerHTML = _buildLinesBlockHtml();
@@ -304,15 +316,29 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
 
 // Back-fill: only pin the latest AI message — history doesn't need stale snapshots.
 async function backfillLinesInlineBlocks() {
+    _removeAllInlineBlocks();  // clean up any accumulated blocks from previous state
     const lastMesEl = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].at(-1);
     if (!lastMesEl) return;
     const mesId = lastMesEl.getAttribute('mesid');
     if (mesId == null) return;
     const msgEl = lastMesEl.querySelector('.mes_text');
     if (!msgEl) return;
-    // Remove stale block if present (e.g. from previous chat session)
-    msgEl.querySelector('.sp-lines-inline')?.remove();
     await appendLinesInlineBlock(mesId, false);
+}
+
+// Refresh the inline block on the latest AI message using current cache.
+// Called after the panel regenerates lines so the message-level block doesn't
+// stay stale until page reload.
+function syncLatestInlineBlock() {
+    _removeAllInlineBlocks();
+    const lastMesEl = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].at(-1);
+    if (!lastMesEl) return;
+    const msgEl = lastMesEl.querySelector('.mes_text');
+    if (!msgEl) return;
+    const block = document.createElement('details');
+    block.className = 'sp-lines-inline';
+    block.innerHTML = _buildLinesBlockHtml();
+    msgEl.appendChild(block);
 }
 
 // ─── Extensions panel ─────────────────────────────────────────────────────────
@@ -1520,8 +1546,13 @@ async function runGenerateLines(silent = false) {
         isGeneratingLines = false;
         linesAbortController = null;
         cachedLines = html;
+        // Panel body
         if (linesMode) setLinesBody(html);
-        else if (!silent) showToast('事件线已生成，点击查看', () => {
+        // Sync the inline block on the latest AI message — panel & inline share
+        // the same cache; without this the message-level block shows stale data
+        // until page reload.
+        syncLatestInlineBlock();
+        if (!linesMode && !silent) showToast('事件线已生成，点击查看', () => {
             if (!linesMode) $('.sp-view-btn[data-view="lines"]').trigger('click');
             showPanel();
         });
@@ -1545,26 +1576,53 @@ function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw 
     return `请暂停角色扮演，以编剧顾问身份根据以上剧情，追踪当前故事中正在发生的"事件线"。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 
-事件线是指独立于 ${subject} 直接行动之外、正在自行发展的多阶段进程——阴谋、外部危机、他人的计划等。每条事件线属于以下两类之一，并处于对应阶段之一：
-- 冲突类：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
-- 推进类：筹备 → 执行 → 关键 → 已完成（或已失败）
+事件线是独立于 ${subject} 直接行动之外、需要跨轮次持续追踪的主事项。每条属于两类之一：
+- 冲突类 (conflict)：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
+- 推进类 (progress)：筹备 → 执行 → 关键 → 已完成（或已失败）
 
-【叙事节奏约束——必须遵守】
-- 事件线推进必须忠实于剧情实际进展，禁止自行臆造"冲突升级""矛盾激化""爆发"等剧情中没有发生的内容。
-- 现实中大多数事件都是缓慢发酵的，非特殊剧情下不应在一次推进中跳跃两个及以上阶段。
-- 已有事件线如果剧情中没有明显进展信号，应保持原阶段，在 Desc 中注明"暂无变化"即可，不要强行推进。
-- 冲突类事件线尤其需要克制：只有剧情中出现了明确的激化迹象（对话、行动、外部事件），才能从"萌芽"进入"发酵"；切勿将小摩擦直接渲染为即将爆发的危机。
+【推进属性 agency（必填）】
+- player：事件推进依赖 ${subject} 主动行动（如：${subject} 答应的委托、结下的仇怨、承接的任务）
+- world：事件在世界/NPC/势力层面自行演化，${subject} 不动它也会推进（如：他方阴谋、外部战事、朝局变化）
+
+【创建门槛——必须同时满足才能创建新事件线】
+1. 事件明确独立且**未闭合**
+2. 有可识别的持续主体、目标对象或作用范围
+3. 需要时间、资源、信息、组织、条件变化或外部响应才能继续演化
+4. 后续至少有两种合理走向
+5. 剧情中已有实际依据：行动开始 / 计划下达 / 资源投入 / 矛盾持续 / 条件累积
+
+【禁止创建事件线的情况】
+- 已完成 / 胜负已定 / 目标达成或失败且无需继续追踪的事情
+- 只有历史意义、气氛、情绪余波、单次结果或一次性影响
+- 当前场景内即可收束的普通行动、日常事务、临时互动、短暂插曲
+- 仅凭"可能引发后续 X"的推测（没有实际依据）
+- 把同一主事项下的步骤、材料、局部阻碍、阶段结果、单个后果或传播反馈拆成多条
+
+【归并规则——避免同一件事被拆成多条】
+若新内容与已有事件线共享 **时间 / 范围 / 主体 / 原因 / 目标 / 执行过程 / 后果归属** 中任一维度，
+应更新原事件线的 desc / stage / stall，**不得**新建一条子事件线。
+
+【推进节奏约束】
+- 每次推进通常只前进一个阶段；非明确剧情信号不跨越多个阶段。
+- 避免同一次推进中多条事件线同时进入高烈度（已爆发 / 关键）。
+- 剧情中没有明显进展信号时，**必须**使用 stall=true 保持原 stage，desc 写明停滞原因和恢复条件——不要为了填字段臆造推进。
+- 冲突类尤其克制：只有出现明确激化迹象才从"萌芽"进入"发酵"。
+
+【终局判定】
+- "已爆发" / "已消散" / "已完成" / "已失败" 为终局，进入后不得回退。
+- stall 不是终局；只要仍有恢复可能就用 stall=true，不要标终局。
 
 【当前已追踪的事件线】
-${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 2-4 条正在发生或即将发生的事件线，若剧情中暂时看不出明显的多阶段进程，也可以只给 1-2 条。初次生成时冲突类事件线等级不宜超过 2）'}
+${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 1-4 条真正满足创建门槛的事件线；如果剧情尚未积累出符合门槛的事件，宁可只输出 1 条或不输出，也不要凑数。初次生成时冲突类等级不宜超过 2）'}
 
-请基于以上已有事件线和最新剧情进展更新它们：可能推进到下一阶段、可能受挫停滞在原阶段、可能达到终结阶段。如果剧情里出现了新的多阶段进程，可以新增，但总数不要超过 6 条；已经收尾且不再重要的事件线直接不要输出，视为自然收尾。
+请基于以上已有事件线和最新剧情进展更新它们（严格遵守归并规则）；如出现真正的新多阶段进程可新增，但总数不超过 6 条。收尾且不再重要的事件线直接不输出，视为自然收尾。
 
 【输出格式（严格遵守）】
 <storylines_widget>
-Line: 名称|类型(冲突/推进)|阶段|等级(1-4，数字越大越重要)|最近进展的时间点（如"今天上午""三天后""下周一"，锚定在故事内具体时间，不要用"第N轮"这类说法）
-Desc: 当前状态与可能走向（60-100字）
-（每条事件线重复上面两行）
+Line: 名称|类型(冲突/推进)|阶段|等级(1-4)|时间锚点(如"今天上午"/"三天后"，禁用"第N轮")|agency(player/world)|stall(true/false)
+Desc: 当前状态与关键背景（40-70字，不要写"下一步/继续/等待"这类前瞻性内容）
+Next: 一句话给出前瞻信号（15-30字）。stall=true 时写"恢复条件"（触发什么才能重新推进）；stall=false 时写"下一步"（最可能的下一动作、下一阶段或催化事件）
+（每条事件线重复上面三行）
 </storylines_widget>`;
 }
 
@@ -1580,20 +1638,41 @@ function parseLines(raw) {
         if (/^Line\s*:/i.test(t)) {
             if (cur) lines.push(cur);
             const parts = t.replace(/^Line\s*:\s*/i, '').split('|');
+            const agencyRaw = (parts[5] || '').trim().toLowerCase();
+            const stallRaw  = (parts[6] || '').trim().toLowerCase();
             cur = {
-                name : (parts[0] || '').trim(),
-                type : (parts[1] || '').trim(),
-                stage: (parts[2] || '').trim(),
-                level: (parts[3] || '').trim(),
-                when : (parts[4] || '').trim(),
-                desc : '',
+                name  : (parts[0] || '').trim(),
+                type  : (parts[1] || '').trim(),
+                stage : (parts[2] || '').trim(),
+                level : (parts[3] || '').trim(),
+                when  : (parts[4] || '').trim(),
+                // Backward-compat migration: missing agency → 'world', missing stall → false
+                agency: agencyRaw === 'player' ? 'player' : 'world',
+                stall : stallRaw === 'true' || stallRaw === '1' || stallRaw === 'yes',
+                desc  : '',
+                next  : '',
             };
         } else if (/^Desc\s*:/i.test(t) && cur) {
             cur.desc = t.replace(/^Desc\s*:\s*/i, '').trim();
+        } else if (/^Next\s*:/i.test(t) && cur) {
+            cur.next = t.replace(/^Next\s*:\s*/i, '').trim();
         }
     }
     if (cur) lines.push(cur);
     return lines;
+}
+
+// ─── Agency SVG icons (person / globe) ────────────────────────────────────────
+// Pure stroke, currentColor, 20×20 viewBox — inherits container text color.
+const AGENCY_ICONS = {
+    player: '<svg class="sp-agency-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="需推动"><circle cx="10" cy="7" r="3"/><path d="M4 17 c1-3 4-5 6-5 s5 2 6 5"/></svg>',
+    world : '<svg class="sp-agency-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="自演化"><circle cx="10" cy="10" r="7"/><ellipse cx="10" cy="10" rx="3" ry="7"/><path d="M3 10 h14"/></svg>',
+};
+const AGENCY_LABELS = { player: '需推动', world: '自演化' };
+
+function agencyBadge(agency) {
+    const key = agency === 'player' ? 'player' : 'world';
+    return `<span class="sp-agency-badge sp-agency-${key}" title="${AGENCY_LABELS[key]}">${AGENCY_ICONS[key]}</span>`;
 }
 
 const STAGE_COLORS = {
@@ -1615,20 +1694,32 @@ function renderLines(raw) {
         const beadsHtml = Array.from({length: 4}, (_, i) =>
             `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
         ).join('');
-        const injectParts = [`【事件线参考】${l.name}（${l.type}·${l.stage}）`];
+        const injectParts = [`【事件线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
         if (l.desc) injectParts.push(l.desc);
+        if (l.next) injectParts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
         const injectBtn = makeInjectBtn(injectParts.join('\n'));
+        const stallCls  = l.stall ? ' sp-line-stall' : '';
+        const stallTag  = l.stall ? `<span class="sp-line-stall-tag">停滞</span>` : '';
+        const nextRow   = l.next
+            ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}">
+                    <span class="sp-line-next-tag">${l.stall ? '⏸ 恢复条件' : '→ 下一步'}</span>
+                    <span class="sp-line-next-text">${escapeHtml(cleanText(l.next))}</span>
+               </div>`
+            : '';
         return `
-        <div class="sp-beat" style="border-left:3px solid ${stageColor}30">
+        <div class="sp-beat sp-line-card${stallCls}" style="border-left:3px solid ${stageColor}30">
             <div class="sp-beat-head">
                 <span class="sp-beat-type" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                 ${l.type ? `<span class="sp-beat-line">${escapeHtml(l.type)}</span>` : ''}
                 <span class="sp-beat-time">${beadsHtml}</span>
                 ${l.when ? `<span class="sp-beat-time">${escapeHtml(l.when)}</span>` : ''}
+                ${stallTag}
+                ${agencyBadge(l.agency)}
                 ${injectBtn}
             </div>
             <div class="sp-beat-title">${escapeHtml(l.name)}</div>
             ${l.desc ? `<div class="sp-beat-scene">${escapeHtml(cleanText(l.desc))}</div>` : ''}
+            ${nextRow}
         </div>`;
     }).join('');
     return toolbar + cards;
