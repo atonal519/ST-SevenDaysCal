@@ -880,7 +880,7 @@ function confirmCharView() {
     if (cachedSchedule) {
         setBody(cachedSchedule);
     } else {
-        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
         if (!isGenerating) {
             isGenerating = true;
             setExtBtnState('generating');
@@ -894,7 +894,7 @@ function confirmCharView() {
 function openSchedule() {
     showPanel();
     if (isGenerating) {
-        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
     } else if (cachedSchedule) {
         setBody(cachedSchedule);
     } else {
@@ -941,7 +941,7 @@ function triggerGenerate() {
     isGenerating = true;
     setExtBtnState('generating');
     if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
-    setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+    setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
     runGenerate();
 }
 
@@ -1377,7 +1377,7 @@ function triggerGenerateOutline() {
     if (key) localStorage.removeItem(key);
     cachedOutline = null;
     isGeneratingOutline = true;
-    setOutlineBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在构思大纲…</p><button class="sp-abort-btn" id="sp-abort-outline"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+    setOutlineBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在构思大纲…</p><button class="sp-abort-btn" id="sp-abort-outline"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
     runGenerateOutline();
 }
 
@@ -1551,7 +1551,7 @@ function renderEmptyLinesState() {
 function triggerGenerateLines() {
     if (isGeneratingLines) return;
     isGeneratingLines = true;
-    setLinesBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在推演事件线…</p><button class="sp-abort-btn" id="sp-abort-lines"><i class="fa-solid fa-stop"></i>中止生成</button></div>`);
+    setLinesBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在推演事件线…</p><button class="sp-abort-btn" id="sp-abort-lines"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
     runGenerateLines();
 }
 
