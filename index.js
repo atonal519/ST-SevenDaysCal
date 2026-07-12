@@ -552,6 +552,11 @@ function injectModal() {
                                         <span>时间制，按游戏内日期变化推进</span>
                                     </label>
                                 </div>
+
+                                <p class="sp-cfg-hint" id="sp-scale-hint" style="margin-top:14px">叙事尺度（按角色保存）</p>
+                                <div class="sp-mode-row" id="sp-scale-row">
+                                    <!-- populated by refreshScaleRadio() when settings opens -->
+                                </div>
                             </div>
                         </details>
 
@@ -1032,6 +1037,36 @@ function getDisabledKeys(characterId) {
 function setDisabledKeys(characterId, disabledSet) {
     if (!characterId) return;
     getWiFilter()[characterId] = [...disabledSet];
+    saveSettingsDebounced();
+}
+
+// ─── Per-character narrative scale ──────────────────────────────────────────
+// Controls the granularity of storyline events. 'auto' means the LLM decides
+// from card context; explicit values override that.
+// Stored: extension_settings[PLUGIN_ID].scale = { [characterId]: 'auto'|'macro'|'meso'|'micro' }
+const SCALE_VALUES = ['auto', 'macro', 'meso', 'micro'];
+const SCALE_LABELS = {
+    auto : '自动（由 AI 依据剧情判断）',
+    macro: '宏观（阴谋 / 势力 / 天下大势）',
+    meso : '中观（家族 / 组织 / 职场 / 学派）',
+    micro: '微观（人际 / 情感 / 日常）',
+};
+
+function getScaleMap() {
+    const s = getSettings();
+    if (!s.scale || typeof s.scale !== 'object') s.scale = {};
+    return s.scale;
+}
+
+function getScale(characterId) {
+    if (characterId == null) return 'auto';
+    const v = getScaleMap()[characterId];
+    return SCALE_VALUES.includes(v) ? v : 'auto';
+}
+
+function setScale(characterId, value) {
+    if (characterId == null) return;
+    getScaleMap()[characterId] = SCALE_VALUES.includes(value) ? value : 'auto';
     saveSettingsDebounced();
 }
 
@@ -1539,7 +1574,7 @@ async function runGenerateLines(silent = false) {
             const saved = cacheKey && JSON.parse(localStorage.getItem(cacheKey) || 'null');
             if (saved?.raw) previousRaw = saved.raw;
         } catch { /* ignore corrupt cache */ }
-        const prompt = buildLinesPrompt(userName, charName, viewSnap, previousRaw);
+        const prompt = buildLinesPrompt(userName, charName, viewSnap, previousRaw, getScale(ctx.characterId));
         const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, linesAbortController.signal);
         const html   = renderLines(raw);
         if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, ts: Date.now() }));
@@ -1571,18 +1606,64 @@ async function runGenerateLines(silent = false) {
     }
 }
 
-function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '') {
+function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto') {
     const subject = perspective === 'char' ? charName : userName;
+
+    // ─── Scale-specific guidance ──────────────────────────────────────────
+    const SCALE_BLOCKS = {
+        macro: `
+【叙事尺度：宏观】
+本卡属于大世界叙事——武侠 / 仙侠 / 朝廷 / 战争 / 修真 / 异世界冒险 / 末世 等。
+- 事件主体应是**势力 / 组织 / 集团 / 朝廷 / 大人物**，可以有天下大势、势力博弈、阴谋、江湖恩怨等
+- 冲突类事件线的"发酵/逼近/已爆发"按字面意义使用（暴力冲突、战事、追杀、政变等）
+- 事件影响范围：城 / 国 / 区域 / 天下
+- 允许出现宏观的伏笔（远方战报、朝堂密信、势力异动、江湖传闻等）`,
+        meso : `
+【叙事尺度：中观】
+本卡属于社群/组织尺度——都市职场 / 家族 / 商界 / 帮派 / 学派 / 公会 / 探案 / 悬疑 等。
+- 事件主体应是**具体人物 + 中小组织**（公司、家族、社群、帮派、学派、班组）
+- 冲突类事件线用"发酵/逼近/已爆发"表达组织内博弈、职场斗争、家族矛盾、商业竞争、悬案调查升温等
+- 事件影响范围：家族 / 公司 / 社区 / 学校 / 城市局部
+- 伏笔多是具体人物的暗中动机、组织内部立场、未公开的交易、可疑线索等
+- **避免**天下 / 战争 / 朝堂尺度的事件；也**避免**单纯的两人情感变化（那是微观）`,
+        micro: `
+【叙事尺度：微观】
+本卡属于日常/亲密关系尺度——校园 / 恋爱 / 同居 / 师生 / 治愈 / 慢生活 等。
+- 事件主体是**具体的几个人**（${subject}、身边的密友 / 家人 / 同学 / 同事）
+- **禁止**出现"势力"、"组织行动"、"阴谋"、"朝堂"、"战事"、"帮派"这类宏观概念
+- **禁止**出现暴力冲突、追杀、系统性对抗、宏大危机
+- 冲突类事件线的"萌芽/发酵/逼近/已爆发"应理解为**心结生长 / 关系张力 / 摊牌前夕 / 情感爆发**——只涉及具体人之间的情绪与关系动态
+- 推进类事件线适合表达：暗恋进展 / 考试筹备 / 兼职计划 / 学业目标 / 习惯养成 / 秘密准备的礼物 等
+- 允许的伏笔类型：
+  * 某人未说出口的话 / 一个欲言又止的瞬间
+  * 一段关系里的隐性张力
+  * 未处理的心结、旧账、误会
+  * 生活里的小变化（新习惯、新去处、新的联系人）
+  * 家庭或学校/职场里悬着的具体事项
+- 事件影响范围：个人 + 密友圈`,
+    };
+
+    const AUTO_HEADER = `
+【叙事尺度：自动判断】
+在推演前先根据角色卡描述、场景设定、最近对话内容判断当前故事的尺度：
+- **宏观**：涉及天下 / 朝堂 / 势力 / 江湖 / 战事 / 修真等——用宏大叙事对应类型的事件
+- **中观**：涉及组织 / 公司 / 家族 / 学派 / 帮派——用中等叙事，具体人物 + 小组织
+- **微观**：校园 / 恋爱 / 日常 / 亲密关系——只有具体的人和情感，禁止势力/阴谋/暴力冲突这类宏观概念
+判断后严格按对应尺度选择事件类型，不要跨越尺度举例。`;
+
+    const scaleBlock = SCALE_BLOCKS[scale] || AUTO_HEADER;
+
     return `请暂停角色扮演，以编剧顾问身份根据以上剧情，追踪当前故事中正在发生的"事件线"。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
+${scaleBlock}
 
 事件线是独立于 ${subject} 直接行动之外、需要跨轮次持续追踪的主事项。每条属于两类之一：
 - 冲突类 (conflict)：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
 - 推进类 (progress)：筹备 → 执行 → 关键 → 已完成（或已失败）
 
 【推进属性 agency（必填）】
-- player：事件推进依赖 ${subject} 主动行动（如：${subject} 答应的委托、结下的仇怨、承接的任务）
-- world：事件在世界/NPC/势力层面自行演化，${subject} 不动它也会推进（如：他方阴谋、外部战事、朝局变化）
+- player：事件推进依赖 ${subject} 主动行动（如：${subject} 答应的委托、结下的关系、承接的事项）
+- world：事件在世界 / 他人 / 环境层面自行演化，${subject} 不动它也会推进（具体举例请对齐上方"叙事尺度"块的类型）
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【每次推演的核心任务——按此顺序执行】
@@ -1593,9 +1674,9 @@ function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw 
 
 【新建 vs 归并——判断标准】
 优先考虑新建的情况：
-- 剧情里出现了新的独立主体（新 NPC、新势力、新地点）且带有可延续的动机或目标
+- 剧情里出现了新的独立主体（新人物 / 新地点 / 新组织 / 新关系）且带有可延续的动机或目标
 - 已有对话/场景里埋下了新的伏笔（角色说漏嘴、异常动作、意味深长的暗示）
-- 世界层面出现新的外部信号（天气、消息、传闻、他方行动）
+- 出现新的外部信号（环境变化、消息、传闻、他方行动，或人物新表态）
 - 一个次要角色首次表现出立场或计划
 
 归并到已有事件线的情况：
@@ -1821,13 +1902,31 @@ function toggleSettings() {
     settingsOpen = !settingsOpen;
     const $overlay = $('#sp-settings-overlay');
     if (settingsOpen) {
-        renderWiList();   // async, fire-and-forget — fills list when done
+        renderWiList();     // async, fire-and-forget — fills list when done
+        renderScaleRow();   // per-character scale radios (sync)
         $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
     } else {
         $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
     }
     $(`#${MODAL_ID} .sp-settings-btn`).toggleClass('sp-btn-active', settingsOpen);
     syncMobileViewport();
+}
+
+// Renders the narrative-scale radio group into #sp-scale-row using the current
+// character's saved value. Regenerated each time settings opens (character can
+// change between opens).
+function renderScaleRow() {
+    const $row = $('#sp-scale-row');
+    if (!$row.length) return;
+    const ctx = getContext();
+    const cid = ctx.characterId;
+    const current = getScale(cid);
+    const opts = SCALE_VALUES.map(v => `
+        <label class="sp-mode-opt">
+            <input type="radio" name="sp-lines-scale" value="${v}"${v === current ? ' checked' : ''}>
+            <span>${escapeHtml(SCALE_LABELS[v])}</span>
+        </label>`).join('');
+    $row.html(opts);
 }
 
 // Render world-info entry checklist for the current character into #sp-wi-list.
@@ -1978,7 +2077,7 @@ function saveSettings() {
     saveCfg({ url: $('#sp-cfg-url').val().trim().replace(/\/$/, ''), key, model: $('#sp-cfg-model').val().trim() });
     saveLinesInterval($('#sp-lines-interval').val());
     saveLinesMode($('input[name="sp-lines-mode"]:checked').val());
-    // Save world-info entry filter for current character
+    // Save world-info entry filter and narrative scale for current character
     const ctx = getContext();
     if (ctx.characterId != null) {
         const disabled = new Set();
@@ -1986,6 +2085,8 @@ function saveSettings() {
             if (!this.checked) disabled.add($(this).data('key'));
         });
         setDisabledKeys(ctx.characterId, disabled);
+        const scaleVal = $('input[name="sp-lines-scale"]:checked').val() || 'auto';
+        setScale(ctx.characterId, scaleVal);
     }
     $k.data('real', key).val(maskKey(key)).attr('type', 'password');
     const $m = $('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
