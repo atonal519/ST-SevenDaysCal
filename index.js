@@ -8,6 +8,7 @@ import {
     buildStorylinesCacheKey as buildLinesScopedCacheKey,
     getCreativeChatPlaceholder,
 } from './state.js';
+import * as memory from './memory.js';
 
 const PLUGIN_ID  = 'schedule-planner';
 const MODAL_ID   = 'sp-modal-root';
@@ -23,6 +24,11 @@ const DEFAULT_SETTINGS = {
     fabShow : true,
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days'
+    // Memory system
+    memoryEnabled  : true,
+    memoryL0Group  : 5,    // AI floors per L0 entry
+    memoryL1Group  : 10,   // L0 entries per L1 chapter
+    memorySkipShort: 50,   // skip AI floors shorter than N chars
 };
 
 let lastDebugPayload = null;
@@ -104,6 +110,20 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
+    // Initialize memory system — wires event listeners internally
+    memory.initMemory({
+        getSettings: () => {
+            const s = getSettings();
+            return {
+                memoryEnabled  : s.memoryEnabled !== false,
+                memoryL0Group  : Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5,
+                memoryL1Group  : Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10,
+                memorySkipShort: Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50,
+            };
+        },
+        saveSettings: () => saveSettingsDebounced(),
+        callApi: callMemoryApi,
+    });
     // Back-fill inline blocks for any messages already rendered at startup
     setTimeout(backfillLinesInlineBlocks, 800);
     // Reset view state and reload cache on chat switch
@@ -571,6 +591,56 @@ function injectModal() {
                             </div>
                         </details>
 
+                        <!-- Section 4: 故事记忆库 -->
+                        <details class="sp-settings-section" id="sp-mem-section">
+                            <summary class="sp-settings-section-title">故事记忆库</summary>
+                            <div class="sp-settings-section-body" id="sp-mem-body">
+                                <p class="sp-cfg-hint">
+                                    对话时自动为每层楼生成客观摘要，供日程 / 大纲 / 事件线生成时参考。
+                                    随聊天存储（不占浏览器缓存）。最新一楼永不摘要，防重 roll。
+                                </p>
+
+                                <label class="sp-mode-opt">
+                                    <input type="checkbox" id="sp-mem-enabled">
+                                    <span>自动记忆开启</span>
+                                </label>
+
+                                <div class="sp-mode-opt">
+                                    <span>每</span>
+                                    <input id="sp-mem-l0" class="sp-input sp-interval-input" type="number" min="1" max="30" value="5">
+                                    <span>楼合成一段 L0 摘要</span>
+                                </div>
+
+                                <div class="sp-mode-opt">
+                                    <span>每</span>
+                                    <input id="sp-mem-l1" class="sp-input sp-interval-input" type="number" min="2" max="30" value="10">
+                                    <span>段 L0 合成一章 L1</span>
+                                </div>
+
+                                <div class="sp-mode-opt">
+                                    <span>跳过短楼（不足</span>
+                                    <input id="sp-mem-skipshort" class="sp-input sp-interval-input" type="number" min="0" max="500" value="50">
+                                    <span>字的 AI 回复）</span>
+                                </div>
+
+                                <div id="sp-mem-status" class="sp-mem-status">
+                                    <span class="sp-cfg-hint">（打开设置时自动刷新）</span>
+                                </div>
+
+                                <div id="sp-mem-progress" class="sp-mem-progress" style="display:none">
+                                    <div class="sp-mem-progress-label">正在处理: <span id="sp-mem-progress-count">0/0</span></div>
+                                    <div class="sp-mem-progress-bar"><div id="sp-mem-progress-fill" class="sp-mem-progress-fill"></div></div>
+                                    <button id="sp-mem-progress-abort" class="sp-abort-btn"><i class="fa-solid fa-circle-stop"></i>中止</button>
+                                </div>
+
+                                <div class="sp-mem-actions">
+                                    <button id="sp-mem-check" class="sp-mem-btn">检查完整性</button>
+                                    <button id="sp-mem-fill" class="sp-mem-btn">补齐缺失</button>
+                                    <button id="sp-mem-rebuild" class="sp-mem-btn sp-mem-btn-danger">推翻重构</button>
+                                </div>
+                            </div>
+                        </details>
+
                     </div><!-- /sp-settings-body -->
                     <div class="sp-settings-footer">
                         <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
@@ -790,6 +860,7 @@ function injectModal() {
     divEl.addEventListener('mousedown',  onDivStart);
     divEl.addEventListener('touchstart', onDivStart, { passive: false });
     restoreOutlineChatHeight();
+    bindMemoryHandlers();
 }
 
 // ─── View (我 / TA) ───────────────────────────────────────────────────────────
@@ -931,17 +1002,77 @@ function closePanel() {
 
 function setBody(html) { $('#sp-body').html(html); }
 
+// ─── Memory pre-check helpers ─────────────────────────────────────────────────
+// Called by the three generation triggers (schedule/outline/lines).
+// Returns a Promise<boolean>: true if user wants to continue, false if canceled.
+async function memoryPreCheckConfirm() {
+    const report = memory.getHealthReport();
+    // No memory data yet is OK (fresh chat) — only warn when there ARE issues
+    const hasPending = report.pending > 0 || report.permaFailed > 0 || report.paused;
+    if (!hasPending) return true;
+    const lines = [];
+    if (report.paused) lines.push('• 记忆系统已暂停（连续失败或单楼超过 3 次）');
+    if (report.pending > 0)    lines.push(`• 有 ${report.pending} 楼待摘要`);
+    if (report.permaFailed > 0) lines.push(`• 有 ${report.permaFailed} 楼摘要永久失败（需手动补齐）`);
+    if (report.busy)           lines.push('• 记忆系统正在后台生成');
+    return spConfirm({
+        title  : '记忆库不完整',
+        body   : lines.join('\n'),
+        note   : '继续生成会使用当前记忆库（可能不完整）。你也可以先去修复。',
+        confirmText: '继续生成',
+        cancelText : '取消',
+    });
+}
+
+// Simple modal confirm — returns Promise<boolean>
+function spConfirm({ title, body, note, confirmText = '确定', cancelText = '取消' }) {
+    return new Promise(resolve => {
+        $('#sp-confirm').remove();
+        const $ov = $(`<div id="sp-confirm" class="sp-confirm-overlay">
+            <div class="sp-confirm-sheet">
+                <div class="sp-confirm-head">${escapeHtml(title)}</div>
+                <div class="sp-confirm-body">${escapeHtml(body).replace(/\n/g, '<br>')}</div>
+                ${note ? `<div class="sp-confirm-note">${escapeHtml(note)}</div>` : ''}
+                <div class="sp-confirm-actions">
+                    <button class="sp-confirm-cancel">${escapeHtml(cancelText)}</button>
+                    <button class="sp-confirm-ok">${escapeHtml(confirmText)}</button>
+                </div>
+            </div>
+        </div>`);
+        $ov.find('.sp-confirm-ok').on('click', () => { $ov.remove(); resolve(true); });
+        $ov.find('.sp-confirm-cancel').on('click', () => { $ov.remove(); resolve(false); });
+        $ov.on('click', function (e) {
+            if (e.target === this) { $ov.remove(); resolve(false); }
+        });
+        $(`#${MODAL_ID} .sp-sheet`).append($ov);
+    });
+}
+
+// Dynamic loading text: reflect whether memory is currently being built
+function loadingHtml(baseText, abortId) {
+    const busy = memory.isMemoryBusy();
+    const text = busy
+        ? `正在补全记忆并${baseText}…`
+        : `${baseText}中…`;
+    return `<div class="sp-loading">
+        <div class="sp-spinner"></div>
+        <p class="sp-loading-text">${escapeHtml(text)}</p>
+        <button class="sp-abort-btn" id="${abortId}"><i class="fa-solid fa-circle-stop"></i>中止生成</button>
+    </div>`;
+}
+
 // ─── Generation ───────────────────────────────────────────────────────────────
 
-function triggerGenerate() {
+async function triggerGenerate() {
     if (isGenerating) return;
+    if (!await memoryPreCheckConfirm()) return;
     const key = getCacheKey();
     if (key) localStorage.removeItem(key);
     cachedSchedule = null;
     isGenerating = true;
     setExtBtnState('generating');
     if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
-    setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
+    setBody(loadingHtml('正在规划', 'sp-abort-generate'));
     runGenerate();
 }
 
@@ -1013,6 +1144,25 @@ async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
         body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages, max_tokens: 4096 }),
         signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
+    return (await res.json()).choices?.[0]?.message?.content ?? '';
+}
+
+// Called by memory.js — minimal wrapper around user's configured API.
+// Skips chat history / world info; just sends raw messages array through.
+async function callMemoryApi(messages) {
+    const cfg = loadCfg();
+    if (!cfg.url || !cfg.key) throw new Error('API 未配置');
+    const res = await fetch(`${cfg.url}/chat/completions`, {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+        body   : JSON.stringify({
+            model: cfg.model || 'gpt-4o-mini',
+            messages,
+            max_tokens: 800,   // summaries are short
+            temperature: 0.3,  // low temp for factual extraction
+        }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
     return (await res.json()).choices?.[0]?.message?.content ?? '';
@@ -1168,6 +1318,13 @@ async function buildWorldInfoContext(ctx) {
 async function buildMessages(ctx, prompt, userName, charName) {
     const char = ctx.characters?.[ctx.characterId] ?? {};
     const wiContext = await buildWorldInfoContext(ctx);
+
+    // Story memory (Plan C: objective memory + view tag)
+    const memText = memory.getMemoryContext();
+    const memBlock = memText
+        ? `【故事记忆库】以下由本插件在对话过程中自动生成的客观摘要，反映从最早到近期的关键事件与伏笔。请**优先信任记忆库描述**，即使它与角色卡/世界书中较早的描述冲突（因为记忆库记录了事件后的最新状态）。以 ${currentView === 'char' ? charName : userName} 的视角优先关注对其有意义的信息。\n\n${memText}`
+        : '';
+
     const sys  = [
         `你是一位旁观者和叙事分析助手，负责以第三人称视角分析 ${userName} 与 ${charName} 的故事。`,
         `不要扮演任何角色，不要使用第一人称。所有输出必须以第三人称叙述。`,
@@ -1175,6 +1332,7 @@ async function buildMessages(ctx, prompt, userName, charName) {
         char.personality ? `【性格】${char.personality}` : '',
         char.scenario    ? `【场景】${char.scenario}`    : '',
         wiContext,
+        memBlock,
     ].filter(Boolean).join('\n\n');
     // Only take the last 10 AI replies (+ their paired user messages) to avoid
     // anchoring on dates from early in the conversation.
@@ -1371,13 +1529,14 @@ function setOutlineBody(html) { $('#sp-outline-beats').html(html); }
 
 // ─── Outline generation ───────────────────────────────────────────────────────
 
-function triggerGenerateOutline() {
+async function triggerGenerateOutline() {
     if (isGeneratingOutline) return;
+    if (!await memoryPreCheckConfirm()) return;
     const key = getOutlineCacheKey();
     if (key) localStorage.removeItem(key);
     cachedOutline = null;
     isGeneratingOutline = true;
-    setOutlineBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在构思大纲…</p><button class="sp-abort-btn" id="sp-abort-outline"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
+    setOutlineBody(loadingHtml('正在构思大纲', 'sp-abort-outline'));
     runGenerateOutline();
 }
 
@@ -1548,8 +1707,9 @@ function renderEmptyLinesState() {
     return `<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>`;
 }
 
-function triggerGenerateLines() {
+async function triggerGenerateLines() {
     if (isGeneratingLines) return;
+    if (!await memoryPreCheckConfirm()) return;
     // Manual refresh: clear cache so LLM generates fresh instead of just echoing
     // the previous raw. Auto-advance path (CHARACTER_MESSAGE_RENDERED) calls
     // runGenerateLines(true) directly and preserves previousRaw for continuity.
@@ -1557,7 +1717,7 @@ function triggerGenerateLines() {
     if (key) localStorage.removeItem(key);
     cachedLines = null;
     isGeneratingLines = true;
-    setLinesBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在推演事件线…</p><button class="sp-abort-btn" id="sp-abort-lines"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
+    setLinesBody(loadingHtml('正在推演事件线', 'sp-abort-lines'));
     runGenerateLines();
 }
 
@@ -1910,12 +2070,125 @@ function toggleSettings() {
     if (settingsOpen) {
         renderWiList();     // async, fire-and-forget — fills list when done
         renderScaleRow();   // per-character scale radios (sync)
+        renderMemorySection();   // memory status + settings sync
         $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
     } else {
         $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
     }
     $(`#${MODAL_ID} .sp-settings-btn`).toggleClass('sp-btn-active', settingsOpen);
     syncMobileViewport();
+}
+
+// ─── Memory section renderer + handlers ─────────────────────────────────────
+function renderMemorySection() {
+    const s = getSettings();
+    $('#sp-mem-enabled').prop('checked', s.memoryEnabled !== false);
+    $('#sp-mem-l0').val(Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5);
+    $('#sp-mem-l1').val(Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10);
+    $('#sp-mem-skipshort').val(Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50);
+    refreshMemoryStatus();
+}
+
+function refreshMemoryStatus() {
+    const r = memory.getHealthReport();
+    const rows = [
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">AI 楼总数</span><span class="sp-mem-stat-v">${r.totalAi}</span></div>`,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">稳定分组数</span><span class="sp-mem-stat-v">${r.totalGroups}</span></div>`,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">已生成 L0</span><span class="sp-mem-stat-v">${r.withL0}</span></div>`,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">待生成</span><span class="sp-mem-stat-v${r.pending > 0 ? ' sp-mem-warn' : ''}">${r.pending}</span></div>`,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">永久失败</span><span class="sp-mem-stat-v${r.permaFailed > 0 ? ' sp-mem-warn' : ''}">${r.permaFailed}</span></div>`,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">L1 章节数</span><span class="sp-mem-stat-v">${r.l1Chapters}</span></div>`,
+    ];
+    if (r.paused) rows.push(`<div class="sp-mem-alert">⚠ 记忆系统已暂停：${escapeHtml(r.lastError || '连续失败')}。点补齐或重构以恢复。</div>`);
+    if (r.busy)   rows.push(`<div class="sp-mem-alert sp-mem-alert-info">🔄 记忆系统正在后台工作</div>`);
+    $('#sp-mem-status').html(rows.join(''));
+}
+
+function bindMemoryHandlers() {
+    $('#sp-mem-enabled').on('change', function () {
+        getSettings().memoryEnabled = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#sp-mem-l0').on('change', function () {
+        const v = Math.max(1, Math.min(30, parseInt(this.value, 10) || 5));
+        getSettings().memoryL0Group = v;
+        this.value = v;
+        saveSettingsDebounced();
+    });
+    $('#sp-mem-l1').on('change', function () {
+        const v = Math.max(2, Math.min(30, parseInt(this.value, 10) || 10));
+        getSettings().memoryL1Group = v;
+        this.value = v;
+        saveSettingsDebounced();
+    });
+    $('#sp-mem-skipshort').on('change', function () {
+        const v = Math.max(0, Math.min(500, parseInt(this.value, 10) || 50));
+        getSettings().memorySkipShort = v;
+        this.value = v;
+        saveSettingsDebounced();
+    });
+    $('#sp-mem-check').on('click', function () {
+        refreshMemoryStatus();
+        showToast('已刷新记忆状态');
+    });
+    $('#sp-mem-fill').on('click', async function () {
+        if ($(this).prop('disabled')) return;
+        setMemoryProgressVisible(true);
+        $(this).prop('disabled', true);
+        try {
+            await memory.fillMissing(({ current, total, done }) => {
+                updateMemoryProgress(current, total);
+                if (current % 3 === 0 || done) refreshMemoryStatus();
+            });
+            showToast('补齐完成');
+        } catch (err) {
+            showToast('补齐失败：' + err.message, null, true);
+        } finally {
+            $(this).prop('disabled', false);
+            setMemoryProgressVisible(false);
+            refreshMemoryStatus();
+        }
+    });
+    $('#sp-mem-rebuild').on('click', async function () {
+        const r = memory.getHealthReport();
+        const cost = r.totalGroups;
+        const ok = await spConfirm({
+            title  : '推翻重构',
+            body   : `将清空全部摘要并按当前分组重新生成，约需 ${cost} 次 L0 API 调用 + 若干次 L1 压缩。`,
+            note   : '重构期间可以中止。已有的日程/大纲/事件线不受影响。',
+            confirmText: '开始重构',
+            cancelText : '取消',
+        });
+        if (!ok) return;
+        if ($(this).prop('disabled')) return;
+        setMemoryProgressVisible(true);
+        $(this).prop('disabled', true);
+        try {
+            await memory.rebuildAll(({ current, total, done, aborted }) => {
+                updateMemoryProgress(current, total, aborted);
+                if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
+            });
+            showToast('重构完成');
+        } catch (err) {
+            showToast('重构失败：' + err.message, null, true);
+        } finally {
+            $(this).prop('disabled', false);
+            setMemoryProgressVisible(false);
+            refreshMemoryStatus();
+        }
+    });
+    $('#sp-mem-progress-abort').on('click', () => memory.abortRebuild());
+}
+
+function setMemoryProgressVisible(visible) {
+    $('#sp-mem-progress').toggle(!!visible);
+    if (visible) updateMemoryProgress(0, 0);
+}
+
+function updateMemoryProgress(current, total, aborted = false) {
+    $('#sp-mem-progress-count').text(aborted ? `已中止 (${current}/${total})` : `${current}/${total}`);
+    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+    $('#sp-mem-progress-fill').css('width', pct + '%');
 }
 
 // Renders the narrative-scale radio group into #sp-scale-row using the current
