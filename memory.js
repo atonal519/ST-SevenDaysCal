@@ -39,9 +39,8 @@ let _callApi = null;
 // ─── State ───────────────────────────────────────────────────────────────────
 let _queue = [];
 let _running = false;
-let _currentJob = null;
-let _abortController = null;
-let _progressCallback = null;
+let _abortController = null;      // reserved for rebuild flow (see abortRebuild)
+let _jobAbortController = null;   // shared signal for per-job fetches; aborted on CHAT_CHANGED
 
 // ─── Utility: fast non-crypto hash ───────────────────────────────────────────
 function hashStr(s) {
@@ -244,14 +243,20 @@ async function runL0(groupKey) {
         prevSummary = m.L0[groups[idx - 1].key]?.text || '';
     }
 
+    // Snapshot chatId — after the await, we may be in a different chat
+    const chatIdSnap = getContext().chatId;
     const messages = buildL0Prompt(prevSummary, group.floors);
     let response = '';
     try {
-        response = await _callApi(messages);
+        response = await _callApi(messages, _jobAbortController?.signal);
     } catch (err) {
+        if (err?.name === 'AbortError') return;          // chat switched; drop silently
         recordFailure(groupKey, err);
         return;
     }
+
+    // Guard: don't write results into a different chat's metadata
+    if (getContext().chatId !== chatIdSnap) return;
 
     if (!response || response.length < 10) {
         recordFailure(groupKey, new Error('响应为空或过短'));
@@ -267,7 +272,6 @@ async function runL0(groupKey) {
     delete m.failed[groupKey];
     m.system.consecutiveFails = 0;
     if (m.system.paused) m.system.paused = false;
-
 
     maybeQueueL1();
 }
@@ -316,19 +320,21 @@ async function runL1(range) {
     entries.sort((a, b) => parseInt(a.range[0], 10) - parseInt(b.range[0], 10));
     if (entries.length < 2) return;
 
+    const chatIdSnap = getContext().chatId;
     const messages = buildL1Prompt(entries);
     let response = '';
     try {
-        response = await _callApi(messages);
+        response = await _callApi(messages, _jobAbortController?.signal);
     } catch (err) {
+        if (err?.name === 'AbortError') return;
         m.system.lastError = 'L1 压缩失败：' + String(err?.message || err);
         return;
     }
+    if (getContext().chatId !== chatIdSnap) return;
     if (!response || response.length < 20) return;
 
     m.L1.push({ range, text: response.trim(), ts: Date.now(), builtFrom: entries.length });
     m.L1.sort((a, b) => parseInt(a.range[0], 10) - parseInt(b.range[0], 10));
-
 }
 
 // ─── Health report ───────────────────────────────────────────────────────────
@@ -495,19 +501,33 @@ function onChatChanged() {
     _queue = [];
     _abortController?.abort();
     _abortController = null;
+    // Cancel any in-flight summary fetch — result would land in wrong chat's metadata
+    _jobAbortController?.abort();
+    _jobAbortController = new AbortController();
 }
 
 // ─── Public init ─────────────────────────────────────────────────────────────
+// Handles for idempotent (un)registration
+const _listeners = { char: null, swipe: null, edit: null, del: null, chat: null };
+
 export function initMemory({ getSettings, saveSettings, callApi }) {
     _getSettings = getSettings || _getSettings;
     _saveSettings = saveSettings || _saveSettings;
     _callApi = callApi;
+    _jobAbortController = new AbortController();
 
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onCharacterMessageRendered);
-    eventSource.on(event_types.MESSAGE_SWIPED, onMessageMutated);
-    eventSource.on(event_types.MESSAGE_EDITED, onMessageMutated);
-    eventSource.on(event_types.MESSAGE_DELETED, () => {
-        // Delete: invalidate anything whose range references a nonexistent mesid
+    // Idempotent (un)register — hot reload / double init won't stack handlers
+    const off = (evt, fn) => { if (fn) eventSource.removeListener?.(evt, fn); };
+    off(event_types.CHARACTER_MESSAGE_RENDERED, _listeners.char);
+    off(event_types.MESSAGE_SWIPED, _listeners.swipe);
+    off(event_types.MESSAGE_EDITED, _listeners.edit);
+    off(event_types.MESSAGE_DELETED, _listeners.del);
+    off(event_types.CHAT_CHANGED, _listeners.chat);
+
+    _listeners.char = onCharacterMessageRendered;
+    _listeners.swipe = onMessageMutated;
+    _listeners.edit = onMessageMutated;
+    _listeners.del = () => {
         const m = meta();
         const chat = getChat();
         const validMids = new Set(chat.map((_, i) => String(i)));
@@ -516,8 +536,14 @@ export function initMemory({ getSettings, saveSettings, callApi }) {
         }
         m.L1 = m.L1.filter(l1 => validMids.has(l1.range[0]) && validMids.has(l1.range[1]));
         persist();
-    });
-    eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    };
+    _listeners.chat = onChatChanged;
+
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _listeners.char);
+    eventSource.on(event_types.MESSAGE_SWIPED, _listeners.swipe);
+    eventSource.on(event_types.MESSAGE_EDITED, _listeners.edit);
+    eventSource.on(event_types.MESSAGE_DELETED, _listeners.del);
+    eventSource.on(event_types.CHAT_CHANGED, _listeners.chat);
 }
 
 export function resumeSystem() {

@@ -105,6 +105,12 @@ const isMobile = () => window.innerWidth <= 640;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+// Module-level handles so hot-reload / re-init doesn't double-register.
+// If the module loads again in the same page (rare but possible with ST's
+// dev workflows), we need to be able to unregister and rewire cleanly.
+let _themeObserver = null;
+const _stListeners = { chat: null, char: null };
+
 jQuery(async () => {
     injectExtButton();
     injectModal();
@@ -127,7 +133,8 @@ jQuery(async () => {
     // Back-fill inline blocks for any messages already rendered at startup
     setTimeout(backfillLinesInlineBlocks, 800);
     // Reset view state and reload cache on chat switch
-    eventSource.on(event_types.CHAT_CHANGED, () => {
+    if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
+    _stListeners.chat = () => {
         currentView  = 'user';
         charViewName = null;
         outlineMode  = false;
@@ -136,7 +143,7 @@ jQuery(async () => {
         linesMode    = false;
         cachedLines  = null;
         linesAiMsgCounter = 0;
-        lastDetectedDay   = null;
+        _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
         $('.sp-view-btn').removeClass('sp-view-active');
         $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
         cachedSchedule = loadCachedForCurrentChat();
@@ -152,32 +159,33 @@ jQuery(async () => {
         }
         // Back-fill inline blocks for newly loaded chat
         setTimeout(backfillLinesInlineBlocks, 300);
-    });
+    };
+    eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
     // Auto-advance storylines, then append inline block to every AI message.
     // NOTE: shouldAdvance triggers generation BEFORE appending the current block,
     // so the current (newest, still-unstable) message is NOT included in the LLM
     // context. The advance fires when the PREVIOUS message tips the counter over,
     // and this message just gets the freshly-generated result injected.
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+    if (_stListeners.char) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
+    _stListeners.char = async (messageId) => {
         let shouldAdvance = false;
         if (getLinesMode() === 'days') {
-            // Time-based: advance when the in-game date appears to have changed
-            // (use the previous message's text, not the current one)
             shouldAdvance = detectInGameDayChange(messageId, /* excludeCurrent */ true);
         } else {
-            // Turn-based: advance when counter hits interval,
-            // increment AFTER deciding so the current message is excluded
             const interval = getLinesInterval();
             if (linesAiMsgCounter >= interval) { linesAiMsgCounter = 0; shouldAdvance = true; }
             linesAiMsgCounter++;
         }
         appendLinesInlineBlock(messageId, shouldAdvance);
-    });
+    };
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     // Track ST theme changes via MutationObserver on documentElement style
-    new MutationObserver(() => {
+    _themeObserver?.disconnect();
+    _themeObserver = new MutationObserver(() => {
         const t = detectSTTheme();
         if (t !== currentTheme) applyTheme(t);
-    }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    });
+    _themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
 });
 
 // ─── Config helpers ───────────────────────────────────────────────────────────
@@ -231,11 +239,11 @@ function maskKey(k) { return k.length <= 8 ? '•'.repeat(k.length) : '•'.repe
 // (第N天, 周X, N月N日, 今天/明天/昨天 transitions) and compare consecutive messages.
 let _lastDetectedDay = null;
 
-function detectInGameDayChange(messageId) {
+function detectInGameDayChange(messageId, excludeCurrent = false) {
     const msgs = getContext().chat || [];
-    // Only look at AI messages; find the one just before this one too
+    // Only look at AI messages
     const aiMsgs = msgs.filter(m => !m.is_user);
-    if (aiMsgs.length < 1) return false;
+    if (aiMsgs.length < (excludeCurrent ? 2 : 1)) return false;
 
     const DAY_PATTERNS = [
         /第\s*(\d+)\s*[天日]/,
@@ -253,8 +261,11 @@ function detectInGameDayChange(messageId) {
         return null;
     }
 
-    const currentMsg = aiMsgs[aiMsgs.length - 1];
-    const currentDay = extractDay(currentMsg?.mes || '');
+    // When excludeCurrent is true, look at the PREVIOUS AI message (skip the one
+    // that just arrived — matches how the caller expects "advance BEFORE current
+    // message enters context").
+    const targetMsg = excludeCurrent ? aiMsgs[aiMsgs.length - 2] : aiMsgs[aiMsgs.length - 1];
+    const currentDay = extractDay(targetMsg?.mes || '');
     if (!currentDay) return false;
 
     if (currentDay !== _lastDetectedDay) {
@@ -349,7 +360,9 @@ async function backfillLinesInlineBlocks() {
 // Refresh the inline block on the latest AI message using current cache.
 // Called after the panel regenerates lines so the message-level block doesn't
 // stay stale until page reload.
-function syncLatestInlineBlock() {
+function syncLatestInlineBlock(expectedChatId = null) {
+    // If caller passed a chatId snapshot, skip when chat changed mid-flight
+    if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
     _removeAllInlineBlocks();
     const lastMesEl = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].at(-1);
     if (!lastMesEl) return;
@@ -907,6 +920,7 @@ function guessCharName(ctx) {
 function setView(view, charName) {
     currentView = view;
     if (view === 'char') charViewName = charName || null;
+    else charViewName = null;   // switching away from char: clear stale name so cache keys can't leak
     $('.sp-view-btn').removeClass('sp-view-active');
     $(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
     cachedSchedule = loadCachedForCurrentChat();
@@ -995,6 +1009,12 @@ function showPanel() {
 }
 
 function closePanel() {
+    // Dismiss any pending confirm — spConfirm's own handler will resolve(false)
+    // via the click handler on the button we simulate here, but since panel close
+    // is out-of-band, we just remove the overlay directly; the awaiting Promise
+    // will get its CHAT_CHANGED escape hatch on next chat switch. If user reopens
+    // without switching, they'll see the confirm was gone and click again.
+    $('#sp-confirm .sp-confirm-cancel').trigger('click');
     $(`#${MODAL_ID}`).stop(true).animate({ opacity: 0 }, 150, function () {
         $(this).css('display', 'none');
     });
@@ -1024,10 +1044,21 @@ async function memoryPreCheckConfirm() {
     });
 }
 
-// Simple modal confirm — returns Promise<boolean>
+// Simple modal confirm — returns Promise<boolean>.
+// Auto-resolves(false) on CHAT_CHANGED or when the panel closes, so callers
+// awaiting the promise won't hang.
 function spConfirm({ title, body, note, confirmText = '确定', cancelText = '取消' }) {
     return new Promise(resolve => {
         $('#sp-confirm').remove();
+        let done = false;
+        const finish = (v) => {
+            if (done) return;
+            done = true;
+            $ov.remove();
+            eventSource.removeListener?.(event_types.CHAT_CHANGED, onExternalClose);
+            resolve(v);
+        };
+        const onExternalClose = () => finish(false);
         const $ov = $(`<div id="sp-confirm" class="sp-confirm-overlay">
             <div class="sp-confirm-sheet">
                 <div class="sp-confirm-head">${escapeHtml(title)}</div>
@@ -1039,12 +1070,11 @@ function spConfirm({ title, body, note, confirmText = '确定', cancelText = '�
                 </div>
             </div>
         </div>`);
-        $ov.find('.sp-confirm-ok').on('click', () => { $ov.remove(); resolve(true); });
-        $ov.find('.sp-confirm-cancel').on('click', () => { $ov.remove(); resolve(false); });
-        $ov.on('click', function (e) {
-            if (e.target === this) { $ov.remove(); resolve(false); }
-        });
+        $ov.find('.sp-confirm-ok').on('click', () => finish(true));
+        $ov.find('.sp-confirm-cancel').on('click', () => finish(false));
+        $ov.on('click', function (e) { if (e.target === this) finish(false); });
         $(`#${MODAL_ID} .sp-sheet`).append($ov);
+        eventSource.on(event_types.CHAT_CHANGED, onExternalClose);
     });
 }
 
@@ -1151,7 +1181,7 @@ async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null
 
 // Called by memory.js — minimal wrapper around user's configured API.
 // Skips chat history / world info; just sends raw messages array through.
-async function callMemoryApi(messages) {
+async function callMemoryApi(messages, signal = null) {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) throw new Error('API 未配置');
     const res = await fetch(`${cfg.url}/chat/completions`, {
@@ -1163,6 +1193,7 @@ async function callMemoryApi(messages) {
             max_tokens: 800,   // summaries are short
             temperature: 0.3,  // low temp for factual extraction
         }),
+        signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
     return (await res.json()).choices?.[0]?.message?.content ?? '';
@@ -1543,6 +1574,7 @@ async function triggerGenerateOutline() {
 async function runGenerateOutline() {
     const viewSnap = currentView;
     const charSnap = charViewName;
+    const chatIdSnap = getContext().chatId;
     outlineAbortController = new AbortController();
     try {
         const ctx      = getContext();
@@ -1555,6 +1587,13 @@ async function runGenerateOutline() {
         }
         const prompt   = buildOutlinePrompt(userName, charName, viewSnap);
         const raw      = await callCustomApi(ctx, prompt, cfg, userName, charName, outlineAbortController.signal);
+
+        if (getContext().chatId !== chatIdSnap) {
+            isGeneratingOutline = false;
+            outlineAbortController = null;
+            return;
+        }
+
         const html     = renderOutline(raw);
         const cacheKey = getOutlineCacheKey(viewSnap, charSnap);
         if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, ts: Date.now() }));
@@ -1567,9 +1606,10 @@ async function runGenerateOutline() {
         isGeneratingOutline = false;
         outlineAbortController = null;
         if (err.name === 'AbortError') {
-            if (outlineMode) setOutlineBody(`<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>已中止</p></div>`);
+            if (outlineMode && getContext().chatId === chatIdSnap) setOutlineBody(`<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>已中止</p></div>`);
             return;
         }
+        if (getContext().chatId !== chatIdSnap) return;
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
         if (outlineMode) setOutlineBody(errHtml);
         else showToast('大纲生成失败，请重试', null, true);
@@ -1678,7 +1718,12 @@ function renderOutline(raw) {
             ${b.think   ? `<details class="sp-beat-think"><summary>创作思考</summary><p>${escapeHtml(cleanText(b.think))}</p></details>` : ''}
         </div>`;
     }).join('');
-    return toolbar + cards;
+    // If we parsed few beats but the raw has substantial content, LLM likely
+    // deviated from format — surface it so the user isn't silently truncated.
+    const rawTail = beats.length < 3
+        ? `<details class="sp-debug"><summary>⚠ 仅解析到 ${beats.length} 个节点</summary><pre class="sp-debug-raw">${escapeHtml(raw)}</pre></details>`
+        : '';
+    return toolbar + cards + rawTail;
 }
 
 
@@ -1724,6 +1769,7 @@ async function triggerGenerateLines() {
 async function runGenerateLines(silent = false) {
     const viewSnap = currentView;
     const charSnap = charViewName;
+    const chatIdSnap = getContext().chatId;
     linesAbortController = new AbortController();
     try {
         const ctx      = getContext();
@@ -1742,6 +1788,14 @@ async function runGenerateLines(silent = false) {
         } catch { /* ignore corrupt cache */ }
         const prompt = buildLinesPrompt(userName, charName, viewSnap, previousRaw, getScale(ctx.characterId));
         const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, linesAbortController.signal);
+
+        // Chat may have switched while we were awaiting; do not touch cache or UI in that case
+        if (getContext().chatId !== chatIdSnap) {
+            isGeneratingLines = false;
+            linesAbortController = null;
+            return;
+        }
+
         const html   = renderLines(raw);
         if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({ raw, ts: Date.now() }));
         isGeneratingLines = false;
@@ -1752,7 +1806,7 @@ async function runGenerateLines(silent = false) {
         // Sync the inline block on the latest AI message — panel & inline share
         // the same cache; without this the message-level block shows stale data
         // until page reload.
-        syncLatestInlineBlock();
+        syncLatestInlineBlock(chatIdSnap);
         if (!linesMode && !silent) showToast('事件线已生成，点击查看', () => {
             if (!linesMode) $('.sp-view-btn[data-view="lines"]').trigger('click');
             showPanel();
@@ -1761,10 +1815,10 @@ async function runGenerateLines(silent = false) {
         isGeneratingLines = false;
         linesAbortController = null;
         if (err.name === 'AbortError') {
-            if (linesMode) setLinesBody(`<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>已中止</p></div>`);
+            if (linesMode && getContext().chatId === chatIdSnap) setLinesBody(`<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>已中止</p></div>`);
             return;
         }
-        if (!silent) {
+        if (!silent && getContext().chatId === chatIdSnap) {
             const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
             if (linesMode) setLinesBody(errHtml);
             else showToast('事件线生成失败，请重试', null, true);
