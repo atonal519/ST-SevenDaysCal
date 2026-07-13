@@ -473,9 +473,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-wi-fullview-body::-webkit-scrollbar       { width: 4px; }
 .sp-wi-fullview-body::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
 
-/* ─── Settings panel (OLD — keep only for backwards reference, now hidden) ──── */
-.sp-settings-panel { display: none !important; }
-
 /* ─── Interval / mode selector ───────────────────────────────────────────────── */
 .sp-interval-input  { width: 46px !important; text-align: center; }
 .sp-mode-row        { display: flex; flex-direction: column; gap: 8px; }
@@ -530,24 +527,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-save-btn:hover { opacity: 0.88; }
 .sp-cfg-msg { font-size: 0.78rem; color: var(--sp-subtle); align-self: center; }
-
-/* ─── Extensions panel row ───────────────────────────────────────────────────── */
-.sp-ext-row {
-    display    : flex;
-    align-items: center;
-    gap        : 8px;
-    margin-top : 4px;
-}
-.sp-toggle-label {
-    display    : flex;
-    align-items: center;
-    gap        : 6px;
-    font-size  : 0.85rem;
-    cursor     : pointer;
-    color      : inherit;
-    user-select: none;
-}
-.sp-toggle-label input[type="checkbox"] { cursor: pointer; }
 
 /* ─── Body ───────────────────────────────────────────────────────────────────── */
 .sp-body {
@@ -898,7 +877,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     50%       { opacity: 0.5; }
 }
 
-#sp-open-btn.sp-btn-generating {
+#sp-open-btn.sp-btn-generating,
+#sp_open_wand.sp-btn-generating {
     animation: sp-neon-text 1.4s ease-in-out infinite;
     color    : var(--sp-primary, #d0bcff) !important;
 }
@@ -909,6 +889,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* Done state */
 #sp-open-btn.sp-btn-done,
+#sp_open_wand.sp-btn-done,
 .sp-fab-btn.sp-btn-done {
     color: var(--sp-primary, #d0bcff) !important;
 }

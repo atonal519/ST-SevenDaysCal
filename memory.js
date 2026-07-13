@@ -31,7 +31,6 @@ let _getSettings = () => ({
     memoryL1Group  : 10,      // L0 entries per L1 chapter
     memorySkipShort: 50,      // skip AI floors shorter than N chars from L0 input
 });
-let _saveSettings = () => {};
 
 // ─── API caller injection ────────────────────────────────────────────────────
 let _callApi = null;
@@ -510,9 +509,8 @@ function onChatChanged() {
 // Handles for idempotent (un)registration
 const _listeners = { char: null, swipe: null, edit: null, del: null, chat: null };
 
-export function initMemory({ getSettings, saveSettings, callApi }) {
+export function initMemory({ getSettings, callApi }) {
     _getSettings = getSettings || _getSettings;
-    _saveSettings = saveSettings || _saveSettings;
     _callApi = callApi;
     _jobAbortController = new AbortController();
 

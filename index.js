@@ -127,7 +127,6 @@ jQuery(async () => {
                 memorySkipShort: Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50,
             };
         },
-        saveSettings: () => saveSettingsDebounced(),
         callApi: callMemoryApi,
     });
     // Back-fill inline blocks for any messages already rendered at startup
@@ -140,6 +139,8 @@ jQuery(async () => {
         outlineMode  = false;
         cachedOutline = null;
         outlineChatHistory = [];
+        outlineChatAbortController?.abort();
+        outlineChatAbortController = null;
         linesMode    = false;
         cachedLines  = null;
         linesAiMsgCounter = 0;
@@ -1166,37 +1167,38 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal);
 }
 
-async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null) {
-    const messages = await buildMessages(ctx, prompt, userName, charName);
-    lastDebugPayload = { model: cfg.model || 'gpt-4o-mini', messages };
+// Single fetch wrapper for all OpenAI-compatible /chat/completions calls.
+async function postChatCompletion({ cfg, messages, maxTokens, temperature, signal = null } = {}) {
+    if (!cfg?.url || !cfg?.key) throw new Error('API 未配置');
+    const body = { model: cfg.model || 'gpt-4o-mini', messages };
+    if (Number.isFinite(maxTokens))   body.max_tokens  = maxTokens;
+    if (Number.isFinite(temperature)) body.temperature = temperature;
     const res = await fetch(`${cfg.url}/chat/completions`, {
         method : 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
-        body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages, max_tokens: 4096 }),
+        body   : JSON.stringify(body),
         signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
     return (await res.json()).choices?.[0]?.message?.content ?? '';
 }
 
+async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null) {
+    const messages = await buildMessages(ctx, prompt, userName, charName);
+    lastDebugPayload = { model: cfg.model || 'gpt-4o-mini', messages };
+    return postChatCompletion({ cfg, messages, maxTokens: 4096, signal });
+}
+
 // Called by memory.js — minimal wrapper around user's configured API.
 // Skips chat history / world info; just sends raw messages array through.
 async function callMemoryApi(messages, signal = null) {
-    const cfg = loadCfg();
-    if (!cfg.url || !cfg.key) throw new Error('API 未配置');
-    const res = await fetch(`${cfg.url}/chat/completions`, {
-        method : 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
-        body   : JSON.stringify({
-            model: cfg.model || 'gpt-4o-mini',
-            messages,
-            max_tokens: 800,   // summaries are short
-            temperature: 0.3,  // low temp for factual extraction
-        }),
+    return postChatCompletion({
+        cfg: loadCfg(),
+        messages,
+        maxTokens: 800,     // summaries are short
+        temperature: 0.3,   // low temp for factual extraction
         signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
-    return (await res.json()).choices?.[0]?.message?.content ?? '';
 }
 
 // ─── World-info entry filter (per character) ──────────────────────────────────
@@ -1485,25 +1487,34 @@ async function buildOutlineChatMessages(userMsg) {
     return [{ role: 'system', content: sys }, ...outlineChatHistory, { role: 'user', content: userMsg }];
 }
 
+let outlineChatAbortController = null;
+const OUTLINE_HISTORY_CAP = 20;   // sliding window: keep last N messages, drop the rest
+
 async function sendOutlineChat(userMsg) {
     if (isOutlineChatting) return;
     appendChatMsg('user', userMsg);
     outlineChatHistory.push({ role: 'user', content: userMsg });
+    // Sliding window: cap history growth so localStorage doesn't bloat
+    if (outlineChatHistory.length > OUTLINE_HISTORY_CAP) {
+        outlineChatHistory.splice(0, outlineChatHistory.length - OUTLINE_HISTORY_CAP);
+    }
     saveCreativeChatHistory();
     isOutlineChatting = true;
+    const chatIdSnap = getContext().chatId;
+    outlineChatAbortController = new AbortController();
     const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').text('…').appendTo('#sp-chat-msgs');
     const el = document.getElementById('sp-chat-msgs');
     if (el) el.scrollTop = el.scrollHeight;
     try {
         const cfg = loadCfg();
         if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); throw new Error('请先配置 API'); }
-        const res = await fetch(`${cfg.url}/chat/completions`, {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
-            body   : JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages: await buildOutlineChatMessages(userMsg), max_tokens: 4096 }),
+        const reply = await postChatCompletion({
+            cfg,
+            messages: await buildOutlineChatMessages(userMsg),
+            maxTokens: 4096,
+            signal: outlineChatAbortController.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const reply = (await res.json()).choices?.[0]?.message?.content ?? '';
+        if (getContext().chatId !== chatIdSnap) { $dots.remove(); return; }
         outlineChatHistory.push({ role: 'assistant', content: reply });
         saveCreativeChatHistory();
         $dots.remove();
@@ -1525,32 +1536,13 @@ async function sendOutlineChat(userMsg) {
         }
     } catch (err) {
         $dots.remove();
-        appendChatMsg('system', `发送失败：${err.message}`);
+        if (err?.name !== 'AbortError') appendChatMsg('system', `发送失败：${err.message}`);
     }
+    outlineChatAbortController = null;
     isOutlineChatting = false;
 }
 
 
-
-function toggleOutlineMode() {
-    outlineMode = !outlineMode;
-    $('.sp-view-btn').removeClass('sp-view-active');
-    if (outlineMode) {
-        $(`.sp-view-btn[data-view="outline"]`).addClass('sp-view-active');
-        $('#sp-body').hide();
-        $('#sp-outline-wrap').css('display', 'flex');
-        loadCreativeChatHistory();
-        updateCreativeChatModeUI();
-        renderCreativeChatHistory();
-        cachedOutline = loadCachedOutlineForCurrentChat();
-        if (cachedOutline) setOutlineBody(cachedOutline);
-        else setOutlineBody(renderEmptyOutlineState());
-    } else {
-        $(`.sp-view-btn[data-view="${currentView}"]`).addClass('sp-view-active');
-        $('#sp-outline-wrap').hide();
-        $('#sp-body').show();
-    }
-}
 
 function renderEmptyOutlineState() {
     return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>`;
@@ -1601,7 +1593,10 @@ async function runGenerateOutline() {
         outlineAbortController = null;
         cachedOutline = html;
         if (outlineMode) setOutlineBody(html);
-        else showToast('大纲已生成，点击查看', () => { if (!outlineMode) toggleOutlineMode(); showPanel(); });
+        else showToast('大纲已生成，点击查看', () => {
+            if (!outlineMode) $('.sp-view-btn[data-view="outline"]').trigger('click');
+            showPanel();
+        });
     } catch (err) {
         isGeneratingOutline = false;
         outlineAbortController = null;
@@ -2565,26 +2560,6 @@ function restoreOutlineChatHeight() {
     if (el) el.style.height = h + 'px';
 }
 
-function restorePositionAndSize() {
-    setTimeout(() => {
-        const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
-        if (!sheet) return;
-        const pos  = JSON.parse(localStorage.getItem(POS_KEY)  || 'null');
-        const size = JSON.parse(localStorage.getItem(SIZE_KEY) || 'null');
-        if (pos) {
-            sheet.style.left  = Math.min(pos.left, window.innerWidth  - sheet.offsetWidth)  + 'px';
-            sheet.style.top   = Math.min(pos.top,  window.innerHeight - 60) + 'px';
-            sheet.style.right = 'auto';
-        }
-        if (size) {
-            sheet.style.width     = size.width  + 'px';
-            sheet.style.height    = size.height + 'px';
-            sheet.style.maxHeight = size.height + 'px';
-            if (isMobile()) sheet.style.maxWidth = size.width + 'px';
-        }
-    }, 0);
-}
-
 function positionPanel() {
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     if (!sheet) return;
@@ -2708,7 +2683,10 @@ function renderSchedule(raw, userName, perspective = 'user') {
 
 function parseCalendar(raw) {
     const m = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-    const content = m ? m[1] : raw;
+    // Strip HTML comments across the whole widget body before splitting into lines.
+    // LLM often emits multi-line <!-- 日程思考: ... --> blocks; per-line startsWith
+    // would only skip the first line and treat the rest as content.
+    const content = (m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, '');
 
     const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
     let startDate = null;
@@ -2720,7 +2698,7 @@ function parseCalendar(raw) {
     const days = []; let cur = null; let inFuture = false; let future = null;
     for (const line of content.split('\n')) {
         const t = line.trim();
-        if (!t || t.startsWith('<!--')) continue;
+        if (!t) continue;
         if (/^Day\s*:?\s*\d+/i.test(t) || /^第[一二三四五六七\d]+天/.test(t)) {
             if (cur && !inFuture) days.push(cur);
             cur = { events: [] }; inFuture = false; continue;

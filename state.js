@@ -3,28 +3,34 @@ function normalizeScopePart(value, fallback = 'default') {
     return text ? encodeURIComponent(text) : fallback;
 }
 
-export function buildScheduleCacheKey(chatId, view = 'user', charName = '') {
+// One shared cache key builder — historical per-kind builders below delegate here.
+// Format: sp-cache-{chatId}-{kind}-{user | char-<name>}
+function buildCacheKey(chatId, kind, view = 'user', charName = '') {
     if (!chatId) return null;
-    if (view === 'char' && charName) return `sp-cache-${chatId}-char-${normalizeScopePart(charName)}`;
-    return `sp-cache-${chatId}-user`;
+    const scope = (view === 'char' && charName)
+        ? `char-${normalizeScopePart(charName)}`
+        : 'user';
+    // 'schedule' is the original bare kind ('sp-cache-{chatId}-user'), keep that
+    // shape for backward compat with existing localStorage entries.
+    return kind === 'schedule'
+        ? `sp-cache-${chatId}-${scope}`
+        : `sp-cache-${chatId}-${kind}-${scope}`;
+}
+
+export function buildScheduleCacheKey(chatId, view = 'user', charName = '') {
+    return buildCacheKey(chatId, 'schedule', view, charName);
 }
 
 export function buildOutlineCacheKey(chatId, view = 'user', charName = '') {
-    if (!chatId) return null;
-    if (view === 'char' && charName) return `sp-cache-${chatId}-outline-char-${normalizeScopePart(charName)}`;
-    return `sp-cache-${chatId}-outline-user`;
+    return buildCacheKey(chatId, 'outline', view, charName);
 }
 
 export function buildStorylinesCacheKey(chatId, view = 'user', charName = '') {
-    if (!chatId) return null;
-    if (view === 'char' && charName) return `sp-cache-${chatId}-lines-char-${normalizeScopePart(charName)}`;
-    return `sp-cache-${chatId}-lines-user`;
+    return buildCacheKey(chatId, 'lines', view, charName);
 }
 
 export function buildCreativeChatHistoryKey(chatId, view = 'user', charName = '') {
-    if (!chatId) return null;
-    if (view === 'char' && charName) return `sp-cache-${chatId}-creative-chat-char-${normalizeScopePart(charName)}`;
-    return `sp-cache-${chatId}-creative-chat-user`;
+    return buildCacheKey(chatId, 'creative-chat', view, charName);
 }
 
 export function getCreativeChatPlaceholder() {
