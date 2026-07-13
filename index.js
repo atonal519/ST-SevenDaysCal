@@ -1550,6 +1550,12 @@ function renderEmptyLinesState() {
 
 function triggerGenerateLines() {
     if (isGeneratingLines) return;
+    // Manual refresh: clear cache so LLM generates fresh instead of just echoing
+    // the previous raw. Auto-advance path (CHARACTER_MESSAGE_RENDERED) calls
+    // runGenerateLines(true) directly and preserves previousRaw for continuity.
+    const key = getLinesCacheKey();
+    if (key) localStorage.removeItem(key);
+    cachedLines = null;
     isGeneratingLines = true;
     setLinesBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在推演事件线…</p><button class="sp-abort-btn" id="sp-abort-lines"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
     runGenerateLines();
