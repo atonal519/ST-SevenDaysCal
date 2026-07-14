@@ -145,8 +145,12 @@ jQuery(async () => {
         cachedLines  = null;
         linesAiMsgCounter = 0;
         _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
-        $('.sp-view-btn').removeClass('sp-view-active');
-        $(`.sp-view-btn[data-view="user"]`).addClass('sp-view-active');
+        $('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
+        $(`.sp-side-tab.sp-view-btn[data-view="schedule"]`).addClass('sp-view-active');
+        $('.sp-sub-btn').removeClass('sp-view-active');
+        $(`.sp-sub-btn[data-view="user"]`).addClass('sp-view-active');
+        $('#sp-sub-toggle').show();
+        $('#sp-content-title').text('日程');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
             $('#sp-outline-wrap').hide();
@@ -406,7 +410,7 @@ function setExtBtnState(state) {
     const $fab = $(`#${FAB_ID} .sp-fab-btn`);
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
-    $('.sp-view-toggle').toggleClass('sp-locked', state === 'generating');
+    $('.sp-sub-toggle, .sp-sidebar-tabs').toggleClass('sp-locked', state === 'generating');
 }
 
 // ─── FAB ─────────────────────────────────────────────────────────────────────
@@ -516,185 +520,209 @@ function injectModal() {
         <div id="${MODAL_ID}" class="sp-root sp-${currentTheme}" style="display:none;position:fixed;z-index:2000001">
             <div class="sp-backdrop"></div>
             <div class="sp-sheet">
-                <div class="sp-topbar" id="sp-drag-handle">
-                    <span class="sp-topbar-title"><i class="fa-solid fa-calendar-days"></i></span>
-                    <div class="sp-view-toggle">
-                        <button class="sp-view-btn sp-view-active" data-view="user">我</button>
-                        <button class="sp-view-btn" data-view="char">TA</button>
-                        <button class="sp-view-btn" data-view="outline">大纲</button>
-                        <button class="sp-view-btn" data-view="lines">线</button>
-                    </div>
-                    <div class="sp-topbar-actions">
-                        <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮"><i class="fa-regular fa-circle-dot"></i></button>
-                        <button class="sp-icon-btn sp-settings-btn" title="设置"><i class="fa-solid fa-gear"></i></button>
-                        <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark" style="font-size:1rem"></i></button>
-                    </div>
-                </div>
+                <aside class="sp-sidebar">
+                    <nav class="sp-sidebar-tabs" aria-label="主视图">
+                        <button class="sp-side-tab sp-view-btn sp-view-active" data-view="schedule">
+                            <span class="sp-tab-glyph" aria-hidden="true">▤</span>
+                            <span class="sp-tab-label">日程</span>
+                        </button>
+                        <button class="sp-side-tab sp-view-btn" data-view="outline">
+                            <span class="sp-tab-glyph" aria-hidden="true">¶</span>
+                            <span class="sp-tab-label">大纲</span>
+                        </button>
+                        <button class="sp-side-tab sp-view-btn" data-view="lines">
+                            <span class="sp-tab-glyph" aria-hidden="true">⁝</span>
+                            <span class="sp-tab-label">线</span>
+                        </button>
+                    </nav>
+                    <div class="sp-sidebar-spacer"></div>
+                    <nav class="sp-sidebar-tabs sp-sidebar-util" aria-label="工具">
+                        <button class="sp-side-tab sp-settings-btn" aria-label="设置">
+                            <span class="sp-tab-glyph" aria-hidden="true">⚙</span>
+                        </button>
+                    </nav>
+                </aside>
 
-                <!-- Settings overlay: covers the sheet, scrollable, three sections -->
-                <div id="sp-settings-overlay" class="sp-settings-overlay" style="display:none">
-                    <div class="sp-settings-header">
-                        <span class="sp-settings-title"><i class="fa-solid fa-gear"></i> 设置</span>
-                        <button class="sp-icon-btn sp-settings-close-btn" title="关闭设置"><i class="fa-solid fa-xmark"></i></button>
-                    </div>
-                    <div class="sp-settings-body">
-
-                        <!-- Section 1: API -->
-                        <details class="sp-settings-section" open>
-                            <summary class="sp-settings-section-title">API 配置</summary>
-                            <div class="sp-settings-section-body">
-                                <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
-                                    <i class="fa-solid ${hasCustomApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
-                                    ${hasCustomApi
-                                        ? '已配置独立 API，后台生成不影响聊天'
-                                        : '未配置独立 API：生成期间将<b>占用聊天通道</b>，无法同时聊天'}
-                                </div>
-                                <p class="sp-cfg-hint">留空则使用酒馆当前模型</p>
-                                <input id="sp-cfg-url" class="sp-input" type="url"
-                                       placeholder="Base URL，如 https://api.openai.com/v1"
-                                       value="${escapeAttr(cfg.url || '')}">
-                                <div class="sp-key-row">
-                                    <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
-                                           placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
-                                    <button id="sp-key-toggle" class="sp-eye-btn"><i class="fa-solid fa-eye"></i></button>
-                                </div>
-                                <div class="sp-model-row">
-                                    <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
-                                           placeholder="模型名称，如 gpt-4o-mini"
-                                           value="${escapeAttr(cfg.model || '')}">
-                                    <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
-                                        <i class="fa-solid fa-list"></i>
-                                    </button>
-                                </div>
-                            </div>
-                        </details>
-
-                        <!-- Section 2: 功能设置 -->
-                        <details class="sp-settings-section">
-                            <summary class="sp-settings-section-title">功能设置</summary>
-                            <div class="sp-settings-section-body">
-                                <p class="sp-cfg-hint">平行事件推进策略</p>
-                                <div class="sp-mode-row">
-                                    <label class="sp-mode-opt">
-                                        <input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}>
-                                        <span>回合制，每</span>
-                                        <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}">
-                                        <span>条 AI 回复推进一次</span>
-                                    </label>
-                                    <label class="sp-mode-opt">
-                                        <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
-                                        <span>时间制，按游戏内日期变化推进</span>
-                                    </label>
-                                </div>
-
-                                <p class="sp-cfg-hint" id="sp-scale-hint" style="margin-top:14px">叙事尺度（按角色保存）</p>
-                                <div class="sp-mode-row" id="sp-scale-row">
-                                    <!-- populated by refreshScaleRadio() when settings opens -->
-                                </div>
-                            </div>
-                        </details>
-
-                        <!-- Section 3: 世界书筛选 -->
-                        <details class="sp-settings-section" id="sp-wi-section">
-                            <summary class="sp-settings-section-title">世界书筛选</summary>
-                            <div class="sp-settings-section-body" id="sp-wi-body">
-                                <p class="sp-cfg-hint">仅处理角色卡内置世界书。勾选的条目会传给 AI，取消勾选则跳过。按角色保存。</p>
-                                <div id="sp-wi-list" class="sp-wi-list">
-                                    <span class="sp-cfg-hint">（打开设置时自动加载）</span>
-                                </div>
-                            </div>
-                        </details>
-
-                        <!-- Section 4: 故事记忆库 -->
-                        <details class="sp-settings-section" id="sp-mem-section">
-                            <summary class="sp-settings-section-title">故事记忆库</summary>
-                            <div class="sp-settings-section-body" id="sp-mem-body">
-                                <p class="sp-cfg-hint">
-                                    对话时自动为每层楼生成客观摘要，供日程 / 大纲 / 事件线生成时参考。
-                                    随聊天存储（不占浏览器缓存）。最新一楼永不摘要，防重 roll。
-                                </p>
-
-                                <label class="sp-mode-opt">
-                                    <input type="checkbox" id="sp-mem-enabled">
-                                    <span>自动记忆开启</span>
-                                </label>
-
-                                <div class="sp-mode-opt">
-                                    <span>每</span>
-                                    <input id="sp-mem-l0" class="sp-input sp-interval-input" type="number" min="1" max="30" value="5">
-                                    <span>楼合成一段 L0 摘要</span>
-                                </div>
-
-                                <div class="sp-mode-opt">
-                                    <span>每</span>
-                                    <input id="sp-mem-l1" class="sp-input sp-interval-input" type="number" min="2" max="30" value="10">
-                                    <span>段 L0 合成一章 L1</span>
-                                </div>
-
-                                <div class="sp-mode-opt">
-                                    <span>跳过短楼（不足</span>
-                                    <input id="sp-mem-skipshort" class="sp-input sp-interval-input" type="number" min="0" max="500" value="50">
-                                    <span>字的 AI 回复）</span>
-                                </div>
-
-                                <div id="sp-mem-status" class="sp-mem-status">
-                                    <span class="sp-cfg-hint">（打开设置时自动刷新）</span>
-                                </div>
-
-                                <div id="sp-mem-progress" class="sp-mem-progress" style="display:none">
-                                    <div class="sp-mem-progress-label">正在处理: <span id="sp-mem-progress-count">0/0</span></div>
-                                    <div class="sp-mem-progress-bar"><div id="sp-mem-progress-fill" class="sp-mem-progress-fill"></div></div>
-                                    <button id="sp-mem-progress-abort" class="sp-abort-btn"><i class="fa-solid fa-circle-stop"></i>中止</button>
-                                </div>
-
-                                <div class="sp-mem-actions">
-                                    <button id="sp-mem-check" class="sp-mem-btn">检查完整性</button>
-                                    <button id="sp-mem-fill" class="sp-mem-btn">补齐缺失</button>
-                                    <button id="sp-mem-rebuild" class="sp-mem-btn sp-mem-btn-danger">推翻重构</button>
-                                </div>
-                            </div>
-                        </details>
-
-                    </div><!-- /sp-settings-body -->
-                    <div class="sp-settings-footer">
-                        <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
-                        <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
-                    </div>
-                </div><!-- /sp-settings-overlay -->
-
-                <div class="sp-body" id="sp-body">
-                    <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>
-                </div>
-
-                <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
-                    <div class="sp-outline-beats" id="sp-outline-beats">
-                        <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>
-                    </div>
-                    <div class="sp-outline-divider" id="sp-outline-divider">
-                        <i class="fa-solid fa-grip-lines"></i>
-                    </div>
-                    <div class="sp-outline-chat" id="sp-outline-chat">
-                        <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
-                        <div class="sp-chat-input-row">
-                            <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
-                            <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+                <div class="sp-content-col">
+                    <header class="sp-content-head">
+                        <h1 class="sp-content-title" id="sp-content-title">日程</h1>
+                        <div class="sp-sub-toggle" id="sp-sub-toggle">
+                            <button class="sp-view-btn sp-sub-btn sp-view-active" data-view="user">我</button>
+                            <button class="sp-view-btn sp-sub-btn" data-view="char">TA</button>
                         </div>
-                    </div>
-                </div>
+                        <div class="sp-head-tools">
+                            <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮"><i class="fa-regular fa-circle-dot"></i></button>
+                            <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark" style="font-size:1rem"></i></button>
+                        </div>
+                    </header>
 
-                <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
-                    <div class="sp-lines-list" id="sp-lines-list">
-                        <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>
-                    </div>
-                </div>
+                    <!-- Settings overlay: covers content-col only, sidebar stays visible -->
+                    <div id="sp-settings-overlay" class="sp-settings-overlay" style="display:none">
+                        <div class="sp-settings-header">
+                            <span class="sp-settings-title"><i class="fa-solid fa-gear"></i> 设置</span>
+                            <button class="sp-icon-btn sp-settings-close-btn" title="关闭设置"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <div class="sp-settings-body">
 
-                <details class="sp-debug-drawer" id="sp-debug-drawer">
-                    <summary class="sp-debug-summary">🐛 AI 输入</summary>
-                    <pre class="sp-debug-pre" id="sp-debug-pre">（尚未发送请求）</pre>
-                    <div class="sp-debug-actions">
-                        <button class="sp-debug-copy-btn">复制</button>
-                    </div>
-                </details>
+                            <!-- Section 1: API -->
+                            <details class="sp-settings-section" open>
+                                <summary class="sp-settings-section-title">API 配置</summary>
+                                <div class="sp-settings-section-body">
+                                    <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
+                                        <i class="fa-solid ${hasCustomApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
+                                        ${hasCustomApi
+                                            ? '已配置独立 API，后台生成不影响聊天'
+                                            : '未配置独立 API：生成期间将<b>占用聊天通道</b>，无法同时聊天'}
+                                    </div>
+                                    <p class="sp-cfg-hint">留空则使用酒馆当前模型</p>
+                                    <input id="sp-cfg-url" class="sp-input" type="url"
+                                           placeholder="Base URL，如 https://api.openai.com/v1"
+                                           value="${escapeAttr(cfg.url || '')}">
+                                    <div class="sp-key-row">
+                                        <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
+                                               placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
+                                        <button id="sp-key-toggle" class="sp-eye-btn"><i class="fa-solid fa-eye"></i></button>
+                                    </div>
+                                    <div class="sp-model-row">
+                                        <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
+                                               placeholder="模型名称，如 gpt-4o-mini"
+                                               value="${escapeAttr(cfg.model || '')}">
+                                        <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
+                                            <i class="fa-solid fa-list"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Section 2: 功能设置 -->
+                            <details class="sp-settings-section">
+                                <summary class="sp-settings-section-title">功能设置</summary>
+                                <div class="sp-settings-section-body">
+                                    <p class="sp-cfg-hint">平行事件推进策略</p>
+                                    <div class="sp-mode-row">
+                                        <label class="sp-mode-opt">
+                                            <input type="radio" name="sp-lines-mode" value="turns" ${getLinesMode() === 'turns' ? 'checked' : ''}>
+                                            <span>回合制，每</span>
+                                            <input id="sp-lines-interval" class="sp-input sp-interval-input" type="number" min="1" value="${escapeAttr(String(getLinesInterval()))}">
+                                            <span>条 AI 回复推进一次</span>
+                                        </label>
+                                        <label class="sp-mode-opt">
+                                            <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
+                                            <span>时间制，按游戏内日期变化推进</span>
+                                        </label>
+                                    </div>
+
+                                    <p class="sp-cfg-hint" id="sp-scale-hint" style="margin-top:14px">叙事尺度（按角色保存）</p>
+                                    <div class="sp-mode-row" id="sp-scale-row">
+                                        <!-- populated by refreshScaleRadio() when settings opens -->
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Section 3: 世界书筛选 -->
+                            <details class="sp-settings-section" id="sp-wi-section">
+                                <summary class="sp-settings-section-title">世界书筛选</summary>
+                                <div class="sp-settings-section-body" id="sp-wi-body">
+                                    <p class="sp-cfg-hint">仅处理角色卡内置世界书。勾选的条目会传给 AI，取消勾选则跳过。按角色保存。</p>
+                                    <div id="sp-wi-list" class="sp-wi-list">
+                                        <span class="sp-cfg-hint">（打开设置时自动加载）</span>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- Section 4: 故事记忆库 -->
+                            <details class="sp-settings-section" id="sp-mem-section">
+                                <summary class="sp-settings-section-title">故事记忆库</summary>
+                                <div class="sp-settings-section-body" id="sp-mem-body">
+                                    <p class="sp-cfg-hint">
+                                        对话时自动为每层楼生成客观摘要，供日程 / 大纲 / 事件线生成时参考。
+                                        随聊天存储（不占浏览器缓存）。最新一楼永不摘要，防重 roll。
+                                    </p>
+
+                                    <label class="sp-mode-opt">
+                                        <input type="checkbox" id="sp-mem-enabled">
+                                        <span>自动记忆开启</span>
+                                    </label>
+
+                                    <div class="sp-mode-opt">
+                                        <span>每</span>
+                                        <input id="sp-mem-l0" class="sp-input sp-interval-input" type="number" min="1" max="30" value="5">
+                                        <span>楼合成一段 L0 摘要</span>
+                                    </div>
+
+                                    <div class="sp-mode-opt">
+                                        <span>每</span>
+                                        <input id="sp-mem-l1" class="sp-input sp-interval-input" type="number" min="2" max="30" value="10">
+                                        <span>段 L0 合成一章 L1</span>
+                                    </div>
+
+                                    <div class="sp-mode-opt">
+                                        <span>跳过短楼（不足</span>
+                                        <input id="sp-mem-skipshort" class="sp-input sp-interval-input" type="number" min="0" max="500" value="50">
+                                        <span>字的 AI 回复）</span>
+                                    </div>
+
+                                    <div id="sp-mem-status" class="sp-mem-status">
+                                        <span class="sp-cfg-hint">（打开设置时自动刷新）</span>
+                                    </div>
+
+                                    <div id="sp-mem-progress" class="sp-mem-progress" style="display:none">
+                                        <div class="sp-mem-progress-label">正在处理: <span id="sp-mem-progress-count">0/0</span></div>
+                                        <div class="sp-mem-progress-bar"><div id="sp-mem-progress-fill" class="sp-mem-progress-fill"></div></div>
+                                        <button id="sp-mem-progress-abort" class="sp-abort-btn"><i class="fa-solid fa-circle-stop"></i>中止</button>
+                                    </div>
+
+                                    <div class="sp-mem-actions">
+                                        <button id="sp-mem-check" class="sp-mem-btn">检查完整性</button>
+                                        <button id="sp-mem-fill" class="sp-mem-btn">补齐缺失</button>
+                                        <button id="sp-mem-rebuild" class="sp-mem-btn sp-mem-btn-danger">推翻重构</button>
+                                    </div>
+                                </div>
+                            </details>
+
+                        </div><!-- /sp-settings-body -->
+                        <div class="sp-settings-footer">
+                            <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+                            <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
+                        </div>
+                    </div><!-- /sp-settings-overlay -->
+
+                    <div class="sp-main">
+                        <div class="sp-body" id="sp-body">
+                            <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>
+                        </div>
+
+                        <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
+                            <div class="sp-outline-beats" id="sp-outline-beats">
+                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>
+                            </div>
+                            <div class="sp-outline-divider" id="sp-outline-divider">
+                                <i class="fa-solid fa-grip-lines"></i>
+                            </div>
+                            <div class="sp-outline-chat" id="sp-outline-chat">
+                                <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
+                                <div class="sp-chat-input-row">
+                                    <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
+                                    <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
+                            <div class="sp-lines-list" id="sp-lines-list">
+                                <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>
+                            </div>
+                        </div>
+                    </div><!-- /sp-main -->
+
+                    <details class="sp-debug-drawer" id="sp-debug-drawer">
+                        <summary class="sp-debug-summary">🐛 AI 输入</summary>
+                        <pre class="sp-debug-pre" id="sp-debug-pre">（尚未发送请求）</pre>
+                        <div class="sp-debug-actions">
+                            <button class="sp-debug-copy-btn">复制</button>
+                        </div>
+                    </details>
+                </div><!-- /sp-content-col -->
 
                 <div class="sp-resize-handle" id="sp-resize-handle">
                     <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
@@ -753,71 +781,86 @@ function injectModal() {
     $('#sp-outline-beats').on('click', '#sp-abort-outline', () => outlineAbortController?.abort());
     $('#sp-lines-list').on('click', '#sp-abort-lines', () => linesAbortController?.abort());
 
-    // View toggle: 我 / TA / 大纲 / 线
-    $(`#${MODAL_ID} .sp-view-toggle`).on('click', '.sp-view-btn', function () {
+    // Tab switching: sidebar (schedule/outline/lines) + sub-toggle (user/char)
+    $(`#${MODAL_ID}`).on('click', '.sp-view-btn', function () {
         if (isGenerating) return;
         const view = $(this).data('view');
+        if (!view) return;
 
-        if (view === 'outline') {
-            if (outlineMode) return;
-            outlineMode = true;
-            linesMode = false;
-            $('.sp-view-btn').removeClass('sp-view-active');
-            $(this).addClass('sp-view-active');
-            $('#sp-body').hide();
-            $('#sp-lines-wrap').hide();
-            $('#sp-outline-wrap').css('display', 'flex');
-            loadCreativeChatHistory();
-            updateCreativeChatModeUI();
-            renderCreativeChatHistory();
-            cachedOutline = loadCachedOutlineForCurrentChat();
-            if (cachedOutline) setOutlineBody(cachedOutline);
-            else setOutlineBody(renderEmptyOutlineState());
+        const $btn      = $(this);
+        const isSideTab = $btn.hasClass('sp-side-tab');
+        const isSubBtn  = $btn.hasClass('sp-sub-btn');
+
+        // Update active state within the button's group
+        if (isSideTab) {
+            $('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
+            $btn.addClass('sp-view-active');
+        } else if (isSubBtn) {
+            $('.sp-sub-btn').removeClass('sp-view-active');
+            $btn.addClass('sp-view-active');
+        }
+
+        // Sidebar clicks
+        if (isSideTab) {
+            if (view === 'outline') {
+                if (outlineMode) return;
+                outlineMode = true;
+                linesMode = false;
+                $('#sp-body').hide();
+                $('#sp-lines-wrap').hide();
+                $('#sp-outline-wrap').css('display', 'flex');
+                $('#sp-sub-toggle').hide();
+                $('#sp-content-title').text('大纲');
+                loadCreativeChatHistory();
+                updateCreativeChatModeUI();
+                renderCreativeChatHistory();
+                cachedOutline = loadCachedOutlineForCurrentChat();
+                if (cachedOutline) setOutlineBody(cachedOutline);
+                else setOutlineBody(renderEmptyOutlineState());
+                return;
+            }
+            if (view === 'lines') {
+                if (linesMode) return;
+                linesMode = true;
+                outlineMode = false;
+                $('#sp-body').hide();
+                $('#sp-outline-wrap').hide();
+                $('#sp-lines-wrap').css('display', 'flex');
+                $('#sp-sub-toggle').hide();
+                $('#sp-content-title').text('线');
+                cachedLines = loadCachedLinesForCurrentChat();
+                if (cachedLines) setLinesBody(cachedLines);
+                else setLinesBody(renderEmptyLinesState());
+                return;
+            }
+            // view === 'schedule' — leaving outline/lines, restore body
+            if (outlineMode) { outlineMode = false; $('#sp-outline-wrap').hide(); }
+            if (linesMode)   { linesMode   = false; $('#sp-lines-wrap').hide(); }
+            $('#sp-body').show();
+            $('#sp-sub-toggle').show();
+            $('#sp-content-title').text('日程');
+            $('.sp-sub-btn').removeClass('sp-view-active');
+            $(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
             return;
         }
 
-        if (view === 'lines') {
-            if (linesMode) return;
-            linesMode = true;
-            outlineMode = false;
-            $('.sp-view-btn').removeClass('sp-view-active');
-            $(this).addClass('sp-view-active');
-            $('#sp-body').hide();
-            $('#sp-outline-wrap').hide();
-            $('#sp-lines-wrap').css('display', 'flex');
-            cachedLines = loadCachedLinesForCurrentChat();
-            if (cachedLines) setLinesBody(cachedLines);
-            else setLinesBody(renderEmptyLinesState());
-            return;
-        }
-
-        // Leaving outline/lines mode
-        let wasExtra = false;
-        if (outlineMode) {
-            outlineMode = false;
-            wasExtra = true;
-            $('#sp-outline-wrap').hide();
-        }
-        if (linesMode) {
-            linesMode = false;
-            wasExtra = true;
-            $('#sp-lines-wrap').hide();
-        }
-        if (wasExtra) $('#sp-body').show();
-
-        if (view === currentView && !wasExtra) return;
-        if (view === 'char') {
-            if (charViewName) {
-                setView('char', charViewName);
+        // Sub-toggle clicks: user / char (only meaningful when schedule mode)
+        if (isSubBtn) {
+            if (view === currentView) return;
+            if (view === 'char') {
+                if (charViewName) {
+                    setView('char', charViewName);
+                    if (cachedSchedule) setBody(cachedSchedule);
+                    else showEmptyGenerate();
+                } else {
+                    switchToCharView();
+                }
+            } else {
+                setView('user');
                 if (cachedSchedule) setBody(cachedSchedule);
                 else showEmptyGenerate();
-            } else {
-                switchToCharView();
             }
-        } else {
-            setView('user');
-            if (cachedSchedule) setBody(cachedSchedule);
-            else showEmptyGenerate();
+            return;
         }
     });
 
@@ -836,8 +879,13 @@ function injectModal() {
         $('.sp-days-track').css('transform', `translateX(-${idx * 100 / total}%)`);
     });
 
-    $('#sp-drag-handle').on('mousedown', onDragStart);
-    document.getElementById('sp-drag-handle').addEventListener('touchstart', onDragStart, { passive: false });
+    // Desktop drag: sidebar's blank top area (above tabs) acts as the handle.
+    // Skipped on mobile — pseudo-fullscreen doesn't move.
+    const dragHandle = document.querySelector(`#${MODAL_ID} .sp-sidebar`);
+    if (dragHandle) {
+        dragHandle.addEventListener('mousedown',  onDragStart);
+        dragHandle.addEventListener('touchstart', onDragStart, { passive: false });
+    }
     $('#sp-resize-handle').on('mousedown', onResizeStart);
     document.getElementById('sp-resize-handle').addEventListener('touchstart', onResizeStart, { passive: false });
 
@@ -2434,10 +2482,13 @@ function applyTheme(theme) {
     $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
 }
 
-// ─── Drag ─────────────────────────────────────────────────────────────────────
+// ─── Drag (desktop only) ──────────────────────────────────────────────────────
 
 function onDragStart(e) {
-    if ($(e.target).closest('.sp-icon-btn, .sp-view-btn').length) return;
+    // Skip on mobile — sheet is pseudo-fullscreen and shouldn't move.
+    if (isMobile()) return;
+    // Ignore drags starting on interactive elements inside the sidebar.
+    if ($(e.target).closest('.sp-icon-btn, .sp-view-btn, .sp-side-tab, button, a, input, textarea').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
 
@@ -2445,8 +2496,8 @@ function onDragStart(e) {
     // MUST cancel the CSS animation first — animation fill-mode has higher cascade
     // priority than inline styles, so transform:'none' alone won't override it.
     if (sheet.style.transform !== 'none') {
-        sheet.style.animation = 'none';           // kill fill-mode translateX(-50%)
-        const snap = sheet.getBoundingClientRect(); // read with CSS transform still active
+        sheet.style.animation = 'none';
+        const snap = sheet.getBoundingClientRect();
         sheet.style.transform = 'none';
         sheet.style.right     = 'auto';
         sheet.style.left      = snap.left + 'px';
@@ -2455,13 +2506,13 @@ function onDragStart(e) {
 
     const cx   = e.touches ? e.touches[0].clientX : e.clientX;
     const cy   = e.touches ? e.touches[0].clientY : e.clientY;
-    const rect = sheet.getBoundingClientRect(); // read AFTER snap
+    const rect = sheet.getBoundingClientRect();
     dragState  = { startX: cx, startY: cy, origLeft: rect.left, origTop: rect.top };
 
     $(document).on('mousemove.spdrag', onDragMove).on('mouseup.spdrag', onDragEnd);
     document.addEventListener('touchmove', onDragMove, { passive: false });
     document.addEventListener('touchend',  onDragEnd);
-    $('#sp-drag-handle').css('cursor', 'grabbing');
+    document.body.style.cursor = 'grabbing';
 }
 
 function onDragMove(e) {
@@ -2488,7 +2539,7 @@ function onDragEnd() {
     $(document).off('mousemove.spdrag mouseup.spdrag');
     document.removeEventListener('touchmove', onDragMove);
     document.removeEventListener('touchend',  onDragEnd);
-    $('#sp-drag-handle').css('cursor', 'grab');
+    document.body.style.cursor = '';
 }
 
 // ─── Resize ───────────────────────────────────────────────────────────────────
@@ -2594,7 +2645,7 @@ function bindViewportSync() {
 
 function syncMobileViewport() {
     if (!isMobile()) return;
-    const root = document.getElementById(MODAL_ID);
+    const root  = document.getElementById(MODAL_ID);
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     if (!root || !sheet || root.style.display === 'none') return;
 

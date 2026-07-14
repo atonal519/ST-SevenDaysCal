@@ -4,54 +4,73 @@
    without introducing a squished web font. */
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap');
 
-/* System font stack with CJK fallbacks — used everywhere as body font */
+/* System font stack with CJK fallbacks — used everywhere as body font.
+   Prefers ST's --SmartThemeFontFamily when defined. */
 :root {
-    --sp-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    --sp-font: var(--SmartThemeFontFamily,
+               -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
                'Hiragino Sans GB', 'HarmonyOS Sans SC', 'Microsoft YaHei',
                'Noto Sans SC', 'Noto Sans CJK SC', 'Helvetica Neue', Helvetica,
-               Arial, sans-serif;
+               Arial, sans-serif);
+    --sp-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
+                    Menlo, Consolas, "Roboto Mono", monospace;
 }
 
-/* ─── Design tokens ─────────────────────────────────────────────────────────── */
+/* ─── Design tokens — legacy fallback layer (kept as safety net) ─────────────
+   These -legacy vars are the two-tier day/night defaults; the .sp-root block
+   below wires the main --sp-* tokens to prefer ST theme vars, falling back
+   here when ST vars aren't defined. */
 .sp-night {
-    --sp-sheet-bg     : #272829;
-    --sp-surface      : #61677A;
-    --sp-surface-high : #757B8E;
-    --sp-primary      : #A8A49E;
+    --sp-sheet-bg-legacy    : #272829;
+    --sp-surface-legacy     : #61677A;
+    --sp-surface-high-legacy: #757B8E;
+    --sp-primary-legacy     : #A8A49E;
     --sp-on-primary   : #272829;
-    --sp-on-surface   : #D8D9DA;
-    --sp-subtle       : #9A9EA8;
-    --sp-divider      : rgba(221,216,208,0.12);
+    --sp-on-surface-legacy  : #D8D9DA;
+    --sp-subtle-legacy      : #9A9EA8;
+    --sp-divider-legacy     : rgba(221,216,208,0.12);
     --sp-shadow       : 0 8px 40px rgba(0,0,0,0.65), 0 2px 10px rgba(0,0,0,0.45);
     --sp-card-shadow  : 0 2px 6px rgba(0,0,0,0.4);
     --sp-chip-bg      : rgba(168,164,158,0.18);
     --sp-spinner-color: #D8D9DA;
     --sp-neon-color   : #D8D9DA;
     --sp-neon-glow    : rgba(216,217,218,0.4);
-    --sp-hover-bg     : rgba(255,255,255,0.06);
+    --sp-hover-bg-legacy    : rgba(255,255,255,0.06);
     --sp-chat-bg      : #FFF6E0;
     --sp-chat-accent  : #61677A;
     --sp-char-color   : #9EC8CC;
     --sp-chip-char-bg : rgba(158,200,204,0.15);
 }
 .sp-day {
-    --sp-sheet-bg     : #F6F4E8;
-    --sp-surface      : #E5EEE4;
-    --sp-surface-high : #C0E1D2;
-    --sp-primary      : #DC9B9B;
+    --sp-sheet-bg-legacy    : #F6F4E8;
+    --sp-surface-legacy     : #E5EEE4;
+    --sp-surface-high-legacy: #C0E1D2;
+    --sp-primary-legacy     : #DC9B9B;
     --sp-on-primary   : #3e1f1f;
-    --sp-on-surface   : #2c2e2a;
-    --sp-subtle       : #7a8078;
-    --sp-divider      : rgba(0,0,0,0.08);
+    --sp-on-surface-legacy  : #2c2e2a;
+    --sp-subtle-legacy      : #7a8078;
+    --sp-divider-legacy     : rgba(0,0,0,0.08);
     --sp-shadow       : 0 8px 40px rgba(0,0,0,0.12), 0 2px 10px rgba(0,0,0,0.07);
     --sp-card-shadow  : 0 1px 4px rgba(0,0,0,0.09);
     --sp-chip-bg      : rgba(220,155,155,0.22);
     --sp-spinner-color: #DC9B9B;
     --sp-neon-color   : #DC9B9B;
     --sp-neon-glow    : rgba(220,155,155,0.5);
-    --sp-hover-bg     : rgba(220,155,155,0.10);
+    --sp-hover-bg-legacy    : rgba(220,155,155,0.10);
     --sp-char-color   : #5C9EA0;
     --sp-chip-char-bg : rgba(92,158,160,0.15);
+}
+
+/* ─── ST theme cascade — ST var 优先，fallback 到上面的 -legacy 值 ──────────── */
+.sp-root {
+    --sp-on-surface  : var(--SmartThemeBodyColor,        var(--sp-on-surface-legacy));
+    --sp-subtle      : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 62%, transparent);
+    --sp-primary     : var(--SmartThemeQuoteColor,       var(--sp-primary-legacy));
+    --sp-sheet-bg    : var(--SmartThemeChatTintColor,    var(--sp-sheet-bg-legacy));
+    --sp-surface     : var(--SmartThemeBotMesBlurTintColor,  var(--sp-surface-legacy));
+    --sp-surface-high: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-high-legacy));
+    --sp-divider     : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 12%, transparent);
+    --sp-hover-bg    : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 6%,  transparent);
 }
 
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
@@ -73,8 +92,8 @@
     background    : var(--sp-sheet-bg);
     border-radius : 20px;
     box-shadow    : var(--sp-shadow);
-    display       : flex;
-    flex-direction: column;
+    display       : grid;
+    grid-template-columns: 44px 1fr;
     overflow      : hidden;
     animation     : sp-sheet-in 0.22s cubic-bezier(0.34, 1.3, 0.64, 1) both;
 }
@@ -84,26 +103,185 @@
     to   { transform: scale(1)    translateY(0);    opacity: 1; }
 }
 
-/* ─── Topbar ─────────────────────────────────────────────────────────────────── */
-.sp-topbar {
-    display      : flex;
-    align-items  : center;
-    padding      : 14px 16px 12px;
-    border-bottom: 1px solid var(--sp-divider);
-    flex-shrink  : 0;
-    cursor       : grab;
-    user-select  : none;
-    touch-action : none;
+/* ─── Sidebar (left rail, 3 main tabs + settings) ─────────────────────────── */
+.sp-sidebar {
+    position: relative;
+    background: color-mix(in oklab, var(--sp-sheet-bg) 88%, black 12%);
+    display: flex;
+    flex-direction: column;
+    padding: 8px 0 6px;
+    min-height: 0;
+    overflow: hidden;
+    /* Desktop: sidebar's blank areas act as the drag handle */
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
 }
-.sp-topbar:active { cursor: grabbing; }
+.sp-sidebar:active { cursor: grabbing; }
+/* Interactive children of sidebar restore normal cursor */
+.sp-side-tab { cursor: pointer; }
+@media (max-width: 640px) {
+    .sp-sidebar { cursor: default; touch-action: auto; }
+    .sp-sidebar:active { cursor: default; }
+}
+/* Manuscript margin rule down the sidebar's left edge */
+.sp-sidebar::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 18px;
+    bottom: 14px;
+    width: 1px;
+    background: var(--sp-divider);
+    pointer-events: none;
+}
 
-.sp-topbar-title {
-    flex          : 1;
-    font-size     : 1.15rem;
-    color         : var(--sp-primary);
-    letter-spacing: 0.01em;
+.sp-sidebar-tabs   { display: flex; flex-direction: column; }
+.sp-sidebar-spacer { flex: 1 1 auto; }
+.sp-sidebar-util   { border-top: 1px solid var(--sp-divider); padding-top: 4px; }
+
+.sp-side-tab {
+    position: relative;
+    background: transparent;
+    border: 0;
+    border-right: 1px solid var(--sp-divider);
+    color: var(--sp-subtle);
+    padding: 16px 4px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--sp-font-mono);
+    transition: color 140ms ease, background 140ms ease;
+    -webkit-tap-highlight-color: transparent;
 }
-.sp-topbar-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.sp-side-tab:hover {
+    color: var(--sp-on-surface);
+    background: color-mix(in oklab, var(--sp-on-surface) 4%, transparent);
+}
+.sp-side-tab .sp-tab-glyph {
+    font-family: var(--sp-font-mono);
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--sp-subtle);
+    transition: color 140ms ease;
+}
+/* Chinese vertical text on tab labels — book-spine style */
+.sp-side-tab .sp-tab-label {
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.32em;
+    line-height: 1;
+}
+/* Tick mark on margin rule — hairline inactive, solid accent active */
+.sp-side-tab::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 1px;
+    background: var(--sp-divider);
+}
+/* Active side tab: bg → content pane, right border removed → merges in */
+.sp-side-tab.sp-view-active {
+    color: var(--sp-on-surface);
+    background: var(--sp-sheet-bg);
+    border-right-color: transparent;
+    margin-right: -1px;
+    z-index: 1;
+}
+.sp-side-tab.sp-view-active .sp-tab-glyph { color: var(--sp-primary); }
+.sp-side-tab.sp-view-active::before {
+    left: 2px;
+    width: 6px;
+    background: var(--sp-primary);
+}
+.sp-sidebar-util .sp-side-tab { padding: 12px 4px; }
+
+/* ─── Content column (right of sidebar) ───────────────────────────────────── */
+.sp-content-col {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--sp-sheet-bg);
+    position: relative;
+}
+
+.sp-content-head {
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--sp-divider);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    min-width: 0;
+}
+.sp-content-title {
+    flex: 1;
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--sp-on-surface);
+    letter-spacing: 0.01em;
+    margin: 0;
+    line-height: 1.15;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-head-tools { display: flex; gap: 2px; flex-shrink: 0; }
+
+/* Sub-toggle (我/TA) sits in content head next to title */
+.sp-sub-toggle {
+    display: inline-flex;
+    border: 1px solid var(--sp-divider);
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.sp-sub-btn {
+    background: transparent;
+    border: 0;
+    color: var(--sp-subtle);
+    padding: 5px 11px;
+    font-family: var(--sp-font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 120ms ease, background 120ms ease;
+}
+.sp-sub-btn:hover { color: var(--sp-on-surface); }
+.sp-sub-btn.sp-view-active {
+    background: color-mix(in oklab, var(--sp-primary) 16%, transparent);
+    color: var(--sp-on-surface);
+}
+.sp-sub-btn + .sp-sub-btn { border-left: 1px solid var(--sp-divider); }
+
+/* Locked state (during generation) — reused for sub-toggle + sidebar */
+.sp-locked { pointer-events: none; opacity: 0.4; }
+
+/* Settings side-tab active glyph tint (piggybacks existing .sp-btn-active) */
+.sp-side-tab.sp-btn-active .sp-tab-glyph { color: var(--sp-primary); }
+
+/* ─── Main content area (wraps body/outline/lines) ────────────────────────── */
+.sp-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
 
 .sp-icon-btn {
     width          : 32px;
@@ -614,10 +792,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-tab:hover      { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
 .sp-tab-active     { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; border-color: var(--sp-primary) !important; }
-/* 夜间：底部描边 + 极淡暖底，不占用 surface 色系 */
-.sp-night .sp-tab-active  { background: rgba(221,216,208,0.10) !important; color: #DDD8D0 !important; border-color: transparent !important; box-shadow: inset 0 -2px 0 #DDD8D0 !important; }
-/* 日间：底部描边粉色，区分开 #C0E1D2 的聊天框和 surface 色系 */
-.sp-day   .sp-tab-active  { background: rgba(220,155,155,0.12) !important; color: #b06060 !important; border-color: transparent !important; box-shadow: inset 0 -2px 0 #DC9B9B !important; }
 .sp-tab-num        { font-family: 'Roboto Mono', monospace; font-size: 0.65rem; font-weight: 500; line-height: 1; white-space: nowrap; }
 .sp-tab-wd         { font-size: 0.60rem; opacity: 0.8; line-height: 1; }
 
@@ -850,15 +1024,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     box-shadow    : 0 4px 14px rgba(0,0,0,0.4);
     transition    : transform 0.15s, box-shadow 0.15s, color 0.15s;
 }
-.sp-fab-btn.sp-night {
-    background: #61677A;
-    border    : 1.5px solid rgba(221,216,208,0.4);
-    color     : #DDD8D0;
-}
-.sp-fab-btn.sp-day {
-    background: #DC9B9B;
-    border    : 1.5px solid rgba(176,96,96,0.3);
-    color     : #3e1f1f;
+.sp-fab-btn {
+    background: var(--sp-primary);
+    border    : 1.5px solid color-mix(in oklab, var(--sp-primary) 45%, transparent);
+    color     : var(--sp-on-primary);
 }
 .sp-fab-btn:hover {
     transform : scale(1.1);
@@ -894,7 +1063,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color: var(--sp-primary, #d0bcff) !important;
 }
 
-/* ─── Mobile: floating panel (same as desktop, touch-draggable) ──────────────── */
+/* ─── Mobile: floating panel (original layout, no drag) ──────────────────── */
 @media (max-width: 640px) {
     /* Mobile open animation — must include translateX(-50%) so fill-mode:both
        doesn't clobber the centering transform when the animation freezes */
@@ -918,7 +1087,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     /* No dimmed backdrop — tapping outside passes through to ST */
     .sp-backdrop { display: none; }
 
-    /* Sheet floats centered, same rounding as desktop, touch-draggable */
+    /* Sheet floats centered — matches original mobile layout */
     .sp-sheet {
         position        : fixed;
         top             : 70px;
@@ -934,8 +1103,7 @@ select.sp-input { appearance: none; cursor: pointer; }
         animation-name  : sp-sheet-in-mobile;
     }
 
-    .sp-topbar        { cursor: grab; }
-    /* Resize handle visible on mobile — touch-action:none so touch drag isn't intercepted */
+    /* Resize handle visible on mobile */
     .sp-resize-handle { display: flex; touch-action: none; }
 
     #sp-fab {
@@ -945,37 +1113,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     }
 }
 
-/* ─── View toggle (我 / TA) ──────────────────────────────────────────────────── */
-.sp-view-toggle {
-    display      : flex;
-    gap          : 2px;
-    background   : var(--sp-surface);
-    border-radius: 8px;
-    padding      : 2px;
-    margin       : 0 8px;
-    flex-shrink  : 0;
-    transition   : opacity 0.15s;
-}
-.sp-view-toggle.sp-locked {
-    pointer-events: none;
-    opacity       : 0.4;
-}
-.sp-view-btn {
-    padding      : 3px 10px;
-    border        : none;
-    background    : transparent;
-    color         : var(--sp-subtle);
-    border-radius : 6px;
-    cursor        : pointer;
-    font-size     : 0.78rem;
-    font-weight   : 500;
-    transition    : background 0.12s, color 0.12s;
-    white-space   : nowrap;
-}
-.sp-view-btn:hover   { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
-.sp-view-active      { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; }
-.sp-night .sp-view-active { background: rgba(221,216,208,0.10) !important; color: #DDD8D0 !important; box-shadow: inset 0 -2px 0 #DDD8D0 !important; }
-.sp-day   .sp-view-active { background: rgba(220,155,155,0.12) !important; color: #b06060 !important; box-shadow: inset 0 -2px 0 #DC9B9B !important; }
+/* ─── (View toggle styles removed — replaced by .sp-sub-toggle / .sp-side-tab
+       defined higher up.  Kept nothing here; .sp-view-btn is only a JS hook now.) ── */
 
 /* ─── Char picker ────────────────────────────────────────────────────────────── */
 .sp-char-picker {
@@ -1187,8 +1326,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-direction: column;
     background    : var(--sp-chat-bg);
 }
-.sp-night { --sp-chat-bg: #D2C1B6; --sp-chat-accent: #4A7090; }
-.sp-day   { --sp-chat-bg: #C0E1D2; --sp-chat-accent: #C0E1D2; }
+/* Chat area bg follows ST when possible; legacy fallback keeps warm cream/tan. */
+.sp-root { --sp-chat-bg: var(--SmartThemeChatTintColor, #D2C1B6); }
 .sp-chat-msgs {
     flex           : 1;
     overflow-y     : auto;
@@ -1217,9 +1356,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     max-width    : 90%;
     word-break   : break-word;
 }
-.sp-chat-msg-user   { background: #61677A; color: #D8D9DA;  align-self: flex-end; }
-.sp-chat-msg-ai     { background: #f0e8e0; color: #2a3a45; align-self: flex-start; }
-.sp-chat-msg-system { font-size: 0.72rem; color: #6a5a52; align-self: center; font-style: italic; }
+.sp-chat-msg-user   { background: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-end; }
+.sp-chat-msg-ai     { background: var(--SmartThemeBotMesBlurTintColor,  var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-start; }
+.sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); align-self: center; font-style: italic; }
 .sp-chat-thinking   { opacity: 0.45; }
 .sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; }
 .sp-apply-outline-btn {
@@ -1520,8 +1659,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background       : rgba(128,128,128,0.06);
     border-left-color: rgba(120,180,150,0.45);
 }
-.sp-line-next-go .sp-line-next-tag { color: #5a9a7a; opacity: 0.9; }
-.sp-night .sp-line-next-go .sp-line-next-tag { color: #8ecab0; opacity: 0.85; }
+.sp-line-next-go .sp-line-next-tag { color: #6aab8a; opacity: 0.9; }
 
 /* 停滞：底色一致中性，边条与标签走灰调 */
 .sp-line-next-stall {
