@@ -879,9 +879,9 @@ function injectModal() {
         $('.sp-days-track').css('transform', `translateX(-${idx * 100 / total}%)`);
     });
 
-    // Desktop drag: sidebar's blank top area (above tabs) acts as the handle.
-    // Skipped on mobile — pseudo-fullscreen doesn't move.
-    const dragHandle = document.querySelector(`#${MODAL_ID} .sp-sidebar`);
+    // Desktop drag: content header acts as the handle (like a title bar).
+    // Skipped on mobile — near-fullscreen sheet doesn't move.
+    const dragHandle = document.querySelector(`#${MODAL_ID} .sp-content-head`);
     if (dragHandle) {
         dragHandle.addEventListener('mousedown',  onDragStart);
         dragHandle.addEventListener('touchstart', onDragStart, { passive: false });
@@ -2485,10 +2485,10 @@ function applyTheme(theme) {
 // ─── Drag (desktop only) ──────────────────────────────────────────────────────
 
 function onDragStart(e) {
-    // Skip on mobile — sheet is pseudo-fullscreen and shouldn't move.
+    // Skip on mobile — sheet is near-fullscreen and shouldn't move.
     if (isMobile()) return;
-    // Ignore drags starting on interactive elements inside the sidebar.
-    if ($(e.target).closest('.sp-icon-btn, .sp-view-btn, .sp-side-tab, button, a, input, textarea').length) return;
+    // Ignore drags starting on interactive elements inside the header.
+    if ($(e.target).closest('.sp-icon-btn, .sp-sub-btn, button, a, input, textarea').length) return;
     e.preventDefault();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
 
@@ -2545,9 +2545,24 @@ function onDragEnd() {
 // ─── Resize ───────────────────────────────────────────────────────────────────
 
 function onResizeStart(e) {
+    // Resize is desktop-only. On mobile the sheet is near-fullscreen and the
+    // handle is hidden; any resize event on mobile is stray (e.g. bubbling
+    // from the outline divider) — ignore it so the sheet doesn't shrink.
+    if (isMobile()) return;
     e.preventDefault();
     e.stopPropagation();
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
+
+    // Desktop sheet uses `right: 20px` as its horizontal anchor. If we grow
+    // width while `right` is fixed, the LEFT edge moves outward instead of
+    // the right edge. Snap to left-anchored inline coords before resizing.
+    if (!sheet.style.left || sheet.style.right !== 'auto') {
+        const snap = sheet.getBoundingClientRect();
+        sheet.style.left  = snap.left + 'px';
+        sheet.style.top   = snap.top  + 'px';
+        sheet.style.right = 'auto';
+    }
+
     sheet.style.willChange = 'width, height';
     document.body.style.userSelect = 'none';
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
@@ -2618,6 +2633,7 @@ function positionPanel() {
         sheet.style.left      = '';
         sheet.style.top       = '';
         sheet.style.right     = '';
+        sheet.style.height    = '';
         sheet.style.transform = '';
         syncMobileViewport();
         bindViewportSync();
@@ -2649,13 +2665,24 @@ function syncMobileViewport() {
     const sheet = document.querySelector(`#${MODAL_ID} .sp-sheet`);
     if (!root || !sheet || root.style.display === 'none') return;
 
+    // Read safe-area insets from CSS env() via a probe element.
+    // Fallback to 0 when unsupported (older Android browsers).
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;visibility:hidden;top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px)';
+    document.body.appendChild(probe);
+    const cs = getComputedStyle(probe);
+    const safeTop = parseFloat(cs.top) || 0;
+    const safeBot = parseFloat(cs.bottom) || 0;
+    document.body.removeChild(probe);
+
     const vv = window.visualViewport;
     const vh = Math.max(320, Math.round((vv?.height || window.innerHeight)));
-    const top = 70;
-    const bottomGap = 20;
+    const top = 20 + safeTop;
+    const bottomGap = 20 + safeBot;
     const maxH = Math.max(260, vh - top - bottomGap);
 
     sheet.style.top = `${top}px`;
+    sheet.style.height = `${maxH}px`;
     sheet.style.maxHeight = `${maxH}px`;
 }
 
