@@ -702,6 +702,7 @@ function injectModal() {
                             <div class="sp-outline-chat" id="sp-outline-chat">
                                 <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
                                 <div class="sp-chat-input-row">
+                                    <button id="sp-chat-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
                                     <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
                                     <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
                                 </div>
@@ -764,6 +765,40 @@ function injectModal() {
     }
     $('#sp-chat-send').on('click', doSendChat);
     $('#sp-chat-input').on('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSendChat(); } });
+
+    // Delete a single message (leaves the rest alone — user chose "just this one")
+    $('#sp-chat-msgs').on('click', '.sp-chat-msg-delete', function () {
+        if (isOutlineChatting) return;
+        const idx = Number($(this).closest('.sp-chat-msg').attr('data-idx'));
+        if (!Number.isInteger(idx) || idx < 0 || idx >= outlineChatHistory.length) return;
+        outlineChatHistory.splice(idx, 1);
+        saveCreativeChatHistory();
+        renderCreativeChatHistory();
+    });
+
+    // Edit user message → inline editor
+    $('#sp-chat-msgs').on('click', '.sp-chat-msg-edit', function () {
+        if (isOutlineChatting) return;
+        const $msg = $(this).closest('.sp-chat-msg');
+        const idx  = Number($msg.attr('data-idx'));
+        if (!Number.isInteger(idx) || idx < 0 || idx >= outlineChatHistory.length) return;
+        startInlineEdit($msg, idx);
+    });
+
+    $('#sp-chat-clear').on('click', async () => {
+        if (isOutlineChatting) return;
+        if (!outlineChatHistory.length) return;
+        const ok = await spConfirm({
+            title: '清空对话',
+            body : '将清空这个大纲的讨论历史，不影响已生成的大纲本身。',
+            confirmText: '清空',
+            cancelText : '取消',
+        });
+        if (!ok) return;
+        outlineChatHistory = [];
+        saveCreativeChatHistory();
+        $('#sp-chat-msgs').empty();
+    });
     $('#sp-outline-beats').on('click', '#sp-gen-outline-now', triggerGenerateOutline);
     $('#sp-lines-list').on('click', '#sp-gen-lines-now', triggerGenerateLines);
     $('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
@@ -1473,9 +1508,9 @@ function updateCreativeChatModeUI() {
 function renderCreativeChatHistory() {
     const $msgs = $('#sp-chat-msgs');
     $msgs.empty();
-    for (const msg of outlineChatHistory) {
-        appendChatMsg(msg.role === 'assistant' ? 'ai' : msg.role, msg.content);
-    }
+    outlineChatHistory.forEach((msg, idx) => {
+        appendChatMsg(msg.role === 'assistant' ? 'ai' : msg.role, msg.content, idx);
+    });
 }
 
 function loadCachedOutlineForCurrentChat(view, charName) {
@@ -1505,14 +1540,67 @@ function injectToST(text) {
 
 // ─── Outline chat ─────────────────────────────────────────────────────────────
 
-function appendChatMsg(role, content) {
+function appendChatMsg(role, content, historyIndex = null) {
     const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新大纲]');
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
-    $('<div>').addClass(`sp-chat-msg ${cls}`)
-        .html(escapeHtml(display).replace(/\n/g, '<br>'))
-        .appendTo('#sp-chat-msgs');
+    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    const canAct = role !== 'system' && Number.isInteger(historyIndex);
+    if (canAct) $msg.attr('data-idx', historyIndex);
+    const contentHtml = escapeHtml(display).replace(/\n/g, '<br>');
+    if (canAct) {
+        const editBtn = role === 'user'
+            ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
+            : '';
+        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>` +
+                  `<div class="sp-chat-msg-actions">${editBtn}` +
+                  `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`);
+    } else {
+        $msg.html(contentHtml);
+    }
+    $msg.appendTo('#sp-chat-msgs');
     const el = document.getElementById('sp-chat-msgs');
     if (el) el.scrollTop = el.scrollHeight;
+}
+
+function startInlineEdit($msg, idx) {
+    const original = outlineChatHistory[idx]?.content ?? '';
+    $msg.find('.sp-chat-msg-content').replaceWith(
+        `<textarea class="sp-chat-msg-editor">${escapeHtml(original)}</textarea>`
+    );
+    $msg.find('.sp-chat-msg-actions').replaceWith(
+        '<div class="sp-chat-msg-actions sp-chat-msg-editing">' +
+        '<button class="sp-chat-msg-edit-save">保存并重发</button>' +
+        '<button class="sp-chat-msg-edit-cancel">取消</button>' +
+        '</div>'
+    );
+    const $ta = $msg.find('.sp-chat-msg-editor');
+    $ta.trigger('focus');
+    const val = $ta.val();
+    $ta[0].setSelectionRange(val.length, val.length);
+
+    $msg.find('.sp-chat-msg-edit-cancel').on('click', () => {
+        renderCreativeChatHistory();
+    });
+    $msg.find('.sp-chat-msg-edit-save').on('click', () => {
+        if (isOutlineChatting) return;
+        const newText = $ta.val().trim();
+        if (!newText) return;
+        // Truncate from this user message onward (drops the paired AI reply too),
+        // then rerun sendOutlineChat with the new text.
+        outlineChatHistory.splice(idx);
+        saveCreativeChatHistory();
+        renderCreativeChatHistory();
+        sendOutlineChat(newText);
+    });
+    $ta.on('keydown', e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            $msg.find('.sp-chat-msg-edit-save').trigger('click');
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            renderCreativeChatHistory();
+        }
+    });
 }
 
 async function buildOutlineChatMessages(userMsg) {
@@ -1540,12 +1628,16 @@ const OUTLINE_HISTORY_CAP = 20;   // sliding window: keep last N messages, drop 
 
 async function sendOutlineChat(userMsg) {
     if (isOutlineChatting) return;
-    appendChatMsg('user', userMsg);
     outlineChatHistory.push({ role: 'user', content: userMsg });
-    // Sliding window: cap history growth so localStorage doesn't bloat
+    // Sliding window: cap history growth so localStorage doesn't bloat.
+    // When trim happens all indices shift, so re-render instead of append.
+    let trimmed = false;
     if (outlineChatHistory.length > OUTLINE_HISTORY_CAP) {
         outlineChatHistory.splice(0, outlineChatHistory.length - OUTLINE_HISTORY_CAP);
+        trimmed = true;
     }
+    if (trimmed) renderCreativeChatHistory();
+    else appendChatMsg('user', userMsg, outlineChatHistory.length - 1);
     saveCreativeChatHistory();
     isOutlineChatting = true;
     const chatIdSnap = getContext().chatId;
@@ -1566,7 +1658,7 @@ async function sendOutlineChat(userMsg) {
         outlineChatHistory.push({ role: 'assistant', content: reply });
         saveCreativeChatHistory();
         $dots.remove();
-        appendChatMsg('ai', reply);
+        appendChatMsg('ai', reply, outlineChatHistory.length - 1);
         if (/<outline_widget/i.test(reply)) {
             const pendingRaw = reply;
             const $btn = $('<button class="sp-apply-outline-btn">应用此大纲</button>');

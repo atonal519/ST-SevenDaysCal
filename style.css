@@ -1354,12 +1354,87 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: 8px;
     max-width    : 90%;
     word-break   : break-word;
+    display      : flex;
+    align-items  : flex-start;
+    gap          : 6px;
 }
+.sp-chat-msg-content { flex: 1; min-width: 0; }
 .sp-chat-msg-user   { background: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-end; }
 .sp-chat-msg-ai     { background: var(--SmartThemeBotMesBlurTintColor,  var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-start; }
-.sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); align-self: center; font-style: italic; }
-.sp-chat-thinking   { opacity: 0.45; }
-.sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; }
+.sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); align-self: center; font-style: italic; display: block; }
+.sp-chat-thinking   { opacity: 0.45; display: block; }
+.sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; display: block; }
+
+/* Hover-actions (edit / delete) on outline chat messages */
+.sp-chat-msg-actions {
+    display       : flex;
+    gap           : 2px;
+    align-self    : center;
+    opacity       : 0;
+    transition    : opacity 0.12s;
+    flex-shrink   : 0;
+}
+.sp-chat-msg:hover .sp-chat-msg-actions { opacity: 0.85; }
+@media (hover: none) {
+    .sp-chat-msg-actions { opacity: 0.55; }
+}
+.sp-chat-msg-actions button {
+    background : transparent;
+    border     : none;
+    padding    : 2px 4px;
+    color      : var(--sp-subtle);
+    cursor     : pointer;
+    font-size  : 0.7rem;
+    line-height: 1;
+    border-radius: 4px;
+    transition : color 0.12s, background 0.12s;
+}
+.sp-chat-msg-actions button:hover {
+    color     : var(--sp-primary);
+    background: rgba(127, 127, 127, 0.12);
+}
+
+/* Inline editor for user messages */
+.sp-chat-msg-editor {
+    flex        : 1;
+    min-width   : 0;
+    min-height  : 3.5em;
+    resize      : vertical;
+    padding     : 4px 6px;
+    border      : 1px solid var(--sp-divider);
+    border-radius: 6px;
+    background  : var(--sp-surface, transparent);
+    color       : inherit;
+    font        : inherit;
+    box-sizing  : border-box;
+}
+.sp-chat-msg-actions.sp-chat-msg-editing {
+    opacity   : 1;
+    align-self: flex-end;
+    flex-direction: column;
+}
+.sp-chat-msg-edit-save,
+.sp-chat-msg-edit-cancel {
+    padding      : 3px 10px;
+    border-radius: 99px;
+    font-size    : 0.72rem;
+    font-weight  : 500;
+    cursor       : pointer;
+    border       : none;
+    line-height  : 1.2;
+}
+.sp-chat-msg-edit-save {
+    background: var(--sp-primary);
+    color     : var(--sp-on-primary);
+}
+.sp-chat-msg-edit-save:hover { opacity: 0.85; }
+.sp-chat-msg-edit-cancel {
+    background: transparent;
+    color     : var(--sp-subtle);
+    border    : 1px solid var(--sp-divider);
+}
+.sp-chat-msg-edit-cancel:hover { color: var(--sp-on-surface); }
+
 .sp-apply-outline-btn {
     padding      : 4px 14px;
     background   : var(--sp-primary);
