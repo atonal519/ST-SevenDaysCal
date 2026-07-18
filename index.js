@@ -6,7 +6,10 @@ import {
     buildOutlineCacheKey as buildOutlineScopedCacheKey,
     buildScheduleCacheKey,
     buildStorylinesCacheKey as buildLinesScopedCacheKey,
+    buildSpaceChatHistoryKey,
+    buildSpaceChatSystemPrompt,
     getCreativeChatPlaceholder,
+    getSpaceChatPlaceholder,
 } from './state.js';
 import * as memory from './memory.js';
 
@@ -95,6 +98,10 @@ let linesMode           = false;
 let isGeneratingLines   = false;
 let cachedLines         = null;
 let linesAbortController = null;
+let spaceMode           = false;
+let spaceChatHistory    = [];
+let isSpaceChatting     = false;
+let spaceChatAbortController = null;
 let linesAiMsgCounter   = 0;   // counts AI messages since last lines advancement
 let scheduleAbortController = null;
 let outlineAbortController  = null;
@@ -147,22 +154,28 @@ jQuery(async () => {
         cachedLines  = null;
         linesAiMsgCounter = 0;
         _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
+        spaceMode = false;
+        spaceChatHistory = [];
+        spaceChatAbortController?.abort();
+        spaceChatAbortController = null;
         $('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
         $(`.sp-side-tab.sp-view-btn[data-view="schedule"]`).addClass('sp-view-active');
         $('.sp-sub-btn').removeClass('sp-view-active');
         $(`.sp-sub-btn[data-view="user"]`).addClass('sp-view-active');
         $('#sp-sub-toggle').show();
-        $('#sp-content-title').text('日程');
+        $('#sp-content-title').text('点');
         cachedSchedule = loadCachedForCurrentChat();
         if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
             $('#sp-outline-wrap').hide();
             $('#sp-lines-wrap').hide();
+            $('#sp-space-wrap').hide();
             $('#sp-body').show();
             $(`#${MODAL_ID} .sp-outline-btn`).removeClass('sp-btn-active');
             updateCreativeChatModeUI();
             $('#sp-chat-msgs').empty();
+            $('#sp-space-msgs').empty();
             if (cachedSchedule) setBody(cachedSchedule);
-            else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>`);
+            else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
         }
         // Back-fill inline blocks for newly loaded chat
         setTimeout(backfillLinesInlineBlocks, 300);
@@ -365,9 +378,9 @@ function _buildLinesBlockHtml() {
                 </div>` : ''}
             </div>`;
         }).join('');
-        return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
+        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
     }
-    return `<summary class="sp-inline-summary"><span class="sp-inline-title">事件线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
+    return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
 }
 
 // Remove inline lines block from ALL AI messages — enforces "only the latest floor holds it".
@@ -434,8 +447,8 @@ function injectExtButton() {
     // No drawer content — panel opened via magic wand or FAB
     const wandHtml = `
         <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
-            <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开日程表"></div>
-            <span>日程表</span>
+            <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开构画"></div>
+            <span>构画</span>
         </div>`;
 
     function mountWandBtn() {
@@ -471,7 +484,7 @@ function injectFab() {
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
         : '';
     const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() ? '' : 'display:none'}">
-        <button class="sp-fab-btn sp-${currentTheme}" title="日程表"
+        <button class="sp-fab-btn sp-${currentTheme}" title="构画"
             style="width:44px;height:44px;border-radius:50%;background:#3a3648;color:#d0bcff;border:1.5px solid rgba(208,188,255,0.35);display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);transform:translateZ(0);clip:auto;">
             <i class="fa-solid fa-calendar-days"></i>
         </button>
@@ -573,15 +586,19 @@ function injectModal() {
                     <nav class="sp-sidebar-tabs" aria-label="主视图">
                         <button class="sp-side-tab sp-view-btn sp-view-active" data-view="schedule">
                             <span class="sp-tab-glyph" aria-hidden="true">▤</span>
-                            <span class="sp-tab-label">日程</span>
-                        </button>
-                        <button class="sp-side-tab sp-view-btn" data-view="outline">
-                            <span class="sp-tab-glyph" aria-hidden="true">¶</span>
-                            <span class="sp-tab-label">大纲</span>
+                            <span class="sp-tab-label">点</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="lines">
                             <span class="sp-tab-glyph" aria-hidden="true">⁝</span>
                             <span class="sp-tab-label">线</span>
+                        </button>
+                        <button class="sp-side-tab sp-view-btn" data-view="outline">
+                            <span class="sp-tab-glyph" aria-hidden="true">¶</span>
+                            <span class="sp-tab-label">面</span>
+                        </button>
+                        <button class="sp-side-tab sp-view-btn" data-view="space">
+                            <span class="sp-tab-glyph" aria-hidden="true">‖</span>
+                            <span class="sp-tab-label">间</span>
                         </button>
                     </nav>
                     <div class="sp-sidebar-spacer"></div>
@@ -594,7 +611,7 @@ function injectModal() {
 
                 <div class="sp-content-col">
                     <header class="sp-content-head">
-                        <h1 class="sp-content-title" id="sp-content-title">日程</h1>
+                        <h1 class="sp-content-title" id="sp-content-title">点</h1>
                         <div class="sp-sub-toggle" id="sp-sub-toggle">
                             <button class="sp-view-btn sp-sub-btn sp-view-active" data-view="user">我</button>
                             <button class="sp-view-btn sp-sub-btn" data-view="char">TA</button>
@@ -691,7 +708,7 @@ function injectModal() {
 
                                     <div id="sp-mem-internal">
                                     <p class="sp-cfg-hint">
-                                        对话时自动为每层楼生成客观摘要，供日程 / 大纲 / 事件线生成时参考。
+                                        对话时自动为每层楼生成客观摘要，供点 / 线 / 面 / 间生成时参考。
                                         随聊天存储（不占浏览器缓存）。最新一楼永不摘要，防重 roll。
                                     </p>
 
@@ -746,12 +763,12 @@ function injectModal() {
 
                     <div class="sp-main">
                         <div class="sp-body" id="sp-body">
-                            <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有日程</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成日程</button></div>
+                            <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>
                         </div>
 
                         <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
                             <div class="sp-outline-beats" id="sp-outline-beats">
-                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>
+                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
                             </div>
                             <div class="sp-outline-divider" id="sp-outline-divider">
                                 <i class="fa-solid fa-grip-lines"></i>
@@ -760,7 +777,7 @@ function injectModal() {
                                 <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
                                 <div class="sp-chat-input-row">
                                     <button id="sp-chat-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
-                                    <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论大纲…">
+                                    <input type="text" id="sp-chat-input" class="sp-input" placeholder="和 AI 讨论面…">
                                     <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
                                 </div>
                             </div>
@@ -768,7 +785,16 @@ function injectModal() {
 
                         <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
                             <div class="sp-lines-list" id="sp-lines-list">
-                                <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>
+                                <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>
+                            </div>
+                        </div>
+
+                        <div class="sp-space-wrap sp-outline-chat" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
+                            <div class="sp-chat-msgs" id="sp-space-msgs"></div>
+                            <div class="sp-chat-input-row">
+                                <button id="sp-space-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
+                                <input type="text" id="sp-space-input" class="sp-input" placeholder="局外聊聊：剧情、设定、关系、知识…">
+                                <button id="sp-space-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
                             </div>
                         </div>
                     </div><!-- /sp-main -->
@@ -847,7 +873,7 @@ function injectModal() {
         if (!outlineChatHistory.length) return;
         const ok = await spConfirm({
             title: '清空对话',
-            body : '将清空这个大纲的讨论历史，不影响已生成的大纲本身。',
+            body : '将清空这个面的讨论历史，不影响已生成的面本身。',
             confirmText: '清空',
             cancelText : '取消',
         });
@@ -855,6 +881,46 @@ function injectModal() {
         outlineChatHistory = [];
         saveCreativeChatHistory();
         $('#sp-chat-msgs').empty();
+    });
+
+    // Space chat (间)
+    function doSendSpaceChat() {
+        const msg = $('#sp-space-input').val().trim();
+        if (msg && !isSpaceChatting) { $('#sp-space-input').val(''); sendSpaceChat(msg); }
+    }
+    $('#sp-space-send').on('click', doSendSpaceChat);
+    $('#sp-space-input').on('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSendSpaceChat(); } });
+
+    $('#sp-space-msgs').on('click', '.sp-chat-msg-delete', function () {
+        if (isSpaceChatting) return;
+        const idx = Number($(this).closest('.sp-chat-msg').attr('data-idx'));
+        if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
+        spaceChatHistory.splice(idx, 1);
+        saveSpaceChatHistory();
+        renderSpaceChatHistory();
+    });
+
+    $('#sp-space-msgs').on('click', '.sp-chat-msg-edit', function () {
+        if (isSpaceChatting) return;
+        const $msg = $(this).closest('.sp-chat-msg');
+        const idx  = Number($msg.attr('data-idx'));
+        if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
+        startSpaceInlineEdit($msg, idx);
+    });
+
+    $('#sp-space-clear').on('click', async () => {
+        if (isSpaceChatting) return;
+        if (!spaceChatHistory.length) return;
+        const ok = await spConfirm({
+            title: '清空对话',
+            body : '将清空"间"的局外聊天记录。',
+            confirmText: '清空',
+            cancelText : '取消',
+        });
+        if (!ok) return;
+        spaceChatHistory = [];
+        saveSpaceChatHistory();
+        $('#sp-space-msgs').empty();
     });
     $('#sp-outline-beats').on('click', '#sp-gen-outline-now', triggerGenerateOutline);
     $('#sp-lines-list').on('click', '#sp-gen-lines-now', triggerGenerateLines);
@@ -898,11 +964,13 @@ function injectModal() {
                 if (outlineMode) return;
                 outlineMode = true;
                 linesMode = false;
+                spaceMode = false;
                 $('#sp-body').hide();
                 $('#sp-lines-wrap').hide();
+                $('#sp-space-wrap').hide();
                 $('#sp-outline-wrap').css('display', 'flex');
                 $('#sp-sub-toggle').hide();
-                $('#sp-content-title').text('大纲');
+                $('#sp-content-title').text('面');
                 loadCreativeChatHistory();
                 updateCreativeChatModeUI();
                 renderCreativeChatHistory();
@@ -915,8 +983,10 @@ function injectModal() {
                 if (linesMode) return;
                 linesMode = true;
                 outlineMode = false;
+                spaceMode = false;
                 $('#sp-body').hide();
                 $('#sp-outline-wrap').hide();
+                $('#sp-space-wrap').hide();
                 $('#sp-lines-wrap').css('display', 'flex');
                 $('#sp-sub-toggle').hide();
                 $('#sp-content-title').text('线');
@@ -925,12 +995,29 @@ function injectModal() {
                 else setLinesBody(renderEmptyLinesState());
                 return;
             }
-            // view === 'schedule' — leaving outline/lines, restore body
+            if (view === 'space') {
+                if (spaceMode) return;
+                spaceMode = true;
+                outlineMode = false;
+                linesMode = false;
+                $('#sp-body').hide();
+                $('#sp-outline-wrap').hide();
+                $('#sp-lines-wrap').hide();
+                $('#sp-space-wrap').css('display', 'flex');
+                $('#sp-sub-toggle').hide();
+                $('#sp-content-title').text('间');
+                $('#sp-space-input').attr('placeholder', getSpaceChatPlaceholder());
+                loadSpaceChatHistory();
+                renderSpaceChatHistory();
+                return;
+            }
+            // view === 'schedule' — leaving outline/lines/space, restore body
             if (outlineMode) { outlineMode = false; $('#sp-outline-wrap').hide(); }
             if (linesMode)   { linesMode   = false; $('#sp-lines-wrap').hide(); }
+            if (spaceMode)   { spaceMode   = false; $('#sp-space-wrap').hide(); }
             $('#sp-body').show();
             $('#sp-sub-toggle').show();
-            $('#sp-content-title').text('日程');
+            $('#sp-content-title').text('点');
             $('.sp-sub-btn').removeClass('sp-view-active');
             $(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
             return;
@@ -1083,7 +1170,7 @@ function switchToCharView() {
     // Prefer previously confirmed name; fall back to guessing from chat messages
     const guessed = charViewName || guessCharName(ctx);
     setBody(`<div class="sp-char-picker">
-        <p class="sp-char-picker-hint"><i class="fa-solid fa-user-pen"></i> 输入要查看日程的角色名</p>
+        <p class="sp-char-picker-hint"><i class="fa-solid fa-user-pen"></i> 输入要查看点的角色名</p>
         <div class="sp-char-picker-row">
             <input id="sp-char-name-input" class="sp-input" type="text"
                    placeholder="角色名" value="${escapeAttr(guessed)}">
@@ -1131,7 +1218,7 @@ function openSchedule() {
 function showEmptyGenerate() {
     setBody(`<div class="sp-empty">
         <i class="fa-regular fa-calendar"></i>
-        <button class="sp-gen-btn" id="sp-gen-now">生成日程</button>
+        <button class="sp-gen-btn" id="sp-gen-now">生成点</button>
     </div>`);
     $('#sp-gen-now').on('click', triggerGenerate);
 }
@@ -1302,9 +1389,9 @@ async function runGenerate() {
         if (stillOnView) {
             cachedSchedule = html;
             if ($(`#${MODAL_ID}`).is(':visible')) setBody(html);
-            else showToast('日程已生成，点击查看', () => { showPanel(); setBody(html); });
+            else showToast('点已生成，点击查看', () => { showPanel(); setBody(html); });
         } else {
-            showToast('日程已生成，点击查看', () => {
+            showToast('点已生成，点击查看', () => {
                 setView(viewSnap, charSnap);
                 cachedSchedule = html;
                 showPanel();
@@ -1322,7 +1409,7 @@ async function runGenerate() {
         }
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
         if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap) setBody(errHtml);
-        else showToast('日程生成失败，请重试', null, true);
+        else showToast('点生成失败，请重试', null, true);
     }
 }
 
@@ -1652,7 +1739,7 @@ function injectToST(text) {
 // ─── Outline chat ─────────────────────────────────────────────────────────────
 
 function appendChatMsg(role, content, historyIndex = null) {
-    const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新大纲]');
+    const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
     const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
@@ -1772,7 +1859,7 @@ async function sendOutlineChat(userMsg) {
         appendChatMsg('ai', reply, outlineChatHistory.length - 1);
         if (/<outline_widget/i.test(reply)) {
             const pendingRaw = reply;
-            const $btn = $('<button class="sp-apply-outline-btn">应用此大纲</button>');
+            const $btn = $('<button class="sp-apply-outline-btn">应用此面</button>');
             $btn.on('click', () => {
                 const html = renderOutline(pendingRaw);
                 setOutlineBody(html);
@@ -1793,10 +1880,166 @@ async function sendOutlineChat(userMsg) {
     isOutlineChatting = false;
 }
 
+// ─── Space chat (间：off-scenario OOC) ───────────────────────────────────────
+// Mirrors outline chat but talks to the user out of scene as consultant/知识帮手.
+// Same context sources (world info + memory + outline for reference), no
+// <outline_widget> extraction.
+
+function getSpaceChatHistoryKey(view, charName) {
+    const chatId = getContext().chatId;
+    return buildSpaceChatHistoryKey(chatId, view ?? currentView, charName ?? charViewName);
+}
+
+function loadSpaceChatHistory(view, charName) {
+    const key = getSpaceChatHistoryKey(view, charName);
+    if (!key) { spaceChatHistory = []; return spaceChatHistory; }
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || '[]');
+        spaceChatHistory = Array.isArray(saved) ? saved.filter(item => item?.role && item?.content) : [];
+    } catch { spaceChatHistory = []; }
+    return spaceChatHistory;
+}
+
+function saveSpaceChatHistory(view, charName) {
+    const key = getSpaceChatHistoryKey(view, charName);
+    if (!key) return;
+    localStorage.setItem(key, JSON.stringify(spaceChatHistory));
+}
+
+function renderSpaceChatHistory() {
+    const $msgs = $('#sp-space-msgs');
+    $msgs.empty();
+    spaceChatHistory.forEach((msg, idx) => {
+        appendSpaceChatMsg(msg.role === 'assistant' ? 'ai' : msg.role, msg.content, idx);
+    });
+}
+
+function appendSpaceChatMsg(role, content, historyIndex = null) {
+    const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
+    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    const canAct = role !== 'system' && Number.isInteger(historyIndex);
+    if (canAct) $msg.attr('data-idx', historyIndex);
+    const contentHtml = escapeHtml(content).replace(/\n/g, '<br>');
+    if (canAct) {
+        const editBtn = role === 'user'
+            ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
+            : '';
+        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>` +
+                  `<div class="sp-chat-msg-actions">${editBtn}` +
+                  `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`);
+    } else {
+        $msg.html(contentHtml);
+    }
+    $msg.appendTo('#sp-space-msgs');
+    const el = document.getElementById('sp-space-msgs');
+    if (el) el.scrollTop = el.scrollHeight;
+}
+
+function startSpaceInlineEdit($msg, idx) {
+    const original = spaceChatHistory[idx]?.content ?? '';
+    $msg.find('.sp-chat-msg-content').replaceWith(
+        `<textarea class="sp-chat-msg-editor">${escapeHtml(original)}</textarea>`
+    );
+    $msg.find('.sp-chat-msg-actions').replaceWith(
+        '<div class="sp-chat-msg-actions sp-chat-msg-editing">' +
+        '<button class="sp-chat-msg-edit-save">保存并重发</button>' +
+        '<button class="sp-chat-msg-edit-cancel">取消</button>' +
+        '</div>'
+    );
+    const $ta = $msg.find('.sp-chat-msg-editor');
+    $ta.trigger('focus');
+    const val = $ta.val();
+    $ta[0].setSelectionRange(val.length, val.length);
+
+    $msg.find('.sp-chat-msg-edit-cancel').on('click', () => renderSpaceChatHistory());
+    $msg.find('.sp-chat-msg-edit-save').on('click', () => {
+        if (isSpaceChatting) return;
+        const newText = $ta.val().trim();
+        if (!newText) return;
+        spaceChatHistory.splice(idx);
+        saveSpaceChatHistory();
+        renderSpaceChatHistory();
+        sendSpaceChat(newText);
+    });
+    $ta.on('keydown', e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            $msg.find('.sp-chat-msg-edit-save').trigger('click');
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            renderSpaceChatHistory();
+        }
+    });
+}
+
+async function buildSpaceChatMessages(userMsg) {
+    const ctx      = getContext();
+    const userName = ctx.name1 || '用户';
+    const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
+    let outlineCtx = '';
+    try {
+        const key   = getOutlineCacheKey();
+        const saved = key && JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) outlineCtx = saved.raw;
+    } catch { /* ignore */ }
+    const wiContext = await buildWorldInfoContext(ctx);
+    const memText   = getMemText();
+    const sys = buildSpaceChatSystemPrompt({
+        userName,
+        charName,
+        outlineRaw: outlineCtx,
+        wiContext,
+        memText,
+    });
+    return [{ role: 'system', content: sys }, ...spaceChatHistory, { role: 'user', content: userMsg }];
+}
+
+const SPACE_HISTORY_CAP = 20;
+
+async function sendSpaceChat(userMsg) {
+    if (isSpaceChatting) return;
+    spaceChatHistory.push({ role: 'user', content: userMsg });
+    let trimmed = false;
+    if (spaceChatHistory.length > SPACE_HISTORY_CAP) {
+        spaceChatHistory.splice(0, spaceChatHistory.length - SPACE_HISTORY_CAP);
+        trimmed = true;
+    }
+    if (trimmed) renderSpaceChatHistory();
+    else appendSpaceChatMsg('user', userMsg, spaceChatHistory.length - 1);
+    saveSpaceChatHistory();
+    isSpaceChatting = true;
+    const chatIdSnap = getContext().chatId;
+    spaceChatAbortController = new AbortController();
+    const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').text('…').appendTo('#sp-space-msgs');
+    const el = document.getElementById('sp-space-msgs');
+    if (el) el.scrollTop = el.scrollHeight;
+    try {
+        const cfg = loadCfg();
+        if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); throw new Error('请先配置 API'); }
+        const reply = await postChatCompletion({
+            cfg,
+            messages: await buildSpaceChatMessages(userMsg),
+            maxTokens: 4096,
+            signal: spaceChatAbortController.signal,
+        });
+        if (getContext().chatId !== chatIdSnap) { $dots.remove(); return; }
+        spaceChatHistory.push({ role: 'assistant', content: reply });
+        saveSpaceChatHistory();
+        $dots.remove();
+        appendSpaceChatMsg('ai', reply, spaceChatHistory.length - 1);
+    } catch (err) {
+        $dots.remove();
+        if (err?.name !== 'AbortError') appendSpaceChatMsg('system', `发送失败：${err.message}`);
+    }
+    spaceChatAbortController = null;
+    isSpaceChatting = false;
+}
+
+
 
 
 function renderEmptyOutlineState() {
-    return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有大纲，可以先直接聊天讨论，也可以生成一版大纲作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成大纲</button></div>`;
+    return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>`;
 }
 
 function setOutlineBody(html) { $('#sp-outline-beats').html(html); }
@@ -1810,7 +2053,7 @@ async function triggerGenerateOutline() {
     if (key) localStorage.removeItem(key);
     cachedOutline = null;
     isGeneratingOutline = true;
-    setOutlineBody(loadingHtml('正在构思大纲', 'sp-abort-outline'));
+    setOutlineBody(loadingHtml('正在构思面', 'sp-abort-outline'));
     runGenerateOutline();
 }
 
@@ -1844,7 +2087,7 @@ async function runGenerateOutline() {
         outlineAbortController = null;
         cachedOutline = html;
         if (outlineMode) setOutlineBody(html);
-        else showToast('大纲已生成，点击查看', () => {
+        else showToast('面已生成，点击查看', () => {
             if (!outlineMode) $('.sp-view-btn[data-view="outline"]').trigger('click');
             showPanel();
         });
@@ -1858,7 +2101,7 @@ async function runGenerateOutline() {
         if (getContext().chatId !== chatIdSnap) return;
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
         if (outlineMode) setOutlineBody(errHtml);
-        else showToast('大纲生成失败，请重试', null, true);
+        else showToast('面生成失败，请重试', null, true);
     }
 }
 
@@ -1941,7 +2184,7 @@ function parseOutline(raw) {
 
 function renderOutline(raw) {
     const beats = parseOutline(raw);
-    const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-outline" title="重新生成大纲"><i class="fa-solid fa-rotate-right"></i></button></div>`;
+    const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-outline" title="重新生成面"><i class="fa-solid fa-rotate-right"></i></button></div>`;
     if (beats.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
     const cards = beats.map((b, i) => {
         const injectParts = [`【剧情节点参考】`, `${b.time}·《${b.title}》${b.type ? '·' + b.type : ''}${b.line ? '（' + b.line + '）' : ''}`];
@@ -1995,7 +2238,7 @@ function loadCachedLinesForCurrentChat(view, charName) {
 function setLinesBody(html) { $('#sp-lines-list').html(html); }
 
 function renderEmptyLinesState() {
-    return `<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的事件线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成事件线</button></div>`;
+    return `<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>`;
 }
 
 async function triggerGenerateLines() {
@@ -2008,7 +2251,7 @@ async function triggerGenerateLines() {
     if (key) localStorage.removeItem(key);
     cachedLines = null;
     isGeneratingLines = true;
-    setLinesBody(loadingHtml('正在推演事件线', 'sp-abort-lines'));
+    setLinesBody(loadingHtml('正在推演线', 'sp-abort-lines'));
     runGenerateLines();
 }
 
@@ -2053,7 +2296,7 @@ async function runGenerateLines(silent = false) {
         // the same cache; without this the message-level block shows stale data
         // until page reload.
         syncLatestInlineBlock(chatIdSnap);
-        if (!linesMode && !silent) showToast('事件线已生成，点击查看', () => {
+        if (!linesMode && !silent) showToast('线已生成，点击查看', () => {
             if (!linesMode) $('.sp-view-btn[data-view="lines"]').trigger('click');
             showPanel();
         });
@@ -2067,7 +2310,7 @@ async function runGenerateLines(silent = false) {
         if (!silent && getContext().chatId === chatIdSnap) {
             const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
             if (linesMode) setLinesBody(errHtml);
-            else showToast('事件线生成失败，请重试', null, true);
+            else showToast('线生成失败，请重试', null, true);
         }
     }
 }
@@ -2240,7 +2483,7 @@ function renderLines(raw) {
     const lines = parseLines(raw);
     const toolbar = `<div class="sp-schedule-header">
         <span class="sp-user-chip">平行事件</span>
-        <button class="sp-panel-refresh sp-refresh-lines" title="重新生成事件线"><i class="fa-solid fa-rotate-right"></i></button>
+        <button class="sp-panel-refresh sp-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
     if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
     const cards = lines.map(l => {
@@ -2250,7 +2493,7 @@ function renderLines(raw) {
         const beadsHtml = Array.from({length: 4}, (_, i) =>
             `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
         ).join('');
-        const injectParts = [`【事件线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
+        const injectParts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
         if (l.desc) injectParts.push(l.desc);
         if (l.next) injectParts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
         const injectBtn = makeInjectBtn(injectParts.join('\n'));
@@ -2397,7 +2640,7 @@ function renderMemorySection() {
             } catch {}
             $('#sp-mem-bbb-status').html(`<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> ${escapeHtml(coverageMsg)}`);
         } else {
-            $('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 柏宝书 API 未就绪；日程/大纲/事件线生成时不会注入历史记忆');
+            $('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 柏宝书 API 未就绪；点 / 线 / 面 / 间 生成时不会注入历史记忆');
         }
         return;
     }
@@ -2482,7 +2725,7 @@ function bindMemoryHandlers() {
         const ok = await spConfirm({
             title  : '推翻重构',
             body   : `将清空全部摘要并按当前分组重新生成，约需 ${cost} 次 L0 API 调用 + 若干次 L1 压缩。`,
-            note   : '重构期间可以中止。已有的日程/大纲/事件线不受影响。',
+            note   : '重构期间可以中止。已有的点 / 线 / 面 不受影响。',
             confirmText: '开始重构',
             cancelText : '取消',
         });
@@ -2952,8 +3195,8 @@ function renderSchedule(raw, userName, perspective = 'user') {
 
     const header = `<div class="sp-schedule-header">
         <span class="${chipCls}">${escapeHtml(userName)}</span>
-        <span class="sp-schedule-label">的日程</span>
-        <button class="sp-panel-refresh sp-refresh-schedule" title="重新生成日程"><i class="fa-solid fa-rotate-right"></i></button>
+        <span class="sp-schedule-label">的点</span>
+        <button class="sp-panel-refresh sp-refresh-schedule" title="重新生成点"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
 
     const tabs = days.map((_, i) => {
@@ -3031,7 +3274,7 @@ function parseCalendar(raw) {
 
 function renderEvent(ev) {
     const meta = TYPE_META[ev.type] || TYPE_META.main;
-    const injectParts = ['【日程参考】'];
+    const injectParts = ['【点参考】'];
     if (ev.time) injectParts.push(`时间：${ev.time}`);
     injectParts.push(ev.title);
     if (ev.desc)      injectParts.push(ev.desc);
