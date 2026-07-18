@@ -368,6 +368,7 @@ export function isMemoryBusy() { return _running || _queue.length > 0; }
 
 // ─── Memory context for injection ────────────────────────────────────────────
 export function getMemoryContext() {
+    if (_getSettings().useBaiBaiBook) return '';
     const m = meta();
     const parts = [];
     if (m.L1.length) {
@@ -458,6 +459,7 @@ export function abortRebuild() { _abortController?.abort(); }
 
 // ─── Event handlers ──────────────────────────────────────────────────────────
 function onCharacterMessageRendered() {
+    if (_getSettings().useBaiBaiBook) return;
     if (!_getSettings().memoryEnabled) return;
     if (meta().system.paused) return;
     // A new AI floor arrived: any stable group (not the newest) whose L0 is missing
@@ -473,6 +475,7 @@ function onCharacterMessageRendered() {
 }
 
 function onMessageMutated(mesId) {
+    if (_getSettings().useBaiBaiBook) return;
     // Any mutation invalidates any L0 whose range contains this mesid
     const m = meta();
     const midNum = parseInt(String(mesId), 10);
@@ -497,6 +500,7 @@ function onMessageMutated(mesId) {
 }
 
 function onChatChanged() {
+    if (_getSettings().useBaiBaiBook) return;
     _queue = [];
     _abortController?.abort();
     _abortController = null;
@@ -526,6 +530,7 @@ export function initMemory({ getSettings, callApi }) {
     _listeners.swipe = onMessageMutated;
     _listeners.edit = onMessageMutated;
     _listeners.del = () => {
+        if (_getSettings().useBaiBaiBook) return;
         const m = meta();
         const chat = getChat();
         const validMids = new Set(chat.map((_, i) => String(i)));
