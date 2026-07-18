@@ -238,44 +238,91 @@ function saveLinesMode(mode) {
 
 function maskKey(k) { return k.length <= 8 ? '•'.repeat(k.length) : '•'.repeat(k.length - 4) + k.slice(-4); }
 
-// ─── Time-based day-change detection ─────────────────────────────────────────
-// Scans the last few AI messages for date/time expressions and detects when the
-// in-game calendar date has advanced. Heuristic: look for Chinese date patterns
-// (第N天, 周X, N月N日, 今天/明天/昨天 transitions) and compare consecutive messages.
+// ─── In-game day-change detection (via 柏宝书 API) ─────────────────────────────
+// Reads authoritative in-game time from 柏宝书 (ST-BaiBai-Book) instead of
+// grepping message text — the old regex heuristic false-positived on every
+// mention of 今天/明天/周X. Extracts a canonical day key from state.time and
+// signals advance only when it actually changes.
 let _lastDetectedDay = null;
+let _bbbWarned       = false;
+
+// 中文数字 → 阿拉伯数字（覆盖 0–99，足以处理古代年月日）。
+const _CN_NUM_MAP = { 零:0, 〇:0, 一:1, 二:2, 两:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10 };
+const _CN_MONTH_ALIAS = { 正:1, 冬:11, 腊:12 };
+
+function _cnToNumber(s) {
+    if (!s) return null;
+    if (s === '元') return 1;
+    if (/^\d+$/.test(s)) return parseInt(s, 10);
+    if (s.length === 1) return _CN_NUM_MAP[s] ?? null;
+    if (s.includes('十')) {
+        const [a, b] = s.split('十');
+        const tens = a === '' ? 1 : _CN_NUM_MAP[a];
+        const ones = b === '' ? 0 : _CN_NUM_MAP[b];
+        if (tens != null && ones != null) return tens * 10 + ones;
+    }
+    return null;
+}
+
+// 抽出"这一天"的规范化 key。剥掉 era 前缀、时分秒尾巴以及数字前导零，
+// 让同一天不同写法（"1287/04/01" ≡ "1287/4/1" ≡ "1287年4月1日"）落到同一
+// 个 key 上。返回 null 表示无法识别 → 不推进。
+function extractDayFromTime(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return null;
+    let m;
+    // 阿拉伯：YYYY年M月D日
+    if ((m = timeStr.match(/(\d{2,4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})/))) return `${+m[1]}-${+m[2]}-${+m[3]}`;
+    // 阿拉伯：YYYY/M/D、YYYY-M-D、YYYY.M.D
+    if ((m = timeStr.match(/(\d{2,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/))) return `${+m[1]}-${+m[2]}-${+m[3]}`;
+    // 相对天数：第N天/日
+    if ((m = timeStr.match(/第\s*(\d+)\s*[天日]/))) return `day-${+m[1]}`;
+    // day N
+    if ((m = timeStr.match(/day\s*(\d+)/i))) return `day-${+m[1]}`;
+    // 古代中文：<cn年>年<cn月/正/冬/腊>月<初X/cn日>[日]?
+    m = timeStr.match(/(元|[零〇一二两三四五六七八九十]+)\s*年\s*(正|冬|腊|[零〇一二两三四五六七八九十]+)\s*月\s*(初[零〇一二两三四五六七八九十]|[零〇一二两三四五六七八九十]+)/);
+    if (m) {
+        const year  = _cnToNumber(m[1]);
+        const month = (m[2] in _CN_MONTH_ALIAS) ? _CN_MONTH_ALIAS[m[2]] : _cnToNumber(m[2]);
+        const day   = m[3].startsWith('初') ? _cnToNumber(m[3].slice(1)) : _cnToNumber(m[3]);
+        if (year != null && month != null && day != null) return `cn-${year}-${month}-${day}`;
+    }
+    return null;
+}
 
 function detectInGameDayChange(messageId, excludeCurrent = false) {
-    const msgs = getContext().chat || [];
-    // Only look at AI messages
-    const aiMsgs = msgs.filter(m => !m.is_user);
-    if (aiMsgs.length < (excludeCurrent ? 2 : 1)) return false;
-
-    const DAY_PATTERNS = [
-        /第\s*(\d+)\s*[天日]/,
-        /([一二三四五六七八九十百千\d]+)\s*月\s*([一二三四五六七八九十百千\d]+)\s*[日号]/,
-        /星期([一二三四五六日天])|周([一二三四五六日天])/,
-        /今天|明天|后天|大后天/,
-        /day\s*(\d+)/i,
-    ];
-
-    function extractDay(text) {
-        for (const p of DAY_PATTERNS) {
-            const m = text.match(p);
-            if (m) return m[0];
+    const api = globalThis.STBaiBaiBook;
+    if (!api || typeof api.getSnapshot !== 'function') {
+        if (!_bbbWarned) {
+            _bbbWarned = true;
+            console.info('[7dayscal] STBaiBaiBook 未就绪，days 模式不自动推进');
         }
-        return null;
+        return false;
     }
 
-    // When excludeCurrent is true, look at the PREVIOUS AI message (skip the one
-    // that just arrived — matches how the caller expects "advance BEFORE current
-    // message enters context").
-    const targetMsg = excludeCurrent ? aiMsgs[aiMsgs.length - 2] : aiMsgs[aiMsgs.length - 1];
-    const currentDay = extractDay(targetMsg?.mes || '');
-    if (!currentDay) return false;
+    const msgs = getContext().chat || [];
+    const aiFloors = [];
+    for (let i = 0; i < msgs.length; i++) if (!msgs[i].is_user) aiFloors.push(i);
+    if (aiFloors.length < (excludeCurrent ? 2 : 1)) return false;
 
-    if (currentDay !== _lastDetectedDay) {
-        _lastDetectedDay = currentDay;
-        return true;  // day changed → trigger advance
+    // 与旧实现一致：excludeCurrent=true 时读上一条 AI 楼的状态，避开
+    // 刚渲染完的这一条（"advance BEFORE current message enters context"）。
+    const targetFloor = excludeCurrent
+        ? aiFloors[aiFloors.length - 2]
+        : aiFloors[aiFloors.length - 1];
+
+    let snapshot;
+    try {
+        snapshot = api.getSnapshot({ floor: targetFloor, at: 'after' });
+    } catch {
+        return false;
+    }
+
+    const day = extractDayFromTime(snapshot?.state?.time);
+    if (!day) return false;
+
+    if (day !== _lastDetectedDay) {
+        _lastDetectedDay = day;
+        return true;
     }
     return false;
 }
