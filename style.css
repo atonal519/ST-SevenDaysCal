@@ -73,6 +73,20 @@
     --sp-hover-bg    : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 6%,  transparent);
 }
 
+/* Forced theme override — bypass ST vars entirely, use only legacy palette.
+   Applied when user picks day/night manually (fallback for transparent ST themes). */
+.sp-forced-day,
+.sp-forced-night {
+    --sp-on-surface  : var(--sp-on-surface-legacy);
+    --sp-subtle      : var(--sp-subtle-legacy);
+    --sp-primary     : var(--sp-primary-legacy);
+    --sp-sheet-bg    : var(--sp-sheet-bg-legacy);
+    --sp-surface     : var(--sp-surface-legacy);
+    --sp-surface-high: var(--sp-surface-high-legacy);
+    --sp-divider     : var(--sp-divider-legacy);
+    --sp-hover-bg    : var(--sp-hover-bg-legacy);
+}
+
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
 .sp-root {
     position  : fixed;

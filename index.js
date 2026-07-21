@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = {
     apiKey  : '',
     apiModel: '',
     fabShow : true,
+    themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days'
     // Memory system
@@ -78,6 +79,15 @@ function detectSTTheme() {
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night';
 }
 
+// Resolve the effective theme by combining the user's themeMode setting
+// with the detected ST theme. 'auto' follows ST (transparent-theme users get
+// the day/night fallback via explicit modes instead).
+function getEffectiveTheme() {
+    const mode = getSettings().themeMode || 'auto';
+    if (mode === 'day' || mode === 'night') return mode;
+    return detectSTTheme();
+}
+
 let currentTheme   = detectSTTheme();
 let cachedSchedule = null;
 let isGenerating   = false;
@@ -124,6 +134,8 @@ jQuery(async () => {
     injectModal();
     injectFab();
     injectToastContainer();
+    // Apply saved theme mode (day/night/auto) now that settings are guaranteed loaded
+    applyTheme(getEffectiveTheme());
     // Initialize memory system — wires event listeners internally
     memory.initMemory({
         getSettings: () => {
@@ -202,6 +214,8 @@ jQuery(async () => {
     // Track ST theme changes via MutationObserver on documentElement style
     _themeObserver?.disconnect();
     _themeObserver = new MutationObserver(() => {
+        // Only auto mode follows ST; forced day/night ignores ST changes.
+        if ((getSettings().themeMode || 'auto') !== 'auto') return;
         const t = detectSTTheme();
         if (t !== currentTheme) applyTheme(t);
     });
@@ -617,6 +631,7 @@ function injectModal() {
                             <button class="sp-view-btn sp-sub-btn" data-view="char">TA</button>
                         </div>
                         <div class="sp-head-tools">
+                            <button class="sp-icon-btn sp-theme-toggle-btn" title="${themeToggleTitle()}"><i class="fa-solid ${themeToggleIcon()}"></i></button>
                             <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮"><i class="fa-regular fa-circle-dot"></i></button>
                             <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark" style="font-size:1rem"></i></button>
                         </div>
@@ -827,6 +842,7 @@ function injectModal() {
         $(`#${FAB_ID}`).toggle(nowEnabled);
         $(this).toggleClass('sp-btn-active', nowEnabled);
     });
+    $(`#${MODAL_ID} .sp-theme-toggle-btn`).on('click', cycleThemeMode);
     $(`#${MODAL_ID} .sp-backdrop`).on('click',     closePanel);
     document.getElementById('sp-debug-drawer').addEventListener('toggle', function () {
         if (this.open) {
@@ -2951,8 +2967,44 @@ function saveSettings() {
 
 function applyTheme(theme) {
     currentTheme = theme;
-    $(`#${MODAL_ID}`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
-    $(`#${FAB_ID} .sp-fab-btn`).removeClass('sp-night sp-day').addClass(`sp-${theme}`);
+    const forced = (getSettings().themeMode || 'auto') !== 'auto';
+    const $modal = $(`#${MODAL_ID}`);
+    const $fab   = $(`#${FAB_ID} .sp-fab-btn`);
+    $modal.removeClass('sp-night sp-day sp-forced-day sp-forced-night').addClass(`sp-${theme}`);
+    $fab.removeClass('sp-night sp-day sp-forced-day sp-forced-night').addClass(`sp-${theme}`);
+    if (forced) {
+        $modal.addClass(`sp-forced-${theme}`);
+        $fab.addClass(`sp-forced-${theme}`);
+    }
+}
+
+// ─── Theme mode toggle (day / night / auto) ─────────────────────────────────
+// Auto follows ST theme; day/night force a fallback so users on transparent
+// ST themes still get a readable panel.
+function themeToggleIcon() {
+    const mode = getSettings().themeMode || 'auto';
+    if (mode === 'day')   return 'fa-sun';
+    if (mode === 'night') return 'fa-moon';
+    return 'fa-circle-half-stroke';   // auto
+}
+
+function themeToggleTitle() {
+    const mode = getSettings().themeMode || 'auto';
+    if (mode === 'day')   return '主题：日间（点击切换到夜间）';
+    if (mode === 'night') return '主题：夜间（点击切换到跟随酒馆）';
+    return '主题：跟随酒馆（点击切换到日间）';
+}
+
+function cycleThemeMode() {
+    const cur  = getSettings().themeMode || 'auto';
+    const next = cur === 'auto' ? 'day' : cur === 'day' ? 'night' : 'auto';
+    getSettings().themeMode = next;
+    saveSettingsDebounced();
+    applyTheme(getEffectiveTheme());
+    // Update this button's icon + tooltip in place
+    const $btn = $(`#${MODAL_ID} .sp-theme-toggle-btn`);
+    $btn.attr('title', themeToggleTitle());
+    $btn.find('i').attr('class', `fa-solid ${themeToggleIcon()}`);
 }
 
 // ─── Drag (desktop only) ──────────────────────────────────────────────────────
