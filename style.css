@@ -332,7 +332,32 @@
 .sp-fetch-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* ─── Model select ───────────────────────────────────────────────────────────── */
+/* Kept for backward compat but no <select> uses .sp-input anymore. */
 select.sp-input { appearance: none; cursor: pointer; }
+
+/* Model dropdown after fetchModels: match .sp-input geometry, but let the
+   browser keep its native dropdown arrow — users need the visual affordance
+   and the native picker is the most reliable cross-platform experience.
+   min-width: 0 is critical: <select> defaults to intrinsic (longest option)
+   width and would otherwise blow past the flex row, pushing the fetch button
+   off screen and making the whole panel scroll horizontally. */
+.sp-model-select {
+    flex         : 1;
+    min-width    : 0;
+    max-width    : 100%;
+    padding      : 7px 11px;
+    background   : var(--sp-sheet-bg);
+    border       : 1px solid var(--sp-divider);
+    border-radius: 8px !important;   /* !important overrides ST global select rule + any theme */
+    color        : var(--sp-on-surface);
+    font-size    : 0.85rem;
+    font-family  : var(--sp-font);
+    outline      : none;
+    box-sizing   : border-box;
+    cursor       : pointer;
+    transition   : border-color 0.15s;
+}
+.sp-model-select:focus { border-color: var(--sp-primary); }
 
 
 .sp-api-notice {
@@ -391,6 +416,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex           : 1;
     min-height     : 0;
     overflow-y     : auto;
+    overflow-x     : hidden;   /* Prevent stray wide content from making the panel scroll sideways */
     padding        : 8px 0 4px;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;

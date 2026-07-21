@@ -2629,12 +2629,17 @@ async function fetchModels() {
             .filter(Boolean).sort();
         if (!models.length) throw new Error('接口未返回任何模型');
 
+        // Replace input with a native <select> — browser handles the popup
+        // (Android → fullscreen picker with search, desktop → dropdown with
+        // scrollbar). No `appearance: none` here on purpose: users need the
+        // visible dropdown arrow to know it's clickable, and the native picker
+        // is the most reliable cross-platform choice for long lists (180+).
         const current = loadCfg().model || '';
         const opts = models.map(m =>
             `<option value="${escapeAttr(m)}"${m === current ? ' selected' : ''}>${escapeHtml(m)}</option>`
         ).join('');
         $('#sp-cfg-model').replaceWith(
-            `<select id="sp-cfg-model" class="sp-input sp-model-input">${opts}</select>`
+            `<select id="sp-cfg-model" class="sp-model-select">${opts}</select>`
         );
         if (!current) $('#sp-cfg-model').val(models[0]);
         showToast(`已加载 ${models.length} 个模型`);
