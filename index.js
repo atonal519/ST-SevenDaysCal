@@ -191,6 +191,8 @@ jQuery(async () => {
         }
         // Back-fill inline blocks for newly loaded chat
         setTimeout(backfillLinesInlineBlocks, 300);
+        // Surface memory schema-migration notice, if any (once per upgraded chat)
+        setTimeout(checkMemoryMigrationNotice, 500);
     };
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
     // Auto-advance storylines, then append inline block to every AI message.
@@ -1229,6 +1231,9 @@ function openSchedule() {
     } else {
         showEmptyGenerate();
     }
+    // Surface schema-migration notice for users who upgrade + open the panel
+    // without ever switching chat first (rare but possible after fresh install/update)
+    checkMemoryMigrationNotice();
 }
 
 function showEmptyGenerate() {
@@ -1267,6 +1272,23 @@ function closePanel() {
 function setBody(html) { $('#sp-body').html(html); }
 
 // ─── Memory pre-check helpers ─────────────────────────────────────────────────
+// Show a one-time toast when memory schema migration wiped this chat's summaries.
+// Called from CHAT_CHANGED and openSchedule so users see it on the next chat
+// switch OR the first time they open the panel post-upgrade.
+function checkMemoryMigrationNotice() {
+    if (getSettings().useBaiBaiBook) return;      // 柏宝书用户不受影响
+    const notice = memory.consumeMigrationNotice?.();
+    if (!notice) return;
+    const { l0Count, l1Count } = notice;
+    const msg = `故事记忆库已升级：${l0Count} 段 L0 + ${l1Count} 章 L1 需重算（点此打开设置补齐）`;
+    showToast(msg, () => {
+        showPanel();
+        if (!settingsOpen) toggleSettings();
+        // Expand the memory section so the "补齐缺失" button is visible
+        $('#sp-mem-section').attr('open', 'open');
+    });
+}
+
 // Called by the three generation triggers (schedule/outline/lines).
 // Returns a Promise<boolean>: true if user wants to continue, false if canceled.
 async function memoryPreCheckConfirm() {

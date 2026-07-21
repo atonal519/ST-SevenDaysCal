@@ -20,7 +20,7 @@ import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
 
 const MEMORY_KEY = 'sp-memory';
-const SCHEMA_VERSION = 2;   // v2 = grouped L0 (previous per-floor L0 layouts are migrated)
+const SCHEMA_VERSION = 3;   // v3 = tag-stripped floor text (v2 summaries included thinking/widget noise; requires rebuild)
 
 // ─── Settings (per-plugin, not per-chat) ─────────────────────────────────────
 // Stored via caller; memory.js just reads them via a getter injected at init.
@@ -54,11 +54,22 @@ function meta() {
     if (!ctx.chatMetadata[MEMORY_KEY]) {
         ctx.chatMetadata[MEMORY_KEY] = freshMeta();
     }
-    // Simple forward-compat: if a previous version's structure exists, wipe it
-    // (users see "reconstruct needed" via the health report + can rebuild).
+    // Version mismatch: wipe (hash algorithm changed with content sanitizer,
+    // so old summaries can't be validated) but stash a migration notice for
+    // the UI to surface once. Users see a toast on next chat switch / panel
+    // open explaining why their summaries are reset.
     const m = ctx.chatMetadata[MEMORY_KEY];
     if (m.version !== SCHEMA_VERSION) {
-        ctx.chatMetadata[MEMORY_KEY] = freshMeta();
+        const l0Count = m.L0 ? Object.keys(m.L0).length : 0;
+        const l1Count = Array.isArray(m.L1) ? m.L1.length : 0;
+        const fresh = freshMeta();
+        // Only surface a notice if the previous chat actually had summaries
+        // built up; brand-new chats shouldn't trigger a "migration" popup.
+        if (l0Count > 0 || l1Count > 0) {
+            fresh._migration = { fromVersion: m.version ?? 1, l0Count, l1Count, ts: Date.now() };
+        }
+        ctx.chatMetadata[MEMORY_KEY] = fresh;
+        persist();
     }
     return ctx.chatMetadata[MEMORY_KEY];
 }
@@ -78,16 +89,44 @@ function persist() {
     ctx.saveMetadataDebounced?.();
 }
 
+// ─── Content sanitizer ──────────────────────────────────────────────────────
+// Strip all tag-wrapped blocks (thinking, reasoning, outline_widget,
+// calendar_widget, details/summary, HTML markup, etc.) — the summarizer only
+// wants the narrative prose. Both paired blocks and stray tags are removed,
+// plus HTML/XML comments. Applied at getAiFloors() so every downstream
+// consumer (grouping, hashing, prompt building) sees the same clean text.
+function stripTags(raw) {
+    if (!raw) return '';
+    let s = String(raw);
+    // HTML/XML comments <!-- ... -->
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    // Paired tags — repeat until no more matches to handle nested cases
+    // (e.g. <details><summary>...</summary>body</details> — inner strips first
+    // pass, outer strips next pass).
+    let prev;
+    do {
+        prev = s;
+        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
+    } while (s !== prev);
+    // Any remaining self-closing / orphan tags
+    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
+    // Collapse the whitespace left behind by removed blocks
+    s = s.replace(/\n{3,}/g, '\n\n').trim();
+    return s;
+}
+
 // ─── Chat helpers ────────────────────────────────────────────────────────────
 function getChat() { return getContext().chat || []; }
 
 // Returns all AI floors (including hidden — is_system=true means hidden in ST).
+// Text is sanitized: thinking/reasoning/widget/HTML tags all stripped,
+// leaving only narrative prose for the summarizer.
 function getAiFloors() {
     const chat = getChat();
     const out = [];
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
-        if (m && !m.is_user) out.push({ mesid: String(i), text: m.mes || '' });
+        if (m && !m.is_user) out.push({ mesid: String(i), text: stripTags(m.mes || '') });
     }
     return out;
 }
@@ -365,6 +404,20 @@ export function getHealthReport() {
 }
 
 export function isMemoryBusy() { return _running || _queue.length > 0; }
+
+// Returns the migration notice ONCE (then clears it) so callers can surface a
+// toast/popup. Shape: { fromVersion, l0Count, l1Count, ts } or null.
+// Safe to call repeatedly; only the first call after a schema upgrade returns
+// a non-null value.
+export function consumeMigrationNotice() {
+    const m = meta();
+    const notice = m._migration || null;
+    if (notice) {
+        delete m._migration;
+        persist();
+    }
+    return notice;
+}
 
 // ─── Memory context for injection ────────────────────────────────────────────
 export function getMemoryContext() {
