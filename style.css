@@ -1932,3 +1932,86 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-color: #d98a3d;
 }
 
+
+/* ─── Model picker overlay (self-drawn, replaces <select>) ───────────────── */
+/* z-index 60 sits above sp-confirm-overlay (50), sp-settings-overlay (20),
+   and the sheet content — but still inside sp-root's fixed layer, so the
+   entire panel-relative overlay is contained. */
+.sp-model-picker-overlay {
+    position       : absolute;
+    inset          : 0;
+    z-index        : 60;
+    background     : rgba(0,0,0,0.55);
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    padding        : 20px;
+    animation      : sp-wi-fullview-in 0.15s ease-out;
+}
+.sp-model-picker-sheet {
+    background   : var(--sp-sheet-bg);
+    border-radius: 12px;
+    max-width    : 100%;
+    width        : 100%;
+    max-height   : 80%;
+    padding      : 14px;
+    box-shadow   : var(--sp-shadow);
+    display      : flex;
+    flex-direction: column;
+    gap          : 10px;
+    min-height   : 0;
+}
+.sp-model-picker-head {
+    display        : flex;
+    align-items    : center;
+    justify-content: space-between;
+    gap            : 8px;
+}
+.sp-model-picker-title {
+    font-size  : 0.9rem;
+    font-weight: 600;
+    color      : var(--sp-on-surface);
+}
+.sp-model-picker-search {
+    /* Reuses .sp-input base; width comes from that */
+    font-size: 0.85rem;
+}
+.sp-model-picker-list {
+    flex        : 1;
+    overflow-y  : auto;
+    display     : flex;
+    flex-direction: column;
+    gap         : 4px;
+    padding-right: 4px;
+    min-height  : 0;
+}
+.sp-model-picker-list::-webkit-scrollbar { width: 6px; }
+.sp-model-picker-list::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+.sp-model-picker-item {
+    display      : block;
+    width        : 100%;
+    text-align   : left;
+    padding      : 11px 12px;    /* 44px+ tap target */
+    background   : transparent;
+    border       : 1px solid transparent;
+    border-radius: 8px;
+    color        : var(--sp-on-surface);
+    font-size    : 0.85rem;
+    font-family  : var(--sp-font);
+    cursor       : pointer;
+    transition   : background 0.12s, border-color 0.12s;
+    word-break   : break-all;
+}
+.sp-model-picker-item:hover  { background: var(--sp-hover-bg); }
+.sp-model-picker-item:active { background: var(--sp-surface-high); }
+.sp-model-picker-active {
+    background  : var(--sp-hover-bg);
+    border-color: var(--sp-primary);
+    color       : var(--sp-primary);
+}
+.sp-model-picker-empty {
+    padding   : 20px;
+    text-align: center;
+    color     : var(--sp-subtle);
+    font-size : 0.85rem;
+}

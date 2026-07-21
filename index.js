@@ -235,7 +235,20 @@ function getSettings() {
 
 function loadCfg() {
     const s = getSettings();
-    return { url: s.apiUrl || '', key: s.apiKey || '', model: s.apiModel || '' };
+    return { url: s.apiUrl || '', key: sanitizeHeaderValue(s.apiKey), model: s.apiModel || '' };
+}
+
+// Strip characters that can't legally live inside an HTTP header value.
+// Fetch throws "Failed to read the 'headers' property from 'RequestInit':
+// String contains non ISO-8859-1 code point" if these slip in. Most common
+// culprit: users copying API keys with a trailing newline, a zero-width
+// space (U+200B) or a BOM (U+FEFF) accidentally included.
+function sanitizeHeaderValue(v) {
+    return String(v || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')    // zero-width space/joiner/BOM
+        .replace(/[\x00-\x1F\x7F]/g, '')          // control chars + DEL (covers \r \n \t)
+        .replace(/[^\x00-\xFF]/g, '')             // anything beyond Latin-1
+        .trim();
 }
 
 function saveCfg(c) {
@@ -1264,6 +1277,7 @@ function closePanel() {
     // will get its CHAT_CHANGED escape hatch on next chat switch. If user reopens
     // without switching, they'll see the confirm was gone and click again.
     $('#sp-confirm .sp-confirm-cancel').trigger('click');
+    closeModelPicker();
     $(`#${MODAL_ID}`).stop(true).animate({ opacity: 0 }, 150, function () {
         $(this).css('display', 'none');
     });
@@ -1464,12 +1478,14 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
 // Single fetch wrapper for all OpenAI-compatible /chat/completions calls.
 async function postChatCompletion({ cfg, messages, maxTokens, temperature, signal = null } = {}) {
     if (!cfg?.url || !cfg?.key) throw new Error('API 未配置');
+    // Defense-in-depth: sanitize here too in case a caller built cfg without going through loadCfg()
+    const authKey = sanitizeHeaderValue(cfg.key);
     const body = { model: cfg.model || 'gpt-4o-mini', messages };
     if (Number.isFinite(maxTokens))   body.max_tokens  = maxTokens;
     if (Number.isFinite(temperature)) body.temperature = temperature;
     const res = await fetch(`${cfg.url}/chat/completions`, {
         method : 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authKey}` },
         body   : JSON.stringify(body),
         signal,
     });
@@ -2611,10 +2627,75 @@ Future 块收录剧情中出现的未来事项，时间不限。
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
+// ─── Model picker overlay ───────────────────────────────────────────────────
+// Self-drawn model list — replaces native <select> because appearance:none
+// selects break on some Android WebViews (empty popup / bad hit region).
+// Full control over z-index and touch targets. Opens after fetchModels,
+// or via clicking the model input when a list is cached.
+function showModelPicker(models) {
+    if (!Array.isArray(models) || !models.length) return;
+    $('#sp-model-picker').remove();   // clean up any stale instance
+    const current = ($('#sp-cfg-model').val() || '').trim();
+    const overlay = $(`<div id="sp-model-picker" class="sp-model-picker-overlay">
+        <div class="sp-model-picker-sheet">
+            <div class="sp-model-picker-head">
+                <span class="sp-model-picker-title">选择模型（${models.length}）</span>
+                <button class="sp-icon-btn sp-model-picker-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <input type="text" class="sp-input sp-model-picker-search" placeholder="搜索模型…" autocomplete="off">
+            <div class="sp-model-picker-list"></div>
+        </div>
+    </div>`);
+    // Anchor inside sp-modal so it's positioned relative to the panel, not viewport
+    $(`#${MODAL_ID}`).append(overlay);
+
+    const $list   = overlay.find('.sp-model-picker-list');
+    const $search = overlay.find('.sp-model-picker-search');
+
+    function renderList(filter = '') {
+        const q = filter.trim().toLowerCase();
+        const filtered = q ? models.filter(m => m.toLowerCase().includes(q)) : models;
+        if (!filtered.length) {
+            $list.html(`<div class="sp-model-picker-empty">无匹配项</div>`);
+            return;
+        }
+        $list.html(filtered.map(m =>
+            `<button class="sp-model-picker-item${m === current ? ' sp-model-picker-active' : ''}" data-model="${escapeAttr(m)}">${escapeHtml(m)}</button>`
+        ).join(''));
+    }
+    renderList();
+
+    // Live filter
+    $search.on('input', () => renderList($search.val()));
+    // Pick a model — write back to input, close overlay
+    $list.on('click', '.sp-model-picker-item', function () {
+        const model = $(this).attr('data-model');
+        $('#sp-cfg-model').val(model);
+        closeModelPicker();
+    });
+    overlay.find('.sp-model-picker-close').on('click', closeModelPicker);
+    // Click outside sheet (on the dim backdrop) closes too
+    overlay.on('click', function (e) {
+        if (e.target === this) closeModelPicker();
+    });
+    // Focus search after mount for keyboard users
+    setTimeout(() => $search.trigger('focus'), 50);
+}
+
+function closeModelPicker() {
+    $('#sp-model-picker').remove();
+}
+
 async function fetchModels() {
     const url = $('#sp-cfg-url').val().trim().replace(/\/$/, '');
-    const key = ($('#sp-cfg-key').data('real') || $('#sp-cfg-key').val()).trim();
+    const rawKey = ($('#sp-cfg-key').data('real') || $('#sp-cfg-key').val()).trim();
+    const key = sanitizeHeaderValue(rawKey);
     if (!url || !key) { showToast('请先填写 URL 和 Key', null, true); return; }
+    if (key !== rawKey) {
+        // Silently repaired — key had trailing whitespace, zero-width chars, etc.
+        // Not blocking; the sanitized version is what we'll send.
+        console.warn('[7dayscal] API Key contained non-Latin-1 or invisible characters; sanitized before use.');
+    }
 
     const $btn = $('#sp-fetch-models');
     $btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i>');
@@ -2630,16 +2711,23 @@ async function fetchModels() {
         if (!models.length) throw new Error('接口未返回任何模型');
 
         const current = loadCfg().model || '';
-        const opts = models.map(m =>
-            `<option value="${escapeAttr(m)}"${m === current ? ' selected' : ''}>${escapeHtml(m)}</option>`
-        ).join('');
-        $('#sp-cfg-model').replaceWith(
-            `<select id="sp-cfg-model" class="sp-input sp-model-input">${opts}</select>`
-        );
-        if (!current) $('#sp-cfg-model').val(models[0]);
+        // Keep the model input as a plain <input> — some Android WebViews break
+        // on native <select> with appearance:none. Cache the list on the input
+        // and pop a self-drawn picker so layering stays under our control.
+        const $modelInput = $('#sp-cfg-model');
+        $modelInput.data('models', models);
+        if (!current && models[0]) $modelInput.val(models[0]);
+        showModelPicker(models);
         showToast(`已加载 ${models.length} 个模型`);
     } catch (err) {
-        showToast(`获取模型失败：${err.message}`, null, true);
+        // Chrome/Firefox both mention "headers" + "RequestInit" for the ISO-8859-1 error
+        const isHeaderErr = /headers.*RequestInit|ISO-8859-1|non ISO/i.test(err.message || '');
+        showToast(
+            isHeaderErr
+                ? 'API Key 格式异常，可能包含不可见字符——请清空后重新粘贴'
+                : `获取模型失败：${err.message}`,
+            null, true,
+        );
     } finally {
         $btn.prop('disabled', false).html('<i class="fa-solid fa-list"></i>');
     }
@@ -2654,6 +2742,7 @@ function toggleSettings() {
         renderMemorySection();   // memory status + settings sync
         $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
     } else {
+        closeModelPicker();
         $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
     }
     $(`#${MODAL_ID} .sp-settings-btn`).toggleClass('sp-btn-active', settingsOpen);
