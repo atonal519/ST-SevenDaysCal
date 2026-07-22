@@ -1648,25 +1648,61 @@ function setScale(characterId, value) {
 }
 
 // Resolve the list of world-book names to load for the current character.
-// Priority: character.data.extensions.world (primary linked), then character_book.name.
+// Prefers TavernHelper's getCharLorebooks (works uniformly across vanilla ST
+// and Luker), falls back to reading character.data directly.
 function getLinkedWorldNames(ctx) {
     const names = new Set();
+    // 1. TavernHelper — most reliable across ST forks
+    try {
+        const th = globalThis?.TavernHelper;
+        if (th && typeof th.getCharLorebooks === 'function') {
+            const books = th.getCharLorebooks();   // { primary, additional }
+            if (books?.primary) names.add(String(books.primary).trim());
+            if (Array.isArray(books?.additional)) {
+                for (const n of books.additional) if (n) names.add(String(n).trim());
+            }
+            if (names.size) return [...names].filter(Boolean);
+        }
+    } catch {}
+    // 2. Vanilla/Luker fallback — read character.data directly
     const char = ctx.characters?.[ctx.characterId] ?? {};
     const primary = String(char.data?.extensions?.world || '').trim();
     if (primary) names.add(primary);
-    // Fallback: some cards only have the embedded name without linking
+    // Some cards only have the embedded name without linking
     const embeddedName = String(char.data?.character_book?.name || '').trim();
     if (embeddedName && !primary) names.add(embeddedName);
-    return [...names];
+    return [...names].filter(Boolean);
 }
 
 // Global world-info names enabled in ST's right-panel WI selector.
-// Uses the exposed getter ctx.chatWorldInfo.globalSelection when available.
+// Three-layer resolution — first hit wins:
+//   1. TavernHelper.getLorebookSettings().selected_global_lorebooks (universal)
+//   2. Luker-only: ctx.chatWorldInfo.globalSelection
+//   3. Vanilla ST: globalThis.world_info.globalSelect
+// Empty on any failure — plugin still works with just character books.
 function getGlobalWorldNames(ctx) {
+    // 1. TavernHelper
     try {
-        const globals = ctx?.chatWorldInfo?.globalSelection;
-        return Array.isArray(globals) ? globals.filter(Boolean) : [];
-    } catch { return []; }
+        const th = globalThis?.TavernHelper;
+        if (th && typeof th.getLorebookSettings === 'function') {
+            const s = th.getLorebookSettings();
+            if (Array.isArray(s?.selected_global_lorebooks)) {
+                return s.selected_global_lorebooks.filter(Boolean);
+            }
+        }
+    } catch {}
+    // 2. Luker wrapper on getContext
+    try {
+        const luker = ctx?.chatWorldInfo?.globalSelection;
+        if (Array.isArray(luker)) return luker.filter(Boolean);
+    } catch {}
+    // 3. Vanilla ST — world_info object is exposed on window when world-info.js
+    //    loads (see Object.assign(world_info, { globalSelect: selected_world_info }))
+    try {
+        const vanilla = globalThis?.world_info?.globalSelect;
+        if (Array.isArray(vanilla)) return vanilla.filter(Boolean);
+    } catch {}
+    return [];
 }
 
 // Returns live world-info entries for the current character. Uses ctx.loadWorldInfo
