@@ -111,7 +111,7 @@ function parseTagList(csv) {
         .filter(s => /^[a-zA-Z][\w-]*$/.test(s));
 }
 
-function stripTags(raw, opts = {}) {
+export function stripTags(raw, opts = {}) {
     if (!raw) return '';
     const keep  = parseTagList(opts.keepTags  ?? 'content');
     const extra = parseTagList(opts.extraTags ?? '');

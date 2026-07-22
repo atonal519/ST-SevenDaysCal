@@ -1530,20 +1530,51 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal);
 }
 
-// Single fetch wrapper for all OpenAI-compatible /chat/completions calls.
+// Normalize user-input OpenAI-compatible base URL:
+// - '.../v1/chat/completions' → strip trailing endpoint (user pasted the wrong URL)
+// - bare 'https://api.example.com' (no path) → append '/v1'
+// - 'https://x/v2/coding' (custom path) → keep as-is, don't guess
+function normalizeApiUrl(url) {
+    const u = String(url || '').trim().replace(/\/+$/, '');
+    if (!u) return u;
+    if (/\/chat\/completions$/i.test(u)) return u.replace(/\/chat\/completions$/i, '');
+    if (/^https?:\/\/[^/?#]+$/i.test(u)) return `${u}/v1`;
+    return u;
+}
+
+// Single wrapper for all OpenAI-compatible /chat/completions calls.
+// Goes through ST's server-side proxy (/api/backends/chat-completions/generate)
+// instead of fetching the third-party URL directly from the browser. Fixes:
+// - CORS: some APIs don't send Access-Control-Allow-Origin, browser blocks
+// - Mixed content: ST is HTTPS, plain-HTTP third-party APIs get blocked
+// - Intranet / firewalled endpoints: browser can't reach them, ST server can
+// This is the same strategy 柏宝书 uses (借鉴柏宝书 client.ts).
 async function postChatCompletion({ cfg, messages, maxTokens, temperature, signal = null } = {}) {
     if (!cfg?.url || !cfg?.key) throw new Error('API 未配置');
-    const body = { model: cfg.model || 'gpt-4o-mini', messages };
+    const ctx = getContext();
+    if (!ctx?.getRequestHeaders) throw new Error('SillyTavern 上下文不可用');
+    const body = {
+        chat_completion_source: 'openai',
+        reverse_proxy         : normalizeApiUrl(cfg.url),
+        proxy_password        : cfg.key,
+        model                 : cfg.model || 'gpt-4o-mini',
+        messages,
+        stream                : false,
+        presence_penalty      : 0,
+        frequency_penalty     : 0,
+    };
     if (Number.isFinite(maxTokens))   body.max_tokens  = maxTokens;
     if (Number.isFinite(temperature)) body.temperature = temperature;
-    const res = await fetch(`${cfg.url}/chat/completions`, {
+    const res = await fetch('/api/backends/chat-completions/generate', {
         method : 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+        headers: ctx.getRequestHeaders(),
         body   : JSON.stringify(body),
         signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
-    return (await res.json()).choices?.[0]?.message?.content ?? '';
+    const data = await res.json();
+    if (data?.error) throw new Error(data.error.message || '返回错误');
+    return data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.content ?? '';
 }
 
 async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null) {
@@ -1743,6 +1774,37 @@ async function getCharBookEntries(ctx) {
     return items;
 }
 
+// Recent chat context — fills the gap between memory (delayed L0/L1 summaries)
+// and "what the user just typed". Both 间 and 面 discussions previously saw
+// only outline+wi+memText, so the last few floors of the main chat were
+// invisible to the assistant — feels like it "ignores context".
+// Returns a formatted block or '' when the chat is empty.
+async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 800) {
+    const chat = ctx?.chat;
+    if (!Array.isArray(chat) || !chat.length) return '';
+    const userName = ctx.name1 || '用户';
+    const charName = ctx.name2 || '角色';
+    const s = getSettings();
+    const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
+    // Walk from the end backwards, collect up to N usable entries (skip hidden system rows)
+    const rows = [];
+    for (let i = chat.length - 1; i >= 0 && rows.length < floorCount; i--) {
+        const m = chat[i];
+        if (!m || m.is_system) continue;   // hidden / OOC noise
+        const raw = String(m.mes || '');
+        if (!raw.trim()) continue;
+        const cleaned = memory.stripTags(raw, stripOpts).trim();
+        if (!cleaned) continue;
+        const speaker = m.is_user ? userName : (m.name || charName);
+        const capped = cleaned.length > perMessageChars
+            ? cleaned.slice(0, perMessageChars) + '…'
+            : cleaned;
+        rows.unshift(`【${speaker}】${capped}`);
+    }
+    if (!rows.length) return '';
+    return `【最近对话】以下是主聊天中最近几层对话原文，供理解当前剧情走向。\n\n${rows.join('\n\n')}`;
+}
+
 async function buildWorldInfoContext(ctx) {
     const characterId = ctx.characterId;
     const disabledKeys = getDisabledKeys(characterId);
@@ -1901,13 +1963,33 @@ function injectToST(text) {
 
 // ─── Outline chat ─────────────────────────────────────────────────────────────
 
+// Turn AI reply text into safe rendered HTML. Prefer ST's own
+// messageFormatting (which routes through their markdown + sanitizer + custom
+// hooks) so behavior matches the main chat area. Falls back to escaped text
+// with <br> if the API isn't available. Never used for user messages —
+// user typed plain text, don't reinterpret markdown they didn't write.
+function renderAiMessageHtml(text) {
+    const ctx = getContext();
+    if (typeof ctx?.messageFormatting === 'function') {
+        try {
+            return ctx.messageFormatting(String(text ?? ''), '', false, false, null, {}, false);
+        } catch (err) {
+            console.warn('[7dayscal] messageFormatting failed, falling back to plain:', err);
+        }
+    }
+    return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
+}
+
 function appendChatMsg(role, content, historyIndex = null) {
     const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
     const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
     if (canAct) $msg.attr('data-idx', historyIndex);
-    const contentHtml = escapeHtml(display).replace(/\n/g, '<br>');
+    // User: keep plain text (they typed literally). AI: run through ST's markdown.
+    const contentHtml = role === 'ai'
+        ? renderAiMessageHtml(display)
+        : escapeHtml(display).replace(/\n/g, '<br>');
     if (canAct) {
         const editBtn = role === 'user'
             ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
@@ -1975,11 +2057,13 @@ async function buildOutlineChatMessages(userMsg) {
         if (saved?.raw) outlineCtx = saved.raw;
     } catch { /* ignore */ }
     const wiContext = await buildWorldInfoContext(ctx);
+    const recentCtx = await buildRecentChatContext(ctx);
     const sys = buildCreativeChatSystemPrompt({
         userName,
         charName,
         outlineRaw: outlineCtx,
         wiContext,
+        recentCtx,
     });
     return [{ role: 'system', content: sys }, ...outlineChatHistory, { role: 'user', content: userMsg }];
 }
@@ -2082,7 +2166,10 @@ function appendSpaceChatMsg(role, content, historyIndex = null) {
     const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
     if (canAct) $msg.attr('data-idx', historyIndex);
-    const contentHtml = escapeHtml(content).replace(/\n/g, '<br>');
+    // User: keep plain text (they typed literally). AI: run through ST's markdown.
+    const contentHtml = role === 'ai'
+        ? renderAiMessageHtml(content)
+        : escapeHtml(content).replace(/\n/g, '<br>');
     if (canAct) {
         const editBtn = role === 'user'
             ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
@@ -2147,12 +2234,14 @@ async function buildSpaceChatMessages(userMsg) {
     } catch { /* ignore */ }
     const wiContext = await buildWorldInfoContext(ctx);
     const memText   = getMemText();
+    const recentCtx = await buildRecentChatContext(ctx);
     const sys = buildSpaceChatSystemPrompt({
         userName,
         charName,
         outlineRaw: outlineCtx,
         wiContext,
         memText,
+        recentCtx,
     });
     return [{ role: 'system', content: sys }, ...spaceChatHistory, { role: 'user', content: userMsg }];
 }
@@ -2760,18 +2849,29 @@ function renderModelList(models, filter = '') {
 }
 
 async function fetchModels() {
-    const url = $('#sp-cfg-url').val().trim().replace(/\/$/, '');
+    const rawUrl = $('#sp-cfg-url').val().trim();
     const key = ($('#sp-cfg-key').data('real') || $('#sp-cfg-key').val()).trim();
-    if (!url || !key) { showToast('请先填写 URL 和 Key', null, true); return; }
+    if (!rawUrl || !key) { showToast('请先填写 URL 和 Key', null, true); return; }
+    const url = normalizeApiUrl(rawUrl);
+    const ctx = getContext();
 
     const $btn = $('#sp-fetch-models');
     $btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i>');
     try {
-        const res = await fetch(`${url}/models`, {
-            headers: { 'Authorization': `Bearer ${key}` },
+        // Same proxy strategy as generation: go through ST's /status endpoint
+        // which supports listing OpenAI-compatible models via a POST body.
+        const res = await fetch('/api/backends/chat-completions/status', {
+            method : 'POST',
+            headers: ctx.getRequestHeaders(),
+            body   : JSON.stringify({
+                chat_completion_source: 'openai',
+                reverse_proxy         : url,
+                proxy_password        : key,
+            }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
         const data = await res.json();
+        if (data?.error) throw new Error(data.error.message || '返回错误');
         const models = (data.data || data.models || [])
             .map(m => (typeof m === 'string' ? m : m.id))
             .filter(Boolean).sort();
