@@ -3142,6 +3142,10 @@ function cycleThemeMode() {
 function onDragStart(e) {
     // Skip on mobile — sheet is near-fullscreen and shouldn't move.
     if (isMobile()) return;
+    // Only respond to left-click for mouse events. Right-click (and middle)
+    // don't emit matching mouseup, which used to leave dragState set forever
+    // and drag the sheet on every subsequent mousemove.
+    if (e.type === 'mousedown' && e.button !== 0) return;
     // Ignore drags starting on interactive elements inside the header.
     if ($(e.target).closest('.sp-icon-btn, .sp-sub-btn, button, a, input, textarea').length) return;
     e.preventDefault();
@@ -3369,7 +3373,6 @@ const TYPE_META = {
 function renderSchedule(raw, userName, perspective = 'user') {
     const { days, future, startDate } = parseCalendar(raw);
     const hasFuture = future && future.events.length > 0;
-    if (days.length === 0 && !hasFuture) return `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
 
     const WEEKDAYS = ['周日','周一','周二','周三','周四','周五','周六'];
     const totalTabs = days.length + (hasFuture ? 1 : 0);
@@ -3380,6 +3383,13 @@ function renderSchedule(raw, userName, perspective = 'user') {
         <span class="sp-schedule-label">的点</span>
         <button class="sp-panel-refresh sp-refresh-schedule" title="重新生成点"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
+
+    // Parse failed (AI leaked prompt / malformed output) — still render header
+    // so the user has a refresh button to reroll. Otherwise they get stuck
+    // staring at raw garbage with no way to try again.
+    if (days.length === 0 && !hasFuture) {
+        return header + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+    }
 
     const tabs = days.map((_, i) => {
         let numLabel = String(i + 1);

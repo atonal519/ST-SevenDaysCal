@@ -36,10 +36,19 @@
     --sp-neon-color   : #D8D9DA;
     --sp-neon-glow    : rgba(216,217,218,0.4);
     --sp-hover-bg-legacy    : rgba(255,255,255,0.06);
-    --sp-chat-bg      : #FFF6E0;
     --sp-chat-accent  : #61677A;
     --sp-char-color   : #9EC8CC;
     --sp-chip-char-bg : rgba(158,200,204,0.15);
+    /* Chat bubble backgrounds — dedicated tokens so we control contrast
+       independent of general surface tokens (which have to stay light-ish
+       for panels/cards). Night uses much darker shades so light text stays
+       readable. */
+    --sp-chat-user-bg : #3a4358;
+    --sp-chat-ai-bg   : #2f3542;
+    /* Chat scroll-area background (间/大纲 discussion panels). Named -legacy
+       so .sp-root's cascade (ST var → -legacy fallback) picks it up. Night
+       needs a genuinely dark backdrop or bubbles + text combo washes out. */
+    --sp-chat-bg-legacy: #1e2028;
 }
 .sp-day {
     --sp-sheet-bg-legacy    : #F6F4E8;
@@ -59,6 +68,13 @@
     --sp-hover-bg-legacy    : rgba(220,155,155,0.10);
     --sp-char-color   : #5C9EA0;
     --sp-chip-char-bg : rgba(92,158,160,0.15);
+    /* Day mode: bubbles stay close to surface tokens (they already contrast
+       fine with dark text) */
+    --sp-chat-user-bg : #C0E1D2;
+    --sp-chat-ai-bg   : #E5EEE4;
+    /* Chat scroll-area background — same warm cream ST usually gives us,
+       hard-coded so transparent-ST-theme users don't fall through to blank. */
+    --sp-chat-bg-legacy: #D2C1B6;
 }
 
 /* ─── ST theme cascade — ST var 优先，fallback 到上面的 -legacy 值 ──────────── */
@@ -71,6 +87,7 @@
     --sp-surface-high: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-high-legacy));
     --sp-divider     : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 12%, transparent);
     --sp-hover-bg    : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 6%,  transparent);
+    --sp-chat-bg     : var(--SmartThemeChatTintColor, var(--sp-chat-bg-legacy));
 }
 
 /* Forced theme override — bypass ST vars entirely, use only legacy palette.
@@ -85,6 +102,7 @@
     --sp-surface-high: var(--sp-surface-high-legacy);
     --sp-divider     : var(--sp-divider-legacy);
     --sp-hover-bg    : var(--sp-hover-bg-legacy);
+    --sp-chat-bg     : var(--sp-chat-bg-legacy);
 }
 
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
@@ -1460,8 +1478,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-direction: column;
     background    : var(--sp-chat-bg);
 }
-/* Chat area bg follows ST when possible; legacy fallback keeps warm cream/tan. */
-.sp-root { --sp-chat-bg: var(--SmartThemeChatTintColor, #D2C1B6); }
+/* Chat area bg — cascade lives in the main .sp-root block (top of file).
+   Auto mode reads --SmartThemeChatTintColor with legacy fallback; forced day/
+   night override in the .sp-forced-* block (which is declared after .sp-root,
+   so specificity-tie declarations get the correct winner). */
 .sp-chat-msgs {
     flex           : 1;
     overflow-y     : auto;
@@ -1494,8 +1514,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap          : 6px;
 }
 .sp-chat-msg-content { flex: 1; min-width: 0; }
-.sp-chat-msg-user   { background: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-end; }
-.sp-chat-msg-ai     { background: var(--SmartThemeBotMesBlurTintColor,  var(--sp-surface-legacy)); color: var(--sp-on-surface); align-self: flex-start; }
+/* Bubble backgrounds use dedicated --sp-chat-*-bg tokens (defined per theme)
+   so we can tune contrast against text color independently of the general
+   surface tokens (which have to stay usable for panels/cards). */
+.sp-chat-msg-user   { background: var(--sp-chat-user-bg); color: var(--sp-on-surface); align-self: flex-end; }
+.sp-chat-msg-ai     { background: var(--sp-chat-ai-bg);   color: var(--sp-on-surface); align-self: flex-start; }
 .sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); align-self: center; font-style: italic; display: block; }
 .sp-chat-thinking   { opacity: 0.45; display: block; }
 .sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; display: block; }
