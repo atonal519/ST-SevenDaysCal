@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = {
     apiModel: '',
     fabShow : true,
     themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
+    linesEnabled : true, // master switch: false disables both auto-advance AND inline block rendering
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days'
     // Memory system
@@ -208,6 +209,8 @@ jQuery(async () => {
     // and this message just gets the freshly-generated result injected.
     if (_stListeners.char) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     _stListeners.char = async (messageId) => {
+        // Master switch: linesEnabled=false disables auto-advance + inline block
+        if (getSettings().linesEnabled === false) return;
         let shouldAdvance = false;
         if (getLinesMode() === 'days') {
             shouldAdvance = detectInGameDayChange(messageId, /* excludeCurrent */ true);
@@ -443,6 +446,7 @@ async function appendLinesInlineBlock(messageId, shouldAdvance) {
 // Back-fill: only pin the latest AI message — history doesn't need stale snapshots.
 async function backfillLinesInlineBlocks() {
     _removeAllInlineBlocks();  // clean up any accumulated blocks from previous state
+    if (getSettings().linesEnabled === false) return;   // master switch off: leave chat clean
     const lastMesEl = [...document.querySelectorAll('#chat .mes:not([is_user="true"])')].at(-1);
     if (!lastMesEl) return;
     const mesId = lastMesEl.getAttribute('mesid');
@@ -703,6 +707,14 @@ function injectModal() {
                             <details class="sp-settings-section">
                                 <summary class="sp-settings-section-title">功能设置</summary>
                                 <div class="sp-settings-section-body">
+                                    <label class="sp-mode-opt">
+                                        <input type="checkbox" id="sp-lines-enabled" ${getSettings().linesEnabled !== false ? 'checked' : ''}>
+                                        <span>启用平行事件（线）</span>
+                                    </label>
+                                    <p class="sp-cfg-hint" style="margin-top:2px">关闭后不再自动推进、也不再向楼层追加内联展示</p>
+
+                                    <hr class="sp-mem-divider">
+
                                     <p class="sp-cfg-hint">平行事件推进策略</p>
                                     <div class="sp-mode-row">
                                         <label class="sp-mode-opt">
@@ -728,7 +740,7 @@ function injectModal() {
                             <details class="sp-settings-section" id="sp-wi-section">
                                 <summary class="sp-settings-section-title">世界书筛选</summary>
                                 <div class="sp-settings-section-body" id="sp-wi-body">
-                                    <p class="sp-cfg-hint">仅处理角色卡内置世界书。勾选的条目会传给 AI，取消勾选则跳过。按角色保存。</p>
+                                    <p class="sp-cfg-hint">识别角色卡关联和全局启用的所有世界书。勾选的条目会传给 AI，取消勾选则跳过。按角色卡保存。</p>
                                     <div id="sp-wi-list" class="sp-wi-list">
                                         <span class="sp-cfg-hint">（打开设置时自动加载）</span>
                                     </div>
@@ -1102,6 +1114,14 @@ function injectModal() {
     $('#sp-cfg-save').on('click',      saveSettings);
     $('#sp-key-toggle').on('click',    toggleKeyVisibility);
     $('#sp-fetch-models').on('click',  fetchModels);
+    // Master switch: apply immediately so the user sees inline blocks appear/
+    // disappear the moment they toggle, not on next AI message.
+    $('#sp-lines-enabled').on('change', function () {
+        getSettings().linesEnabled = this.checked;
+        saveSettingsDebounced();
+        // Refresh chat area: on → back-fill latest floor with block; off → clear all
+        backfillLinesInlineBlocks();
+    });
     // Inline model list: pick an item → write to input + refresh active highlight
     $('#sp-model-list-items').on('click', '.sp-model-list-item', function () {
         const model = $(this).attr('data-model');
@@ -1609,10 +1629,21 @@ function getLinkedWorldNames(ctx) {
     return [...names];
 }
 
+// Global world-info names enabled in ST's right-panel WI selector.
+// Uses the exposed getter ctx.chatWorldInfo.globalSelection when available.
+function getGlobalWorldNames(ctx) {
+    try {
+        const globals = ctx?.chatWorldInfo?.globalSelection;
+        return Array.isArray(globals) ? globals.filter(Boolean) : [];
+    } catch { return []; }
+}
+
 // Returns live world-info entries for the current character. Uses ctx.loadWorldInfo
 // (the live editable copy), NOT ctx.characters[].data.character_book (stale snapshot).
 // Fallback to character_book if no linked world book exists.
-// Each item: { key, uid, label, preview, content, source, embedded }
+// Each item: { key, uid, label, preview, content, source, embedded, scope }
+//   scope = 'char'  → came from card's linked/embedded book
+//         = 'global' → came from ST's global world info selection
 async function getCharBookEntries(ctx) {
     const items = [];
     const seen = new Set();
@@ -1641,6 +1672,7 @@ async function getCharBookEntries(ctx) {
                     content: entry.content || '',
                     source : name,
                     embedded: false,
+                    scope  : 'char',
                 });
             }
         } catch { /* ignore individual load failure */ }
@@ -1671,9 +1703,41 @@ async function getCharBookEntries(ctx) {
                     content: e.content || '',
                     source : bookName,
                     embedded: true,
+                    scope  : 'char',
                 });
             }
         }
+    }
+
+    // 3. Global world-info (enabled via ST's WI panel — top-right世界书面板中间"启用"列表)
+    const globalNames = getGlobalWorldNames(ctx);
+    for (const name of globalNames) {
+        if (worldNames.includes(name)) continue;   // skip if same book is already linked to char
+        try {
+            const data = await ctx.loadWorldInfo(name);
+            if (!data?.entries) continue;
+            for (const [uid, entry] of Object.entries(data.entries)) {
+                if (entry?.disable) continue;
+                const label = entry.comment
+                    || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
+                    || `条目 ${uid}`;
+                const preview = String(entry.content || '')
+                    .replace(/\s+/g, ' ')
+                    .slice(0, 120);
+                const key = `${name}::${uid}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                items.push({
+                    key, uid,
+                    label,
+                    preview,
+                    content: entry.content || '',
+                    source : name,
+                    embedded: false,
+                    scope  : 'global',
+                });
+            }
+        } catch { /* ignore individual load failure */ }
     }
 
     return items;
@@ -1688,7 +1752,7 @@ async function buildWorldInfoContext(ctx) {
         .map(e => e.content)
         .filter(Boolean);
     if (!kept.length) return '';
-    return `【角色世界书】\n${kept.join('\n\n')}`;
+    return `【世界书】\n${kept.join('\n\n')}`;
 }
 
 // Memory-source dispatcher. When useBaiBaiBook is on, read the same history text
@@ -2952,12 +3016,16 @@ async function renderWiList() {
 
     const disabledKeys = getDisabledKeys(characterId);
 
-    // Group by source
-    const groups = new Map();
+    // Two-level group: scope (char / global) → source (book name) → entries
+    // Preserves entry order within each source, and puts char scope first
+    // (feels more relevant to the current character).
+    const scopes = new Map([['char', new Map()], ['global', new Map()]]);
     for (const e of entries) {
-        if (!groups.has(e.source)) groups.set(e.source, []);
-        groups.get(e.source).push(e);
+        const scopeGroup = scopes.get(e.scope) || scopes.get('char');
+        if (!scopeGroup.has(e.source)) scopeGroup.set(e.source, []);
+        scopeGroup.get(e.source).push(e);
     }
+    const SCOPE_LABELS = { char: '角色卡世界书', global: '全局世界书' };
 
     // Build HTML in one pass
     const parts = [];
@@ -2968,24 +3036,41 @@ async function renderWiList() {
         <span class="sp-wi-count">${entries.length} 条</span>
     </div>`);
 
-    for (const [source, group] of groups) {
-        parts.push(`<div class="sp-wi-group">
-            <div class="sp-wi-source-label">${escapeHtml(source)} <span class="sp-wi-group-count">${group.length} 条</span></div>
-            <div class="sp-wi-items">`);
-        for (const e of group) {
-            const checked = !disabledKeys.has(e.key);
-            parts.push(`<div class="sp-wi-card${checked ? '' : ' sp-wi-card-off'}" data-key="${escapeAttr(e.key)}" role="button" tabindex="0">
-                <div class="sp-wi-card-head">
-                    <input type="checkbox" class="sp-wi-cb" data-key="${escapeAttr(e.key)}"${checked ? ' checked' : ''}>
-                    <span class="sp-wi-label">${escapeHtml(e.label)}</span>
-                </div>
-                <div class="sp-wi-card-body">
-                    <div class="sp-wi-preview">${e.preview ? escapeHtml(e.preview) + '…' : '<span class="sp-wi-empty">（无内容）</span>'}</div>
-                    <button class="sp-wi-view-btn" type="button" title="查看全文" data-key="${escapeAttr(e.key)}"><i class="fa-regular fa-eye"></i></button>
-                </div>
-            </div>`);
+    for (const [scope, groups] of scopes) {
+        if (!groups.size) continue;
+        const scopeCount = [...groups.values()].reduce((n, g) => n + g.length, 0);
+        parts.push(`<div class="sp-wi-scope">
+            <div class="sp-wi-scope-label">${escapeHtml(SCOPE_LABELS[scope])} <span class="sp-wi-scope-count">${scopeCount} 条</span></div>`);
+        for (const [source, group] of groups) {
+            // Each book is collapsible; default open. summary shows a
+            // per-book "select-all" checkbox (indeterminate when partial).
+            const groupChecked = group.filter(e => !disabledKeys.has(e.key)).length;
+            const groupAllOn   = groupChecked === group.length;
+            const groupAllOff  = groupChecked === 0;
+            const escSrc       = escapeAttr(source);
+            parts.push(`<details class="sp-wi-group" open data-source="${escSrc}">
+                <summary class="sp-wi-source-label">
+                    <input type="checkbox" class="sp-wi-group-cb" data-source="${escSrc}"${groupAllOn ? ' checked' : ''}${!groupAllOn && !groupAllOff ? ' data-indeterminate="true"' : ''}>
+                    <span class="sp-wi-source-name">${escapeHtml(source)}</span>
+                    <span class="sp-wi-group-count">${group.length} 条</span>
+                </summary>
+                <div class="sp-wi-items">`);
+            for (const e of group) {
+                const checked = !disabledKeys.has(e.key);
+                parts.push(`<div class="sp-wi-card${checked ? '' : ' sp-wi-card-off'}" data-key="${escapeAttr(e.key)}" data-source="${escSrc}" role="button" tabindex="0">
+                    <div class="sp-wi-card-head">
+                        <input type="checkbox" class="sp-wi-cb" data-key="${escapeAttr(e.key)}"${checked ? ' checked' : ''}>
+                        <span class="sp-wi-label">${escapeHtml(e.label)}</span>
+                    </div>
+                    <div class="sp-wi-card-body">
+                        <div class="sp-wi-preview">${e.preview ? escapeHtml(e.preview) + '…' : '<span class="sp-wi-empty">（无内容）</span>'}</div>
+                        <button class="sp-wi-view-btn" type="button" title="查看全文" data-key="${escapeAttr(e.key)}"><i class="fa-regular fa-eye"></i></button>
+                    </div>
+                </div>`);
+            }
+            parts.push(`</div></details>`);
         }
-        parts.push(`</div></div>`);
+        parts.push(`</div>`);
     }
 
     // Single DOM write
@@ -3018,6 +3103,19 @@ async function renderWiList() {
         const checked = this.checked;
         $list.find('.sp-wi-cb').prop('checked', checked);
         $list.find('.sp-wi-card').toggleClass('sp-wi-card-off', !checked);
+        $list.find('.sp-wi-group-cb').prop({ checked, indeterminate: false });
+    }).on('change.wi', '.sp-wi-group-cb', function (ev) {
+        // Per-book select-all — flip every entry in this <details> group
+        ev.stopPropagation();
+        const $group = $(this).closest('.sp-wi-group');
+        const checked = this.checked;
+        $group.find('.sp-wi-cb').prop('checked', checked);
+        $group.find('.sp-wi-card').toggleClass('sp-wi-card-off', !checked);
+        this.indeterminate = false;
+        syncWiSelectAll();
+    }).on('click.wi', '.sp-wi-group-cb', function (ev) {
+        // Don't let click on the summary's checkbox also toggle <details> open/close
+        ev.stopPropagation();
     });
 
     syncWiSelectAll();
@@ -3029,9 +3127,21 @@ function syncWiSelectAll() {
     const total   = $cbs.length;
     const checked = $cbs.filter(':checked').length;
     const $all = $('#sp-wi-select-all')[0];
-    if (!$all) return;
-    $all.checked       = checked === total;
-    $all.indeterminate = checked > 0 && checked < total;
+    if ($all) {
+        $all.checked       = checked === total;
+        $all.indeterminate = checked > 0 && checked < total;
+    }
+    // Refresh each group's per-book checkbox based on its own entries
+    $('#sp-wi-list .sp-wi-group').each(function () {
+        const $g = $(this);
+        const $groupCb = $g.find('.sp-wi-group-cb')[0];
+        if (!$groupCb) return;
+        const gCbs = $g.find('.sp-wi-cb');
+        const gTotal = gCbs.length;
+        const gChecked = gCbs.filter(':checked').length;
+        $groupCb.checked       = gChecked === gTotal;
+        $groupCb.indeterminate = gChecked > 0 && gChecked < gTotal;
+    });
 }
 
 // Full-text popup for a single world-info entry

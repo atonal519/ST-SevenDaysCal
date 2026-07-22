@@ -600,7 +600,35 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity   : 0.7;
 }
 
-/* Group by source */
+/* Scope group (角色卡 / 全局) — outer group above sp-wi-group */
+.sp-wi-scope {
+    display       : flex;
+    flex-direction: column;
+    gap           : 8px;
+    padding-bottom: 4px;
+}
+.sp-wi-scope:not(:last-child) {
+    border-bottom : 1px dashed var(--sp-divider);
+    padding-bottom: 10px;
+    margin-bottom : 4px;
+}
+.sp-wi-scope-label {
+    display      : flex;
+    align-items  : baseline;
+    gap          : 8px;
+    font-size    : 0.78rem;
+    font-weight  : 600;
+    color        : var(--sp-on-surface);
+    padding      : 2px 2px 4px;
+}
+.sp-wi-scope-count {
+    font-size  : 0.7rem;
+    font-weight: 400;
+    color      : var(--sp-subtle);
+    opacity    : 0.75;
+}
+
+/* Group by source — <details> for collapsibility */
 .sp-wi-group {
     display       : flex;
     flex-direction: column;
@@ -608,7 +636,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-wi-source-label {
     display      : flex;
-    align-items  : baseline;
+    align-items  : center;   /* was baseline — checkbox baseline offset looks bad */
     gap          : 8px;
     font-size    : 0.72rem;
     font-weight  : 700;
@@ -616,6 +644,40 @@ select.sp-input { appearance: none; cursor: pointer; }
     letter-spacing: 0.06em;
     text-transform: uppercase;
     padding      : 4px 2px 2px;
+    cursor       : pointer;
+    user-select  : none;
+    list-style   : none;                    /* hide default triangle */
+    position     : relative;
+}
+.sp-wi-source-label::-webkit-details-marker { display: none; }
+/* Chevron affordance — flipped 90° when open */
+.sp-wi-source-label::before {
+    content    : '›';
+    display    : inline-block;
+    font-size  : 0.9rem;
+    color      : var(--sp-subtle);
+    transition : transform 0.15s;
+    line-height: 1;
+    margin-right: 2px;
+}
+.sp-wi-group[open] > .sp-wi-source-label::before {
+    transform: rotate(90deg);
+}
+.sp-wi-source-name {
+    /* takes remaining space so count sits at right */
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-wi-group-cb {
+    flex-shrink: 0;
+    cursor     : pointer;
+    /* Slightly smaller checkbox for the summary — feels tidier next to text */
+    width      : 13px;
+    height     : 13px;
+    margin     : 0;
 }
 .sp-wi-group-count {
     font-size  : 0.68rem;
@@ -624,6 +686,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity    : 0.65;
     letter-spacing: 0;
     text-transform: none;
+    flex-shrink: 0;
 }
 .sp-wi-items {
     display       : flex;
