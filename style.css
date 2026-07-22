@@ -1605,6 +1605,18 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-event:hover .sp-inject-btn,
 .sp-beat:hover  .sp-inject-btn  { opacity: 1; }
 .sp-inject-btn:hover             { color: var(--sp-primary); background: var(--sp-surface-high); }
+/* Inline block (inside chat messages) lives outside .sp-root — no hover on
+   mobile, and CSS vars unresolved. Show the button by default with a subtle
+   opacity and hard-coded fallback color; deepen on hover. */
+.sp-inline-line .sp-inject-btn {
+    opacity: 0.55;
+    color  : inherit;
+}
+.sp-inline-line:hover .sp-inject-btn,
+.sp-inline-line .sp-inject-btn:hover {
+    opacity: 1;
+    background: rgba(128, 128, 128, 0.15);
+}
 
 /* ─── Debug drawer ───────────────────────────────────────────────────────────── */
 .sp-debug-drawer {

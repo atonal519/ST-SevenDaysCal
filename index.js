@@ -383,6 +383,11 @@ function _buildLinesBlockHtml() {
             const beadsHtml = Array.from({length: 4}, (_, i) =>
                 `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
             ).join('');
+            // Per-line inject button — parallels the one in the outer panel (renderLines)
+            const injectParts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
+            if (l.desc) injectParts.push(l.desc);
+            if (l.next) injectParts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
+            const injectBtn = makeInjectBtn(injectParts.join('\n'));
             return `<div class="sp-inline-line${l.stall ? ' sp-line-stall' : ''}" style="border-left:3px solid ${stageColor}20">
                 <div class="sp-inline-head">
                     <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
@@ -391,6 +396,7 @@ function _buildLinesBlockHtml() {
                     ${l.when ? `<span class="sp-inline-when">${escapeHtml(l.when)}</span>` : ''}
                     ${l.stall ? `<span class="sp-line-stall-tag sp-inline-stall">停滞</span>` : ''}
                     ${agencyBadge(l.agency)}
+                    ${injectBtn}
                 </div>
                 <div class="sp-inline-name">${escapeHtml(l.name)}</div>
                 ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
@@ -979,7 +985,7 @@ function injectModal() {
     $('#sp-lines-list').on('click', '.sp-refresh-lines', triggerGenerateLines);
 
     // Inject buttons (event delegation)
-    $(`#sp-body, #sp-outline-wrap, #sp-lines-wrap`).on('click', '.sp-inject-btn', function () {
+    $(`#sp-body, #sp-outline-wrap, #sp-lines-wrap, #chat`).on('click', '.sp-inject-btn', function () {
         const text = _injectTexts[$(this).data('iid')];
         if (text) injectToST(text);
     });
@@ -2574,27 +2580,8 @@ const STAGE_COLORS = {
 
 function renderLines(raw) {
     const lines = parseLines(raw);
-    // Aggregate all lines into one injection block for the panel-level button —
-    // saves users from clicking per-line inject 5x when they want the whole context.
-    const buildAggregateInject = () => {
-        if (!lines.length) return '';
-        const blocks = lines.map(l => {
-            const parts = [`${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
-            if (l.desc) parts.push(l.desc);
-            if (l.next) parts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
-            return parts.join('\n');
-        });
-        return `【当前平行事件线】\n\n${blocks.join('\n\n')}`;
-    };
-    const aggregateInject = buildAggregateInject();
-    const aggregateInjectBtn = aggregateInject
-        ? makeInjectBtn(aggregateInject)
-            .replace('class="sp-inject-btn"', 'class="sp-inject-btn sp-panel-inject-all sp-panel-refresh"')
-            .replace('title="注入到输入框"', 'title="把所有线整体注入到输入框"')
-        : '';
     const toolbar = `<div class="sp-schedule-header">
         <span class="sp-user-chip">平行事件</span>
-        ${aggregateInjectBtn}
         <button class="sp-panel-refresh sp-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
     if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
