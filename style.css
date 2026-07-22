@@ -359,6 +359,86 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-model-select:focus { border-color: var(--sp-primary); }
 
+/* ─── Inline model list (self-drawn, no popup) ──────────────────────────────
+   Renders directly in the settings body. No overlay, no z-index, no lifecycle
+   — just DOM. Works in every browser/WebView that can render <button>. */
+.sp-model-list-section {
+    margin-top: 8px;
+    border    : 1px solid var(--sp-divider);
+    border-radius: 8px;
+    overflow  : hidden;
+}
+.sp-model-list-summary {
+    display    : flex;
+    align-items: center;
+    gap        : 8px;
+    padding    : 8px 11px;
+    font-size  : 0.82rem;
+    color      : var(--sp-subtle);
+    cursor     : pointer;
+    user-select: none;
+    list-style : none;                    /* hide default triangle */
+    transition : background 0.12s;
+}
+.sp-model-list-summary::-webkit-details-marker { display: none; }
+.sp-model-list-summary:hover { background: var(--sp-hover-bg); }
+.sp-model-list-chevron {
+    font-size : 0.7rem;
+    transition: transform 0.15s;
+}
+.sp-model-list-section[open] .sp-model-list-chevron { transform: rotate(90deg); }
+.sp-model-list-body {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
+    padding       : 8px 10px 10px;
+    border-top    : 1px solid var(--sp-divider);
+}
+.sp-model-list-search {
+    font-size: 0.82rem;
+}
+.sp-model-list-items {
+    display       : flex;
+    flex-direction: column;
+    gap           : 3px;
+    max-height    : 260px;                 /* cap height; inner scroll takes over */
+    overflow-y    : auto;
+    overflow-x    : hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior       : contain;   /* don't bounce parent when reaching bounds */
+    padding-right : 2px;
+}
+.sp-model-list-items::-webkit-scrollbar       { width: 4px; }
+.sp-model-list-items::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
+.sp-model-list-item {
+    display      : block;
+    width        : 100%;
+    text-align   : left;
+    padding      : 8px 10px;                /* touch target: 32px+ w/ font-size 0.82rem */
+    background   : transparent;
+    border       : 1px solid transparent;
+    border-radius: 6px;
+    color        : var(--sp-on-surface);
+    font-size    : 0.82rem;
+    font-family  : var(--sp-font);
+    cursor       : pointer;
+    word-break   : break-all;
+    transition   : background 0.12s, border-color 0.12s, color 0.12s;
+}
+.sp-model-list-item:hover  { background: var(--sp-hover-bg); }
+.sp-model-list-item:active { background: var(--sp-surface-high); }
+.sp-model-list-item-active {
+    background  : var(--sp-hover-bg);
+    border-color: var(--sp-primary);
+    color       : var(--sp-primary);
+}
+.sp-model-list-empty {
+    padding   : 14px;
+    text-align: center;
+    color     : var(--sp-subtle);
+    font-size : 0.8rem;
+}
+
 
 .sp-api-notice {
     display    : flex;

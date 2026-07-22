@@ -674,6 +674,16 @@ function injectModal() {
                                             <i class="fa-solid fa-list"></i>
                                         </button>
                                     </div>
+                                    <details id="sp-model-list-section" class="sp-model-list-section" style="display:none">
+                                        <summary class="sp-model-list-summary">
+                                            <i class="fa-solid fa-chevron-right sp-model-list-chevron"></i>
+                                            <span id="sp-model-list-count">已加载 0 个模型</span>
+                                        </summary>
+                                        <div class="sp-model-list-body">
+                                            <input type="text" id="sp-model-list-search" class="sp-input sp-model-list-search" placeholder="搜索模型…" autocomplete="off">
+                                            <div id="sp-model-list-items" class="sp-model-list-items"></div>
+                                        </div>
+                                    </details>
                                 </div>
                             </details>
 
@@ -1064,6 +1074,17 @@ function injectModal() {
     $('#sp-cfg-save').on('click',      saveSettings);
     $('#sp-key-toggle').on('click',    toggleKeyVisibility);
     $('#sp-fetch-models').on('click',  fetchModels);
+    // Inline model list: pick an item → write to input + refresh active highlight
+    $('#sp-model-list-items').on('click', '.sp-model-list-item', function () {
+        const model = $(this).attr('data-model');
+        $('#sp-cfg-model').val(model);
+        $('.sp-model-list-item').removeClass('sp-model-list-item-active');
+        $(this).addClass('sp-model-list-item-active');
+    });
+    // Inline model list: live-filter as user types
+    $('#sp-model-list-search').on('input', function () {
+        renderModelList(_cachedModels, $(this).val());
+    });
     $('#sp-cfg-key')
         .on('focus', () => { const r = $('#sp-cfg-key').data('real'); if (r) $('#sp-cfg-key').val(r); })
         .on('blur',  () => { const r = $('#sp-cfg-key').val().trim() || $('#sp-cfg-key').data('real') || ''; if (r) $('#sp-cfg-key').data('real', r).val(maskKey(r)); });
@@ -2611,6 +2632,29 @@ Future 块收录剧情中出现的未来事项，时间不限。
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
+// Inline model list state — cached models from last fetch. Not persisted
+// across page reloads (matches original <select> behavior — user re-fetches
+// if they refresh). Lives only while the tab is open.
+let _cachedModels = [];
+
+function renderModelList(models, filter = '') {
+    _cachedModels = Array.isArray(models) ? models : [];
+    $('#sp-model-list-count').text(`已加载 ${_cachedModels.length} 个模型`);
+    const q = filter.trim().toLowerCase();
+    const shown = q ? _cachedModels.filter(m => m.toLowerCase().includes(q)) : _cachedModels;
+    const current = ($('#sp-cfg-model').val() || '').trim();
+    if (!shown.length) {
+        $('#sp-model-list-items').html(`<div class="sp-model-list-empty">${q ? '无匹配项' : '暂无模型'}</div>`);
+        return;
+    }
+    // Cap the initial render at 200 items with a "show more" tail for MASSIVE lists;
+    // in practice most APIs return <200 so this is defensive.
+    const html = shown.map(m =>
+        `<button type="button" class="sp-model-list-item${m === current ? ' sp-model-list-item-active' : ''}" data-model="${escapeAttr(m)}">${escapeHtml(m)}</button>`
+    ).join('');
+    $('#sp-model-list-items').html(html);
+}
+
 async function fetchModels() {
     const url = $('#sp-cfg-url').val().trim().replace(/\/$/, '');
     const key = ($('#sp-cfg-key').data('real') || $('#sp-cfg-key').val()).trim();
@@ -2629,19 +2673,14 @@ async function fetchModels() {
             .filter(Boolean).sort();
         if (!models.length) throw new Error('接口未返回任何模型');
 
-        // Replace input with a native <select> — browser handles the popup
-        // (Android → fullscreen picker with search, desktop → dropdown with
-        // scrollbar). No `appearance: none` here on purpose: users need the
-        // visible dropdown arrow to know it's clickable, and the native picker
-        // is the most reliable cross-platform choice for long lists (180+).
-        const current = loadCfg().model || '';
-        const opts = models.map(m =>
-            `<option value="${escapeAttr(m)}"${m === current ? ' selected' : ''}>${escapeHtml(m)}</option>`
-        ).join('');
-        $('#sp-cfg-model').replaceWith(
-            `<select id="sp-cfg-model" class="sp-model-select">${opts}</select>`
-        );
-        if (!current) $('#sp-cfg-model').val(models[0]);
+        // Inline model list — no popup, no z-index chaos. Render directly into
+        // the settings body's <details> section so any browser/WebView that can
+        // render <button> can render this. Fixes "popup appears behind plugin"
+        // reports from in-app browsers (WeChat/QQ WebView, etc.) that don't
+        // give <select> the native fullscreen picker treatment.
+        renderModelList(models);
+        // Auto-expand so user sees the result of their action
+        $('#sp-model-list-section').attr('open', 'open').show();
         showToast(`已加载 ${models.length} 个模型`);
     } catch (err) {
         showToast(`获取模型失败：${err.message}`, null, true);
