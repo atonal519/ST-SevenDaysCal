@@ -773,6 +773,21 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* ─── Interval / mode selector ───────────────────────────────────────────────── */
 .sp-interval-input  { width: 46px !important; text-align: center; }
+/* Subtle divider between logical groups within the memory section */
+.sp-mem-divider {
+    border    : 0;
+    border-top: 1px solid var(--sp-divider);
+    margin    : 12px 0 6px;
+}
+/* Tag sanitizer inputs — wider, aligned right, monospace for tag lists */
+.sp-tag-opt { align-items: center; }
+.sp-tag-input {
+    flex        : 1;
+    min-width   : 0;
+    text-align  : left;
+    font-family : ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size   : 0.78rem !important;
+}
 .sp-mode-row        { display: flex; flex-direction: column; gap: 8px; }
 .sp-mode-opt {
     display    : flex;

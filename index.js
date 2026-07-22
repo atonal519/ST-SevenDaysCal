@@ -34,6 +34,10 @@ const DEFAULT_SETTINGS = {
     memoryL1Group  : 10,   // L0 entries per L1 chapter
     memorySkipShort: 50,   // skip AI floors shorter than N chars
     useBaiBaiBook  : false, // if true, pull history from 柏宝书 getInjectedHistory() and skip built-in memory entirely
+    // Tag sanitizer (used by memory.js:stripTags AND anywhere else that reads
+    // AI floor content). Both are comma-separated bare tag names (no <>).
+    keepTags       : 'content',  // protect list — contents inside these tags survive stripping
+    extraTags      : '',         // extra strip list — forcibly delete these tags + their content
 };
 
 let lastDebugPayload = null;
@@ -146,6 +150,8 @@ jQuery(async () => {
                 memoryL0Group  : Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5,
                 memoryL1Group  : Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10,
                 memorySkipShort: Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50,
+                keepTags       : typeof s.keepTags  === 'string' ? s.keepTags  : 'content',
+                extraTags      : typeof s.extraTags === 'string' ? s.extraTags : '',
             };
         },
         callApi: callMemoryApi,
@@ -761,6 +767,22 @@ function injectModal() {
                                         <input id="sp-mem-skipshort" class="sp-input sp-interval-input" type="number" min="0" max="500" value="50">
                                         <span>字的 AI 回复）</span>
                                     </div>
+
+                                    <hr class="sp-mem-divider">
+
+                                    <p class="sp-cfg-hint" style="margin-top:10px">
+                                        标签清洗：读取 AI 楼层时的过滤规则。多个用英文逗号分隔，只写名字（如 <code>content</code>），不用带尖括号。
+                                    </p>
+                                    <div class="sp-mode-opt sp-tag-opt">
+                                        <span>保留包裹符</span>
+                                        <input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value="">
+                                    </div>
+                                    <div class="sp-mode-opt sp-tag-opt">
+                                        <span>剔除包裹符</span>
+                                        <input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value="">
+                                    </div>
+
+                                    <hr class="sp-mem-divider">
 
                                     <div id="sp-mem-status" class="sp-mem-status">
                                         <span class="sp-cfg-hint">（打开设置时自动刷新）</span>
@@ -1791,8 +1813,20 @@ function makeInjectBtn(text) {
 function injectToST(text) {
     const $ta = $('#send_textarea');
     if (!$ta.length) { showToast('找不到输入框', null, true); return; }
-    $ta.val(text).trigger('input');
-    showToast('已注入到输入框');
+    // Append instead of overwrite — don't nuke whatever the user was typing.
+    // Empty box → just set; non-empty → prepend a blank line separator so the
+    // injection stays visually distinct from prior text.
+    const prev = String($ta.val() || '');
+    const combined = prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n${text}` : text;
+    $ta.val(combined).trigger('input');
+    // Move caret to end + scroll into view so the newly injected text is
+    // visible even if the box already had content.
+    const el = $ta[0];
+    if (el && typeof el.setSelectionRange === 'function') {
+        el.setSelectionRange(combined.length, combined.length);
+    }
+    el?.scrollTo?.({ top: el.scrollHeight });
+    showToast(prev.trim() ? '已追加到输入框' : '已注入到输入框');
 }
 
 // ─── Outline chat ─────────────────────────────────────────────────────────────
@@ -2540,8 +2574,27 @@ const STAGE_COLORS = {
 
 function renderLines(raw) {
     const lines = parseLines(raw);
+    // Aggregate all lines into one injection block for the panel-level button —
+    // saves users from clicking per-line inject 5x when they want the whole context.
+    const buildAggregateInject = () => {
+        if (!lines.length) return '';
+        const blocks = lines.map(l => {
+            const parts = [`${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
+            if (l.desc) parts.push(l.desc);
+            if (l.next) parts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
+            return parts.join('\n');
+        });
+        return `【当前平行事件线】\n\n${blocks.join('\n\n')}`;
+    };
+    const aggregateInject = buildAggregateInject();
+    const aggregateInjectBtn = aggregateInject
+        ? makeInjectBtn(aggregateInject)
+            .replace('class="sp-inject-btn"', 'class="sp-inject-btn sp-panel-inject-all sp-panel-refresh"')
+            .replace('title="注入到输入框"', 'title="把所有线整体注入到输入框"')
+        : '';
     const toolbar = `<div class="sp-schedule-header">
         <span class="sp-user-chip">平行事件</span>
+        ${aggregateInjectBtn}
         <button class="sp-panel-refresh sp-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
     </div>`;
     if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
@@ -2732,6 +2785,8 @@ function renderMemorySection() {
     $('#sp-mem-l0').val(Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5);
     $('#sp-mem-l1').val(Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10);
     $('#sp-mem-skipshort').val(Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50);
+    $('#sp-mem-keeptags').val(typeof s.keepTags  === 'string' ? s.keepTags  : 'content');
+    $('#sp-mem-extratags').val(typeof s.extraTags === 'string' ? s.extraTags : '');
     refreshMemoryStatus();
 }
 
@@ -2776,6 +2831,28 @@ function bindMemoryHandlers() {
     $('#sp-mem-skipshort').on('change', function () {
         const v = Math.max(0, Math.min(500, parseInt(this.value, 10) || 50));
         getSettings().memorySkipShort = v;
+        this.value = v;
+        saveSettingsDebounced();
+    });
+    // Tag sanitizer inputs — sanitize (bare tag names, comma-separated), save.
+    // Applies to future reads; existing L0 summaries built with old rules keep
+    // their hash and stay valid — new content read after change uses new rules.
+    function sanitizeTagList(raw) {
+        return String(raw || '')
+            .split(',')
+            .map(s => s.trim().replace(/^<|>$/g, '').replace(/\/$/, ''))  // tolerate '<content>' or 'content/'
+            .filter(s => /^[a-zA-Z][\w-]*$/.test(s))
+            .join(',');
+    }
+    $('#sp-mem-keeptags').on('change', function () {
+        const v = sanitizeTagList(this.value);
+        getSettings().keepTags = v;
+        this.value = v;
+        saveSettingsDebounced();
+    });
+    $('#sp-mem-extratags').on('change', function () {
+        const v = sanitizeTagList(this.value);
+        getSettings().extraTags = v;
         this.value = v;
         saveSettingsDebounced();
     });

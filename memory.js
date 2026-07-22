@@ -95,22 +95,69 @@ function persist() {
 // wants the narrative prose. Both paired blocks and stray tags are removed,
 // plus HTML/XML comments. Applied at getAiFloors() so every downstream
 // consumer (grouping, hashing, prompt building) sees the same clean text.
-function stripTags(raw) {
+//
+// Two user-configurable name lists override the default behavior:
+//   keepTags  → PROTECT list. Contents inside these tags survive stripping;
+//               the tags themselves are removed but their inner text is kept.
+//               Default 'content'. Fixes the "AI wraps narrative in <content>
+//               and default strip nukes it" edge case some cards hit.
+//   extraTags → EXTRA strip list. Explicitly names tags that MUST be removed
+//               with their content. Redundant with default behavior but lets
+//               users document intent (e.g. write 'think,reasoning').
+function parseTagList(csv) {
+    return String(csv || '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(s => /^[a-zA-Z][\w-]*$/.test(s));
+}
+
+function stripTags(raw, opts = {}) {
     if (!raw) return '';
+    const keep  = parseTagList(opts.keepTags  ?? 'content');
+    const extra = parseTagList(opts.extraTags ?? '');
     let s = String(raw);
-    // HTML/XML comments <!-- ... -->
+    // 1. HTML/XML comments
     s = s.replace(/<!--[\s\S]*?-->/g, '');
-    // Paired tags — repeat until no more matches to handle nested cases
-    // (e.g. <details><summary>...</summary>body</details> — inner strips first
-    // pass, outer strips next pass).
+    // 2. Extract keep-list blocks into placeholders BEFORE any stripping runs,
+    //    so the default "delete paired tags with content" pass won't nuke them.
+    //    Restored (as bare inner text) at the end.
+    const keepStash = [];
+    for (const name of keep) {
+        const rx = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}\\s*>`, 'gi');
+        s = s.replace(rx, (_m, inner) => {
+            keepStash.push(inner);
+            return ` KEEP${keepStash.length - 1} `;
+        });
+    }
+    // 3. Extra strip list — delete these tags + content entirely (redundant with
+    //    the default pass but explicit for user clarity + future-proofs if we
+    //    ever change the default).
+    for (const name of extra) {
+        const rx = new RegExp(`<${name}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${name}\\s*>`, 'gi');
+        let prev;
+        do { prev = s; s = s.replace(rx, ''); } while (s !== prev);
+    }
+    // 4. Default: delete every remaining paired tag WITH its content.
+    //    Multi-pass to handle nested same-name tags.
     let prev;
     do {
         prev = s;
         s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
     } while (s !== prev);
-    // Any remaining self-closing / orphan tags
+    // 5. Any remaining self-closing / orphan tags
     s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
-    // Collapse the whitespace left behind by removed blocks
+    // 6. Restore keep-list inner content (bare, no tags)
+    s = s.replace(/ KEEP(\d+) /g, (_m, idx) => keepStash[+idx] ?? '');
+    // 7. Second cleaning pass — restored kept content may itself contain
+    //    noisy tags (e.g. <content><thinking>...</thinking>正文</content>).
+    //    Run the default + orphan strip again. Keep list is NOT re-applied
+    //    here (would re-stash then loop); protection is by design outermost-only.
+    do {
+        prev = s;
+        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
+    } while (s !== prev);
+    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
+    // 8. Collapse the whitespace left behind by removed blocks
     s = s.replace(/\n{3,}/g, '\n\n').trim();
     return s;
 }
@@ -120,13 +167,16 @@ function getChat() { return getContext().chat || []; }
 
 // Returns all AI floors (including hidden — is_system=true means hidden in ST).
 // Text is sanitized: thinking/reasoning/widget/HTML tags all stripped,
-// leaving only narrative prose for the summarizer.
+// leaving only narrative prose for the summarizer. User can influence which
+// tags to keep/strip via keepTags/extraTags settings.
 function getAiFloors() {
     const chat = getChat();
+    const settings = _getSettings();
+    const stripOpts = { keepTags: settings.keepTags, extraTags: settings.extraTags };
     const out = [];
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
-        if (m && !m.is_user) out.push({ mesid: String(i), text: stripTags(m.mes || '') });
+        if (m && !m.is_user) out.push({ mesid: String(i), text: stripTags(m.mes || '', stripOpts) });
     }
     return out;
 }
