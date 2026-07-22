@@ -1565,47 +1565,63 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink: 0;
 }
 .sp-chat-input-row .sp-input { flex: 1; font-size: 0.82rem; padding: 5px 10px; }
+/* Chat message wrap — contains the bubble + external action buttons.
+   Bubble handles alignment (user right / ai left), actions align with the
+   bubble edge (right side for user, left side for ai) and sit below it. */
+.sp-chat-msg-wrap {
+    display       : flex;
+    flex-direction: column;
+    max-width     : 90%;
+}
+.sp-chat-msg-wrap-user   { align-self: flex-end;   align-items: flex-end; }
+.sp-chat-msg-wrap-ai     { align-self: flex-start; align-items: flex-start; }
+.sp-chat-msg-wrap-system { align-self: center;     align-items: center; }
+
 .sp-chat-msg {
     font-size    : 0.81rem;
     line-height  : 1.55;
     padding      : 5px 9px;
     border-radius: 8px;
-    max-width    : 90%;
     word-break   : break-word;
-    display      : flex;
-    align-items  : flex-start;
-    gap          : 6px;
+    /* wrap now handles max-width + alignment; msg is just a filled block */
+    max-width    : 100%;
 }
-.sp-chat-msg-content { flex: 1; min-width: 0; }
+.sp-chat-msg-content { min-width: 0; }
 /* Bubble backgrounds use dedicated --sp-chat-*-bg tokens (defined per theme)
    so we can tune contrast against text color independently of the general
    surface tokens (which have to stay usable for panels/cards). */
-.sp-chat-msg-user   { background: var(--sp-chat-user-bg); color: var(--sp-on-surface); align-self: flex-end; }
-.sp-chat-msg-ai     { background: var(--sp-chat-ai-bg);   color: var(--sp-on-surface); align-self: flex-start; }
-.sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); align-self: center; font-style: italic; display: block; }
+.sp-chat-msg-user   { background: var(--sp-chat-user-bg); color: var(--sp-on-surface); }
+.sp-chat-msg-ai     { background: var(--sp-chat-ai-bg);   color: var(--sp-on-surface); }
+.sp-chat-msg-system { font-size: 0.72rem; color: var(--sp-subtle); font-style: italic; display: block; background: transparent; padding: 0; }
+/* Bare bubbles (no wrap) — used for transient "…" thinking indicator.
+   Give them their own alignment so they still sit in the correct column. */
+#sp-chat-msgs   > .sp-chat-msg.sp-chat-msg-ai { align-self: flex-start; max-width: 90%; }
+#sp-space-msgs  > .sp-chat-msg.sp-chat-msg-ai { align-self: flex-start; max-width: 90%; }
 .sp-chat-thinking   { opacity: 0.45; display: block; }
 .sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; display: block; }
 
-/* Hover-actions (edit / delete) on outline chat messages */
+/* External actions (edit / delete) — sit below bubble, right-aligned relative
+   to bubble side. Desktop: hover shows; mobile: half-opacity always visible. */
 .sp-chat-msg-actions {
     display       : flex;
     gap           : 2px;
-    align-self    : center;
+    margin-top    : 3px;
     opacity       : 0;
     transition    : opacity 0.12s;
     flex-shrink   : 0;
 }
-.sp-chat-msg:hover .sp-chat-msg-actions { opacity: 0.85; }
+.sp-chat-msg-wrap:hover .sp-chat-msg-actions { opacity: 0.85; }
 @media (hover: none) {
-    .sp-chat-msg-actions { opacity: 0.55; }
+    .sp-chat-msg-actions { opacity: 0.5; }
+    .sp-chat-msg-wrap:hover .sp-chat-msg-actions { opacity: 1; }
 }
 .sp-chat-msg-actions button {
     background : transparent;
     border     : none;
-    padding    : 2px 4px;
+    padding    : 3px 6px;
     color      : var(--sp-subtle);
     cursor     : pointer;
-    font-size  : 0.7rem;
+    font-size  : 0.72rem;
     line-height: 1;
     border-radius: 4px;
     transition : color 0.12s, background 0.12s;

@@ -920,7 +920,7 @@ function injectModal() {
     // Delete a single message (leaves the rest alone — user chose "just this one")
     $('#sp-chat-msgs').on('click', '.sp-chat-msg-delete', function () {
         if (isOutlineChatting) return;
-        const idx = Number($(this).closest('.sp-chat-msg').attr('data-idx'));
+        const idx = Number($(this).closest('.sp-chat-msg-wrap').attr('data-idx'));
         if (!Number.isInteger(idx) || idx < 0 || idx >= outlineChatHistory.length) return;
         outlineChatHistory.splice(idx, 1);
         saveCreativeChatHistory();
@@ -930,7 +930,7 @@ function injectModal() {
     // Edit user message → inline editor
     $('#sp-chat-msgs').on('click', '.sp-chat-msg-edit', function () {
         if (isOutlineChatting) return;
-        const $msg = $(this).closest('.sp-chat-msg');
+        const $msg = $(this).closest('.sp-chat-msg-wrap');
         const idx  = Number($msg.attr('data-idx'));
         if (!Number.isInteger(idx) || idx < 0 || idx >= outlineChatHistory.length) return;
         startInlineEdit($msg, idx);
@@ -961,7 +961,7 @@ function injectModal() {
 
     $('#sp-space-msgs').on('click', '.sp-chat-msg-delete', function () {
         if (isSpaceChatting) return;
-        const idx = Number($(this).closest('.sp-chat-msg').attr('data-idx'));
+        const idx = Number($(this).closest('.sp-chat-msg-wrap').attr('data-idx'));
         if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
         spaceChatHistory.splice(idx, 1);
         saveSpaceChatHistory();
@@ -970,7 +970,7 @@ function injectModal() {
 
     $('#sp-space-msgs').on('click', '.sp-chat-msg-edit', function () {
         if (isSpaceChatting) return;
-        const $msg = $(this).closest('.sp-chat-msg');
+        const $msg = $(this).closest('.sp-chat-msg-wrap');
         const idx  = Number($msg.attr('data-idx'));
         if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
         startSpaceInlineEdit($msg, idx);
@@ -2019,24 +2019,30 @@ function renderAiMessageHtml(text) {
 function appendChatMsg(role, content, historyIndex = null) {
     const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
-    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    const wrapCls = role === 'user' ? 'sp-chat-msg-wrap-user'
+                  : role === 'ai'   ? 'sp-chat-msg-wrap-ai'
+                                    : 'sp-chat-msg-wrap-system';
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
-    if (canAct) $msg.attr('data-idx', historyIndex);
     // User: keep plain text (they typed literally). AI: run through ST's markdown.
     const contentHtml = role === 'ai'
         ? renderAiMessageHtml(display)
         : escapeHtml(display).replace(/\n/g, '<br>');
+    // wrap holds both the bubble and its actions (actions live outside the bubble)
+    const $wrap = $('<div>').addClass(`sp-chat-msg-wrap ${wrapCls}`);
+    if (canAct) $wrap.attr('data-idx', historyIndex);
+    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
+    $wrap.append($msg);
     if (canAct) {
         const editBtn = role === 'user'
             ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
             : '';
-        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>` +
-                  `<div class="sp-chat-msg-actions">${editBtn}` +
-                  `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`);
-    } else {
-        $msg.html(contentHtml);
+        $wrap.append(
+            `<div class="sp-chat-msg-actions">${editBtn}` +
+            `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`,
+        );
     }
-    $msg.appendTo('#sp-chat-msgs');
+    $wrap.appendTo('#sp-chat-msgs');
     const el = document.getElementById('sp-chat-msgs');
     if (el) el.scrollTop = el.scrollHeight;
 }
@@ -2199,24 +2205,29 @@ function renderSpaceChatHistory() {
 
 function appendSpaceChatMsg(role, content, historyIndex = null) {
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
-    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    const wrapCls = role === 'user' ? 'sp-chat-msg-wrap-user'
+                  : role === 'ai'   ? 'sp-chat-msg-wrap-ai'
+                                    : 'sp-chat-msg-wrap-system';
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
-    if (canAct) $msg.attr('data-idx', historyIndex);
     // User: keep plain text (they typed literally). AI: run through ST's markdown.
     const contentHtml = role === 'ai'
         ? renderAiMessageHtml(content)
         : escapeHtml(content).replace(/\n/g, '<br>');
+    const $wrap = $('<div>').addClass(`sp-chat-msg-wrap ${wrapCls}`);
+    if (canAct) $wrap.attr('data-idx', historyIndex);
+    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+    $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
+    $wrap.append($msg);
     if (canAct) {
         const editBtn = role === 'user'
             ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
             : '';
-        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>` +
-                  `<div class="sp-chat-msg-actions">${editBtn}` +
-                  `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`);
-    } else {
-        $msg.html(contentHtml);
+        $wrap.append(
+            `<div class="sp-chat-msg-actions">${editBtn}` +
+            `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`,
+        );
     }
-    $msg.appendTo('#sp-space-msgs');
+    $wrap.appendTo('#sp-space-msgs');
     const el = document.getElementById('sp-space-msgs');
     if (el) el.scrollTop = el.scrollHeight;
 }
