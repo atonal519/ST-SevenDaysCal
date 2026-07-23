@@ -211,14 +211,16 @@ jQuery(async () => {
     _stListeners.char = async (messageId) => {
         // Master switch: linesEnabled=false disables auto-advance + inline block
         if (getSettings().linesEnabled === false) return;
+        const mode = getLinesMode();
         let shouldAdvance = false;
-        if (getLinesMode() === 'days') {
+        if (mode === 'days') {
             shouldAdvance = detectInGameDayChange(messageId, /* excludeCurrent */ true);
-        } else {
+        } else if (mode === 'turns') {
             const interval = getLinesInterval();
             if (linesAiMsgCounter >= interval) { linesAiMsgCounter = 0; shouldAdvance = true; }
             linesAiMsgCounter++;
         }
+        // mode === 'manual': never auto-advance, only inline block append
         appendLinesInlineBlock(messageId, shouldAdvance);
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
@@ -268,11 +270,13 @@ function saveLinesInterval(n) {
 }
 
 function getLinesMode() {
-    return getSettings().linesMode === 'days' ? 'days' : 'turns';
+    const m = getSettings().linesMode;
+    return m === 'days' || m === 'manual' ? m : 'turns';
 }
 
 function saveLinesMode(mode) {
-    getSettings().linesMode = (mode === 'days') ? 'days' : 'turns';
+    const valid = (mode === 'days' || mode === 'manual') ? mode : 'turns';
+    getSettings().linesMode = valid;
     saveSettingsDebounced();
 }
 
@@ -379,7 +383,7 @@ function _buildLinesBlockHtml() {
     })();
     const lines = raw ? parseLines(raw) : [];
     if (lines.length) {
-        const linesHtml = lines.map(l => {
+        const linesHtml = lines.map((l, i) => {
             const levelNum = parseInt(l.level, 10);
             const level    = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
             const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
@@ -391,7 +395,7 @@ function _buildLinesBlockHtml() {
             if (l.desc) injectParts.push(l.desc);
             if (l.next) injectParts.push((l.stall ? '恢复条件：' : '下一步：') + l.next);
             const injectBtn = makeInjectBtn(injectParts.join('\n'));
-            return `<div class="sp-inline-line${l.stall ? ' sp-line-stall' : ''}" style="border-left:3px solid ${stageColor}20">
+            return `<div class="sp-inline-line${l.stall ? ' sp-line-stall' : ''}" data-line-idx="${i}" style="border-left:3px solid ${stageColor}20">
                 <div class="sp-inline-head">
                     <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                     ${l.type ? `<span class="sp-inline-type">${escapeHtml(l.type)}</span>` : ''}
@@ -400,6 +404,7 @@ function _buildLinesBlockHtml() {
                     ${l.stall ? `<span class="sp-line-stall-tag sp-inline-stall">停滞</span>` : ''}
                     ${agencyBadge(l.agency)}
                     ${injectBtn}
+                    <button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="sp-inline-name">${escapeHtml(l.name)}</div>
                 ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
@@ -409,7 +414,9 @@ function _buildLinesBlockHtml() {
                 </div>` : ''}
             </div>`;
         }).join('');
-        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${lines.length} 条活跃</span></summary><div class="sp-inline-body">${linesHtml}</div>`;
+        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${lines.length} 条活跃</span><span class="sp-inline-summary-actions">
+            <button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button>
+        </span></summary><div class="sp-inline-body">${linesHtml}</div>`;
     }
     return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
 }
@@ -727,6 +734,10 @@ function injectModal() {
                                             <input type="radio" name="sp-lines-mode" value="days" ${getLinesMode() === 'days' ? 'checked' : ''}>
                                             <span>时间制，按游戏内日期变化推进</span>
                                         </label>
+                                        <label class="sp-mode-opt">
+                                            <input type="radio" name="sp-lines-mode" value="manual" ${getLinesMode() === 'manual' ? 'checked' : ''}>
+                                            <span>手动推进，由用户点击按钮触发</span>
+                                        </label>
                                     </div>
 
                                     <p class="sp-cfg-hint" id="sp-scale-hint" style="margin-top:14px">叙事尺度（按角色保存）</p>
@@ -976,6 +987,17 @@ function injectModal() {
         startSpaceInlineEdit($msg, idx);
     });
 
+    // Widget apply: attach the AI-generated Event/Line to current chat's cache
+    $('#sp-space-msgs').on('click', '.sp-space-widget-apply', function () {
+        const $btn = $(this);
+        if ($btn.prop('disabled')) return;
+        const wid = $btn.attr('data-wid');
+        const stored = _spaceWidgetStore.get(wid);
+        if (!stored) { showToast('这张卡片已过期，请再让 AI 生成一次', null, true); return; }
+        if (stored.kind === 'schedule_widget') applyScheduleWidget(stored.body, $btn);
+        else if (stored.kind === 'line_widget') applyLineWidget(stored.body, $btn);
+    });
+
     $('#sp-space-clear').on('click', async () => {
         if (isSpaceChatting) return;
         if (!spaceChatHistory.length) return;
@@ -995,6 +1017,17 @@ function injectModal() {
     $('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
     $('#sp-outline-beats').on('click', '.sp-refresh-outline', triggerGenerateOutline);
     $('#sp-lines-list').on('click', '.sp-refresh-lines', triggerGenerateLines);
+    // Advance lines — button appears in both panel toolbar and inline block
+    $('#sp-lines-list, #chat').on('click', '.sp-advance-lines, .sp-inline-advance-lines', function (e) {
+        e.stopPropagation();   // inline button lives in <summary>, don't toggle details
+        triggerAdvanceLines();
+    });
+    // Per-line delete (× on each line card, panel + inline). No full-clear button anymore.
+    $('#sp-lines-list, #chat').on('click', '.sp-line-del-one', function (e) {
+        e.stopPropagation();
+        const idx = Number($(this).attr('data-line-idx'));
+        if (Number.isInteger(idx)) triggerDeleteOneLine(idx);
+    });
 
     // Inject buttons (event delegation)
     $(`#sp-body, #sp-outline-wrap, #sp-lines-wrap, #chat`).on('click', '.sp-inject-btn', function () {
@@ -1436,7 +1469,15 @@ function spConfirm({ title, body, note, confirmText = '确定', cancelText = '�
         $ov.find('.sp-confirm-ok').on('click', () => finish(true));
         $ov.find('.sp-confirm-cancel').on('click', () => finish(false));
         $ov.on('click', function (e) { if (e.target === this) finish(false); });
-        $(`#${MODAL_ID} .sp-sheet`).append($ov);
+        // 挂到 <html>（document.documentElement），和 #sp-modal-root / #sp-fab /
+        // #sp-toast-wrap 同一父节点、同一 root 层叠上下文——这样 confirm 的
+        // z-index:2000002 才能干净压过模态框的 2000001。
+        // 【关键】不能挂 <body>：移动端 ST 给 body 设了 position/transform，body 自成
+        // 层叠上下文，confirm 的高 z-index 只在 body 内部有效；而 body 整体在 root
+        // 层级是 auto(≈0)，面板一开(html 级 2000001)就把整个 body 连 confirm 一起压下去，
+        // 表现为"面板处删除，弹窗在主界面下面点不到"。挂 .sp-root+主题类是为了拿 --sp-* 变量。
+        $ov.addClass(`sp-root sp-${currentTheme}`);
+        document.documentElement.appendChild($ov[0]);
         eventSource.on(event_types.CHAT_CHANGED, onExternalClose);
     });
 }
@@ -2016,6 +2057,185 @@ function renderAiMessageHtml(text) {
     return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
 }
 
+// ─── Space chat widget extraction ─────────────────────────────────────────
+// AI 输出 <schedule_widget> / <line_widget> 时切成三段：
+//   1. widget 之外的正文（如果有）走 markdown 渲染
+//   2. 每个 widget 转成"卡片 + 应用按钮"预览
+// 多个 widget 一起出可以并列显示，用户挑一个应用。
+function extractSpaceWidgets(raw) {
+    const widgets = [];
+    const rx = /<(schedule_widget|line_widget)[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+    let cleaned = String(raw || '');
+    let m;
+    while ((m = rx.exec(cleaned)) !== null) {
+        widgets.push({ kind: m[1].toLowerCase(), body: m[2].trim() });
+    }
+    cleaned = cleaned.replace(rx, '').trim();
+    return { text: cleaned, widgets };
+}
+
+// Turn a widget body into a preview card HTML (no apply button yet — button is
+// wired separately so click handler can capture the raw body).
+function renderSpaceWidgetCard(kind, body, wid) {
+    if (kind === 'schedule_widget') {
+        const line = body.split('\n').find(l => /^Event\s*:/i.test(l)) || '';
+        const parts = line.replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
+        const [type, title, desc, time, location, dynamic] = parts;
+        const TYPE_META = { main: { label: '明线', color: '#d6b85a' }, hidden: { label: '暗线', color: '#a06fd6' }, bond: { label: '红线', color: '#d67f6f' } };
+        const meta = TYPE_META[type] || { label: type || '?', color: '#9aa6b2' };
+        return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="schedule">
+            <div class="sp-space-widget-head">
+                <span class="sp-space-widget-badge" style="background:${meta.color}22;color:${meta.color};border-color:${meta.color}">
+                    <i class="fa-regular fa-calendar"></i> 建议加到点（${escapeHtml(meta.label)}）
+                </span>
+            </div>
+            <div class="sp-space-widget-body">
+                <div class="sp-space-widget-title">${escapeHtml(title || '(未命名)')}</div>
+                ${desc ? `<div class="sp-space-widget-desc">${escapeHtml(desc)}</div>` : ''}
+                <div class="sp-space-widget-meta">
+                    ${time ? `<span><i class="fa-regular fa-clock"></i> ${escapeHtml(time)}</span>` : ''}
+                    ${location ? `<span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(location)}</span>` : ''}
+                </div>
+                ${dynamic ? `<div class="sp-space-widget-dynamic">🧵 ${escapeHtml(dynamic)}</div>` : ''}
+            </div>
+            <div class="sp-space-widget-actions">
+                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid fa-plus"></i> 应用到点</button>
+            </div>
+        </div>`;
+    }
+    if (kind === 'line_widget') {
+        const lineRow = body.split('\n').find(l => /^Line\s*:/i.test(l)) || '';
+        const descRow = body.split('\n').find(l => /^Desc\s*:/i.test(l)) || '';
+        const nextRow = body.split('\n').find(l => /^Next\s*:/i.test(l)) || '';
+        const parts = lineRow.replace(/^Line\s*:\s*/i, '').split('|').map(s => s.trim());
+        const [name, ltype, stage, level, when, agency, stall] = parts;
+        const desc = descRow.replace(/^Desc\s*:\s*/i, '').trim();
+        const next = nextRow.replace(/^Next\s*:\s*/i, '').trim();
+        const isStall = String(stall).toLowerCase() === 'true';
+        return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="line">
+            <div class="sp-space-widget-head">
+                <span class="sp-space-widget-badge sp-space-widget-badge-line">
+                    <i class="fa-solid fa-diagram-project"></i> 建议加到线
+                </span>
+            </div>
+            <div class="sp-space-widget-body">
+                <div class="sp-space-widget-title">${escapeHtml(name || '(未命名)')}</div>
+                <div class="sp-space-widget-meta">
+                    ${ltype  ? `<span>${escapeHtml(ltype)}</span>` : ''}
+                    ${stage  ? `<span>${escapeHtml(stage)}${isStall ? ' · 停滞' : ''}</span>` : ''}
+                    ${when   ? `<span>${escapeHtml(when)}</span>` : ''}
+                    ${agency ? `<span>${agency === 'player' ? '需推动' : '自演化'}</span>` : ''}
+                </div>
+                ${desc ? `<div class="sp-space-widget-desc">${escapeHtml(desc)}</div>` : ''}
+                ${next ? `<div class="sp-space-widget-next">→ ${escapeHtml(next)}</div>` : ''}
+            </div>
+            <div class="sp-space-widget-actions">
+                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid fa-plus"></i> 应用到线</button>
+            </div>
+        </div>`;
+    }
+    return '';
+}
+
+// Cache widget bodies by short id so click handler can retrieve them.
+// Persists per-session; not saved to disk (raw is preserved in chat history anyway).
+const _spaceWidgetStore = new Map();
+let _spaceWidgetSeq = 0;
+
+// ─── Apply widget to schedule (点) ────────────────────────────────────────
+// Body is the raw text between <schedule_widget>...</schedule_widget>.
+// Always appended to Future block per spec (so users don't have to worry about
+// which Day it belongs to). Toast tells them to look in Future column.
+function applyScheduleWidget(body, $btn) {
+    // Extract the Event line
+    const eventLine = body.split('\n').map(l => l.trim()).find(l => /^Event\s*:/i.test(l));
+    if (!eventLine) { showToast('卡片格式不完整，无法应用', null, true); return; }
+    // Use current view's cache key (respects user vs char view + charViewName)
+    const key = getCacheKey();
+    if (!key) { showToast('当前 chat 没有可写入的日程缓存', null, true); return; }
+    let raw = '';
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) raw = saved.raw;
+    } catch {}
+    // If no existing schedule → build minimal wrapper containing just Future
+    if (!raw) {
+        raw = `<calendar_widget>\nFuture:\n${eventLine}\n</calendar_widget>`;
+    } else {
+        // Find (or create) Future: section inside calendar_widget
+        const widgetMatch = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
+        if (widgetMatch) {
+            const inner = widgetMatch[1];
+            let newInner;
+            if (/^\s*Future\s*:/im.test(inner)) {
+                // Future section exists — append event line to the end
+                newInner = inner.replace(/(Future\s*:[^\n]*\n?)([\s\S]*)$/i, (_m, header, tail) => {
+                    return `${header}${tail}${tail.endsWith('\n') || !tail ? '' : '\n'}${eventLine}\n`;
+                });
+            } else {
+                // No Future section — append one
+                newInner = `${inner.replace(/\s+$/, '')}\nFuture:\n${eventLine}\n`;
+            }
+            raw = raw.replace(widgetMatch[0], `<calendar_widget>${newInner}</calendar_widget>`);
+        } else {
+            // No calendar_widget wrapper — wrap what's there and append Future
+            raw = `<calendar_widget>\n${raw}\nFuture:\n${eventLine}\n</calendar_widget>`;
+        }
+    }
+    const subject = currentView === 'char' ? (charViewName || getContext().name2 || '角色') : (getContext().name1 || '用户');
+    localStorage.setItem(key, JSON.stringify({ raw, userName: subject, ts: Date.now() }));
+    // Update cached rendered HTML for schedule view. Only setBody() if the
+    // schedule view is what user is currently looking at — don't stomp on
+    // outline/lines/space views.
+    const rendered = renderSchedule(raw, subject, currentView);
+    cachedSchedule = rendered;
+    if (!outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible')) {
+        setBody(rendered);
+    }
+    $btn.prop('disabled', true).html('<i class="fa-solid fa-check"></i> 已加到点·未来列');
+    showToast('已加到点：请去"未来"列查看');
+}
+
+// ─── Apply widget to storylines (线) ──────────────────────────────────────
+// Always creates a NEW line section (no in-place editing of existing lines).
+function applyLineWidget(body, $btn) {
+    // Grab the 3 lines: Line: / Desc: / Next:
+    const rows = body.split('\n').map(l => l.trim()).filter(Boolean);
+    const lineRow = rows.find(l => /^Line\s*:/i.test(l));
+    const descRow = rows.find(l => /^Desc\s*:/i.test(l)) || '';
+    const nextRow = rows.find(l => /^Next\s*:/i.test(l)) || '';
+    if (!lineRow) { showToast('卡片格式不完整，无法应用', null, true); return; }
+    const block = [lineRow, descRow, nextRow].filter(Boolean).join('\n');
+
+    const key = getLinesCacheKey();
+    if (!key) { showToast('当前 chat 没有可写入的线缓存', null, true); return; }
+    let raw = '';
+    try {
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved?.raw) raw = saved.raw;
+    } catch {}
+    if (!raw) {
+        raw = `<storylines_widget>\n${block}\n</storylines_widget>`;
+    } else {
+        const widgetMatch = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
+        if (widgetMatch) {
+            const inner = widgetMatch[1].replace(/\s+$/, '');
+            const newInner = `${inner}\n\n${block}\n`;
+            raw = raw.replace(widgetMatch[0], `<storylines_widget>${newInner}</storylines_widget>`);
+        } else {
+            raw = `<storylines_widget>\n${raw}\n\n${block}\n</storylines_widget>`;
+        }
+    }
+    localStorage.setItem(key, JSON.stringify({ raw, ts: Date.now() }));
+    // Refresh lines view + inline block on latest AI floor
+    const html = renderLines(raw);
+    cachedLines = html;
+    if (linesMode) setLinesBody(html);
+    syncLatestInlineBlock();
+    $btn.prop('disabled', true).html('<i class="fa-solid fa-check"></i> 已加到线');
+    showToast('已加到线');
+}
+
 function appendChatMsg(role, content, historyIndex = null) {
     const display = content.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
     const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
@@ -2209,15 +2429,31 @@ function appendSpaceChatMsg(role, content, historyIndex = null) {
                   : role === 'ai'   ? 'sp-chat-msg-wrap-ai'
                                     : 'sp-chat-msg-wrap-system';
     const canAct = role !== 'system' && Number.isInteger(historyIndex);
-    // User: keep plain text (they typed literally). AI: run through ST's markdown.
-    const contentHtml = role === 'ai'
-        ? renderAiMessageHtml(content)
-        : escapeHtml(content).replace(/\n/g, '<br>');
+    // AI: extract schedule/line widgets first — they render as cards below the
+    // text bubble. Non-widget text still renders as markdown.
+    let contentHtml;
+    let widgetCards = '';
+    if (role === 'ai') {
+        const { text, widgets } = extractSpaceWidgets(content);
+        contentHtml = text ? renderAiMessageHtml(text) : '';
+        widgetCards = widgets.map(w => {
+            const wid = String(++_spaceWidgetSeq);
+            _spaceWidgetStore.set(wid, { kind: w.kind, body: w.body });
+            return renderSpaceWidgetCard(w.kind, w.body, wid);
+        }).join('');
+    } else {
+        contentHtml = escapeHtml(content).replace(/\n/g, '<br>');
+    }
     const $wrap = $('<div>').addClass(`sp-chat-msg-wrap ${wrapCls}`);
     if (canAct) $wrap.attr('data-idx', historyIndex);
-    const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
-    $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
-    $wrap.append($msg);
+    // Only render the bubble if there's text; if AI's whole reply is just a
+    // widget card, skip the empty bubble
+    if (contentHtml) {
+        const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
+        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
+        $wrap.append($msg);
+    }
+    if (widgetCards) $wrap.append(widgetCards);
     if (canAct) {
         const editBtn = role === 'user'
             ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
@@ -2554,6 +2790,83 @@ async function triggerGenerateLines() {
     runGenerateLines();
 }
 
+// Advance = generate based on existing raw (preserves previousRaw for continuity).
+// Called from manual-advance buttons on inline block + panel toolbar.
+async function triggerAdvanceLines() {
+    if (isGeneratingLines) return;
+    if (!await memoryPreCheckConfirm()) return;
+    // NOTE: no cache clear — runGenerateLines will read previousRaw and pass it
+    // to the LLM as the "existing storylines to continue" context.
+    isGeneratingLines = true;
+    if (linesMode) setLinesBody(loadingHtml('正在推进线', 'sp-abort-lines'));
+    runGenerateLines(!linesMode /* silent if panel not open */);
+}
+
+// Remove one storyline by index (as parsed by parseLines). Works on the raw text
+// block-by-block so the OTHER lines keep their exact serialization untouched.
+// Returns: new raw string / '' when the removed line was the last one / null on bad idx.
+function deleteOneLineFromRaw(raw, idx) {
+    const src = String(raw || '');
+    const m = src.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
+    const inner = m ? m[1] : src;
+    const blocks = [];
+    let cur = null;
+    for (const rawLine of inner.split('\n')) {
+        if (/^\s*Line\s*:/i.test(rawLine)) {
+            if (cur) blocks.push(cur);
+            cur = [rawLine];
+        } else if (cur) {
+            cur.push(rawLine);
+        }
+    }
+    if (cur) blocks.push(cur);
+    if (idx < 0 || idx >= blocks.length) return null;
+    blocks.splice(idx, 1);
+    if (!blocks.length) return '';
+    const newInner = blocks.map(b => b.join('\n').replace(/\s+$/, '')).join('\n\n');
+    return m
+        ? src.replace(m[0], `<storylines_widget>\n${newInner}\n</storylines_widget>`)
+        : `<storylines_widget>\n${newInner}\n</storylines_widget>`;
+}
+
+// Delete just ONE line by index; the other lines stay applied.
+async function triggerDeleteOneLine(idx) {
+    if (isGeneratingLines) return;
+    const key = getLinesCacheKey();
+    if (!key) return;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(key) || 'null'); } catch {}
+    const raw = saved?.raw || '';
+    if (!raw) return;
+    const target = parseLines(raw)[idx];
+    if (!target) { showToast('这条线已不存在，请刷新面板', null, true); return; }
+    const ok = await spConfirm({
+        title: '删除这条线',
+        body : `将删除「${target.name || '未命名'}」这一条，其它事件线保留。此操作不可撤销。`,
+        confirmText: '删除',
+        cancelText : '取消',
+    });
+    if (!ok) return;
+    const newRaw = deleteOneLineFromRaw(raw, idx);
+    if (newRaw == null) { showToast('删除失败：条目错位，请刷新后重试', null, true); return; }
+    if (newRaw === '') {
+        // that was the last line — clear the cache like a full delete
+        localStorage.removeItem(key);
+        cachedLines = null;
+        linesAiMsgCounter = 0;
+        if (linesMode) setLinesBody(renderEmptyLinesState());
+        syncLatestInlineBlock();
+        showToast('已删除，事件线已清空');
+        return;
+    }
+    localStorage.setItem(key, JSON.stringify({ ...saved, raw: newRaw, ts: Date.now() }));
+    const html = renderLines(newRaw);
+    cachedLines = html;
+    if (linesMode) setLinesBody(html);
+    syncLatestInlineBlock();
+    showToast('已删除这条线');
+}
+
 async function runGenerateLines(silent = false) {
     const viewSnap = currentView;
     const charSnap = charViewName;
@@ -2783,9 +3096,10 @@ function renderLines(raw) {
     const toolbar = `<div class="sp-schedule-header">
         <span class="sp-user-chip">平行事件</span>
         <button class="sp-panel-refresh sp-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
+        <button class="sp-panel-refresh sp-advance-lines" title="推进事件线（在已有线基础上继续推演）"><i class="fa-solid fa-forward"></i></button>
     </div>`;
     if (lines.length === 0) return toolbar + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
-    const cards = lines.map(l => {
+    const cards = lines.map((l, i) => {
         const levelNum  = parseInt(l.level, 10);
         const level     = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
         const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
@@ -2805,7 +3119,7 @@ function renderLines(raw) {
                </div>`
             : '';
         return `
-        <div class="sp-beat sp-line-card${stallCls}" style="border-left:3px solid ${stageColor}30">
+        <div class="sp-beat sp-line-card${stallCls}" data-line-idx="${i}" style="border-left:3px solid ${stageColor}30">
             <div class="sp-beat-head">
                 <span class="sp-beat-type" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
                 ${l.type ? `<span class="sp-beat-line">${escapeHtml(l.type)}</span>` : ''}
@@ -2814,6 +3128,7 @@ function renderLines(raw) {
                 ${stallTag}
                 ${agencyBadge(l.agency)}
                 ${injectBtn}
+                <button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="sp-beat-title">${escapeHtml(l.name)}</div>
             ${l.desc ? `<div class="sp-beat-scene">${escapeHtml(cleanText(l.desc))}</div>` : ''}
@@ -3593,9 +3908,17 @@ function syncMobileViewport() {
 
     const vv = window.visualViewport;
     const vh = Math.max(320, Math.round((vv?.height || window.innerHeight)));
-    const top = 20 + safeTop;
+    // iOS 软键盘不缩小 layout viewport，而是把可视视口整体上移，visualViewport.offsetTop
+    // 变正；安卓则是直接缩小 layout（offsetTop≈0，靠 vh 变小自适应）。sheet 是
+    // position:fixed（相对 layout viewport 定位），若 top 不叠加 offsetTop，键盘一弹
+    // sheet 就停在 layout 顶部、被推到可视区上方看不见——正是 iOS 用户反馈的
+    // "整个界面被挤出页面、找不到输入框"。叠加 offsetTop 让 sheet 跟随可视视口下移到
+    // 键盘上方；安卓 offsetTop≈0 完全不受影响，属 iOS 定向修复。
+    const offsetTop = vv ? Math.max(0, vv.offsetTop) : 0;
+    const marginTop = 20 + safeTop;      // sheet 顶到可视视口顶的留白
     const bottomGap = 20 + safeBot;
-    const maxH = Math.max(260, vh - top - bottomGap);
+    const top  = offsetTop + marginTop;  // fixed 绝对值 = 可视视口位移 + 留白
+    const maxH = Math.max(260, vh - marginTop - bottomGap);  // 高度只按可视视口算，不含 offsetTop
 
     sheet.style.top = `${top}px`;
     sheet.style.height = `${maxH}px`;
@@ -3609,6 +3932,17 @@ function injectToastContainer() {
 }
 
 function showToast(msg, onClick, isError = false) {
+    // 若装了「酒馆提示框美化 (zmer-toast-theme-loader)」插件，改走原生 toastr，
+    // 让它的 MutationObserver 捕获 #toast-container 里的 toast 并统一美化风格。
+    // 探测其 init 时无条件挂上的全局清理钩子——与任何 UI 开关无关，最稳；
+    // 探测失败（未装/改版/换名）则无害回退到下方自绘 toast。
+    const tr = globalThis.toastr;
+    if (globalThis.__zmerUniversalToastThemeCleanup && tr) {
+        // 不覆盖 timeOut/位置等视觉参数，交给美化插件统一；只保留点击行为。
+        const opts = onClick ? { onclick: onClick } : {};   // toastr 默认 tapToDismiss，点后自动消失
+        (isError ? tr.error : tr.success)(msg, '', opts);
+        return;
+    }
     const $t = $(`<div class="sp-toast${isError ? ' sp-toast-error' : ''}">
         <i class="fa-solid ${isError ? 'fa-circle-exclamation' : 'fa-calendar-check'}"></i>
         <span>${escapeHtml(msg)}</span>

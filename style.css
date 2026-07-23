@@ -2003,10 +2003,17 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 
 /* ─── Confirm overlay (used by memory prompts + rebuild) ─────────────────────── */
+/* 一元素一职：#sp-confirm 自己就是全屏 fixed 遮罩，直接挂 <body>。
+   不再套外层 layer——之前套壳导致 finish 只删 $ov 却漏删外层，残留 layer
+   吃掉全屏点击（"删完后整个界面/整个酒馆卡死"）。现在 remove 一次即彻底清空。
+   pointer-events:auto 显式覆盖：移动端 .sp-root 是 pointer-events:none
+   （只有 .sp-sheet 才 re-enable），本元素虽然挂 .sp-root 类拿 --sp-* 变量，
+   但必须自行打开交互，否则会"看得见点不动、点击穿透到下层"。 */
 .sp-confirm-overlay {
-    position       : absolute;
+    position       : fixed;
     inset          : 0;
-    z-index        : 50;
+    z-index        : 2000002;   /* 高于 #sp-modal-root(2000001) 与 #sp-fab(2000000) */
+    pointer-events : auto;
     background     : rgba(0,0,0,0.55);
     display        : flex;
     align-items    : center;
@@ -2017,8 +2024,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-confirm-sheet {
     background   : var(--sp-sheet-bg);
     border-radius: 12px;
+    /* 挂在 body 上时，父容器是整屏；限一下宽度免得整屏拉满 */
+    width        : min(400px, calc(100vw - 40px));
     max-width    : 100%;
-    width        : 100%;
     padding      : 16px 18px 14px;
     box-shadow   : var(--sp-shadow);
     display      : flex;
@@ -2167,3 +2175,158 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-color: #d98a3d;
 }
 
+
+/* ─── Space chat widget cards (间 → 点/线 转换预览) ────────────────────────── */
+.sp-space-widget-card {
+    align-self   : stretch;
+    margin-top   : 6px;
+    background   : var(--sp-chat-ai-bg);
+    border       : 1px solid var(--sp-divider);
+    border-radius: 10px;
+    padding      : 10px 12px;
+    display      : flex;
+    flex-direction: column;
+    gap          : 6px;
+    color        : var(--sp-on-surface);
+}
+.sp-space-widget-head {
+    display    : flex;
+    align-items: center;
+    gap        : 6px;
+}
+.sp-space-widget-badge {
+    display      : inline-flex;
+    align-items  : center;
+    gap          : 5px;
+    padding      : 3px 8px;
+    font-size    : 0.72rem;
+    border-radius: 12px;
+    border       : 1px solid transparent;
+    font-weight  : 500;
+}
+.sp-space-widget-badge-line {
+    background  : rgba(158, 200, 204, 0.15);
+    color       : #5c9ea0;
+    border-color: #5c9ea0;
+}
+.sp-space-widget-body { display: flex; flex-direction: column; gap: 4px; }
+.sp-space-widget-title {
+    font-size  : 0.88rem;
+    font-weight: 600;
+    color      : var(--sp-on-surface);
+    line-height: 1.4;
+}
+.sp-space-widget-desc {
+    font-size  : 0.78rem;
+    line-height: 1.55;
+    color      : var(--sp-on-surface);
+    opacity    : 0.85;
+    word-break : break-word;
+}
+.sp-space-widget-meta {
+    display   : flex;
+    flex-wrap : wrap;
+    gap       : 10px;
+    font-size : 0.72rem;
+    color     : var(--sp-subtle);
+    margin-top: 2px;
+}
+.sp-space-widget-meta i { margin-right: 3px; }
+.sp-space-widget-dynamic {
+    font-size  : 0.74rem;
+    color      : var(--sp-subtle);
+    padding    : 4px 8px;
+    background : rgba(127, 127, 127, 0.08);
+    border-radius: 6px;
+    margin-top : 3px;
+}
+.sp-space-widget-next {
+    font-size  : 0.75rem;
+    color      : var(--sp-primary);
+    margin-top : 2px;
+}
+.sp-space-widget-actions {
+    display       : flex;
+    justify-content: flex-end;
+    margin-top    : 4px;
+}
+.sp-space-widget-apply {
+    display      : inline-flex;
+    align-items  : center;
+    gap          : 5px;
+    padding      : 5px 12px;
+    background   : var(--sp-primary);
+    color        : var(--sp-on-primary, #fff);
+    border       : none;
+    border-radius: 6px;
+    font-size    : 0.76rem;
+    cursor       : pointer;
+    transition   : opacity 0.12s;
+}
+.sp-space-widget-apply:hover { opacity: 0.85; }
+.sp-space-widget-apply:disabled {
+    background: rgba(127, 127, 127, 0.2);
+    color     : var(--sp-subtle);
+    cursor    : default;
+}
+
+/* 单条删除 × —— 放在 head 行内，紧挨注入按钮并排，二者同尺寸。
+   不用 absolute，避免跟常驻显示的注入按钮重叠、互相遮挡点击（楼内尤甚）。 */
+.sp-line-del-one {
+    width          : 22px;
+    height         : 22px;
+    padding        : 0;
+    border         : none;
+    background     : transparent;
+    color          : var(--sp-subtle);
+    cursor         : pointer;
+    border-radius  : 4px;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    font-size      : 0.68rem;
+    flex-shrink    : 0;
+    opacity        : 0;
+    transition     : opacity 0.15s, color 0.15s, background 0.15s;
+}
+/* 面板：跟注入按钮一样，hover 卡片才浮现 */
+.sp-beat:hover .sp-line-del-one { opacity: 1; }
+.sp-line-del-one:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
+/* 楼内：移动端无 hover，默认淡显（对齐注入按钮的 0.55 逻辑） */
+.sp-inline-line .sp-line-del-one { opacity: 0.55; color: inherit; }
+.sp-inline-line:hover .sp-line-del-one,
+.sp-inline-line .sp-line-del-one:hover { opacity: 1; }
+.sp-inline-line .sp-line-del-one:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
+/* Only the FIRST .sp-panel-refresh should absorb margin-left:auto —
+   the header already sets that. Sibling refresh buttons stack next to it. */
+.sp-schedule-header .sp-panel-refresh ~ .sp-panel-refresh { margin-left: 0; }
+
+/* Inline summary right-side action cluster (advance + delete lines) */
+.sp-inline-summary-actions {
+    margin-left: auto;
+    display    : flex;
+    gap        : 2px;
+    /* Ensure buttons don't get killed by summary's default behavior */
+    align-items: center;
+}
+.sp-inline-summary-actions button {
+    width          : 22px;
+    height         : 22px;
+    padding        : 0;
+    background     : transparent;
+    border         : none;
+    border-radius  : 4px;
+    color          : var(--sp-subtle);
+    cursor         : pointer;
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    font-size      : 0.68rem;
+    opacity        : 0.55;
+    transition     : opacity 0.12s, background 0.12s, color 0.12s;
+}
+.sp-inline-summary-actions button:hover {
+    opacity   : 1;
+    color     : var(--sp-primary);
+    background: rgba(127, 127, 127, 0.12);
+}
