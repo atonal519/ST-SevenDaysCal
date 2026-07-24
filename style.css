@@ -121,7 +121,10 @@
     right         : 20px;
     width         : 360px;
     max-height    : 85vh;
-    background    : var(--sp-sheet-bg);
+    /* 双层背景：不透明底板(-legacy) + 覆一层酒馆 tint。跟随酒馆色相，
+       但即便酒馆主题带 alpha 也不会把弹窗变透明（透明酒馆主题下的兜底）。*/
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border-radius : 20px;
     box-shadow    : var(--sp-shadow);
     display       : grid;
@@ -484,7 +487,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     position      : absolute;
     inset         : 0;
     z-index       : 20;
-    background    : var(--sp-sheet-bg);
+    /* 双层背景同 .sp-sheet：设置页是铺在面板之上的 absolute 覆盖层，
+       半透明会透出底下面板造成叠字，强制不透明 */
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border-radius : inherit;
     display       : none;
     flex-direction: column;
@@ -798,7 +804,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     to   { opacity: 1; }
 }
 .sp-wi-fullview-sheet {
-    background   : var(--sp-sheet-bg);
+    /* 双层背景同 .sp-sheet：全文卡片浮在半透明遮罩上，强制不透明 */
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border-radius: 12px;
     max-width    : 100%;
     max-height   : 100%;
@@ -869,6 +877,32 @@ select.sp-input { appearance: none; cursor: pointer; }
     font-family : ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size   : 0.78rem !important;
 }
+/* Advanced API drawer — exclude params / timeout / stream */
+.sp-adv-api {
+    border       : 1px solid var(--sp-divider);
+    border-radius: 8px;
+    overflow     : hidden;
+}
+.sp-adv-api-summary {
+    padding    : 8px 11px;
+    font-size  : 0.82rem;
+    color      : var(--sp-subtle);
+    cursor     : pointer;
+    user-select: none;
+    list-style : none;
+    transition : background 0.12s;
+}
+.sp-adv-api-summary::-webkit-details-marker { display: none; }
+.sp-adv-api-summary:hover { background: var(--sp-hover-bg); }
+.sp-adv-api-body { padding: 4px 11px 11px; }
+.sp-exclude-input {
+    width       : 100%;
+    resize      : vertical;
+    text-align  : left;
+    font-family : ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size   : 0.78rem !important;
+}
+
 .sp-mode-row        { display: flex; flex-direction: column; gap: 8px; }
 .sp-mode-opt {
     display    : flex;
@@ -1521,18 +1555,39 @@ select.sp-input { appearance: none; cursor: pointer; }
     height         : 18px;
     display        : flex;
     align-items    : center;
-    justify-content: center;
     cursor         : ns-resize;
-    color          : var(--sp-chat-accent);
-    font-size      : 0.6rem;
     background     : var(--sp-chat-bg);
-    border-top     : 2px solid var(--sp-chat-accent);
     user-select    : none;
     touch-action   : none;
-    opacity        : 0.8;
+    opacity        : 0.65;
     transition     : opacity 0.15s;
 }
+/* 抓手贯穿整宽：隐藏 FA 字形，用重复渐变画两条横线，读作一条完整的分割面 */
+.sp-outline-divider i {
+    flex       : 1;
+    height     : 6px;
+    font-size  : 0;
+    line-height: 0;
+    background : repeating-linear-gradient(
+                   to bottom,
+                   color-mix(in oklab, var(--sp-on-surface) 45%, transparent) 0 2px,
+                   transparent 2px 4px
+                 );
+}
 .sp-outline-divider:hover { opacity: 1; }
+
+/* 点/线卡片序号徽标——与「间」聊天"改第 N 条"编号一致 */
+.sp-seq-badge {
+    font-size    : 11px;
+    font-weight  : 700;
+    color        : var(--sp-subtle);
+    background   : var(--sp-hover-bg);
+    border-radius: 5px;
+    padding      : 1px 5px;
+    margin-right : 2px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink  : 0;
+}
 
 .sp-outline-chat {
     flex-shrink   : 0;
@@ -2022,7 +2077,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     animation      : sp-wi-fullview-in 0.15s ease-out;
 }
 .sp-confirm-sheet {
-    background   : var(--sp-sheet-bg);
+    /* 双层背景同 .sp-sheet：确认框浮在半透明遮罩上，必须强制不透明 */
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border-radius: 12px;
     /* 挂在 body 上时，父容器是整屏；限一下宽度免得整屏拉满 */
     width        : min(400px, calc(100vw - 40px));
