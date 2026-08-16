@@ -1,1 +1,4 @@
 .pi/
+
+# Refactor phase backup snapshots (never commit)
+*.bak-*

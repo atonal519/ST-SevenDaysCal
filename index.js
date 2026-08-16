@@ -22,6 +22,69 @@ import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, load
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
 import { axisState } from './business/axis/state.js';
+import {
+    ALM_TYPES,
+    almId,
+    getAlmanacKey,
+    almClampInt,
+    normalizeAlmItem,
+    loadAlmanac,
+    saveAlmanacItems,
+    almTypeMeta,
+    almDateLabel,
+    monthDayFromDayKey,
+    almValidMonthDay,
+    ALM_CHAT_SCAN_LIMIT,
+    almDayOfYear,
+    ALM_WEEKDAYS,
+    parseWeekdayToken,
+    _WEEKDAY_ADJ_RE,
+    weekdayAdjacent,
+    calRealWeekdayRef,
+    almMonthDayFromDoy,
+    almEndMonthDay,
+    almItemCoversDoy,
+    getCalDescInjectText,
+    almMapType,
+    parseAlmanacWidget,
+    parseEraWidget,
+    almDedupKey,
+    mergeAlmanac,
+    loadCalDesc,
+    getCalDescKey,
+    normalizeCalDesc,
+    saveCalDesc,
+    ALM_DAYS_IN_MONTH,
+    DEFAULT_CAL,
+    _cal,
+    calYearLen,
+    calMonthCount,
+    calMonthDays,
+    calMonthName,
+    calHasEra,
+    CALENDAR_LIMITS,
+    CALENDAR_TEMPLATE_NAME_LENGTH,
+    cloneCalDesc,
+    validateCalendarDesc,
+    loadCalendarTemplates,
+    saveCalendarTemplates,
+    calendarTemplateId,
+    renameCalendarTemplate,
+    calendarTemplateBindings,
+    sortCalendarTemplatesForCurrent,
+    almDateFromChat,
+} from './business/axis/data.js';
+import {
+    calendarSummary,
+    calendarConflicts,
+} from './business/axis/ui.js';
+
+// ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
+// point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
+import { pointState } from './business/point/state.js';
+import { parseCalendar, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate, serializeCalendar } from './business/point/parse.js';
+import { buildPrompt } from './business/point/prompt.js';
+import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
 
 // store 视图态回退桥：keyDesc 缺省 view/charName 时回退到当前视图/角色（闭包捕获实时值）。
 bindStoreViewFallback(() => currentView, () => charViewName);
@@ -32,6 +95,11 @@ bindApiClient({
     setLastDebugPayload: (v) => { lastDebugPayload = v; },
     buildMessages,
 });
+
+// 点渲染回调注入：render.js 的 scheduleDayCtx/scheduleDayLabel/renderEvent 需访问本文件的
+// almTodayAnchor/almWeekdayRef/almWeekdayFor/makeInjectBtn，经 bindPointRender 注入以避免反向依赖（循环引用）。
+bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn });
+
 const MODAL_ID   = 'sp-modal-root';
 const FAB_ID     = 'sp-fab';
 const POS_KEY    = 'sp-pos';
@@ -186,8 +254,6 @@ const customDialog = createDialogManager({
     },
 });
 
-let cachedSchedule = null;
-let isGenerating   = false;
 let settingsOpen   = false;
 let dragState      = null;
 let resizeState    = null;
@@ -221,7 +287,6 @@ let spaceChatHistory    = [];
 let isSpaceChatting     = false;
 let spaceChatAbortController = null;
 let linesAiMsgCounter   = 0;   // counts AI messages since last lines advancement
-let scheduleAbortController = null;
 let outlineAbortController  = null;
 let theaterMode          = false;
 let isGeneratingTheater  = false;
@@ -235,6 +300,12 @@ let _anchorCurrentItem   = null;   // 当前全文视图的 item（跳转/删除
 let _anchorFullTagEdit   = false;  // 全文视图「编辑标签」是否内联展开（避免 body 浮层被面板盖住）
 let _ledgerEditor        = null;   // 暗历内联编辑态：{ id, advanced } 或 null（照 _almanacEditor 同款，改现有条目；起始锚默认折叠、advanced 才展开）
 let _ledgerArchiveOpen   = false;  // 暗历「已了结」归档折叠区是否展开（默认收起，切档/退窗重置）
+// 历面板批量模式（可复用框架，执行动作按 scope 分开）：一次只在一个可见列表内生效。
+//   scope: null=未进入; 'almanac'=日历条目批量删除; 'ledger-active'=活跃刻度批量归档; 'ledger-archive'=归档刻度批量删除
+//   _batchSelected: 当前勾选的 id 集合。切 sheet / 切档 / 退窗 一律清空。
+let _batchScope    = null;
+let _batchSelected = new Set();
+function batchReset() { _batchScope = null; _batchSelected = new Set(); }
 const _injectTexts      = {};
 let   _injectIdSeq      = 0;
 let viewportSyncBound   = false;
@@ -424,6 +495,7 @@ jQuery(async () => {
         axisState._almanacEditor = null;
         _ledgerEditor = null;
         _ledgerArchiveOpen = false;
+        batchReset();
         axisState._almanacManager = null;
         axisState._almTodayEditing = false;
         axisState._almSyncingPoint = false;
@@ -437,8 +509,8 @@ jQuery(async () => {
         closeTaDrawer();            // 换 chat：收起可能开着的 TA▾ 抽屉
         updateTaTriggerLabel();     // charViewName 已清 → 标签回落「TA」
         $in('#sp-content-title').text('点');
-        cachedSchedule = loadCachedForCurrentChat();
-        if ($(`#${MODAL_ID}`).is(':visible') && !isGenerating) {
+        pointState.cachedSchedule = loadCachedForCurrentChat();
+        if ($(`#${MODAL_ID}`).is(':visible') && !pointState.isGenerating) {
             $in('#sp-outline-wrap').hide();
             $in('#sp-lines-wrap').hide();
             $in('#sp-space-wrap').hide();
@@ -450,7 +522,7 @@ jQuery(async () => {
             updateCreativeChatModeUI();
             $in('#sp-chat-msgs').empty();
             $in('#sp-space-msgs').empty();
-            if (cachedSchedule) setBody(cachedSchedule);
+            if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
             else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
         }
         // Back-fill inline blocks for newly loaded chat（backfill 内部已含线注入 + 统一窗口刷新）
@@ -805,13 +877,13 @@ jQuery(async () => {
 function _abortAllBackground() {
     for (const c of [
         linesAbortController, dashedAbortController, spaceChatAbortController,
-        scheduleAbortController, outlineAbortController, theaterAbortController,
+        pointState.scheduleAbortController, outlineAbortController, theaterAbortController,
         axisState.almanacAbortController, outlineChatAbortController,
         outlineJudgeAbort, almanacJudgeAbort, _autoRegenSchedAbort,
         ledgerCaptureAbort, ledgerJudgeAbort,
     ]) { try { c?.abort(); } catch {} }
     linesAbortController = dashedAbortController = spaceChatAbortController = null;
-    scheduleAbortController = outlineAbortController = theaterAbortController = null;
+    pointState.scheduleAbortController = outlineAbortController = theaterAbortController = null;
     axisState.almanacAbortController = outlineChatAbortController = null;
     outlineJudgeAbort = almanacJudgeAbort = _autoRegenSchedAbort = null;
     ledgerCaptureAbort = ledgerJudgeAbort = null;
@@ -2690,8 +2762,8 @@ async function runLedgerJudgeStep(manual = false) {
 // ─── 共享锚点善后 ───────────────────────────────────────────────────────────
 // 任何一处改「今天」锚点（自动判定 applyDetectedDate / 历面板 ±1天·改·恢复自动）后都走这里，统一善后：
 //   1) 刷楼内历条 / 点条、历面板；2) 点恒跟随今天——把点重排到今天（点纯下游连带，无独立开关）。
-// 点连带走 syncPointToToday(true)：其自带「点没生成过就 no-op」「_almSyncingPoint 重入合并」「isGenerating/
-// chatId/abort」守卫，fire-and-forget 安全；不占前台 isGenerating 锁。故这里无脑调、由它自己判断要不要真重生成。
+// 点连带走 syncPointToToday(true)：其自带「点没生成过就 no-op」「_almSyncingPoint 重入合并」「pointState.isGenerating/
+// chatId/abort」守卫，fire-and-forget 安全；不占前台 pointState.isGenerating 锁。故这里无脑调、由它自己判断要不要真重生成。
 function runAnchorAftermath() {
     syncLatestAlmanacBlock();
     syncLatestScheduleBlock();
@@ -2720,11 +2792,11 @@ function schedulePointNeedsSync() {
 
 // syncPointToToday() —— 用户在历面板点「同步到点」触发：后台把当前视角的点重生成，StartDate 强钉到「今天」，
 // 让「点」从今天起排 7 天、与「历」同一天。反馈全在历（按钮态「同步中…」+ toast），结果落在点。
-// 绝不占用 isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
+// 绝不占用 pointState.isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
 let _autoRegenSchedAbort = null;
 async function syncPointToToday(auto = false) {
     if (axisState._almSyncingPoint) { axisState._almSyncPending = true; return; }   // 同步在飞：标记待办，等它收尾自对账补一轮（都开态·快聊防丢，别硬丢）
-    if (isGenerating) { if (!auto) showToast('点正在生成，稍候再同步', null, true); return; }
+    if (pointState.isGenerating) { if (!auto) showToast('点正在生成，稍候再同步', null, true); return; }
     const view = currentView, charName = charViewName;
     const cacheKey = getCacheKey(view, charName);
     if (!cacheKey) return;
@@ -2749,18 +2821,18 @@ async function syncPointToToday(auto = false) {
         if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
         const fresh = await generate(ctx, userName, cName, view, myCtrl.signal, pinnedEvents);
         if (_autoRegenSchedAbort !== myCtrl) return;         // 被更新的同步取代（或被手动生成掐断）
-        if (isGenerating) return;                            // 期间前台手动生成插了队 → 让前台赢
+        if (pointState.isGenerating) return;                            // 期间前台手动生成插了队 → 让前台赢
         if (getContext().chatId !== chatIdSnap) return;      // 已切 chat → 丢弃
         const today = almTodayAnchor();                      // 落地前重读今天：regen 期间今天可能又前进，钉最新值而非开跑时的旧值（都开态防落后一格）
         const merged = forceStartDate(mergePinnedPoints(raw, fresh), today.month, today.day);   // C：钉到今天
         writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
         syncLatestScheduleBlock();                           // 楼内点条即时刷到新日期
-        // 修 cachedSchedule 陈旧：只要同步的视角 == 当前视角就刷缓存——哪怕此刻停在历面板，
+        // 修 pointState.cachedSchedule 陈旧：只要同步的视角 == 当前视角就刷缓存——哪怕此刻停在历面板，
         // 回头切到点也拿到新版（不再限「点面板正开着」才更新，否则切过去会看到旧点）。
         if (currentView === view && (view !== 'char' || charViewName === charName)) {
-            cachedSchedule = renderSchedule(merged, subject, view);
+            pointState.cachedSchedule = renderSchedule(merged, subject, view);
             const onPointPanel = !axisState.almanacMode && !outlineMode && !linesMode && !spaceMode && !theaterMode && !anchorMode;
-            if (onPointPanel && $(`#${MODAL_ID}`).is(':visible')) setBody(cachedSchedule);
+            if (onPointPanel && $(`#${MODAL_ID}`).is(':visible')) setBody(pointState.cachedSchedule);
         }
         if (auto ? getSettings().notifyMode === 'full' : getSettings().notifyMode !== 'off') showToast(`点已同步到 ${calMonthName(loadCalDesc(), today.month)}${today.day}日`);
     } catch (err) {
@@ -2778,7 +2850,7 @@ async function syncPointToToday(auto = false) {
         // 自对账：同步在飞期间被丢过新的「今天」推进 → 若点仍落后今天且环境未变，收尾补一轮，保证都开态最终收敛（不会永久停在旧日期）。
         if (axisState._almSyncPending) {
             axisState._almSyncPending = false;
-            if (getContext().chatId === chatIdSnap && !isGenerating && schedulePointNeedsSync()) syncPointToToday(auto);
+            if (getContext().chatId === chatIdSnap && !pointState.isGenerating && schedulePointNeedsSync()) syncPointToToday(auto);
         }
     }
 }
@@ -3097,7 +3169,7 @@ function injectExtButton() {
 // 悬浮球「插件在忙」呼吸灯：引用计数。所有 LLM 请求都经唯一咽喉 postChatCompletion，
 // 那里进 +1 / finally -1，故点/线/面/棱/历/暗历标注/暗历判定/写记忆/间——无论自动手动、
 // 无论并发几路，只要还有一路在飞就呼吸，全部落地才熄。独立 class（sp-fab-busy）不碰点的
-// sp-btn-generating/done，两套并存互不干扰。计数只增减、不直接读 isGenerating 那些分散旗标，
+// sp-btn-generating/done，两套并存互不干扰。计数只增减、不直接读 pointState.isGenerating 那些分散旗标，
 // 天然免漏灯/卡灯。
 let _fabBusyCount = 0;
 function setFabBusy(on) {
@@ -4652,6 +4724,40 @@ function injectModal() {
     $almanac.on('click', '.sp-alm-pin', function () { toggleAlmanacPin($(this).attr('data-id')); });
     $almanac.on('click', '.sp-alm-edit', function () { openAlmanacEditor($(this).attr('data-id')); });
     $almanac.on('click', '.sp-alm-del', function () { deleteAlmanacItem($(this).attr('data-id')); });
+    // ── 历面板批量模式：三个入口（日历条目删 / 活跃刻度归档 / 归档刻度删）。严格限定 scope，不接模板管理。──
+    $almanac.on('click', '.sp-batch-enter', function (e) {
+        e.stopPropagation();
+        const scope = $(this).attr('data-scope');
+        if (!BATCH_SCOPES.includes(scope)) return;   // 严格限定入口：仅 'almanac' / 'ledger-active' / 'ledger-archive'
+        _batchScope = scope;
+        _batchSelected = new Set();
+        renderAlmanacPanel();
+    });
+    $almanac.on('click', '.sp-batch-exit', function (e) {
+        e.stopPropagation();
+        batchReset();
+        renderAlmanacPanel();
+    });
+    $almanac.on('change', '.sp-batch-selall', function () {
+        if (!_batchScope || !BATCH_SCOPES.includes(_batchScope)) return;
+        if (this.checked) batchScopeIds(_batchScope).forEach(id => _batchSelected.add(id));
+        else _batchSelected = new Set();
+        renderAlmanacPanel();
+    });
+    $almanac.on('change', '.sp-batch-check', function () {
+        const id = $(this).closest('[data-id]').attr('data-id');
+        if (id == null) return;
+        if (this.checked) _batchSelected.add(id);
+        else _batchSelected.delete(id);
+        renderAlmanacPanel();
+    });
+    $almanac.on('click', '.sp-batch-exec', async function (e) {
+        e.stopPropagation();
+        const scope = _batchScope;
+        const ids = [..._batchSelected];
+        if (!scope || !BATCH_SCOPES.includes(scope) || !ids.length) return;
+        await execBatch(scope, ids);
+    });
     // 历面板「今天」栏：±1天 / 改（内联月日） / 自动（清锚） / 同步到点。前三者经 runAnchorAftermath 共享善后
     // （刷两条只读条 + 历面板）；改今天不再自动烧点，点要跟随由「同步到点」键显式触发（历点共用这枚今天锚点）。
     $almanac.on('click', '.sp-alm-today-prev', function () { almNudgeToday(-1); });
@@ -4945,7 +5051,7 @@ function injectModal() {
         // TA▾ 触发器：不直接切视角，而是开/关「固定槽抽屉」（换人入口，已与刷新解耦）。
         // 生成途中锁子切换（沿用 isSubBtn 分支原守卫）。active 态 / 标签由抽屉内真正切到某 char 时再落。
         if ($btn.hasClass('sp-ta-trigger')) {
-            if (isGenerating) return;
+            if (pointState.isGenerating) return;
             toggleTaDrawer();
             return;
         }
@@ -5124,19 +5230,19 @@ function injectModal() {
             $inAll(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
             updateTaTriggerLabel();   // 回点视图：TA▾ 标签跟随当前视角（char 显名 / user 回落 TA）
             // 生成在途/切走再切回：从状态重建正文（镜像 线/面/棱），别露上次残留或僵尸转圈
-            if (isGenerating) setBody(loadingHtml('正在规划', 'sp-abort-generate'));
-            else if (cachedSchedule) setBody(cachedSchedule);
+            if (pointState.isGenerating) setBody(loadingHtml('正在规划', 'sp-abort-generate'));
+            else if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
             else showEmptyGenerate();
             return;
         }
 
         // Sub-toggle clicks：走到这里只剩「我」（TA▾ 触发器已在上面拦截并 return）。
         if (isSubBtn) {
-            if (isGenerating) return;   // 点生成途中不切视角：本次生成绑定当前视角，中途换「我/TA」无意义
+            if (pointState.isGenerating) return;   // 点生成途中不切视角：本次生成绑定当前视角，中途换「我/TA」无意义
             closeTaDrawer();            // 切回「我」顺手收起 TA 抽屉
             if (view === currentView) return;
             setView('user');
-            if (cachedSchedule) setBody(cachedSchedule);
+            if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
             else showEmptyGenerate();
             return;
         }
@@ -5416,7 +5522,7 @@ function onRegenClick() {
         return;
     }
     if (axisState._almSyncingPoint) { showToast('点正在同步到今天，稍候再刷新', null, true); return; }   // 同步在飞：别让点这边的刷新跟后台同步抢 store（否则重排点会被同步写回）
-    if (isGenerating) return;
+    if (pointState.isGenerating) return;
     // 刷新 = 对当前视角（我 / 当前 char）原地重排，永不弹填写框。
     // 「换人」已彻底交给 TA▾ 抽屉，与刷新解耦——故 user / char 两视角在此完全对称，同走 triggerGenerate。
     // （char 视角靠 charViewName 定主体，triggerGenerate→runGenerate 内部按 currentView/charViewName 取 subject。）
@@ -5454,7 +5560,7 @@ function setView(view, charName) {
     refreshOutlineInjection(); // 视角切换 → 大纲/游标随视角变，重设注入（loadCached 已带高亮）
     $inAll('.sp-view-btn').removeClass('sp-view-active');
     $inAll(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
-    cachedSchedule = loadCachedForCurrentChat();
+    pointState.cachedSchedule = loadCachedForCurrentChat();
     cachedOutline  = loadCachedOutlineForCurrentChat();
     outlineChatHistory = [];
     if (outlineMode) {
@@ -5508,12 +5614,12 @@ function confirmCharView() {
     store.pushRecentCharName(name);   // 记进"最近填过的名字"，供多人卡下次预填
     setView('char', name);
     updateTaTriggerLabel();
-    if (cachedSchedule) {
-        setBody(cachedSchedule);
+    if (pointState.cachedSchedule) {
+        setBody(pointState.cachedSchedule);
     } else {
         setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
-        if (!isGenerating) {
-            isGenerating = true;
+        if (!pointState.isGenerating) {
+            pointState.isGenerating = true;
             setExtBtnState('generating');
             runGenerate();
         }
@@ -5576,11 +5682,11 @@ function toggleTaDrawer() {
 function activateCharView(name) {
     const n = String(name || '').trim();
     if (!n) return;
-    if (isGenerating) { showToast('点正在生成，稍候再换人', null, true); return; }
+    if (pointState.isGenerating) { showToast('点正在生成，稍候再换人', null, true); return; }
     closeTaDrawer();
-    setView('char', n);          // 内部置 currentView/charViewName + active 态 + 载 cachedSchedule
+    setView('char', n);          // 内部置 currentView/charViewName + active 态 + 载 pointState.cachedSchedule
     updateTaTriggerLabel();
-    if (cachedSchedule) setBody(cachedSchedule);
+    if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
     else showEmptyGenerate();
 }
 
@@ -5598,12 +5704,12 @@ function onCharPinToggle(name) {
         showToast(`已固定「${n}」到 TA▾`);
     }
     // 固定态活在 store（独立于点 raw），故不重写 raw；但要用当前 raw 重跑 renderSchedule（内部读
-    // isPinnedChar 定钉子高亮）刷新 cachedSchedule——否则重开面板/切视图回放旧字符串，钉态丢失
-    // （对齐兄弟 triggerTogglePointPin：改完必更 cachedSchedule，别只改就地 DOM）。
+    // isPinnedChar 定钉子高亮）刷新 pointState.cachedSchedule——否则重开面板/切视图回放旧字符串，钉态丢失
+    // （对齐兄弟 triggerTogglePointPin：改完必更 pointState.cachedSchedule，别只改就地 DOM）。
     const saved = readStore(getCacheKey());
     if (saved?.raw) {
-        cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户', currentView);
-        setBody(cachedSchedule);
+        pointState.cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户', currentView);
+        setBody(pointState.cachedSchedule);
     } else {
         refreshCharPinIcon();   // 无 raw（罕见）→ 至少就地刷图标
     }
@@ -5636,6 +5742,7 @@ function resetPanelToScheduleHome() {
     axisState._almanacEditor = null;
     _ledgerEditor = null;
     _ledgerArchiveOpen = false;
+    batchReset();
     axisState._almanacManager = null;
     $in('#sp-body').show();
     $in('#sp-sub-toggle').show();
@@ -5659,10 +5766,10 @@ function openSchedule() {
             return;
         }
     }
-    if (isGenerating) {
+    if (pointState.isGenerating) {
         setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
-    } else if (cachedSchedule) {
-        setBody(cachedSchedule);
+    } else if (pointState.cachedSchedule) {
+        setBody(pointState.cachedSchedule);
     } else {
         showEmptyGenerate();
     }
@@ -5927,13 +6034,13 @@ function loadingHtml(baseText, abortId) {
 // ─── Generation ───────────────────────────────────────────────────────────────
 
 async function triggerGenerate() {
-    if (isGenerating) return;
+    if (pointState.isGenerating) return;
     if (axisState._almSyncingPoint) { showToast('点正在同步到今天，稍候', null, true); return; }   // 同步在飞：拦住点这边的生成，避免跟后台同步双写
     if (!await memoryPreCheckConfirm()) return;
     // F5 锁点对齐线：不清 raw，保留旧 raw（含 pin 标记）供 mergePinnedPoints 回并；
     // 生成失败/中止则旧点原样留存，成功后 runGenerate 覆写。
-    cachedSchedule = null;
-    isGenerating = true;
+    pointState.cachedSchedule = null;
+    pointState.isGenerating = true;
     setExtBtnState('generating');
     if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
     setBody(loadingHtml('正在规划', 'sp-abort-generate'));
@@ -5944,7 +6051,7 @@ async function runGenerate() {
     // Snapshot view state — user may switch views while the request is in flight
     const viewSnap = currentView;
     const charSnap = charViewName;
-    const myCtrl = scheduleAbortController = new AbortController();
+    const myCtrl = pointState.scheduleAbortController = new AbortController();
     _autoRegenSchedAbort?.abort();   // 手动生成优先：掐掉可能在飞的「同步到点」后台生成，免得它慢半拍回来覆盖手动结果
     try {
         const ctx      = getContext();
@@ -5961,7 +6068,7 @@ async function runGenerate() {
             if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
         }
         const raw = await generate(ctx, userName, charName, viewSnap, myCtrl.signal, pinnedEvents);
-        if (scheduleAbortController !== myCtrl) return;   // 生成途中被中止/取代：丢弃本次结果
+        if (pointState.scheduleAbortController !== myCtrl) return;   // 生成途中被中止/取代：丢弃本次结果
         // F5：合并锁定，机制对齐 mergePinnedLines(oldRaw, aiRaw)
         let merged = prevRaw ? mergePinnedPoints(prevRaw, raw) : raw;
         // 点恒跟随今天：手动生成也把 StartDate 钉到「今天」，与轴同日（今天由戳/手动钉/兜底经 almTodayAnchor 单一咽喉给出）。
@@ -5972,8 +6079,8 @@ async function runGenerate() {
 
         writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
         syncLatestScheduleBlock();   // 点生成 → 楼内日程条即时刷
-        isGenerating = false;
-        scheduleAbortController = null;
+        pointState.isGenerating = false;
+        pointState.scheduleAbortController = null;
         setExtBtnState('done');
 
         if (viewSnap === 'char') charViewName = charSnap;
@@ -5981,22 +6088,22 @@ async function runGenerate() {
         const stillOnView = currentView === viewSnap &&
             (viewSnap !== 'char' || charViewName === charSnap);
         if (stillOnView) {
-            cachedSchedule = html;
+            pointState.cachedSchedule = html;
             if ($(`#${MODAL_ID}`).is(':visible')) { setBody(html); if (getSettings().notifyMode !== 'off') showToast('点已生成'); }
             else showToast('点已生成，点击查看', () => { showPanel(); setBody(html); });
         } else {
             showToast('点已生成，点击查看', () => {
                 setView(viewSnap, charSnap);
-                cachedSchedule = html;
+                pointState.cachedSchedule = html;
                 showPanel();
                 setBody(html);
             });
         }
         setTimeout(() => setExtBtnState(null), 6000);
     } catch (err) {
-        if (scheduleAbortController !== myCtrl) return;   // 已中止/被新一次生成取代：状态与界面已另处理
-        isGenerating = false;
-        scheduleAbortController = null;
+        if (pointState.scheduleAbortController !== myCtrl) return;   // 已中止/被新一次生成取代：状态与界面已另处理
+        pointState.isGenerating = false;
+        pointState.scheduleAbortController = null;
         setExtBtnState(null);
         if (err.name === 'AbortError') {
             if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap) showEmptyGenerate();
@@ -6012,10 +6119,10 @@ async function runGenerate() {
 // 前置阶段（世界书组装等）不可打断，若只 abort 不即时复位界面，用户点"中止"会觉得没反应。
 // 被中止的旧管线随后走各自 run* 的身份守卫（controller !== myCtrl）静默丢弃，不覆盖界面。
 function abortScheduleGen() {
-    if (!isGenerating) return;
-    scheduleAbortController?.abort();
-    scheduleAbortController = null;
-    isGenerating = false;
+    if (!pointState.isGenerating) return;
+    pointState.scheduleAbortController?.abort();
+    pointState.scheduleAbortController = null;
+    pointState.isGenerating = false;
     setExtBtnState(null);
     showEmptyGenerate();
 }
@@ -7040,7 +7147,7 @@ function applyScheduleWidget(body, $btn, editIdx = null) {
     // schedule view is what user is currently looking at — don't stomp on
     // outline/lines/space views.
     const rendered = renderSchedule(raw, subject, currentView);
-    cachedSchedule = rendered;
+    pointState.cachedSchedule = rendered;
     if (!outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible')) {
         setBody(rendered);
     }
@@ -7450,27 +7557,6 @@ const SPACE_HELP_KEYWORDS = ['悬浮球', '悬浮按钮', '开关', '在哪', '�
 function readCacheRaw(desc) {
     const saved = readStore(desc);
     return saved?.raw || '';
-}
-
-// 当前点里所有 Event: 行（calendar_widget 内、去注释、按文档顺序）——编号与"改第 N 条"共用同一序列
-function pointEventLines(raw) {
-    const src = String(raw || '');
-    const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-    const inner = (m ? m[1] : src).replace(/<!--[\s\S]*?-->/g, '');
-    return inner.split('\n').map(l => l.trim()).filter(l => /^Event\s*:/i.test(l));
-}
-
-function numberedPointList(raw) {
-    const TYPE_LABEL = { user: '用户线', char: '角色线', main: '明线', hidden: '暗线', bond: '红线' };
-    return pointEventLines(raw).map((l, i) => {
-        const [type, title, desc, time, location, dynamic] = l.replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
-        const bits = [`#${i + 1}`, `【${TYPE_LABEL[(type || '').toLowerCase()] || type || '?'}】`, title || '(未命名)'];
-        if (time)     bits.push(`｜时间:${time}`);
-        if (location) bits.push(`｜地点:${location}`);
-        if (desc)     bits.push(`｜${desc}`);
-        if (dynamic)  bits.push(`｜线头:${dynamic}`);
-        return bits.join(' ');
-    }).join('\n');
 }
 
 function numberedLineList(raw) {
@@ -8738,7 +8824,7 @@ async function renderStorageUsage() {
 // 清完某 kind 数据后，若对应视图正开着就重渲染成空态；点视图另清内存缓存。
 function refreshEditorsAfterStoreClear(kind) {
     if (kind === 'schedule') {
-        cachedSchedule = null;
+        pointState.cachedSchedule = null;
         setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
     }
     if (kind === 'outline' && outlineMode) setOutlineBody(renderEmptyOutlineState());
@@ -9508,7 +9594,6 @@ const STAGE_COLORS = {
 
 // 点/线面板 header 下方另起一行的「去间改」引导，视觉对齐历法管理页的 .sp-alm-manager-hint。
 // 「间」能把讨论落地成点/线，想调整时一键跳过去（handler 见 injectModal 委托）。
-const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想调整这些点？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
 const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
 
 function linesToolbarHtml() {
@@ -9597,177 +9682,29 @@ function renderLines(raw) {
 }
 
 
-function buildPrompt(userName, charName, perspective = 'user', pinned = null) {
-    const subject   = perspective === 'char' ? charName : userName;
-    const companion = perspective === 'char' ? userName : charName;
-    const pins = Array.isArray(pinned) ? pinned.filter(e => e?.title?.trim()) : [];
-    const pinnedBlock = pins.length
-        ? `\n【已锁定事件·必须保留】\n以下事件已被用户锁定，你必须在新日程中原样保留（标题不可改动），可顺势推进其时间/描述，但严禁删除、改名或替换：\n${pins.map((e, i) => `${i + 1}. ${e.title}${e.time ? `（${e.time}）` : ''}`).join('\n')}\n`
-        : '';
-    // char 目标天然与 user 关系密切，无需额外提示；非-char 目标（重要 NPC / 其他人物）
-    // 生成的日程常与 user 关联过弱，这里加一段「软约束」，让 AI 适度考虑潜在关联，
-    // 但不硬绑、不默认爱情、不逼所有事件都围绕 user。
-    const relationHint = perspective === 'char'
-        ? ''
-        : `\n【与 ${companion} 的潜在关联·软提示】\n${subject} 若是重要 NPC / 非主角人物，其日程可以适度体现与 ${companion} 的潜在关联——可以是复仇、陷害、交易、试探、监视、利用、牵制、误导、协作、冲突等多种走向，也可能只是间接波及。请根据剧情自然带出，不必每条事件都围绕 ${companion}，更不要默认写成爱情关系；${subject} 仍应有独立于 ${companion} 的生活与目标。\n`;
-    return `请暂停角色扮演，以旁观者视角根据以上剧情，为 ${subject} 生成日程。
-【重要】所有输出必须使用中文（人名、地名可保留原文）。
-【人称】你是旁观者，不要扮演任何角色。所有文字（含 description 与线头动态）必须以第三人称叙述，直呼 ${subject} 的名字，严禁使用"我""我们"等第一人称，也不要用第二人称"你"。
-
-事件分三类：
-- main（明线）：${subject} 直接卷入、正在推进的事件
-- hidden（暗线）：隐含的伏笔、悬而未决的走向
-- bond（红线）：${subject} 与某人之间可能发生或加深的事件（不限于 ${companion}，可以是任意重要人物）
-
-${subject} 和 ${companion} 都有各自独立的生活，事件可以涉及任意 NPC 和第三方，不必每条都围绕两人互动。
-${relationHint}
-Day 1-3 每天生成 1 到 3 个事件；Future 块生成 5 到 10 个事件，时间跨度不限。
-
-【天气说明】
-每个 Day 的日头请附带当天天气与温度，格式 Day: N|天气|温度（如 Day: 1|晴|3℃）。
-天气是氛围点缀，请结合剧情季节/地域/时间合理"推测"，无需真实准确——晴/多云/阴/小雨/雷阵雨/小雪/大雪/雾 等皆可，温度给摄氏度区间或单值（如 -2℃ / 12~18℃）。
-若剧情完全无从判断季节地域，可给一个自洽的温和天气。Future 块不需要天气。
-
-【字段说明】
-格式：Event: type|title|description|time|location|线头动态
-- type 只能是 main / hidden / bond
-- description：以第三人称客观记述 ${subject} 这天经历的事，生活化口吻，直呼其名，不用第一人称，30字以上
-- 线头动态：与此事件相关的其他角色同期动态，可以是任意 NPC 或第三方，30字以上；若无关联角色可留空
-
-【日期说明】
-Day 1 应从剧情当前时间节点开始，向后推演。如剧情中能明确推断出当前日期则填写 StartDate，否则省略。不要回填已经发生过的日期，Day 1 必须是剧情"现在"或之后的时间。
-${pinnedBlock}
-【输出格式（严格遵守，只输出以下结构）】
-<!-- 日程思考：（结合剧情推演安排，100字以上） -->
-<calendar_widget>
-StartDate: YYYY-MM-DD（可从剧情推断则填写，否则省略此行）
-Day: 1|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Day: 2|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Day: 3|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Future:
-Event: type|title|description|time|location|线头动态
-</calendar_widget>
-
-【Future 说明】
-Future 块收录剧情中出现的未来事项，时间不限。
-允许基于剧情走向合理推测，但不能凭空捏造剧情中从未提及的约定或承诺。`;
-}
-
 // ─── 历（日历 / 历法）─────────────────────────────────────────────────────────
 // 独立模块，与点/线/面共通但存储隔离：点是 AI 每轮重算的易失数据，历要稳，
 // 单独存 chat_metadata（kind='almanac'，不分我/TA，固定 user scope，抄 dashed）。
 // 历自己不注入主楼——只在 buildMessages 里作为「本世界观重要日期」喂点/线/大纲，
 // 跟随它们已有的注入进主楼。数据形状：{ items:[{id,name,type,month,day,displayDate,note,pin,source}], ts }
-const ALM_TYPES = ['festival', 'birthday', 'anniversary', 'custom'];
 
-function almId() { return 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function getAlmanacKey() { return keyDesc('almanac', 'user', ''); }  // 固定 user scope，与当前视角无关
 
-function almClampInt(v, lo, hi, dflt) {
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return dflt;
-    return Math.min(hi, Math.max(lo, n));
-}
 
-function normalizeAlmItem(it, cal = loadCalDesc()) {
-    if (!it || typeof it !== 'object') return null;
-    const name = String(it.name || '').trim();
-    if (!name) return null;
-    const month = almClampInt(it.month, 1, calMonthCount(cal), 1);
-    return {
-        id: it.id || almId(),
-        name,
-        type: ALM_TYPES.includes(it.type) ? it.type : 'custom',
-        month,
-        day: almClampInt(it.day, 1, calMonthDays(cal, month), 1),
-        days: almClampInt(it.days, 1, calYearLen(cal), 1),   // 持续天数：单日=1，多日节假日>1（缺失退化为 1，向后兼容）
-        displayDate: String(it.displayDate || '').trim(),
-        note: String(it.note || '').trim(),
-        pin: !!it.pin,
-        source: it.source === 'user' ? 'user' : 'ai',
-    };
-}
 
-function loadAlmanac() {
-    const saved = readStore(getAlmanacKey());
-    const items = Array.isArray(saved?.items) ? saved.items : [];
-    // 必须 arrow 包一层：裸传 normalizeAlmItem 会让 map 把「下标」当第二参 cal 传进去，
-    // 第 2 条起下标为真值数字 → calMonthCount 里 (1).months.length 抛 undefined，全模块生成崩。
-    return items.map(it => normalizeAlmItem(it)).filter(Boolean);
-}
-function saveAlmanacItems(items) { writeStore(getAlmanacKey(), { items, ts: Date.now() }); }
 
-function almTypeMeta(type) {
-    switch (type) {
-        case 'festival':    return { label: '节日',   cls: 'festival',    icon: 'fa-champagne-glasses' };
-        case 'birthday':    return { label: '生日',   cls: 'birthday',    icon: 'fa-cake-candles' };
-        case 'anniversary': return { label: '纪念日', cls: 'anniversary', icon: 'fa-heart' };
-        default:            return { label: '自定义', cls: 'custom',      icon: 'fa-star' };
-    }
-}
-function almDateLabel(it, cal = loadCalDesc()) {
-    if (it.displayDate) return it.displayDate;
-    const days = almClampInt(it.days, 1, calYearLen(cal), 1);
-    if (days > 1) { const e = almEndMonthDay(it, cal); return `${calMonthName(cal, it.month)}${it.day}日–${calMonthName(cal, e.month)}${e.day}日`; }
-    return `${calMonthName(cal, it.month)}${it.day}日`;
-}
 
 // 历的「当前日期」锚点：年在扮演里极模糊，一律不用现实日期。按可靠性逐级取剧情内时间——
 // 柏宝书 → 记忆库 → 线 → 点 → 聊天正文 → 都拿不到才 fallback 1 月 1 日（默认从头开始）。
 // 只借月/日（年无意义）。所有「今天 / 即将到来 / 日历默认月 / 编辑器默认」都走这一个函数。
 // extractDayFromTime 已能解析「YYYY年M月D日 / YYYY-M-D / 元年正月初三」等，这里把它的
 // key 再抽成 {month,day}；相对天数（day-N）无月日，返回 null 让链继续往下走。
-function monthDayFromDayKey(key, cal = loadCalDesc()) {
-    if (!key) return null;
-    let m;
-    if ((m = String(key).match(/^(\d+)-(\d+)-(\d+)$/)) || (m = String(key).match(/^cn-(\d+)-(\d+)-(\d+)$/))) {
-        return almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
-    }
-    return null;
-}
 // 严格校验 {month,day} 是否落在当前历法有效范围（月 1..月数、日 1..该月天数）。
 // 越界返回 null（＝此来源不可信，交回 almTodayAnchor 链往下找），绝不 clamp 成错误日期。
 // 公历(DEFAULT_CAL)下 12 月 / 各月足长，真实 Date 与 cn- 日期恒通过，与旧行为等价；仅自定义历会拒。
-function almValidMonthDay(md, cal = loadCalDesc()) {
-    if (!md) return null;
-    const mo = md.month, da = md.day;
-    if (!Number.isFinite(mo) || !Number.isFinite(da)) return null;
-    if (mo < 1 || mo > calMonthCount(cal)) return null;
-    if (da < 1 || da > calMonthDays(cal, mo)) return null;
-    return { month: mo, day: da };
-}
 // 扫最近若干 AI 楼取剧情正文里写明的绝对日期。返回 { month, day, date }：
 //   date 只在阿拉伯「YYYY-M-D」（带真实年份）时构造成 JS Date（用于取现实周几）；古代历(cn-)/相对天数无现实年，date=null。
 // 存在意义：很多用户没装柏宝书、也没生成记忆摘要/点，但正文（场景头/状态栏）其实明写了日期——
 // 这正是喂进生成提示的同一份内容。不扫它就只能白白 fallback 到 1 月 1 日（论坛用户实测到的正是这条）。
-// 从最新楼往回扫、命中即返回 → 取到的是「最近一处」写明的日期，贴合「现在」；扫描上限兜住超长聊天。
-const ALM_CHAT_SCAN_LIMIT = 40;
-function almDateFromChat() {
-    const msgs = getContext().chat || [];
-    let scanned = 0;
-    for (let i = msgs.length - 1; i >= 0 && scanned < ALM_CHAT_SCAN_LIMIT; i--) {
-        const msg = msgs[i];
-        if (!msg || msg.is_user || !msg.mes) continue;
-        scanned++;
-        const raw = String(msg.mes);
-        const key = extractDayFromTime(raw);
-        const md  = monthDayFromDayKey(key);
-        if (!md) continue;
-        let date = null;
-        const ymd = /^(\d+)-(\d+)-(\d+)$/.exec(String(key));  // 纯阿拉伯 → 带真实年，可取现实周几；排除 cn-
-        if (ymd) { const d = new Date(+ymd[1], +ymd[2] - 1, +ymd[3]); if (!isNaN(d)) date = d; }
-        // 同楼里紧贴日期的「状态栏周几」token：供上层压过真实 getDay()（写死的剧情周几 > 公历）。缺则 null，退回 getDay。
-        const wd = weekdayAdjacent(raw);
-        return { month: md.month, day: md.day, date, wd };
-    }
-    return null;
-}
 function almTodayAnchor() {
     // ①′ 手动/自动确认锚点：最高优先。用户手钉或自动确认 judge 写入的日期，压过所有
     //     被动源——解决「正文都 X+1 号了，历还信较慢的柏宝书/记忆库停在 X 号」的相位差。
@@ -9834,12 +9771,6 @@ function almTodayAnchor() {
     return { month: 1, day: 1 };
 }
 // 月/日 → 一年中的第几天（1..年长；纯按月日、不涉年）。cal 缺省=公历(DEFAULT_CAL)，与旧行为完全等价。
-function almDayOfYear(month, day, cal = loadCalDesc()) {
-    const m = almClampInt(month, 1, calMonthCount(cal), 1);
-    let doy = almClampInt(day, 1, calMonthDays(cal, m), 1);
-    for (let i = 1; i < m; i++) doy += calMonthDays(cal, i);
-    return doy;
-}
 // 从锚点「今天」到下一次 (month, day) 还有几天（按年长环形，不涉年）。
 function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
     const total = calYearLen(cal);
@@ -9847,44 +9778,16 @@ function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
     return (almDayOfYear(month, day, cal) - almDayOfYear(a.month, a.day, cal) + total) % total;
 }
 // ── 周几（年-free）：以一对「参照日→周几」为锚，周几纯按日序偏移推算，全程不涉年、不 new Date 推月历 ──
-const ALM_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];  // 周日索引，对齐 JS getDay() / renderSchedule
 // 从文本里认出一个周几 token → 0(周日)..6(周六)，认不出返回 null。周末(末)语义模糊，不认。
-function parseWeekdayToken(text) {
-    const s = String(text || '');
-    let m = s.match(/(?:周|週|星期|禮拜|礼拜)\s*([一二三四五六日天])/);
-    if (m) return { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 }[m[1]];
-    m = s.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
-    if (m) return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(m[1].toLowerCase());
-    return null;
-}
 // 只认「规整状态栏格式」里紧贴日期的周几：一个日号(数字，可带 日/号)后仅隔空格/轻标点(不隔汉字)紧跟
 // 周几 token → 0..6，否则 null。存在意义：让「状态栏写死的周几」压过真实公历 getDay()（RP 用户要剧情
 // 自洽、不在乎真实历是周几）。之所以要求「紧贴日号」而非 parseWeekdayToken 那样认任意周几：正文对白里
 // 游离的「周五我们去吃饭」前面没有紧贴的日号，天然不匹配，避免把闲聊里的周几误当权威锚。
-const _WEEKDAY_ADJ_RE = /\d{1,2}\s*[日号]?[\s·.,，、｜|/／~〜—\-]{0,3}(?:(?:星期|週|周|礼拜|禮拜)\s*([一二三四五六日天])|\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b)/i;
-function weekdayAdjacent(text) {
-    const m = _WEEKDAY_ADJ_RE.exec(String(text || ''));
-    if (!m) return null;
-    if (m[1] != null) return { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 }[m[1]];
-    if (m[2]) return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(m[2].toLowerCase());
-    return null;
-}
 // 从一段时间文本抠「带真实公历年份」的日期，内置公历下用其现实周几当锚（年-正确），返回 {refDoy, refWd}。
 // 自定义历法（cal≠公历）或抠不到真实年（day-N / cn- / 无日期）→ null，交回上层退回「周几 token」。
 // 存在意义：柏宝书/记忆给了「2025年X月X日」时，应当像点 StartDate/正文那样按真实年**算**周几，
 // 而不是只抠 state.time 里那颗可能缺失的周几 token——token 缺了就会一路 fallback 到别处残留的真实年
 //（如某条点里模型顺手写进的现实年份 2026），导致「柏宝书明明 2025、月历却排成 2026」的相位错位。
-function calRealWeekdayRef(timeStr, cal = loadCalDesc()) {
-    if (cal !== DEFAULT_CAL) return null;                                     // 自定义历法：现实公历周几无意义
-    const m = /^(\d+)-(\d+)-(\d+)$/.exec(extractDayFromTime(timeStr) || '');  // 纯阿拉伯 YYYY-M-D，排除 day-N / cn-
-    if (!m) return null;
-    const refDoy = almDayOfYear(+m[2], +m[3], cal);
-    const tok = weekdayAdjacent(timeStr);            // 时间串里紧贴日期写死的周几：剧情自洽 > 真实公历，压过 getDay()
-    if (tok != null) return { refDoy, refWd: tok };
-    const d = new Date(+m[1], +m[2] - 1, +m[3]);
-    if (isNaN(d)) return null;
-    return { refDoy, refWd: d.getDay() };
-}
 // 取「参照日→周几」锚，优先级：柏宝书/记忆(真实年→现实周几，抠不到退周几token) > 聊天正文真实年 > 点 StartDate > 默认(1月1日=周一)。返回 {refDoy, refWd}。
 // 点 StartDate 排在正文之后：开点自动检测时它的年份是 forceStartDate 钉的固定 POINT_ANCHOR_YEAR，getDay() 为假年周几，不能压过正文里剧情/用户写的真实年。
 function almWeekdayRef(cal = loadCalDesc()) {
@@ -9948,53 +9851,8 @@ function almWeekdayFor(month, day, ref, cal = loadCalDesc()) {
     const r = ref || almWeekdayRef(cal);
     return ((r.refWd + almDayOfYear(month, day, cal) - r.refDoy) % 7 + 7) % 7;
 }
-// 日序(可越界，按年长环) → {month, day}。与 almDayOfYear 互逆，供多日节假日/七天条折算。
-function almMonthDayFromDoy(doy, cal = loadCalDesc()) {
-    const total = calYearLen(cal);
-    const mc = calMonthCount(cal);
-    let d = ((Math.round(doy) - 1) % total + total) % total + 1; // 归一到 1..年长
-    for (let m = 1; m <= mc; m++) {
-        const dim = calMonthDays(cal, m);
-        if (d <= dim) return { month: m, day: d };
-        d -= dim;
-    }
-    return { month: mc, day: calMonthDays(cal, mc) };
-}
-// 点条七天的日期/周几，历法感知。整轮渲染算一次 ctx：公历只带 cal；自定义历法预算 ref(较重)+锚点日序，避免逐日重算。
-function scheduleDayCtx() {
-    const cal = loadCalDesc();
-    const ref = almWeekdayRef(cal);   // 点周几改走年-free 锚（与历同源）；default 分支也要 ref
-    if (cal === DEFAULT_CAL) return { cal, ref };
-    const anchor = almTodayAnchor();
-    return { cal, ref, anchorDoy: almDayOfYear(anchor.month, anchor.day, cal) };
-}
-// 点条第 i 天 → {month, day, wd(0..6,周日索引)}。公历分支与旧 `new Date(startDate)+i` 逐字节等价；
-// 自定义历法从共享今天锚点 seed、逐日在本历法内步进，令点条与历/今头同源同锚。
-function scheduleDayLabel(i, startDate, ctx) {
-    if (ctx.cal === DEFAULT_CAL) {
-        // 月/日仍按公历步进（跨月/闰日正确）；但周几改用年-free 锚 almWeekdayFor，不用 startDate.getDay()——
-        // startDate 的年份是 forceStartDate 钉的 POINT_ANCHOR_YEAR（固定闰年、纯为拿月日），其 getDay() 是假年
-        // 周几，会和用户设定的现实周几错位（bug：2021/8/20 周五显示成 2024 的周二）。历也走同一锚，两者一致。
-        const d = new Date(startDate); d.setDate(d.getDate() + i);
-        const month = d.getMonth() + 1, day = d.getDate();
-        return { month, day, wd: almWeekdayFor(month, day, ctx.ref, ctx.cal) };
-    }
-    const { month, day } = almMonthDayFromDoy(ctx.anchorDoy + i, ctx.cal);
-    return { month, day, wd: almWeekdayFor(month, day, ctx.ref, ctx.cal) };
-}
 // 多日节假日的结束日 = 起始 + (days-1) 环形折回。days<=1 即单日，返回起点本身。
-function almEndMonthDay(it, cal = loadCalDesc()) {
-    const days = almClampInt(it.days, 1, calYearLen(cal), 1);
-    if (days <= 1) return { month: it.month, day: it.day };
-    return almMonthDayFromDoy(almDayOfYear(it.month, it.day, cal) + days - 1, cal);
-}
 // 条目(可能多日)是否覆盖某个日序 doy。按年长环，天然处理跨年尾接缝。
-function almItemCoversDoy(it, doy, cal = loadCalDesc()) {
-    const total = calYearLen(cal);
-    const start = almDayOfYear(it.month, it.day, cal);
-    const len = almClampInt(it.days, 1, total, 1);
-    return ((doy - start) % total + total) % total < len;
-}
 
 function sortAlmanacUpcoming(items, cal = loadCalDesc()) {
     const anchor = almTodayAnchor();   // 链较重，每次排序只算一次，复用给全部条目
@@ -10042,80 +9900,13 @@ function getAlmanacInjectText() {
 }
 
 // 当前历法描述（供间做「改历法」增量编辑参考）；内置公历返回 ''（无需告知，AI 直接按需新建）。
-function getCalDescInjectText() {
-    const cal = loadCalDesc();
-    if (cal === DEFAULT_CAL) return '';
-    const months = cal.months.map((m, i) => `${i + 1}=${m.name}(${m.days}天)`).join('、');
-    return `${cal.era ? '纪年：' + cal.era + '；' : ''}一年 ${calMonthCount(cal)} 个月、共 ${calYearLen(cal)} 天；各月：${months}`;
-}
 
 // AI 输出解析：<almanac_widget> 内 Item: name|type|month|day|days|displayDate|note
-function almMapType(t) {
-    const s = String(t || '').toLowerCase().trim();
-    if (['festival', '节日', '节庆', 'holiday', '节假日'].includes(s)) return 'festival';
-    if (['birthday', '生日', '诞辰'].includes(s)) return 'birthday';
-    if (['anniversary', '纪念日', '纪念'].includes(s)) return 'anniversary';
-    return 'custom';
-}
-function parseAlmanacWidget(raw) {
-    const s = String(raw || '');
-    const m = s.match(/<almanac_widget>([\s\S]*?)<\/almanac_widget>/i);
-    const body = m ? m[1] : s;
-    const out = [];
-    for (const line of body.split('\n')) {
-        const mm = line.match(/^\s*Item\s*:\s*(.+)$/i);
-        if (!mm) {
-            // 续行救援：提示词要求「说明单行不换行」，但模型对长说明常忍不住折行。
-            // 非 Item 行不是垃圾，而是上一条说明被换行截断的尾巴——接回上一条 note，
-            // 别再像旧版那样静默丢弃（老症状：几条较长的纪念日说明只显示到折行处）。
-            const cont = line.trim();
-            if (cont && out.length) out[out.length - 1].note = (out[out.length - 1].note + cont).trim();
-            continue;
-        }
-        const parts = mm[1].split('|').map(x => x.trim());
-        const [name, type, month, day, days, displayDate, ...noteRest] = parts;
-        const it = normalizeAlmItem({
-            name, type: almMapType(type), month, day, days, displayDate,
-            note: noteRest.join('|').trim(), source: 'ai', pin: false,
-        });
-        if (it) out.push(it);
-    }
-    return out;
-}
 
 // 解析间落地的 <era_widget>（纪年/历法描述符）：一行可选 Era: 纪年名 + N 行 Month: 月名|天数。
 // 交给 normalizeCalDesc 统一校验裁剪（月名≤12字、天数1-60、月数≤60、年长≤2000），无 Month 行/校验不过 → null。
-function parseEraWidget(raw) {
-    const s = String(raw || '');
-    const m = s.match(/<era_widget>([\s\S]*?)<\/era_widget>/i);
-    const body = m ? m[1] : s;
-    let era = '';
-    const months = [];
-    for (const line of body.split('\n')) {
-        const em = line.match(/^\s*Era\s*:\s*(.+)$/i);
-        if (em) { era = em[1].trim(); continue; }
-        const mm = line.match(/^\s*Month\s*:\s*(.+)$/i);
-        if (!mm) continue;
-        const [name, days] = mm[1].split('|').map(x => x.trim());
-        months.push({ name, days });
-    }
-    return normalizeCalDesc({ era, months });
-}
 
-function almDedupKey(it) { return `${it.name.toLowerCase()}|${it.month}|${it.day}`; }
 // 重算合并：保留所有已锁 + 所有自填(user)，丢弃未锁 AI 项，再并入新 AI 项（按名+月日去重）。
-function mergeAlmanac(oldItems, aiItems) {
-    const kept = oldItems.filter(it => it.pin || it.source === 'user');
-    const seen = new Set(kept.map(almDedupKey));
-    const merged = [...kept];
-    for (const it of aiItems) {
-        const k = almDedupKey(it);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        merged.push(it);
-    }
-    return merged;
-}
 
 // ── 渲染 ──
 function closeActionMenus(except = null) {
@@ -10270,20 +10061,26 @@ function almRowHtml(it, ctx) {
     const active = days > 1 && ctx?.todayDoy != null && almItemCoversDoy(it, ctx.todayDoy, ctx?.cal);
     const activeTag = active ? '<span class="sp-alm-active-tag">进行中</span>' : '';
     const srcTag = it.source === 'user' ? '<span class="sp-alm-src-tag">自填</span>' : '';
+    // 批量模式：日历条目对应 'almanac' scope。命中当前 scope 才出勾选框、隐藏行操作钮。
+    const batchOn = _batchScope === 'almanac';
+    const checked = batchOn && _batchSelected.has(it.id);
+    const checkbox = batchOn
+        ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此条">`
+        : '';
     // 三行布局（旧两行把日期/周几/名字/标签全塞第一行，长节日名会把末尾操作按钮顶掉）：
     //   L1 = 日期 + 周几 + 持续天数「共N天」…… 右对齐三个操作按钮（全是短、定宽内容，按钮永不被挤掉）
     //   L2 = 节日名 + 类型标签 + 自填 + 进行中（可变长的名字独占一行、溢出省略号，不再顶按钮）
     //   L3 = 备注（整行）
-    return `<div class="sp-alm-item sp-alm-type-${meta.cls}${it.pin ? ' sp-alm-pinned' : ''}" data-id="${it.id}">
+    return `<div class="sp-alm-item sp-alm-type-${meta.cls}${it.pin ? ' sp-alm-pinned' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}" data-id="${it.id}">
         <div class="sp-alm-top">
-            <i class="fa-solid ${meta.icon} sp-alm-date-icon"></i>
+            ${checkbox}<i class="fa-solid ${meta.icon} sp-alm-date-icon"></i>
             <span class="sp-alm-date-txt">${escapeHtml(almDateLabel(it, ctx?.cal))}</span>
             <span class="sp-alm-wd">${wd}</span>${spanTag}
-            <span class="sp-alm-acts">
+            ${batchOn ? '' : `<span class="sp-alm-acts">
                 <button class="sp-icon-btn sp-alm-pin" data-id="${it.id}" title="${it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留'}"><i class="fa-solid ${it.pin ? 'fa-lock' : 'fa-lock-open'}"></i></button>
                 <button class="sp-icon-btn sp-alm-edit" data-id="${it.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
                 <button class="sp-icon-btn sp-alm-del" data-id="${it.id}" title="删除"><i class="fa-solid fa-trash"></i></button>
-            </span>
+            </span>`}
         </div>
         <div class="sp-alm-meta">
             <span class="sp-alm-name">${escapeHtml(it.name)}</span>
@@ -10311,7 +10108,8 @@ function renderAlmanacUpcoming() {
     const anchor = almTodayAnchor();
     const cal = loadCalDesc();
     const ctx = { cal, wkRef: almWeekdayRef(cal), todayDoy: almDayOfYear(anchor.month, anchor.day, cal) };
-    return `<div class="sp-alm-list">${sortAlmanacUpcoming(items, cal).map(it => almRowHtml(it, ctx)).join('')}</div>`;
+    const sorted = sortAlmanacUpcoming(items, cal);
+    return batchBarHtml('almanac', sorted.length, '批量删除', true) + `<div class="sp-alm-list">${sorted.map(it => almRowHtml(it, ctx)).join('')}</div>`;
 }
 
 // ─── 暗账页（历面板第三 sheet：标注开关/间隔 + 手动标注 + 条目只读列表）──────────
@@ -10351,10 +10149,17 @@ function ledgerRowHtml(e, cal, archived = false) {
     // 无条件挪到第二行、换行标准统一（不再靠 flex-wrap 超出才折）。三者全空则整行不渲染。
     const dates = `${startTag}${cyc}${due}`;
     const r15 = dates ? `<div class="sp-ledger-dates">${dates}</div>` : '';
+    // 批量模式：归档条对应 'ledger-archive'、活跃条对应 'ledger-active'。命中当前 scope 才出勾选框、隐藏行操作钮。
+    const batchScope = archived ? 'ledger-archive' : 'ledger-active';
+    const batchOn = _batchScope === batchScope;
+    const checked = batchOn && _batchSelected.has(e.id);
+    const checkbox = batchOn
+        ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此条">`
+        : '';
     // 第一行＝元信息头（类型 + 人物 + 操作钮）；事由独占整行放在头下方，长了就自己逐行换、不再挤钮组。
-    const cls = `sp-ledger-row sp-ledger-${ledgerTypeClass(e.类型)}${locked ? ' sp-ledger-locked' : ''}${paused ? ' sp-ledger-paused' : ''}${archived ? ' sp-ledger-archived' : ''}`;
+    const cls = `sp-ledger-row sp-ledger-${ledgerTypeClass(e.类型)}${locked ? ' sp-ledger-locked' : ''}${paused ? ' sp-ledger-paused' : ''}${archived ? ' sp-ledger-archived' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}`;
     return `<div class="${cls}" data-id="${escapeAttr(e.id)}">
-        <div class="sp-ledger-r1">${badge}${who}${acts}</div>
+        <div class="sp-ledger-r1">${checkbox}${badge}${who}${batchOn ? '' : acts}</div>
         <div class="sp-ledger-gist-row"><span class="sp-ledger-gist">${escapeHtml(e.事由)}</span></div>
         ${r15}
         <div class="sp-ledger-r2">${escapeHtml(e.现状 || '（无现状）')}</div>
@@ -10461,9 +10266,68 @@ function saveLedgerEditor() {
     closeLedgerEditor();
 }
 
+// 批量操作条（可复用框架）：进入某 scope 后渲在列表顶部。执行动作文案/危险度由调用方按 scope 传入。
+//   scope: 当前列表 scope 串；total: 该列表条目数；actionLabel: 执行钮文案（如「批量归档」「批量删除」）；danger: 执行钮是否红。
+// 未进入该 scope 时返回「进入批量」入口钮；进入后返回「全选 + 计数 + 执行 + 退出」条。
+function batchBarHtml(scope, total, actionLabel, danger) {
+    if (total <= 0) return '';
+    if (_batchScope !== scope) {
+        return `<div class="sp-batch-bar"><button class="sp-mini-btn sp-batch-enter" data-scope="${escapeAttr(scope)}"><i class="fa-solid fa-list-check"></i> 批量</button></div>`;
+    }
+    const n = _batchSelected.size;
+    const allChecked = n > 0 && n >= total;
+    return `<div class="sp-batch-bar sp-batch-active">
+        <label class="sp-batch-all"><input type="checkbox" class="sp-batch-selall" ${allChecked ? 'checked' : ''}><span>全选</span></label>
+        <span class="sp-batch-count">已选 ${n} / ${total}</span>
+        <span class="sp-batch-bar-actions">
+            <button class="sp-mini-btn sp-batch-exit">退出</button>
+            <button class="sp-mini-btn ${danger ? 'sp-mini-btn-danger' : ''} sp-batch-exec" data-scope="${escapeAttr(scope)}" ${n ? '' : 'disabled'}>${escapeHtml(actionLabel)}</button>
+        </span>
+    </div>`;
+}
+
+// 批量模式允许的三个 scope（严格限定入口：不接 'calendar' 模板批量删除）。
+const BATCH_SCOPES = ['almanac', 'ledger-active', 'ledger-archive'];
+
+// 当前 scope 内的全部条目 id（供「全选」与执行过滤）。
+function batchScopeIds(scope) {
+    if (scope === 'almanac') return loadAlmanac().map(it => it.id);
+    if (scope === 'ledger-active') return ledger.listEntries().map(e => e.id);
+    if (scope === 'ledger-archive') return ledger.listEntries({ includeClosed: true }).filter(e => e.状态 === '已了结').map(e => e.id);
+    return [];
+}
+
+// 按 scope 执行批量动作。动作彼此独立、确认后机械写回，随后退批并刷新面板。
+async function execBatch(scope, ids) {
+    if (!ids.length) return;
+    if (scope === 'almanac') {
+        const list = loadAlmanac();
+        const ok = await spConfirm({ title: '批量删除日期', body: `确定删除选中的 ${ids.length} 个日期条目？不可恢复。`, confirmText: '删除', cancelText: '取消' });
+        if (!ok) return;
+        saveAlmanacItems(list.filter(x => !ids.includes(x.id)));
+        batchReset();
+        if (axisState.almanacMode) renderAlmanacPanel();
+        syncLatestAlmanacBlock();
+        showToast(`已删除 ${ids.length} 个日期条目`);
+    } else if (scope === 'ledger-active') {
+        const ok = await spConfirm({ title: '批量归档', body: `把选中的 ${ids.length} 个活跃刻度移入归档？可在归档里捞回。`, confirmText: '归档', cancelText: '取消' });
+        if (!ok) return;
+        ids.forEach(id => ledger.closeEntry(id));
+        batchReset();
+        if (axisState.almanacMode) renderAlmanacPanel();
+        showToast(`已归档 ${ids.length} 个刻度条目`);
+    } else if (scope === 'ledger-archive') {
+        const ok = await spConfirm({ title: '批量删除', body: `选中的 ${ids.length} 个已归档刻度将被永久删除，无法恢复。确定？`, confirmText: '删除', cancelText: '取消' });
+        if (!ok) return;
+        ids.forEach(id => ledger.removeEntry(id));
+        batchReset();
+        if (axisState.almanacMode) renderAlmanacPanel();
+        showToast(`已删除 ${ids.length} 个刻度条目`);
+    }
+}
+
 function renderLedgerSheet() {
     const s = getSettings();
-    const on = s.ledgerCaptureEnabled === true;
     const iv = getLedgerCaptureInterval();
     const busy = isCapturingLedger;
     const judging = isJudgingLedger;
@@ -10487,7 +10351,7 @@ function renderLedgerSheet() {
                     <i class="fa-solid fa-chevron-${_ledgerArchiveOpen ? 'down' : 'right'}"></i>
                     <span>已了结 ${closed.length} 条</span>
                 </button>
-                ${_ledgerArchiveOpen ? `<div class="sp-ledger-list sp-ledger-archive-list">${closed.map(e => ledgerRowHtml(e, cal, true)).join('')}</div>` : ''}
+                ${_ledgerArchiveOpen ? batchBarHtml('ledger-archive', closed.length, '批量删除', true) + `<div class="sp-ledger-list sp-ledger-archive-list">${closed.map(e => ledgerRowHtml(e, cal, true)).join('')}</div>` : ''}
            </div>`
         : '';
     if (!entries.length) {
@@ -10495,121 +10359,24 @@ function renderLedgerSheet() {
             : `暂无活跃刻度条目。聊几楼后${on ? '自动标注' : '（先勾上「自动标注」）'}，或点右上「立即标注」。`;
         return ctrl + `<div class="sp-ledger-empty">${hint}</div>` + archive;
     }
-    return ctrl + `<div class="sp-ledger-list">${entries.map(e => ledgerRowHtml(e, cal)).join('')}</div>` + archive;
+    return ctrl + batchBarHtml('ledger-active', entries.length, '批量归档', false) + `<div class="sp-ledger-list">${entries.map(e => ledgerRowHtml(e, cal)).join('')}</div>` + archive;
 }
 
 // 历不挂年：年在实际游玩里是极模糊的概念（绝大多数卡都不是现实年份），只按月/日排。
 // 月历「周几」对齐不锚定某一年，而是靠 almWeekdayRef 的日序偏移推（见 almWeekdayFor）。
 // 2 月固定给到 29 天以容纳闰日生日/纪念日。
-const ALM_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 // ─── 日历描述符（历法 / 纪年）────────────────────────────────────────────────
 // 让历脱离硬编码公历：整套历算术本funnel到「月长数组 + 7 天周」两个常量，把月长数组换成
 // 一份可由「间」落地（<era_widget>）的描述符即可历法无关。周长本期固定 7（scope 决定），
 // 描述符只带 era（纪年名）+ months（每月名/天数）。**缺省 = DEFAULT_CAL = 与公历完全等价**，
 // 无描述符时行为一字不差 → 零向后兼容风险。存储镜像 getAlmanacKey（固定 user scope 单例）。
-const DEFAULT_CAL = Object.freeze({
-    era   : '',
-    months: Object.freeze(ALM_DAYS_IN_MONTH.map((d, i) => Object.freeze({ name: `${i + 1}月`, days: d }))),
-});
-function getCalDescKey() { return keyDesc('caldesc', 'user', ''); }   // 固定 user scope，与视角无关（镜像 getAlmanacKey）
-function normalizeCalDesc(raw) {
-    if (!raw || typeof raw !== 'object') return null;
-    const era = String(raw.era || '').trim().slice(0, 24);
-    const months = (Array.isArray(raw.months) ? raw.months : [])
-        .slice(0, 60)   // 最多 60 个月，防滥用撑爆
-        .map((m, i) => ({
-            name: (String(m?.name || '').trim().slice(0, 12)) || `${i + 1}月`,
-            days: almClampInt(m?.days, 1, 60, 30),
-        }));
-    if (!months.length) return null;                                   // 无月 → 不成历法，退默认
-    if (months.reduce((a, b) => a + b.days, 0) > 2000) return null;    // 年过长 → 视为无效
-    return { era, months };
-}
-function loadCalDesc() { return normalizeCalDesc(readStore(getCalDescKey())) || DEFAULT_CAL; }
-function saveCalDesc(desc) {
-    const n = normalizeCalDesc(desc);
-    if (!n) return false;
-    writeStore(getCalDescKey(), { ...n, ts: Date.now() });
-    return true;
-}
 // 派生器（cal 缺省退 DEFAULT_CAL；m 为 1..monthCount）：
 // cal 兜底：非对象 / 无 months / map 下标误当 cal 传入等坏值一律退 DEFAULT_CAL（原 `cal||DEFAULT_CAL` 挡不住真值坏对象）。
-function _cal(cal) { return (cal && Array.isArray(cal.months) && cal.months.length) ? cal : DEFAULT_CAL; }
-function calYearLen(cal)     { return _cal(cal).months.reduce((a, b) => a + b.days, 0); }
-function calMonthCount(cal)  { return _cal(cal).months.length; }
-function calMonthDays(cal, m){ const M = _cal(cal).months; return M[almClampInt(m, 1, M.length, 1) - 1].days; }
-function calMonthName(cal, m){ const M = _cal(cal).months; const i = almClampInt(m, 1, M.length, 1) - 1; return M[i].name || `${i + 1}月`; }
-function calHasEra(cal)      { return !!String(_cal(cal).era || '').trim(); }
 
-const CALENDAR_LIMITS = Object.freeze({
-    eraNameLength: 24,
-    monthNameLength: 12,
-    monthCount: 60,
-    monthDaysMin: 1,
-    monthDaysMax: 60,
-    yearDays: 2000,
-    defaultMonthDays: 30,
-});
 
-const CALENDAR_TEMPLATE_NAME_LENGTH = 40;
 
-function cloneCalDesc(cal) {
-    return { era: String(cal.era || ''), months: cal.months.map(month => ({ name: String(month.name), days: Number(month.days) })) };
-}
 
-function validateCalendarDesc(raw) {
-    const era = String(raw?.era || '').trim();
-    if (era.length > CALENDAR_LIMITS.eraNameLength) return { error: `纪年名最多 ${CALENDAR_LIMITS.eraNameLength} 个字` };
-    const months = Array.isArray(raw?.months) ? raw.months : [];
-    if (!months.length) return { error: '至少需要一个月份' };
-    if (months.length > CALENDAR_LIMITS.monthCount) return { error: `最多只能有 ${CALENDAR_LIMITS.monthCount} 个月份` };
-    const out = [];
-    for (let index = 0; index < months.length; index++) {
-        const name = String(months[index]?.name || '').trim();
-        const days = Number(months[index]?.days);
-        if (!name) return { error: `第 ${index + 1} 个月需要填写名称` };
-        if (name.length > CALENDAR_LIMITS.monthNameLength) return { error: `第 ${index + 1} 个月名称最多 ${CALENDAR_LIMITS.monthNameLength} 个字` };
-        if (!Number.isInteger(days) || days < CALENDAR_LIMITS.monthDaysMin || days > CALENDAR_LIMITS.monthDaysMax) return { error: `${name}的天数必须是 ${CALENDAR_LIMITS.monthDaysMin}–${CALENDAR_LIMITS.monthDaysMax} 的整数` };
-        out.push({ name, days });
-    }
-    if (out.reduce((sum, month) => sum + month.days, 0) > CALENDAR_LIMITS.yearDays) return { error: `全年总天数不能超过 ${CALENDAR_LIMITS.yearDays} 天` };
-    return { value: { era, months: out } };
-}
-
-function calendarTemplateId() { return 'ct' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-
-function loadCalendarTemplates() {
-    const list = Array.isArray(getSettings().calendarTemplates) ? getSettings().calendarTemplates : [];
-    return list.map(item => {
-        const cal = validateCalendarDesc(item).value;
-        const id = String(item?.id || '');
-        const name = String(item?.name || '').trim();
-        return cal && id && name ? { ...cal, id, name, createdAt: Number(item.createdAt) || 0, updatedAt: Number(item.updatedAt) || 0 } : null;
-    }).filter(Boolean);
-}
-
-function saveCalendarTemplates(list) {
-    getSettings().calendarTemplates = list.map(item => ({
-        id: item.id,
-        name: item.name,
-        era: item.era,
-        months: item.months.map(month => ({ name: month.name, days: month.days })),
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-    }));
-    saveSettingsDebounced();
-}
-
-function renameCalendarTemplate(list, id, name) {
-    return list.map(item => item.id === id ? { ...item, name, updatedAt: Date.now() } : item);
-}
-
-function calendarTemplateBindings() {
-    const settings = getSettings();
-    if (!settings.calendarTemplateBindings || typeof settings.calendarTemplateBindings !== 'object' || Array.isArray(settings.calendarTemplateBindings)) settings.calendarTemplateBindings = {};
-    return settings.calendarTemplateBindings;
-}
 
 function currentCharacterCards() {
     const ctx = getContext();
@@ -10652,12 +10419,6 @@ function calendarBindingCandidates(cards, bindings, templateId, query = '') {
     });
 }
 
-function sortCalendarTemplatesForCurrent(list, currentTemplateId) {
-    return list.map((template, index) => ({ template, index }))
-        .sort((a, b) => Number(b.template.id === currentTemplateId) - Number(a.template.id === currentTemplateId) || a.index - b.index)
-        .map(item => item.template);
-}
-
 function openCalendarManager() {
     axisState._almanacEditor = null;
     axisState._almanacManager = { editing: false, draft: cloneCalDesc(loadCalDesc()), error: '', templatesOpen: false, bindTemplateId: null, bindQuery: '' };
@@ -10689,8 +10450,6 @@ function copyCalendarMonth(months, index, maxMonths) {
     months.splice(index + 1, 0, { name: source.name, days: source.days });
     return true;
 }
-
-function calendarSummary(cal) { return `一年 ${calMonthCount(cal)} 个月、共 ${calYearLen(cal)} 天`; }
 
 function renderCalendarCard() {
     const manager = axisState._almanacManager;
@@ -10757,27 +10516,36 @@ function renderCalendarTemplates() {
     const currentAvatar = charStableKey(getContext());
     const currentTemplateId = currentAvatar ? calendarBoundTemplateId(bindings, currentAvatar, cards) : '';
     const countFor = id => Object.values(bindings).filter(value => value === id).length;
-    const rows = sortCalendarTemplatesForCurrent(loadCalendarTemplates(), currentTemplateId).map(template => {
+    const batchOn = _batchScope === 'calendar';
+    const templateRows = sortCalendarTemplatesForCurrent(loadCalendarTemplates(), currentTemplateId);
+    const rows = templateRows.map(template => {
         const bindOpen = manager.bindTemplateId === template.id;
         const isCurrent = template.id === currentTemplateId;
         const bindTitle = isCurrent ? '当前角色已绑定此模板' : '绑定角色卡';
-        return `<div class="sp-alm-manager-template-entry${isCurrent ? ' sp-alm-manager-template-current' : ''}" data-template-id="${escapeAttr(template.id)}">
-            <div class="sp-alm-manager-template-row"><div class="sp-alm-manager-template-main">
-                <div class="sp-alm-manager-template-name">${escapeHtml(template.name)}</div>
-                <div class="sp-alm-manager-template-meta">已绑定 ${countFor(template.id)} 张角色卡</div>
-            </div><span class="sp-alm-manager-template-actions">
+        const checked = batchOn && _batchSelected.has(template.id);
+        const checkbox = batchOn
+            ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此模板">`
+            : '';
+        const acts = batchOn ? '' : `<span class="sp-alm-manager-template-actions">
                 <button class="sp-icon-btn sp-alm-manager-template-rename" data-id="${escapeAttr(template.id)}" title="重命名模板" aria-label="重命名模板"><i class="fa-solid fa-i-cursor"></i></button>
                 <button class="sp-icon-btn sp-alm-manager-template-apply" data-id="${escapeAttr(template.id)}" title="应用此模板" aria-label="应用此模板"><i class="fa-solid fa-file-import"></i></button>
                 <button class="sp-icon-btn sp-alm-manager-template-bind${isCurrent ? ' sp-btn-active' : ''}" data-id="${escapeAttr(template.id)}" title="${bindTitle}" aria-label="${bindTitle}" aria-expanded="${bindOpen}"><i class="fa-solid fa-link"></i></button>
                 <button class="sp-icon-btn sp-alm-manager-template-delete" data-id="${escapeAttr(template.id)}" title="删除模板" aria-label="删除模板"><i class="fa-solid fa-trash"></i></button>
-            </span></div>
-            ${bindOpen ? renderCalendarBindingEditor(template.id, cards, bindings) : ''}
+            </span>`;
+        return `<div class="sp-alm-manager-template-entry${isCurrent ? ' sp-alm-manager-template-current' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}" data-template-id="${escapeAttr(template.id)}">
+            <div class="sp-alm-manager-template-row">${checkbox}<div class="sp-alm-manager-template-main">
+                <div class="sp-alm-manager-template-name">${escapeHtml(template.name)}</div>
+                <div class="sp-alm-manager-template-meta">已绑定 ${countFor(template.id)} 张角色卡</div>
+            </div>${acts}</div>
+            ${!batchOn && bindOpen ? renderCalendarBindingEditor(template.id, cards, bindings) : ''}
         </div>`;
     }).join('');
+    const batchBar = batchBarHtml('calendar', templateRows.length, '批量删除', true);
     return `<section class="sp-alm-manager-templates">
         <button class="sp-alm-manager-template-head" type="button" aria-expanded="${manager.templatesOpen}"><span>模板管理</span><i class="fa-solid fa-chevron-${manager.templatesOpen ? 'up' : 'down'}"></i></button>
         ${manager.templatesOpen ? `<div class="sp-alm-manager-template-body">
             <button type="button" class="sp-alm-manager-template-save-current"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>保存当前历法为模板</span></button>
+            ${batchBar}
             <div class="sp-alm-manager-template-list">${rows || '<div class="sp-alm-manager-empty-templates">还没有历法模板</div>'}</div>
         </div>` : ''}
     </section>`;
@@ -10909,18 +10677,6 @@ function renderCalendarManager() {
         <span class="sp-alm-editor-title">历法管理</span>
     </div><div class="sp-alm-manager-hint">不想自己填？<button type="button" class="sp-alm-manager-chat-link">和间聊聊吧 →</button></div>
     <div class="sp-alm-body"><div class="sp-alm-editor-body">${renderCalendarManagerBody()}</div></div>`;
-}
-
-function calendarConflicts(items, cal) {
-    return items.map(item => {
-        const month = Number(item.month), day = Number(item.day), days = Number(item.days || 1);
-        const invalid = month < 1 || month > calMonthCount(cal) || day < 1 || day > calMonthDays(cal, Math.min(Math.max(month, 1), calMonthCount(cal))) || days < 1 || days > calYearLen(cal);
-        if (!invalid) return null;
-        const fixedMonth = Math.min(Math.max(Number.isFinite(month) ? month : 1, 1), calMonthCount(cal));
-        const fixedDay = Math.min(Math.max(Number.isFinite(day) ? day : 1, 1), calMonthDays(cal, fixedMonth));
-        const fixedDays = Math.min(Math.max(Number.isFinite(days) ? days : 1, 1), calYearLen(cal));
-        return { item, fixed: { ...item, month: fixedMonth, day: fixedDay, days: fixedDays, displayDate: (fixedMonth !== month || fixedDay !== day) ? '' : item.displayDate } };
-    }).filter(Boolean);
 }
 
 // 调用方负责传入已规范化的历法；本函数只处理日期冲突、统一写入和消费者刷新。
@@ -11102,6 +10858,7 @@ function almSetSheet(sheet) {
     if (axisState._almanacSheet === sheet) return;
     axisState._almanacSheet = sheet;
     axisState._almanacCalDay = null;
+    batchReset();   // 切换 sheet 退出批量模式，避免跨列表误删
     renderAlmanacPanel();
 }
 function almNavMonth(delta) {
@@ -12801,216 +12558,21 @@ function showToast(msg, onClick, isError = false) {
 
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
-const TYPE_META = {
-    main  : { icon: 'fa-bolt',      label: '明线', cls: 'sp-type-world'     },
-    hidden: { icon: 'fa-eye-slash', label: '暗线', cls: 'sp-type-major'     },
-    bond  : { icon: 'fa-heart',     label: '红线', cls: 'sp-type-character' },
-};
-
-// 天气图标：按天气文案关键字挑一个 emoji（AI 瞎编的中文天气 → 视觉点缀）。顺序有讲究，
-// 先判复合词（雨夹雪/阵雨）再判单字，避免"雨夹雪"被"雪"先截胡。
-
-// 单日天气小条：天气或温度任一有值才渲染，两者皆空 → 返回空串（退化为无天气的旧面板）。
-
-function renderSchedule(raw, userName, perspective = 'user') {
-    const { days, future, startDate } = parseCalendar(raw);
-    const hasFuture = future && future.events.length > 0;
-
-    const totalTabs = days.length + (hasFuture ? 1 : 0);
-    const chipCls   = perspective === 'char' ? 'sp-char-chip' : 'sp-user-chip';
-
-    // 历「同步到点」在飞时，点刷新圆圈置灰禁点（同步会后台重写点，此刻手动刷新会跟它抢 store）
-    const refreshBusy = axisState._almSyncingPoint ? ' sp-refresh-busy' : '';
-    // char 视角头部多一个 📌：把当前 char 固定/取消固定到 TA▾ 抽屉（查看与固定解耦，此为唯一固定动作）。
-    const isPinned = perspective === 'char' && store.isPinnedChar(String(userName || '').trim());
-    // 固定态只用**颜色**区分，图标恒 fa-solid fa-thumbtack：FA 免费版无 fa-regular fa-thumbtack，
-    // 用 regular 会静默回落到 solid → 固定/未固定长得一模一样（老 bug「图标没变化」）。照 .sp-alm-today-pin 套路。
-    const pinBtn = perspective === 'char'
-        ? `<button class="sp-panel-refresh sp-point-pin-char${isPinned ? ' sp-pinned' : ''}" data-name="${escapeAttr(String(userName || '').trim())}" title="${isPinned ? '已固定·点击取消固定' : '固定 TA 到 TA▾ 抽屉'}"><i class="fa-solid fa-thumbtack"></i></button>`
-        : '';
-    const header = `<div class="sp-schedule-header">
-        <span class="${chipCls}">${escapeHtml(userName)}</span>
-        <span class="sp-schedule-label">的点</span>
-        ${pinBtn}
-        <button class="sp-panel-refresh sp-refresh-schedule${refreshBusy}" title="${_almSyncingPoint ? '点正在同步中，稍候…' : '重新生成点'}"><i class="fa-solid fa-rotate-right"></i></button>
-    </div>` + SP_JUMP_HINT_POINT;
-
-    // Parse failed (AI leaked prompt / malformed output) — still render header
-    // so the user has a refresh button to reroll. Otherwise they get stuck
-    // staring at raw garbage with no way to try again.
-    if (days.length === 0 && !hasFuture) {
-        return header + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
-    }
-
-    const ctx = scheduleDayCtx();
-    const tabs = days.map((_, i) => {
-        let numLabel = String(i + 1);
-        let wdLabel = '';
-        if (startDate) {
-            const { month, day, wd } = scheduleDayLabel(i, startDate, ctx);
-            wdLabel  = ALM_WEEKDAYS[wd];
-            numLabel = `${month}/${day}`;
-        }
-        return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
-            <span class="sp-tab-num">${numLabel}</span>
-            ${wdLabel ? `<span class="sp-tab-wd">${wdLabel}</span>` : ''}
-        </button>`;
-    });
-    if (hasFuture) tabs.push(`<button class="sp-tab" data-day="${days.length}">
-        <span class="sp-tab-num">未来</span>
-    </button>`);
-
-    const panels = days.map((day, di) => {
-        let dateLabel = `第${di + 1}天`;
-        if (startDate) {
-            const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            dateLabel = `${month}月${dd}日 · ${ALM_WEEKDAYS[wd]}`;
-        }
-        return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
-    });
-    if (hasFuture) panels.push(
-        `<div class="sp-day-panel sp-future-panel" style="width:calc(100%/${totalTabs})">${future.events.map((ev, ei) => renderEvent(ev, 'future', ei, '', '', '未来')).join('')}</div>`
-    );
-
-    const debug = days.length < 3 ? `
-        <details class="sp-debug"><summary>⚠ 仅解析到 ${days.length} 天</summary>
-        <pre class="sp-debug-raw">${escapeHtml(raw)}</pre></details>` : '';
-
-    return `${header}<div class="sp-tab-bar" data-total="${totalTabs}">${tabs.join('')}</div>
-        <div class="sp-days-wrap"><div class="sp-days-track" data-total="${totalTabs}" style="width:${totalTabs * 100}%">${panels.join('')}</div></div>${debug}`;
-}
-
-function parseCalendar(raw) {
-    const m = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-    // Strip HTML comments across the whole widget body before splitting into lines.
-    // LLM often emits multi-line <!-- 日程思考: ... --> blocks; per-line startsWith
-    // would only skip the first line and treat the rest as content.
-    const content = (m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, '');
-
-    const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
-    let startDate = null;
-    if (dateMatch) {
-        const d = new Date(dateMatch[1]);
-        if (!isNaN(d)) startDate = d;
-    }
-
-    const days = []; let cur = null; let inFuture = false; let future = null;
-    for (const line of content.split('\n')) {
-        const t = line.trim();
-        if (!t) continue;
-        if (/^Day\s*:?\s*\d+/i.test(t) || /^第[一二三四五六七\d]+天/.test(t)) {
-            if (cur && !inFuture) days.push(cur);
-            // 日头可带天气：Day: N|天气|温度（旧数据无管道段 → 天气/温度为空，退化为旧行为）
-            const dayParts = t.split('|').slice(1).map(s => s.trim());
-            cur = { events: [], weather: dayParts[0] || '', temp: dayParts[1] || '' };
-            inFuture = false; continue;
-        }
-        if (/^Future\s*:/i.test(t) || /^未来\s*:/i.test(t)) {
-            if (cur && !inFuture) days.push(cur);
-            future = { events: [] }; cur = future; inFuture = true; continue;
-        }
-        if (/^Event\s*:/i.test(t)) {
-            if (!cur) cur = { events: [] };
-            const parts = t.replace(/^Event\s*:\s*/i, '').split('|');
-            if (parts.length >= 4) cur.events.push({
-                type: (parts[0]||'user').trim().toLowerCase(), title: (parts[1]||'').trim(),
-                desc: (parts[2]||'').trim(), time: (parts[3]||'').trim(),
-                location: (parts[4]||'').trim(), npcAction: (parts[5]||'').trim(),
-                pin: (parts[6]||'').trim().toLowerCase() === 'true',   // F5：pin 存 raw 第7段（AI 只出前6段→false），机制对齐线
-            });
-        }
-    }
-    if (cur && !inFuture) days.push(cur);
-    return { days: days.filter(d => d.events.length > 0), future, startDate };
-}
-
-// ─── 点·锁定（F5，机制对齐「线」）──────────────────────────────────────────────
-// 点是 AI 每轮从零重写的 raw 文本、事件无 id，故照抄线：身份认 title（如线认 name），
-// pin 直接写进 raw（Event 行第 7 段），重算时 mergePinnedPoints(oldRaw, aiRaw) 从旧 raw
-// 读锁定项、按 title 回并到新 raw——与 mergePinnedLines 完全对称。历因是稳定结构化存储
-//（条目不被整段重写）用真 id 存 pin，天然不同，故不在此列。
-function samePoint(a, b) {
-    if (!a || !b) return false;
-    const ta = String(a.title || '').trim();
-    const tb = String(b.title || '').trim();
-    return !!ta && ta === tb;
-}
-
-// Event 行序列化：type|title|desc|time|location|npcAction|pin。pin 是第 7 段（AI 只出前 6
-// 段→解析为 false；仅本函数在用户手动锁定 / 回并后写出 true），与线 linesToRaw 写 pin 同理。
-function pointEventToRawLine(ev) {
-    return `Event: ${ev.type || 'main'}|${ev.title || ''}|${ev.desc || ''}|${ev.time || ''}|${ev.location || ''}|${ev.npcAction || ''}|${ev.pin ? 'true' : 'false'}`;
-}
-
-// {days, future, startDate} → 规范 <calendar_widget> 文本（锁定回并 / 手动切换后重序列化用）。
-function serializeCalendar(days, future, startDate) {
-    const out = ['<calendar_widget>'];
-    if (startDate instanceof Date && !isNaN(startDate)) {
-        const y  = startDate.getFullYear();
-        const mo = String(startDate.getMonth() + 1).padStart(2, '0');
-        const da = String(startDate.getDate()).padStart(2, '0');
-        out.push(`StartDate: ${y}-${mo}-${da}`);
-    }
-    (days || []).forEach((d, i) => {
-        // 天气随日头走回 raw：Day: N|天气|温度。缺则退回纯 Day: N（旧行为），mergePinnedPoints 才不会丢天气。
-        const w  = String(d.weather || '').trim();
-        const tp = String(d.temp || '').trim();
-        out.push((w || tp) ? `Day: ${i + 1}|${w}|${tp}` : `Day: ${i + 1}`);
-        for (const ev of (d.events || [])) out.push(pointEventToRawLine(ev));
-    });
-    if (future && Array.isArray(future.events) && future.events.length) {
-        out.push('Future:');
-        for (const ev of future.events) out.push(pointEventToRawLine(ev));
-    }
-    out.push('</calendar_widget>');
-    return out.join('\n');
-}
-
-// C·点永远从「今天」起排：固定闰年做基准，只借它的月/日与周几——年份在楼内点条 / 面板都不渲染
-// （_buildScheduleBlockHtml 只显示 月/日/周几），故 2024 对用户不可见，纯为拿到确定的周几与闰日 2/29。
-const POINT_ANCHOR_YEAR = 2024;
-// 把点的 StartDate 强钉到给定 month/day，保留天数 / 天气 / 事件 / 锁定——让点整体平移到「今天」。
-function forceStartDate(raw, month, day) {
-    const { days, future } = parseCalendar(raw);
-    return serializeCalendar(days, future, new Date(POINT_ANCHOR_YEAR, month - 1, day));
-}
-
-// 合并锁定（对齐 mergePinnedLines(oldRaw, aiRaw)）：从旧 raw 读出被锁事件（连同原所在天），
-// 按 title 在 AI 新 raw 里找——找到就重标 pin（采纳 AI 的推进）；AI 删了就按旧位置就近补回
-// （future/越界 → 未来块或最后一天）。有锁定项即重新序列化（把 pin 落回 raw），无则原样返回。
-function mergePinnedPoints(oldRaw, aiRaw) {
-    const oldParsed = parseCalendar(oldRaw);
-    const oldPinned = [];
-    oldParsed.days.forEach((d, i) => d.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: i }); }));
-    if (oldParsed.future) oldParsed.future.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: 'future' }); });
-    if (!oldPinned.length) return aiRaw;
-
-    const parsed = parseCalendar(aiRaw);
-    const all = [];
-    for (const d of parsed.days) for (const ev of d.events) all.push(ev);
-    if (parsed.future) for (const ev of parsed.future.events) all.push(ev);
-
-    for (const p of oldPinned) {
-        const hit = all.find(ev => samePoint(ev, p.ev));
-        if (hit) { hit.pin = true; continue; }   // AI 保留 → 采纳推进，重标 pin
-        const clone = { ...p.ev, pin: true };     // AI 删了 → 原样并回（保命）
-        if (p.dayIndex === 'future' || !Number.isInteger(p.dayIndex) || p.dayIndex >= parsed.days.length) {
-            if (parsed.future) parsed.future.events.push(clone);
-            else if (parsed.days.length) parsed.days[parsed.days.length - 1].events.push(clone);
-            else parsed.days.push({ events: [clone] });
-        } else if (p.dayIndex >= 0) {
-            parsed.days[p.dayIndex].events.push(clone);
-        } else if (parsed.days.length) {
-            parsed.days[0].events.push(clone);
-        } else {
-            parsed.days.push({ events: [clone] });
-        }
-    }
-    return serializeCalendar(parsed.days, parsed.future, parsed.startDate);
-}
-
 // 手动锁/解一个点（对齐 triggerToggleLinePin）：解析 raw → 翻转该事件 pin → 重序列化写回
 // raw → 原地重渲染（不重算）。pin 就活在 raw 里，无旁挂结构。
+function restorePointActiveDay(dayKey) {
+    const $tabs = $inAll('#sp-body .sp-tab');
+    if (!$tabs?.length) return;
+    let found = false;
+    $tabs.each((_, el) => {
+        const $tab = $(el);
+        const match = String($tab.attr('data-day')) === String(dayKey);
+        $tab.toggleClass('sp-tab-active', match);
+        if (match) { $tab.trigger('click'); found = true; }
+    });
+    if (!found) $tabs.eq(0).trigger('click');
+}
+
 function triggerTogglePointPin(dayKey, evIdx) {
     const key = getCacheKey();
     const saved = readStore(key);
@@ -13025,8 +12587,9 @@ function triggerTogglePointPin(dayKey, evIdx) {
     const newRaw = serializeCalendar(parsed.days, parsed.future, parsed.startDate);
     writeStore(key, { raw: newRaw, userName: saved.userName || '用户', ts: Date.now() });
     const html = renderSchedule(newRaw, saved.userName || '用户', currentView);
-    cachedSchedule = html;
+    pointState.cachedSchedule = html;
     setBody(html);
+    restorePointActiveDay(dayKey);
     syncLatestScheduleBlock();   // 锁/解点 → 楼内日程条锁标即时刷
     showToast(ev.pin ? '已锁定这个点' : '已解锁这个点');
 }
@@ -13055,54 +12618,11 @@ async function triggerDeletePointEvent(dayKey, evIdx) {
     const newRaw = serializeCalendar(parsed.days, parsed.future, parsed.startDate);
     writeStore(key, { raw: newRaw, userName: saved.userName || '用户', ts: Date.now() });
     const html = renderSchedule(newRaw, saved.userName || '用户', currentView);
-    cachedSchedule = html;
+    pointState.cachedSchedule = html;
     setBody(html);
+    restorePointActiveDay(dayKey);
     syncLatestScheduleBlock();
     showToast('已删除这个点');
-}
-
-// 点注入文案（面板卡片 + 楼内抽屉共用同一个 builder，保证两处注入内容一致）。
-// 按用户决定：每条注入带上当天天气（天气/温度任一有值即前置一行「天气：…」）。
-function buildPointInjectText(ev, weather = '', temp = '', dateLabel = '') {
-    const w  = String(weather || '').trim();
-    const tp = String(temp || '').trim();
-    const dl = String(dateLabel || '').trim();
-    const parts = ['【点参考】'];
-    if (dl)           parts.push(`日期：${dl}`);
-    if (w || tp)      parts.push(`天气：${w}${tp ? ' ' + tp : ''}`);
-    if (ev.time)      parts.push(`时间：${ev.time}`);
-    parts.push(ev.title);
-    if (ev.desc)      parts.push(ev.desc);
-    if (ev.location)  parts.push(`地点：${ev.location}`);
-    if (ev.npcAction) parts.push(`线头：${ev.npcAction}`);
-    return parts.join('\n');
-}
-
-function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
-    const meta = TYPE_META[ev.type] || TYPE_META.main;
-    const injectBtn = makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel));
-    // F5 锁点：仅面板内渲染（有定位 dayKey）且事件有标题时给锁钮；注入卡/无定位场景不显示
-    const pinBtn = (dayKey !== null && ev.title && ev.title.trim())
-        ? `<button class="sp-point-pin-toggle" data-day="${escapeAttr(String(dayKey))}" data-ev="${evIdx}" title="${ev.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${ev.pin ? 'lock' : 'lock-open'}"></i></button>`
-        : '';
-    // 删除钮：仅面板内渲染（有定位 dayKey）才给；注入卡/无定位场景不显示。走 .sp-sch-del-one，
-    // 与楼内块抽屉同类、共用 handler（#sp-body/#chat 委托）与 triggerDeletePointEvent（同刷主面板+楼内块）。
-    const delBtn = (dayKey !== null)
-        ? `<button class="sp-sch-del-one" data-day="${escapeAttr(String(dayKey))}" data-ev="${evIdx}" title="删除这个点"><i class="fa-solid fa-xmark"></i></button>`
-        : '';
-    return `<div class="sp-event ${meta.cls}${ev.pin ? ' sp-event-pinned' : ''}">
-        <div class="sp-event-head">
-            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>
-            ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
-            ${injectBtn}${pinBtn}${delBtn}
-        </div>
-        <div class="sp-event-title">${escapeHtml(ev.title)}</div>
-        ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}
-        <div class="sp-event-meta">
-            ${ev.location  ? `<span class="sp-event-loc"><i class="fa-solid fa-location-dot"></i>${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? `<span class="sp-event-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>` : ''}
-        </div>
-    </div>`;
 }
 
 // 聊天输入框随内容自增高：先归零再按 scrollHeight 撑，CSS 用 max-height 封顶后转滚动条。

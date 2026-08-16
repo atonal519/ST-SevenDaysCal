@@ -5834,3 +5834,49 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     .sp-btn:active, .sp-gen-btn:active, .sp-fab-btn:active { transform: none !important; }
 }
 
+/* ── 历面板批量模式（日历条目删 / 活跃刻度归档 / 归档刻度删）────────────────── */
+/* 批量工具条：入口钮或（全选 + 已选计数 + 退出 + 执行）横排，退出/执行推到最右。 */
+.sp-batch-bar {
+    display     : flex;
+    align-items : center;
+    flex-wrap   : wrap;
+    gap         : 6px;
+    padding     : 1px 0 8px;
+}
+.sp-batch-bar .sp-batch-all {
+    display     : inline-flex;
+    align-items : center;
+    gap         : 4px;
+    font-size   : var(--sp-fs-72);
+    color       : var(--sp-subtle);
+    cursor      : pointer;
+    user-select : none;
+}
+.sp-batch-bar .sp-batch-count {
+    font-size            : var(--sp-fs-72);
+    color                : var(--sp-subtle);
+    font-variant-numeric : tabular-nums;
+}
+.sp-batch-bar .sp-batch-bar-actions {
+    display     : inline-flex;
+    align-items : center;
+    gap         : 6px;
+    margin-left : auto;
+}
+.sp-batch-bar .sp-mini-btn:disabled { opacity: 0.5; cursor: default; }
+.sp-batch-bar .sp-mini-btn:disabled:hover { background: transparent; color: var(--sp-on-surface); border-color: var(--sp-divider); }
+/* 行内勾选框：不缩放、与行内容垂直对齐。 */
+.sp-batch-check {
+    flex-shrink  : 0;
+    width        : 15px;
+    height       : 15px;
+    margin       : 0 7px 0 0;
+    cursor       : pointer;
+    accent-color : var(--sp-primary);
+}
+/* 选中行：淡高亮 + 内描边，与点/线区选中风格一致。 */
+.sp-batch-row.sp-batch-checked {
+    background : color-mix(in oklab, var(--sp-primary) 7%, transparent);
+    box-shadow : inset 0 0 0 1.5px color-mix(in oklab, var(--sp-primary) 40%, transparent);
+}
+
