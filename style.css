@@ -1892,8 +1892,12 @@ select.sp-input { appearance: none; cursor: pointer; }
 #sp-toast-wrap {
     position      : fixed;
     top           : 20px;
-    left          : 50%;
-    transform     : translateX(-50%);
+    left          : 0;
+    right         : 0;   /* 满宽透明容器 + align-items:center 居中 toast。
+                            不可用 left:50%+translateX：fixed 元素 left:50%/right:auto/width:auto 时，
+                            shrink-to-fit 的可用宽度会塌成 50vw → toast 永远 ≤50vw、显窄（正是"太窄"根因，
+                            改 .sp-toast 的 max-width 没用，被这层顶死）。left:0;right:0 让容器占满视口，
+                            .sp-toast 的 max-width 才真正说了算。 */
     z-index       : 2000002;   /* 高于面板 .sp-root(2000001)，否则设置页内的 toast 被面板盖住看不见 */
     display       : flex;
     flex-direction: column;
@@ -1920,11 +1924,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity    : 0;
     transform  : translateY(-12px);
     transition : opacity 0.25s, transform 0.25s;
-    /* 长文案换行不撑破视图：wrap 居中(left:50% + translateX)且无宽度约束，nowrap 会把长
-       报错顶成超宽单行 → 两头等量溢出屏幕被裁(手机窄屏尤甚)。改为可换行 + 视口内封顶 +
-       长串可断；border-box 让 padding 计入 max-width、保证总宽真 ≤ 92vw。 */
+    /* 长文案换行不撑破视图：容器 #sp-toast-wrap 已改 left:0;right:0 占满视口(见其注释)，
+       这里的 max-width 才真正生效。border-box 让 padding 计入 max-width；overflow-wrap 断长串。
+       封顶 94vw(留少量边距)/桌面 560px——手机上 px 项恒不生效，起效的是 94vw。 */
     box-sizing   : border-box;
-    max-width    : min(92vw, 420px);
+    max-width    : min(94vw, 560px);
     white-space  : normal;
     overflow-wrap: anywhere;
 }
@@ -2152,6 +2156,20 @@ select.sp-input { appearance: none; cursor: pointer; }
     display       : none;
     flex-direction: column;
 }
+.sp-lines-toolbar {
+    flex-shrink  : 0;
+    padding      : 10px 12px;
+    border-bottom: 1px solid var(--sp-divider);
+}
+/* 工具栏带分隔线后，列表顶部的跳转提示不再贴线 */
+.sp-lines-list .sp-jump-hint { padding-top: 10px; }
+.sp-lines-toolbar-inner {
+    display        : flex;
+    align-items    : center;
+    justify-content: space-between;
+    gap            : 8px;
+}
+.sp-lines-tools { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
 
 .sp-lines-list {
     flex           : 1;
@@ -3196,6 +3214,45 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-dialog-input:focus { border-color: var(--sp-primary); }
 .sp-dialog-input-error { min-height: 1em; color: var(--sp-on-surface); font-size: var(--sp-fs-72); line-height: 1.4; }
 .sp-dialog-input-error i { color: var(--sp-subtle); margin-right: 3px; }
+.sp-dialog-multi-list {
+    display              : grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap                  : 7px 12px;
+    max-height           : min(42vh, 260px);
+    overflow-y           : auto;
+    padding              : 2px;
+}
+.sp-dialog-multi-option {
+    display    : flex;
+    align-items: center;
+    gap        : 6px;
+    min-width  : 0;
+    color      : var(--sp-on-surface);
+    font-size  : var(--sp-fs-80);
+    cursor     : pointer;
+}
+.sp-dialog-multi-option span { min-width: 0; overflow-wrap: anywhere; }
+.sp-dialog-custom-input {
+    width        : 100%;
+    box-sizing   : border-box;
+    resize       : vertical;
+    min-height   : 62px;
+    max-height   : 150px;
+    padding      : 7px 11px;
+    background   : var(--sp-sheet-bg);
+    border       : 1px solid var(--sp-divider);
+    border-radius: 8px;
+    color        : var(--sp-on-surface);
+    font-size    : var(--sp-fs-82);
+    font-family  : var(--sp-font);
+    line-height  : 1.5;
+    outline      : none;
+}
+.sp-dialog-custom-input:focus { border-color: var(--sp-primary); }
+.sp-dialog-custom-input[hidden] { display: none; }
+@media (max-width: 420px) {
+    .sp-dialog-multi-list { grid-template-columns: 1fr; }
+}
 
 /* ─── Memory section ─────────────────────────────────────────────────────────── */
 .sp-mem-status {
@@ -3484,9 +3541,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     cursor    : default;
 }
 
-/* 单条删除 × —— 放在 head 行内，紧挨注入按钮并排，二者同尺寸。
+/* 线 / 冷知识的单条删除 × —— 放在 head 行内，紧挨其他操作并排、保持同尺寸。
    不用 absolute，避免跟常驻显示的注入按钮重叠、互相遮挡点击（楼内尤甚）。 */
-.sp-line-del-one {
+.sp-line-del-one,
+.sp-lines-dashed-delete {
     width          : var(--sp-btn-22);
     height         : var(--sp-btn-22);
     padding        : 0;
@@ -3504,16 +3562,19 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
 }
 /* 面板：跟注入按钮一样，hover 卡片才浮现 */
-.sp-beat:hover .sp-line-del-one { opacity: 1; }
-.sp-line-del-one:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
+.sp-beat:hover .sp-line-del-one,
+.sp-beat:hover .sp-lines-dashed-delete { opacity: 1; }
+.sp-line-del-one:hover,
+.sp-lines-dashed-delete:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
 /* 楼内：移动端无 hover，默认淡显（对齐注入按钮的 0.55 逻辑） */
 .sp-inline-line .sp-line-del-one { opacity: 0.55; color: inherit; }
 .sp-inline-line:hover .sp-line-del-one,
 .sp-inline-line .sp-line-del-one:hover { opacity: 1; }
 .sp-inline-line .sp-line-del-one:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
 
-/* 锁定切换按钮 —— 仿 .sp-line-del-one 骨架，尺寸/布局一致，颜色语义不同（非危险操作） */
-.sp-line-pin-toggle {
+/* 线 / 冷知识的锁定切换按钮——与删除键同骨架，颜色语义不同（非危险操作）。 */
+.sp-line-pin-toggle,
+.sp-lines-dashed-lock {
     width          : var(--sp-btn-22);
     height         : var(--sp-btn-22);
     padding        : 0;
@@ -3530,10 +3591,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity        : 0;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
 }
-.sp-beat:hover .sp-line-pin-toggle { opacity: 1; }
-.sp-line-pin-toggle:hover { color: var(--sp-primary); background: rgba(125, 125, 235, 0.12); }
+.sp-beat:hover .sp-line-pin-toggle,
+.sp-beat:hover .sp-lines-dashed-lock { opacity: 1; }
+.sp-line-pin-toggle:hover,
+.sp-lines-dashed-lock:hover { color: var(--sp-primary); background: rgba(125, 125, 235, 0.12); }
 /* 已锁定时常驻亮出（不必 hover 才看到锁着没锁着） */
-.sp-line-card.sp-line-pinned .sp-line-pin-toggle { opacity: 0.85; color: var(--sp-primary); }
+.sp-line-card.sp-line-pinned .sp-line-pin-toggle,
+.sp-lines-dashed-item.sp-lines-dashed-pinned .sp-lines-dashed-lock { opacity: 0.85; color: var(--sp-primary); }
 
 /* 锁定态卡片：左边框改用主色调、轻微底色区分，一眼看出"保命线" */
 .sp-line-card.sp-line-pinned {
@@ -4559,15 +4623,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-empty-svg   { width: calc(32px * var(--sp-scale)); height: calc(32px * var(--sp-scale)); }
 .sp-anchor-empty-hint  { font-size: var(--sp-fs-72) !important; color: var(--sp-subtle); opacity: 0.85; }
 
-/* ─── 虚线 · 冷知识（线的娱乐子功能；不打大字招牌，靠虚线视觉 + 底部小字点明性质） ─── */
-/* 面板内区块：挂在线列表底部，虚线上边框呼应「虚线」语义，比 beat 卡片弱一档 */
-.sp-dashed-section {
-    padding   : 12px 16px 14px;
-    border-top: 1px dashed var(--sp-divider);
-    opacity   : 0.92;
-}
-.sp-dashed-section:empty { display: none; }   /* dashedEnabled 关时 renderDashedSection 清空 → 整块收起 */
-
+/* ─── 虚线 · 冷知识 ─────────────────────────────────────────────────────────── */
+/* 通用文本列表仍供楼层内冷知识使用。 */
 .sp-dashed-list {
     margin        : 0;
     padding-left  : 0;
@@ -4592,37 +4649,20 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     opacity : 0.6;
 }
 
-/* 冷知识独立刷新键：区块头部右对齐，比常规面板刷新键小一档、弱一档，不抢线的刷新/推进键风头 */
-.sp-dashed-head {
-    display        : flex;
-    justify-content: flex-end;
-    margin         : -2px -4px 2px 0;
+/* 主面板历史直接复用线卡的卡片、头部、编号和正文区，只保留必要的正文收口。 */
+.sp-lines-dashed-list { display: flex; flex-direction: column; }
+.sp-lines-dashed-item .sp-beat-scene { margin-bottom: 0; }
+.sp-lines-dashed-status,
+.sp-lines-dashed-error {
+    padding      : 9px 14px;
+    border-bottom: 1px solid var(--sp-divider);
+    color        : var(--sp-subtle);
+    font-size    : var(--sp-fs-76);
+    line-height  : 1.45;
 }
-.sp-dashed-head .sp-panel-refresh {
-    width    : 24px;
-    height   : 24px;
-    font-size: var(--sp-fs-72);
-    opacity  : 0.6;
-}
-.sp-dashed-head .sp-panel-refresh:hover { opacity: 1; }
-
-/* 底部注脚：很小、很弱，只点明「仅为世界观补充」，不喧宾夺主 */
-.sp-dashed-foot {
-    margin-top    : 8px;
-    font-size     : var(--sp-fs-62);
-    letter-spacing: 0.04em;
-    color         : var(--sp-subtle);
-    opacity       : 0.6;
-    text-align    : right;
-}
-
-.sp-dashed-empty,
-.sp-dashed-loading {
-    font-size : var(--sp-fs-76);
-    color     : var(--sp-subtle);
-    font-style: italic;
-}
-.sp-dashed-loading i { margin-right: 4px; }
+.sp-lines-dashed-status i,
+.sp-lines-dashed-error i { margin-right: 4px; }
+.sp-lines-dashed-empty { min-height: 180px; }
 
 /* 楼内子块：折进 .sp-lines-inline 的 body（与线合并成一个楼内窗口）。虚线上边框呼应「虚线」语义，
    一行「世界观补充」小字点明性质；比线卡片弱一档，不喧宾夺主。 */
@@ -4696,13 +4736,15 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-bottom  : 1px solid var(--sp-divider);
     flex-shrink    : 0;
 }
-.sp-alm-sheet-toggle {
+.sp-alm-sheet-toggle,
+.sp-lines-sheet-toggle {
     display      : inline-flex;
     border       : 1px solid var(--sp-divider);
     border-radius: 8px;
     overflow     : hidden;
 }
-.sp-alm-sheet-btn {
+.sp-alm-sheet-btn,
+.sp-lines-sheet-btn {
     background : transparent;
     border     : 0;
     color      : var(--sp-subtle);
@@ -4714,9 +4756,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     -webkit-tap-highlight-color: transparent;
     transition : color 0.12s, background 0.12s;
 }
-.sp-alm-sheet-btn + .sp-alm-sheet-btn { border-left: 1px solid var(--sp-divider); }
-.sp-alm-sheet-btn:hover { color: var(--sp-on-surface); }
-.sp-alm-sheet-active {
+.sp-alm-sheet-btn + .sp-alm-sheet-btn,
+.sp-lines-sheet-btn + .sp-lines-sheet-btn { border-left: 1px solid var(--sp-divider); }
+.sp-alm-sheet-btn:hover,
+.sp-lines-sheet-btn:hover { color: var(--sp-on-surface); }
+.sp-alm-sheet-active,
+.sp-lines-sheet-active {
     background: color-mix(in oklab, var(--sp-primary) 16%, transparent);
     color     : var(--sp-on-surface);
 }

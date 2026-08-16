@@ -16,6 +16,7 @@
 //       'outline-user'       : { raw, ts },
 //       'outline-char-Alice' : { raw, ts },
 //       'lines-user'         : { raw, ts },
+//       'dashed-user'        : { items: [ { id, text, createdAt, locked }, ... ], ts },
 //       'creative-chat-user' : [ { role, content }, ... ],
 //       'space-chat-user'    : [ ... ],
 //     }

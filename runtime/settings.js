@@ -37,7 +37,9 @@ export const DEFAULT_SETTINGS = {
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days'
     linesInject: false,  // 潜伏注入：活跃线隐形注入主楼 AI（IN_CHAT/SYSTEM）；默认关（改 AI 行为+token 成本，opt-in）
-    dashedEnabled: false, // 虚线·冷知识：跟线同触发多生成两条冷知识（纯展示、绝不注入）。多一次 API 调用，默认关 opt-in
+    dashedEnabled: false, // 冷知识自动生成/楼层展示：跟线多生成两条；历史与面板手动生成不受此开关删除或阻断
+    dashedCleanupEnabled: true, // 冷知识历史自动清理：只限制未锁条目，锁定项不计入数量
+    dashedKeepCount: 15,
     outlineInject: false,       // 大纲自动注入：开启后每 N 楼独立判定剧情推进到哪个节点，把当前/下个节点隐形注入主楼 AI。多判定 API 调用，默认关 opt-in
     outlineJudgeInterval: 3,    // 大纲推进判定节奏：每几条 AI 回复跑一次推进判定（独立于线的 linesInterval，不耦合）
     almanacInlineEnabled: true, // 历·日程块：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是未来七天（周X+日期，有节日可点开看当天安排）；只读，独立于线主开关；默认开，关掉即不注入聊天

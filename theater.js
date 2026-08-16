@@ -136,16 +136,20 @@ export function deleteSaved(id) {
 
 // 确保专用书存在并返回其 data（{ entries:{uid:entry} }）。不用 createNewWorldInfo
 // （它会 trigger('change') 强切 ST 世界书编辑器 UI）；改为空书直存 + 刷新列表。
+//
+// 「书是否存在」以 loadWorldInfo 的实际返回为准（读服务端/缓存，按书名直取），
+// **绝不**信任内存名单 getWorldInfoNames()/world_names——用户在 ST 里删过本书再重建后，
+// 该名单可能与磁盘失同步。一旦据此误判「书不存在」，下面就会用空书覆盖掉磁盘上的真书，
+// 把已存的模板全顶掉（正是用户报的 bug）。loadWorldInfo 内部对认不出的名字会退回原样
+// 按名取（resolveWorldInfoName 找不到就 fallback 到原名），故名单失同步也能读到真书。
 async function ensureBook() {
     const ctx = getContext();
-    const names = typeof ctx.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
-    if (!names.includes(TEMPLATE_BOOK)) {
-        await ctx.saveWorldInfo(TEMPLATE_BOOK, { entries: {} }, true);
-        await ctx.updateWorldInfoList?.();
-        return { entries: {} };
-    }
     const data = await ctx.loadWorldInfo(TEMPLATE_BOOK);
-    return data && data.entries ? data : { entries: {} };
+    if (data) return data.entries ? data : { entries: {} };
+    // loadWorldInfo 返回空 = 服务端确实没有这本书 → 建一本空书（顺带刷新名单，best-effort）。
+    await ctx.saveWorldInfo(TEMPLATE_BOOK, { entries: {} }, true);
+    await ctx.updateWorldInfoList?.();
+    return { entries: {} };
 }
 
 function entryToTemplate(uid, entry) {
@@ -158,8 +162,8 @@ function entryToTemplate(uid, entry) {
 
 export async function listTemplates() {
     const ctx = getContext();
-    const names = typeof ctx.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
-    if (!names.includes(TEMPLATE_BOOK)) return []; // 书还没建 = 无模板，不主动建
+    // 同 ensureBook：以 loadWorldInfo 实际返回为准，不因内存名单缺名就误报「暂无模板」。
+    // 只读不建——书真没有时 loadWorldInfo 返回空，直接返回 []，不主动创建。
     const data = await ctx.loadWorldInfo(TEMPLATE_BOOK);
     if (!data || !data.entries) return [];
     return Object.entries(data.entries)

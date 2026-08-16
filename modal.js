@@ -134,5 +134,105 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
         });
     }
 
-    return Object.freeze({ confirm, choose, prompt, cancelActive });
+    // 通用多选表单：只负责选项互斥、自定义文本与生命周期，具体选项和业务校验由调用方提供。
+    function selectMany({ title = '', body = '', choices = [], initialValues = [], custom = null, confirmText = '确定', cancelText = '取消', validate } = {}) {
+        if (!Array.isArray(choices) || !choices.length) return Promise.resolve(null);
+        return new Promise(resolve => {
+            cancelActive();
+            purgeOverlay();
+            let done = false;
+            let unsubscribe = () => {};
+            const initial = new Set((Array.isArray(initialValues) ? initialValues : []).map(String));
+            const customValue = custom?.value == null ? '' : String(custom.value);
+            const customLimit = Number(custom?.maxLength) > 0 ? Number(custom.maxLength) : 200;
+            const rows = choices.map(choice => {
+                const value = String(choice?.value ?? '');
+                const checked = initial.has(value) ? ' checked' : '';
+                const exclusive = choice?.exclusive ? ' data-dialog-exclusive="true"' : '';
+                return `<label class="sp-dialog-multi-option">
+                    <input type="checkbox" class="sp-dialog-multi-check" data-dialog-value="${escapeHtml(value)}"${exclusive}${checked}>
+                    <span>${escapeHtml(choice?.label ?? value)}</span>
+                </label>`;
+            }).join('');
+            const customInput = customValue
+                ? `<textarea class="sp-dialog-custom-input" maxlength="${customLimit}" placeholder="${escapeHtml(custom?.placeholder || '')}" rows="3"></textarea>`
+                : '';
+            const $overlay = $(`<div id="${OVERLAY_ID}" class="sp-dialog-overlay">
+                <div class="sp-dialog-sheet" role="dialog" aria-modal="true" aria-labelledby="sp-dialog-title">
+                    <div id="sp-dialog-title" class="sp-dialog-head">${escapeHtml(title)}</div>
+                    ${body ? `<div class="sp-dialog-body">${escapeHtml(body)}</div>` : ''}
+                    <div class="sp-dialog-multi-list">${rows}</div>
+                    ${customInput}
+                    <div class="sp-dialog-input-error" aria-live="polite"></div>
+                    <div class="sp-dialog-actions">
+                        <button class="sp-dialog-button sp-dialog-button-secondary sp-dialog-cancel" type="button">${escapeHtml(cancelText)}</button>
+                        <button class="sp-dialog-button sp-dialog-button-primary sp-dialog-submit" type="button">${escapeHtml(confirmText)}</button>
+                    </div>
+                </div>
+            </div>`);
+            const finish = value => {
+                if (done) return;
+                done = true;
+                if (activeCancel === onExternalClose) activeCancel = null;
+                unsubscribe();
+                $overlay.remove();
+                resolve(value);
+            };
+            const onExternalClose = () => finish(null);
+            const selectedValues = () => {
+                const values = [];
+                $overlay.find('.sp-dialog-multi-check').each(function () {
+                    if ($(this).prop('checked')) values.push(String($(this).attr('data-dialog-value') || ''));
+                });
+                return values;
+            };
+            const syncCustomInput = () => {
+                if (!customValue) return;
+                const on = selectedValues().includes(customValue);
+                $overlay.find('.sp-dialog-custom-input').prop('hidden', !on).prop('disabled', !on);
+            };
+            const submit = () => {
+                const values = selectedValues();
+                const inputValue = customValue && values.includes(customValue)
+                    ? String($overlay.find('.sp-dialog-custom-input').val() ?? '').trim()
+                    : '';
+                const result = { values, customValue: inputValue };
+                const raw = typeof validate === 'function' ? validate(result) : '';
+                const error = typeof raw === 'string' ? raw : '';
+                if (error) {
+                    $overlay.find('.sp-dialog-input-error').html(`<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml(error)}`);
+                    if (customValue && values.includes(customValue) && !inputValue) $overlay.find('.sp-dialog-custom-input').trigger('focus');
+                    return;
+                }
+                finish(result);
+            };
+            activeCancel = onExternalClose;
+            $overlay.find('.sp-dialog-multi-check').on('change', function () {
+                const $self = $(this);
+                if ($self.prop('checked')) {
+                    if ($self.attr('data-dialog-exclusive') === 'true') {
+                        $overlay.find('.sp-dialog-multi-check').each(function () { if (this !== $self[0]) $(this).prop('checked', false); });
+                    } else {
+                        $overlay.find('.sp-dialog-multi-check[data-dialog-exclusive="true"]').prop('checked', false);
+                    }
+                }
+                $overlay.find('.sp-dialog-input-error').empty();
+                syncCustomInput();
+            });
+            $overlay.find('.sp-dialog-custom-input').on('input', () => $overlay.find('.sp-dialog-input-error').empty()).on('keydown', event => {
+                if (event.key === 'Escape') { event.preventDefault(); finish(null); }
+            });
+            $overlay.find('.sp-dialog-submit').on('click', submit);
+            $overlay.find('.sp-dialog-cancel').on('click', () => finish(null));
+            $overlay.on('click', function (event) { if (event.target === this) finish(null); });
+            $overlay.on('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); finish(null); } });
+            $overlay.addClass(String(getRootClass() || ''));
+            mount.appendChild($overlay[0]);
+            unsubscribe = subscribeContextChange(onExternalClose) || (() => {});
+            syncCustomInput();
+            setTimeout(() => $overlay.find('.sp-dialog-multi-check').first().trigger('focus'), 0);
+        });
+    }
+
+    return Object.freeze({ confirm, choose, prompt, selectMany, cancelActive });
 }
