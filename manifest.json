@@ -1,7 +1,7 @@
 {
     "display_name": "构画",
     "name": "schedule-planner",
-    "version": "3.2.6",
+    "version": "3.2.7",
     "description": "点(日程) 线(事件线) 面(大纲) 间(局外聊天) 棱(小剧场) 坐标(收藏楼层) — 构画你的故事。",
     "js": "index.js",
     "css": "style.css",

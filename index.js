@@ -9604,6 +9604,12 @@ function buildPrompt(userName, charName, perspective = 'user', pinned = null) {
     const pinnedBlock = pins.length
         ? `\n【已锁定事件·必须保留】\n以下事件已被用户锁定，你必须在新日程中原样保留（标题不可改动），可顺势推进其时间/描述，但严禁删除、改名或替换：\n${pins.map((e, i) => `${i + 1}. ${e.title}${e.time ? `（${e.time}）` : ''}`).join('\n')}\n`
         : '';
+    // char 目标天然与 user 关系密切，无需额外提示；非-char 目标（重要 NPC / 其他人物）
+    // 生成的日程常与 user 关联过弱，这里加一段「软约束」，让 AI 适度考虑潜在关联，
+    // 但不硬绑、不默认爱情、不逼所有事件都围绕 user。
+    const relationHint = perspective === 'char'
+        ? ''
+        : `\n【与 ${companion} 的潜在关联·软提示】\n${subject} 若是重要 NPC / 非主角人物，其日程可以适度体现与 ${companion} 的潜在关联——可以是复仇、陷害、交易、试探、监视、利用、牵制、误导、协作、冲突等多种走向，也可能只是间接波及。请根据剧情自然带出，不必每条事件都围绕 ${companion}，更不要默认写成爱情关系；${subject} 仍应有独立于 ${companion} 的生活与目标。\n`;
     return `请暂停角色扮演，以旁观者视角根据以上剧情，为 ${subject} 生成日程。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 【人称】你是旁观者，不要扮演任何角色。所有文字（含 description 与线头动态）必须以第三人称叙述，直呼 ${subject} 的名字，严禁使用"我""我们"等第一人称，也不要用第二人称"你"。
@@ -9614,7 +9620,7 @@ function buildPrompt(userName, charName, perspective = 'user', pinned = null) {
 - bond（红线）：${subject} 与某人之间可能发生或加深的事件（不限于 ${companion}，可以是任意重要人物）
 
 ${subject} 和 ${companion} 都有各自独立的生活，事件可以涉及任意 NPC 和第三方，不必每条都围绕两人互动。
-
+${relationHint}
 Day 1-3 每天生成 1 到 3 个事件；Future 块生成 5 到 10 个事件，时间跨度不限。
 
 【天气说明】
