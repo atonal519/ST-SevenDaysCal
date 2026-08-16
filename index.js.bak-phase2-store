@@ -11,7 +11,6 @@ import * as memory from './memory.js';
 import * as theater from './theater.js';
 import * as anchor from './anchor.js';
 import * as store from './store.js';
-import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
 import * as ledger from './ledger.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
@@ -22,9 +21,6 @@ import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, load
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
 import { axisState } from './business/axis/state.js';
-
-// store 视图态回退桥：keyDesc 缺省 view/charName 时回退到当前视图/角色（闭包捕获实时值）。
-bindStoreViewFallback(() => currentView, () => charViewName);
 
 // 绑定 API 网络层所需的 UI/业务回调（避免 api/client.js 反向依赖 index.js 造成循环引用）。
 bindApiClient({
@@ -127,6 +123,14 @@ let lastDebugPayload = null;
 
 // 存储描述符 {kind, view, charName}：5 个 getXxxKey() 都返回它，喂给 store.readData/writeData/removeData。
 // 无 chat 时返回 null（保留旧 getter「无 chat → null」语义，各处 if(!key) 守卫照旧生效）。
+// view/charName 在此解析成当前视角默认值；store 层据此算 `{kind}-{scope}` 子键。
+function keyDesc(kind, view, charName) {
+    if (!getContext().chatId) return null;
+    return { kind, view: view ?? currentView, charName: charName ?? charViewName };
+}
+function readStore(desc)         { return desc ? store.readData(desc.kind, desc.view, desc.charName) : null; }
+function writeStore(desc, value) { if (desc) store.writeData(desc.kind, desc.view, desc.charName, value); }
+function removeStore(desc)       { if (desc) store.removeData(desc.kind, desc.view, desc.charName); }
 
 // view: 'user' | 'char'   charName: confirmed char name
 function getCacheKey(view, charName) {
