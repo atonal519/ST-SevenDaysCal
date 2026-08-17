@@ -78,6 +78,11 @@ import {
     calendarSummary,
     calendarConflicts,
 } from './business/axis/ui.js';
+// 轴锚点/周几/距今/将至排序已抽出到 business/axis/anchor.js；index.js 内部跨域读取器经 bindAxisAnchor 注入。
+import {
+    bindAxisAnchor,
+    almTodayAnchor, almDaysUntil, almWeekdayRef, almWeekdayFor, sortAlmanacUpcoming,
+} from './business/axis/anchor.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -105,6 +110,17 @@ bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn })
 // ledger 选择器注入：select.js 的打分/门槛依赖到期/距今口径 ledgerDueInfo/ledgerDaysSince
 // （二者仍滞留本文件、且另经历法助手触达），经 bindLedgerSelect 注入以免反向依赖循环引用。
 bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
+
+// 轴锚点注入：anchor.js 的 almTodayAnchor/almWeekdayRef 需读本文件内的跨域来源
+// （日期锚点/角色键/线缓存键+解析/点缓存键/终态集），经 bindAxisAnchor 注入以避免反向依赖循环引用。
+bindAxisAnchor({
+    getDateAnchor,
+    charStableKey,
+    getLinesCacheKey,
+    parseLines,
+    TERMINAL_STAGES,
+    getCacheKey,
+});
 
 const MODAL_ID   = 'sp-modal-root';
 const FAB_ID     = 'sp-fab';
@@ -9644,179 +9660,8 @@ function renderLines(raw) {
 
 
 
-// 历的「当前日期」锚点：年在扮演里极模糊，一律不用现实日期。按可靠性逐级取剧情内时间——
-// 柏宝书 → 记忆库 → 线 → 点 → 聊天正文 → 都拿不到才 fallback 1 月 1 日（默认从头开始）。
-// 只借月/日（年无意义）。所有「今天 / 即将到来 / 日历默认月 / 编辑器默认」都走这一个函数。
-// extractDayFromTime 已能解析「YYYY年M月D日 / YYYY-M-D / 元年正月初三」等，这里把它的
-// key 再抽成 {month,day}；相对天数（day-N）无月日，返回 null 让链继续往下走。
-// 严格校验 {month,day} 是否落在当前历法有效范围（月 1..月数、日 1..该月天数）。
-// 越界返回 null（＝此来源不可信，交回 almTodayAnchor 链往下找），绝不 clamp 成错误日期。
-// 公历(DEFAULT_CAL)下 12 月 / 各月足长，真实 Date 与 cn- 日期恒通过，与旧行为等价；仅自定义历会拒。
-// 扫最近若干 AI 楼取剧情正文里写明的绝对日期。返回 { month, day, date }：
-//   date 只在阿拉伯「YYYY-M-D」（带真实年份）时构造成 JS Date（用于取现实周几）；古代历(cn-)/相对天数无现实年，date=null。
-// 存在意义：很多用户没装柏宝书、也没生成记忆摘要/点，但正文（场景头/状态栏）其实明写了日期——
-// 这正是喂进生成提示的同一份内容。不扫它就只能白白 fallback 到 1 月 1 日（论坛用户实测到的正是这条）。
-function almTodayAnchor() {
-    // ①′ 手动/自动确认锚点：最高优先。用户手钉或自动确认 judge 写入的日期，压过所有
-    //     被动源——解决「正文都 X+1 号了，历还信较慢的柏宝书/记忆库停在 X 号」的相位差。
-    try {
-        const pinned = getDateAnchor(charStableKey(getContext()));
-        if (pinned) return pinned;
-    } catch { /* 往下走 */ }
-    // ① 柏宝书：权威游戏内时间（很多用户不装 → 拿不到就往下走）
-    try {
-        const api = globalThis.STBaiBaiBook;
-        if (api && typeof api.getSnapshot === 'function') {
-            const msgs = getContext().chat || [];
-            let last = -1;
-            for (let i = 0; i < msgs.length; i++) if (!msgs[i].is_user) last = i;
-            if (last >= 0) {
-                const snap = api.getSnapshot({ floor: last, at: 'after' });
-                const md = monthDayFromDayKey(extractDayFromTime(snap?.state?.time));
-                if (md) return md;
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ② 记忆库：摘要里的「时间锚点」，取最后一段（最新剧情）的终点
-    try {
-        const memText = typeof memory.getMemoryContext === 'function' ? memory.getMemoryContext() : '';
-        const anchors = [...String(memText).matchAll(/时间锚点\s*[:：]\s*([^\n]+)/g)];
-        if (anchors.length) {
-            const line = anchors[anchors.length - 1][1];
-            const tail = line.split(/→|->/).pop();   // 优先终点，退回整行
-            const md = monthDayFromDayKey(extractDayFromTime(tail)) || monthDayFromDayKey(extractDayFromTime(line));
-            if (md) return md;
-        }
-    } catch { /* 往下走 */ }
-    // ③ 线：活跃线的 when / desc / next 里若带绝对日期
-    try {
-        const saved = readStore(getLinesCacheKey());
-        const lines = saved?.raw ? parseLines(saved.raw) : [];
-        for (const l of lines) {
-            if (!l.name || TERMINAL_STAGES.has(l.stage)) continue;
-            const md = monthDayFromDayKey(extractDayFromTime(l.when))
-                    || monthDayFromDayKey(extractDayFromTime(`${l.desc || ''} ${l.next || ''}`));
-            if (md) return md;
-        }
-    } catch { /* 往下走 */ }
-    // ④ 点：日程 AI 输出里的 StartDate（从剧情推断的当前日期）
-    try {
-        const saved = readStore(getCacheKey());
-        if (saved?.raw) {
-            const { startDate } = parseCalendar(saved.raw);
-            if (startDate instanceof Date && !isNaN(startDate)) {
-                // 按当前历校验：自定义历（月数≠12/月长更短）下公历派生的月日可能越界，
-                // 越界即跳过让链往下走，绝不放行一个会被下游 clamp 成错误「今天」的月日。
-                const md = almValidMonthDay({ month: startDate.getMonth() + 1, day: startDate.getDate() });
-                if (md) return md;
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ⑤ 聊天正文：剧情里写明的绝对日期（场景头 / 状态栏），扫最近 AI 楼取最新一处。
-    //    柏宝书/记忆库/线/点全空但正文有日期的用户（论坛反馈）走这条，免得白白 fallback。
-    try {
-        const hit = almDateFromChat();
-        if (hit) return { month: hit.month, day: hit.day };
-    } catch { /* 往下走 */ }
-    // ⑥ 全拿不到 → 默认从头开始（1 月 1 日）
-    return { month: 1, day: 1 };
-}
-// 月/日 → 一年中的第几天（1..年长；纯按月日、不涉年）。cal 缺省=公历(DEFAULT_CAL)，与旧行为完全等价。
-// 从锚点「今天」到下一次 (month, day) 还有几天（按年长环形，不涉年）。
-function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
-    const total = calYearLen(cal);
-    const a = anchor || almTodayAnchor();
-    return (almDayOfYear(month, day, cal) - almDayOfYear(a.month, a.day, cal) + total) % total;
-}
-// ── 周几（年-free）：以一对「参照日→周几」为锚，周几纯按日序偏移推算，全程不涉年、不 new Date 推月历 ──
-// 从文本里认出一个周几 token → 0(周日)..6(周六)，认不出返回 null。周末(末)语义模糊，不认。
-// 只认「规整状态栏格式」里紧贴日期的周几：一个日号(数字，可带 日/号)后仅隔空格/轻标点(不隔汉字)紧跟
-// 周几 token → 0..6，否则 null。存在意义：让「状态栏写死的周几」压过真实公历 getDay()（RP 用户要剧情
-// 自洽、不在乎真实历是周几）。之所以要求「紧贴日号」而非 parseWeekdayToken 那样认任意周几：正文对白里
-// 游离的「周五我们去吃饭」前面没有紧贴的日号，天然不匹配，避免把闲聊里的周几误当权威锚。
-// 从一段时间文本抠「带真实公历年份」的日期，内置公历下用其现实周几当锚（年-正确），返回 {refDoy, refWd}。
-// 自定义历法（cal≠公历）或抠不到真实年（day-N / cn- / 无日期）→ null，交回上层退回「周几 token」。
-// 存在意义：柏宝书/记忆给了「2025年X月X日」时，应当像点 StartDate/正文那样按真实年**算**周几，
-// 而不是只抠 state.time 里那颗可能缺失的周几 token——token 缺了就会一路 fallback 到别处残留的真实年
-//（如某条点里模型顺手写进的现实年份 2026），导致「柏宝书明明 2025、月历却排成 2026」的相位错位。
-// 取「参照日→周几」锚，优先级：柏宝书/记忆(真实年→现实周几，抠不到退周几token) > 聊天正文真实年 > 点 StartDate > 默认(1月1日=周一)。返回 {refDoy, refWd}。
-// 点 StartDate 排在正文之后：开点自动检测时它的年份是 forceStartDate 钉的固定 POINT_ANCHOR_YEAR，getDay() 为假年周几，不能压过正文里剧情/用户写的真实年。
-function almWeekdayRef(cal = loadCalDesc()) {
-    // ① 柏宝书快照 time：先按真实年**算**现实周几（年-正确，压过别处残留的年份），抠不到再退回周几 token
-    try {
-        const api = globalThis.STBaiBaiBook;
-        if (api && typeof api.getSnapshot === 'function') {
-            const msgs = getContext().chat || [];
-            let last = -1;
-            for (let i = 0; i < msgs.length; i++) if (!msgs[i].is_user) last = i;
-            if (last >= 0) {
-                const time = api.getSnapshot({ floor: last, at: 'after' })?.state?.time;
-                const real = calRealWeekdayRef(time, cal);
-                if (real) return real;
-                const wd = parseWeekdayToken(time);
-                if (wd != null) { const a = almTodayAnchor(); return { refDoy: almDayOfYear(a.month, a.day, cal), refWd: wd }; }
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ② 记忆库「时间锚点」尾段：同样先按真实年算现实周几，再退回周几 token（配今天的月/日）
-    try {
-        const memText = typeof memory.getMemoryContext === 'function' ? memory.getMemoryContext() : '';
-        const anchors = [...String(memText).matchAll(/时间锚点\s*[:：]\s*([^\n]+)/g)];
-        if (anchors.length) {
-            const line = anchors[anchors.length - 1][1];
-            const real = calRealWeekdayRef(line, cal);
-            if (real) return real;
-            const wd = parseWeekdayToken(line.split(/→|->/).pop()) ?? parseWeekdayToken(line);
-            if (wd != null) { const a = almTodayAnchor(); return { refDoy: almDayOfYear(a.month, a.day, cal), refWd: wd }; }
-        }
-    } catch { /* 往下走 */ }
-    // ③ 聊天正文（含状态栏）→ 周几：写死的周几 token 优先(剧情自洽 > 真实公历)，没写才退回真实年 getDay()。
-    //    排在点之前：正文年份是剧情/用户写的真实年；点 StartDate 的年份在开了点自动检测时会被
-    //    forceStartDate 钉成固定 POINT_ANCHOR_YEAR，其 getDay() 是假年周几，若压过正文就会把历
-    //    也拖到那个假年（bug：2021/8/20 周五被算成 2024 的周二）。
-    try {
-        const hit = almDateFromChat();
-        if (hit) {
-            let refWd = null;
-            if (hit.wd != null) refWd = hit.wd;                                               // 状态栏写死的周几：直接采信
-            else if (hit.date instanceof Date && !isNaN(hit.date)) refWd = hit.date.getDay();  // 没写周几：真实公历兜底
-            if (refWd != null) return { refDoy: almDayOfYear(hit.month, hit.day, cal), refWd };
-        }
-    } catch { /* 往下走 */ }
-    // ④ 点 StartDate：最后的真实年份来源（正文也没给日期时）。开了点自动检测时这里是
-    //    POINT_ANCHOR_YEAR 的周几——纯虚构、无其他日期锚的设定下无所谓对错，且点/历同源一致。
-    try {
-        const saved = readStore(getCacheKey());
-        if (saved?.raw) {
-            const { startDate } = parseCalendar(saved.raw);
-            if (startDate instanceof Date && !isNaN(startDate)) {
-                return { refDoy: almDayOfYear(startDate.getMonth() + 1, startDate.getDate(), cal), refWd: startDate.getDay() };
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ⑤ 默认：无年份 → 1 月 1 日定为周一（任意但稳定）
-    return { refDoy: 1, refWd: 1 };
-}
-// 某月日的周几（0..6），纯日序偏移，不涉年。ref 可复用（较重，整轮渲染算一次传进来）。
-function almWeekdayFor(month, day, ref, cal = loadCalDesc()) {
-    const r = ref || almWeekdayRef(cal);
-    return ((r.refWd + almDayOfYear(month, day, cal) - r.refDoy) % 7 + 7) % 7;
-}
-// 多日节假日的结束日 = 起始 + (days-1) 环形折回。days<=1 即单日，返回起点本身。
-// 条目(可能多日)是否覆盖某个日序 doy。按年长环，天然处理跨年尾接缝。
-
-function sortAlmanacUpcoming(items, cal = loadCalDesc()) {
-    const anchor = almTodayAnchor();   // 链较重，每次排序只算一次，复用给全部条目
-    const todayDoy = almDayOfYear(anchor.month, anchor.day, cal);
-    return items
-        .map(it => {
-            // 多日节假日若今天正落在区间内 → 记为「进行中」(d=-1)，排在最前
-            const active = almClampInt(it.days, 1, calYearLen(cal), 1) > 1 && almItemCoversDoy(it, todayDoy, cal);
-            return { it, d: active ? -1 : almDaysUntil(it.month, it.day, anchor, cal) };
-        })
-        .sort((a, b) => a.d - b.d || a.it.month - b.it.month || a.it.day - b.it.day)
-        .map(x => x.it);
-}
+// 历「当前日期」锚点体系（almTodayAnchor/almDaysUntil/almWeekdayRef/almWeekdayFor/sortAlmanacUpcoming）
+// 已抽出到 business/axis/anchor.js（纯数据层从 data.js/叶子模块 import，跨域读取器经 bindAxisAnchor 注入）。
 
 // 供 buildMessages 反哺点/线/大纲的文本（历自己不进主楼）。空则返回 ''。
 // 三段式：以「当前剧情日期」为锚 → 近期将至（未来 N 天内 + 进行中，带倒计时，给点/线明确抓手）→ 全年其他（背景）。
