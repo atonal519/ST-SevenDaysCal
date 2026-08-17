@@ -10623,12 +10623,10 @@ async function triggerSupplementAnniversary() {
 // 用户明确怕浮层弹窗出问题（会盖住/卡住），故表单直接渲进 #sp-almanac-wrap 里，
 // 走 renderAlmanacPanel 的正常重渲，跟着 CHAT_CHANGED 一起被清，绝不残留浮层。
 function openAlmanacEditor(id, prefill) {
-    axisState._almanacEditor = { id: id || null, prefill: prefill || null };
-    if (axisState.almanacMode) renderAlmanacPanel();
+    openAxisEditor(id, prefill, renderAlmanacPanel);
 }
 function closeAlmanacEditor() {
-    axisState._almanacEditor = null;
-    if (axisState.almanacMode) renderAlmanacPanel();
+    closeAxisEditor(renderAlmanacPanel);
 }
 function renderAlmanacEditor() {
     const { id, prefill } = axisState._almanacEditor;
