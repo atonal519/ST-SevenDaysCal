@@ -90,6 +90,7 @@ import { renderAxisToolbar } from './business/axis/toolbar.js';
 import { renderAxisUpcoming } from './business/axis/upcoming.js';
 import { renderAxisCalendar } from './business/axis/calendar.js';
 import { openAxisEditor, closeAxisEditor, setAxisSheet, selectAxisDay, navigateAxisMonth } from './business/axis/editor.js';
+import { createCalendarManager } from './business/axis/manager.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -176,6 +177,12 @@ const renderAlmanacUpcoming = () => renderAxisUpcoming({
     almRowHtml,
 });
 const renderAlmanacCalendar = () => renderAxisCalendar({ almRowHtml });
+const axisCalendarManager = createCalendarManager({
+    renderLegacy: (...args) => legacyRenderCalendarManager(...args),
+    refreshLegacy: (...args) => legacyRefreshCalendarManager(...args),
+});
+const renderCalendarManager = axisCalendarManager.renderCalendarManager;
+const refreshCalendarManager = axisCalendarManager.refreshCalendarManager;
 
 // Axis sheet orchestration lives in business/axis; render details are injected
 // from this host to keep DOM/runtime dependencies out of the business module.
@@ -10093,7 +10100,7 @@ async function updateCalendarTemplateBinding(avatar, nextTemplateId, expectedTem
     return true;
 }
 
-function renderCalendarManagerBody() { return renderCalendarCard() + renderCalendarTemplates(); }
+function legacyRenderCalendarManagerBody() { return renderCalendarCard() + renderCalendarTemplates(); }
 
 function calendarManagerTarget(target, $content) {
     if (!target) return $();
@@ -10124,7 +10131,7 @@ function revealCalendarManagerTarget($target, $scroller) {
 }
 
 // 管理页内部只替换业务内容，保留真正的滚动容器；否则每次操作都会重建 scrollTop 和焦点。
-function refreshCalendarManager(options = {}) {
+function legacyRefreshCalendarManager(options = {}) {
     const $wrap = $in('#sp-almanac-wrap');
     const $scroller = $wrap.find('.sp-alm-body').first();
     const $content = $scroller.children('.sp-alm-editor-body').first();
@@ -10151,7 +10158,7 @@ function refreshCalendarManager(options = {}) {
         if (!$card.length) return false;
         $card.replaceWith(renderCalendarCard());
     } else {
-        $content.html(renderCalendarManagerBody());
+        $content.html(legacyRenderCalendarManagerBody());
     }
 
     const focusBindingId = options.focusBindingId || (oldBindingView?.active ? oldBindingView.id : null);
@@ -10175,12 +10182,12 @@ function refreshCalendarManager(options = {}) {
     return true;
 }
 
-function renderCalendarManager() {
+function legacyRenderCalendarManager() {
     return `<div class="sp-alm-editor-head">
         <button class="sp-icon-btn sp-alm-manager-back" title="返回" aria-label="返回"><i class="fa-solid fa-arrow-left"></i></button>
         <span class="sp-alm-editor-title">历法管理</span>
     </div><div class="sp-alm-manager-hint">不想自己填？<button type="button" class="sp-alm-manager-chat-link">和间聊聊吧 →</button></div>
-    <div class="sp-alm-body"><div class="sp-alm-editor-body">${renderCalendarManagerBody()}</div></div>`;
+    <div class="sp-alm-body"><div class="sp-alm-editor-body">${legacyRenderCalendarManagerBody()}</div></div>`;
 }
 
 // 调用方负责传入已规范化的历法；本函数只处理日期冲突、统一写入和消费者刷新。
