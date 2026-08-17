@@ -89,6 +89,7 @@ import { createAxisPanel } from './business/axis/panel.js';
 import { renderAxisToolbar } from './business/axis/toolbar.js';
 import { renderAxisUpcoming } from './business/axis/upcoming.js';
 import { renderAxisCalendar } from './business/axis/calendar.js';
+import { openAxisEditor, closeAxisEditor, setAxisSheet, selectAxisDay, navigateAxisMonth } from './business/axis/editor.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -10359,20 +10360,20 @@ function legacyRenderAlmanacCalendar() {
 // ── 子视图 / 导航 ──
 function almSetSheet(sheet) {
     if (axisState._almanacSheet === sheet) return;
-    axisState._almanacSheet = sheet;
-    axisState._almanacCalDay = null;
+    setAxisSheet(sheet, renderAlmanacPanel, batchReset);
+    return;
     batchReset();   // 切换 sheet 退出批量模式，避免跨列表误删
     renderAlmanacPanel();
 }
 function almNavMonth(delta) {
-    const mc = calMonthCount(loadCalDesc());
+    navigateAxisMonth(delta, () => calMonthCount(loadCalDesc()), almCalMonth, renderAlmanacPanel);
+    return;
     axisState._almanacCalMonth = (almCalMonth() + delta + mc) % mc;   // 只在有效月数内循环，不涉及年
     axisState._almanacCalDay = null;
     renderAlmanacPanel();
 }
 function almSelectDay(day) {
-    axisState._almanacCalDay = (axisState._almanacCalDay === day) ? null : day;
-    renderAlmanacPanel();
+    selectAxisDay(day, renderAlmanacPanel);
 }
 
 // ── 生成 ──
