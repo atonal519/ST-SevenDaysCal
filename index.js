@@ -86,6 +86,7 @@ import {
 // 历注入文本构造（纯函数，仅依赖 data.js/anchor.js）已抽出到 business/axis/inject.js。
 import { getAlmanacInjectText } from './business/axis/inject.js';
 import { createAxisPanel } from './business/axis/panel.js';
+import { renderAxisToolbar } from './business/axis/toolbar.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -165,6 +166,7 @@ const $in  = (sel) => { const el = _spShadow?.querySelector(sel); return el ? $(
 const inEl = (sel) => _spShadow?.querySelector(sel) ?? null;
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
 const $inAll = (sel) => $(Array.from(_spShadow?.querySelectorAll(sel) ?? []));
+const almToolbarHtml = () => renderAxisToolbar(actionMenuHtml);
 
 // Axis sheet orchestration lives in business/axis; render details are injected
 // from this host to keep DOM/runtime dependencies out of the business module.
@@ -9734,25 +9736,6 @@ function actionMenuHtml(menuId) {
     </div>`;
 }
 
-function almToolbarHtml() {
-    const onLedger = axisState._almanacSheet === 'ledger';
-    return `<div class="sp-alm-toolbar">
-        <div class="sp-alm-sheet-toggle">
-            <button class="sp-alm-sheet-btn${axisState._almanacSheet === 'upcoming' ? ' sp-alm-sheet-active' : ''}" data-sheet="upcoming">即将到来</button>
-            <button class="sp-alm-sheet-btn${axisState._almanacSheet === 'calendar' ? ' sp-alm-sheet-active' : ''}" data-sheet="calendar">日历</button>
-            <button class="sp-alm-sheet-btn${onLedger ? ' sp-alm-sheet-active' : ''}" data-sheet="ledger">刻度</button>
-        </div>
-        ${onLedger ? '' : `<div class="sp-alm-tools">
-            <button class="sp-icon-btn sp-alm-add" title="手动添加日期" aria-label="手动添加日期"><i class="fa-solid fa-plus"></i></button>
-            <div class="sp-alm-wide-tools">
-                <button class="sp-icon-btn sp-alm-gen" title="生成节日（AI 按世界观铺满一整年）" aria-label="生成节日"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
-                <button class="sp-icon-btn sp-alm-supplement" title="补录纪念日（只增补新里程碑，不重铺、不动现有日历）" aria-label="补录纪念日"><i class="fa-solid fa-heart-circle-plus"></i></button>
-                <button class="sp-icon-btn sp-alm-manage" title="历法管理" aria-label="历法管理"><i class="fa-solid fa-calendar-days"></i></button>
-            </div>
-            <div class="sp-alm-narrow-tools">${actionMenuHtml('almanac')}</div>
-        </div>`}
-    </div>`;
-}
 // 历面板「今天」栏（仅时间戳关时显示；戳开时整行隐藏——时间戳条已明写当日日期、古风无「周几」概念，只读也多余）。
 //   ‹ / ›  = 把「今天」锚点往前/后挪一天（挪一下即固定成手动锚点）
 //   改      = 内联输入月/日（不弹窗，_almTodayEditing 切换）
