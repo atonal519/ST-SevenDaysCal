@@ -10016,7 +10016,7 @@ function renderCalendarBindingEditor(templateId, cards, bindings) {
     </button>`).join('');
     return `<div class="sp-alm-manager-bind-panel">
         <div class="sp-alm-manager-bind-chips">${chips || '<span class="sp-alm-manager-bind-empty">尚未绑定角色卡 · 当绑定角色的当前聊天既没有历法，也没有纪念日时，将自动采用此历法</span>'}</div>
-        <input type="text" class="sp-input sp-alm-manager-bind-search" role="combobox" aria-expanded="true" aria-controls="sp-alm-manager-bind-results-${escapeAttr(templateId)}" data-template-id="${escapeAttr(templateId)}" value="${escapeAttr(_almanacManager.bindQuery)}" placeholder="搜索角色卡名称…" autocomplete="off">
+        <input type="text" class="sp-input sp-alm-manager-bind-search" role="combobox" aria-expanded="true" aria-controls="sp-alm-manager-bind-results-${escapeAttr(templateId)}" data-template-id="${escapeAttr(templateId)}" value="${escapeAttr(axisState._almanacManager.bindQuery)}" placeholder="搜索角色卡名称…" autocomplete="off">
         <div id="sp-alm-manager-bind-results-${escapeAttr(templateId)}" class="sp-alm-manager-bind-results" role="listbox">${renderCalendarBindingOptions(templateId)}</div>
     </div>`;
 }
