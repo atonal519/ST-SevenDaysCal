@@ -117,6 +117,13 @@ import {
     batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet,
 } from './business/ledger/render.js';
 
+// Shadow-DOM accessors are dependencies of the top-level DI wiring below.
+// Declare them before any bind/create call can evaluate the dependency.
+let _spShadow = null;
+const $in  = (sel) => { const el = _spShadow?.querySelector(sel); return el ? $(el) : $(); };
+const inEl = (sel) => _spShadow?.querySelector(sel) ?? null;
+const $inAll = (sel) => $(Array.from(_spShadow?.querySelectorAll(sel) ?? []));
+
 // store 视图态回退桥：keyDesc 缺省 view/charName 时回退到当前视图/角色（闭包捕获实时值）。
 bindStoreViewFallback(() => currentView, () => charViewName);
 
@@ -169,12 +176,7 @@ const SIZE_KEY    = 'sp-size';
 // 主窗口 #sp-modal-root 迁入 shadow root：ST 全局样式/选择器/事件在边界处切断，
 // 根治样式污染。jQuery 选择器不穿透 shadow——窗口内 id/类查询一律改走 $in()/inEl()。
 // _spShadow 在 injectModal() 里赋值；applyTheme() 同步 shadow 内 wrapper 的主题类。
-let _spShadow = null;
-const $in  = (sel) => { const el = _spShadow?.querySelector(sel); return el ? $(el) : $(); };
-
-const inEl = (sel) => _spShadow?.querySelector(sel) ?? null;
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
-const $inAll = (sel) => $(Array.from(_spShadow?.querySelectorAll(sel) ?? []));
 const almToolbarHtml = () => renderAxisToolbar(actionMenuHtml);
 const renderAlmanacUpcoming = () => renderAxisUpcoming({
     renderAlmanacEmpty,
