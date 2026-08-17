@@ -92,6 +92,11 @@ import { renderAxisCalendar } from './business/axis/calendar.js';
 import { openAxisEditor, closeAxisEditor, setAxisSheet, selectAxisDay, navigateAxisMonth } from './business/axis/editor.js';
 import { createCalendarManager } from './business/axis/manager.js';
 
+// Must be initialized before the top-level bindAxisAnchor() wiring below.
+// Keeping this as a const preserves the shared terminal-stage semantics while
+// avoiding a temporal-dead-zone read during module evaluation.
+const TERMINAL_STAGES = new Set(['已消散', '已完成', '已失败']);
+
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
 import { pointState } from './business/point/state.js';
@@ -1974,8 +1979,6 @@ function syncLatestScheduleBlock(expectedChatId = null) {
 // 改 AI 行为且增加 token。刷新时机跟内联块同步（见 sync/backfill + 开关 handler）。
 const LINES_INJECT_KEY   = 'sp_lines_latent';
 const LINES_INJECT_DEPTH = 4;
-const TERMINAL_STAGES    = new Set(['已消散', '已完成', '已失败']);
-
 function buildLinesInjectionText(lines) {
     const items = lines.map(l => {
         const parts = [`- ${l.name}（${l.type || '线'}·${l.stage}${l.stall ? '·停滞' : ''}）`];
