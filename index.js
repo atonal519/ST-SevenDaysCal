@@ -144,7 +144,7 @@ bindLedgerRender({
     splitCnList,
     spConfirm,
     syncLatestAlmanacBlock,
-    renderAlmanacPanel,
+    renderAlmanacPanel: (...args) => renderAlmanacPanel(...args),
     getLedgerCaptureInterval,
     isCapturingLedger: () => isCapturingLedger,
     isJudgingLedger: () => isJudgingLedger,
@@ -9738,8 +9738,8 @@ function almToolbarHtml() {
     const onLedger = axisState._almanacSheet === 'ledger';
     return `<div class="sp-alm-toolbar">
         <div class="sp-alm-sheet-toggle">
-            <button class="sp-alm-sheet-btn${_almanacSheet === 'upcoming' ? ' sp-alm-sheet-active' : ''}" data-sheet="upcoming">即将到来</button>
-            <button class="sp-alm-sheet-btn${_almanacSheet === 'calendar' ? ' sp-alm-sheet-active' : ''}" data-sheet="calendar">日历</button>
+            <button class="sp-alm-sheet-btn${axisState._almanacSheet === 'upcoming' ? ' sp-alm-sheet-active' : ''}" data-sheet="upcoming">即将到来</button>
+            <button class="sp-alm-sheet-btn${axisState._almanacSheet === 'calendar' ? ' sp-alm-sheet-active' : ''}" data-sheet="calendar">日历</button>
             <button class="sp-alm-sheet-btn${onLedger ? ' sp-alm-sheet-active' : ''}" data-sheet="ledger">刻度</button>
         </div>
         ${onLedger ? '' : `<div class="sp-alm-tools">
@@ -9830,35 +9830,6 @@ function almNudgeToday(delta) {
     setDateAnchor(key, nd.month, nd.day);
     runAnchorAftermath();
 }
-function legacyRenderAlmanacPanel(options = {}) {
-    if (!axisState.almanacMode) return;
-    const $wrap = $in('#sp-almanac-wrap');
-    if (axisState._almanacManager) {
-        if (refreshCalendarManager(options)) return;
-        $wrap.html(renderCalendarManager());
-        return;
-    }
-    if (axisState._almanacEditor) {
-        $wrap.html(renderAlmanacEditor());
-        almRenderWdHint();
-        setTimeout(() => $in('#sp-alm-f-name').trigger('focus'), 30);
-        return;
-    }
-    if (getLedgerEditor()) {
-        $wrap.html(renderLedgerEditor());
-        setTimeout(() => $in('#sp-led-f-gist').trigger('focus'), 30);
-        return;
-    }
-    if (axisState.isGeneratingAlmanac) {
-        $wrap.html(almToolbarHtml() + `<div class="sp-alm-body">${loadingHtml(_almGenLabel, 'sp-abort-almanac')}</div>`);
-        return;
-    }
-    const bodyHtml = axisState._almanacSheet === 'ledger' ? renderLedgerSheet()
-                   : axisState._almanacSheet === 'calendar' ? renderAlmanacCalendar()
-                   : renderAlmanacUpcoming();
-    $wrap.html(almToolbarHtml() + almTodayBarHtml() + storyClockBarHtml() + `<div class="sp-alm-body">${bodyHtml}</div>`);
-}
-
 function almRowHtml(it, ctx) {
     const meta = almTypeMeta(it.type);
     const wd = ALM_WEEKDAYS[almWeekdayFor(it.month, it.day, ctx?.wkRef, ctx?.cal)];   // 起始日周几（年-free）
