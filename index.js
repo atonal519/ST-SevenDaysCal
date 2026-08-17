@@ -87,6 +87,7 @@ import {
 import { getAlmanacInjectText } from './business/axis/inject.js';
 import { createAxisPanel } from './business/axis/panel.js';
 import { renderAxisToolbar } from './business/axis/toolbar.js';
+import { renderAxisUpcoming } from './business/axis/upcoming.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -167,6 +168,11 @@ const inEl = (sel) => _spShadow?.querySelector(sel) ?? null;
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
 const $inAll = (sel) => $(Array.from(_spShadow?.querySelectorAll(sel) ?? []));
 const almToolbarHtml = () => renderAxisToolbar(actionMenuHtml);
+const renderAlmanacUpcoming = () => renderAxisUpcoming({
+    renderAlmanacEmpty,
+    batchBarHtml,
+    almRowHtml,
+});
 
 // Axis sheet orchestration lives in business/axis; render details are injected
 // from this host to keep DOM/runtime dependencies out of the business module.
@@ -9862,7 +9868,7 @@ function renderAlmanacEmpty() {
     </div>`;
 }
 
-function renderAlmanacUpcoming() {
+function legacyRenderAlmanacUpcoming() {
     const items = loadAlmanac();
     if (!items.length) return renderAlmanacEmpty();
     const anchor = almTodayAnchor();
