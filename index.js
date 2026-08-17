@@ -88,6 +88,7 @@ import { getAlmanacInjectText } from './business/axis/inject.js';
 import { createAxisPanel } from './business/axis/panel.js';
 import { renderAxisToolbar } from './business/axis/toolbar.js';
 import { renderAxisUpcoming } from './business/axis/upcoming.js';
+import { renderAxisCalendar } from './business/axis/calendar.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -173,6 +174,7 @@ const renderAlmanacUpcoming = () => renderAxisUpcoming({
     batchBarHtml,
     almRowHtml,
 });
+const renderAlmanacCalendar = () => renderAxisCalendar({ almRowHtml });
 
 // Axis sheet orchestration lives in business/axis; render details are injected
 // from this host to keep DOM/runtime dependencies out of the business module.
@@ -10276,7 +10278,7 @@ function almCalMonth() {
     return axisState._almanacCalMonth;
 }
 
-function renderAlmanacCalendar() {
+function legacyRenderAlmanacCalendar() {
     const cal = loadCalDesc();
     const m0 = almCalMonth();
     const month1 = m0 + 1;
