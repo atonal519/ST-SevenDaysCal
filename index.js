@@ -85,6 +85,7 @@ import {
 } from './business/axis/anchor.js';
 // 历注入文本构造（纯函数，仅依赖 data.js/anchor.js）已抽出到 business/axis/inject.js。
 import { getAlmanacInjectText } from './business/axis/inject.js';
+import { createAxisPanel } from './business/axis/panel.js';
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
@@ -164,6 +165,26 @@ const $in  = (sel) => { const el = _spShadow?.querySelector(sel); return el ? $(
 const inEl = (sel) => _spShadow?.querySelector(sel) ?? null;
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
 const $inAll = (sel) => $(Array.from(_spShadow?.querySelectorAll(sel) ?? []));
+
+// Axis sheet orchestration lives in business/axis; render details are injected
+// from this host to keep DOM/runtime dependencies out of the business module.
+const renderAlmanacPanel = createAxisPanel({
+    $in,
+    getLedgerEditor,
+    refreshCalendarManager,
+    renderCalendarManager,
+    renderAlmanacEditor,
+    renderLedgerEditor,
+    renderLedgerSheet,
+    renderAlmanacCalendar,
+    renderAlmanacUpcoming,
+    almToolbarHtml,
+    almTodayBarHtml,
+    storyClockBarHtml,
+    almRenderWdHint,
+    loadingHtml,
+    _almGenLabel: () => axisState._almGenLabel,
+});
 
 // 扩展目录绝对路径（引自身 style.css 进 shadow）；ST 站点根（引 fontawesome.min.css，
 // 与 ST 共用浏览器缓存）。import.meta.url = …/scripts/extensions/third-party/ST-SevenDaysCal/index.js
@@ -9809,7 +9830,7 @@ function almNudgeToday(delta) {
     setDateAnchor(key, nd.month, nd.day);
     runAnchorAftermath();
 }
-function renderAlmanacPanel(options = {}) {
+function legacyRenderAlmanacPanel(options = {}) {
     if (!axisState.almanacMode) return;
     const $wrap = $in('#sp-almanac-wrap');
     if (axisState._almanacManager) {
