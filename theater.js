@@ -316,14 +316,18 @@ function buildWriteMessages(userInput) {
 function buildBeautifyMessages(raw) {
     const s = _getSettings();
     const defaultBeautify =
-`你是一个 HTML 排版师。把用户给的小说文本转成一段**美观的 HTML 片段**用于网页展示。
+`你是一个 HTML 排版师。把用户给的小说文本转成一段**克制、适合阅读的 HTML 片段**用于网页展示。
 【硬性约束】
-- 只用**行内 style**（inline style）装饰，绝对不要写 <style> 标签、不要写 <script>、不要引用外部 CSS/字体/图片
+- 绝对不要写 <style> 标签、不要写 <script>、不要引用外部 CSS/字体/图片；根容器及四类固定语义元素的颜色、背景、边框、字号、间距等视觉表现交给页面 CSS，禁止在这些元素上用行内 style 覆盖
 - 不要写 <html>/<head>/<body> 外壳，只输出可直接插入的片段
-- 保留原文全部文字内容，不增删情节，只做分段、强调、排版美化
+- 最外层请使用一个语义根容器，例如 <div class="sp-theater-prose">；普通正文仍以正常 <p> 段落为主，禁止把每段做成卡片
+- 只按原文真实结构、少量使用以下固定语义类，不要自由发明类名：转场/原文分隔处用 .sp-theater-scene-break；原文确实包含信件、聊天记录、便签、广播、档案等文中载体时用 .sp-theater-inset；原文确实存在适合弱化呈现的心声、回忆或旁逸文字时用 .sp-theater-aside；仅包裹少量原文关键短句时用 .sp-theater-emphasis
+- 如果原文没有分隔符、但确实需要一个装饰性转场，必须精确输出无任何空格、换行或文本节点的 <div class="sp-theater-scene-break"></div>；如果原文已有 ***、—— 等分隔符，则保留原文并放入该元素，不要新增圆点文本
+- 保留原文全部文字内容，不增删情节、不新增标题、标签、说明、图标文字，不改写内容；不得为了排版虚构结构
 - **正文字号务必克制、偏小**：正文用约 13px（0.87em 左右），行高 1.6；绝对不要放大正文、不要用超大字号；标题（若有）最多 1.1em
 - **不要拉大字间距**：不要设 letter-spacing（或设 0/normal），字与字之间保持正常间距
-- 配色淡雅、留白舒适、适合阅读；容器不要设固定宽度，让它自适应面板
+- 配色淡雅、留白舒适、适合阅读；容器不要设固定宽度，让它自适应面板；转场只用细线/小符号，文中载体只做低对比度轻框，旁逸文字柔和，关键短句少量强调
+- 禁止固定宽度、夸张字号、动画、高饱和装饰和自由发明类名；普通结构优先使用正常标签并保持克制，不要重装饰；如确有基础排版需要，优先使用上述固定类
 直接输出 HTML，不要用代码块包裹、不要解释。`;
     const sys = s.theaterBeautifyPrompt ? String(s.theaterBeautifyPrompt).trim() : defaultBeautify;
     return [
@@ -348,7 +352,7 @@ function sanitizeHtml(htmlRaw) {
 
 // 生成一段小剧场。返回 { piece } 或抛错。piece 已自动落草稿。
 // onStage(stageText) 供 UI 更新 loading 文案（'写作' / '美化'）。
-export async function generate(userInput, { signal, onStage } = {}) {
+export async function generate(userInput, { signal, onStage, templateSource = null } = {}) {
     if (_generating) throw new Error('正在生成中，请稍候');
     if (!String(userInput || '').trim()) throw new Error('请先填写小剧场需求');
     if (!_callWriteApi || !_callBeautifyApi) throw new Error('棱未正确初始化');
@@ -389,6 +393,10 @@ export async function generate(userInput, { signal, onStage } = {}) {
             raw  : String(raw),
             html,
             ts   : Date.now(),
+            // 保存生成当刻实际输入；模板改名/删除或用户二次编辑后，回看仍准确。
+            templateSource: templateSource?.input
+                ? { uid: String(templateSource.uid || ''), title: String(templateSource.title || '(无标题)'), input: String(templateSource.input) }
+                : undefined,
         };
         pushDraft(piece);   // 自动落草稿（sliding window）
         return { piece };

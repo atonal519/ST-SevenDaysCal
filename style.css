@@ -5835,6 +5835,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 
 /* ── 历面板批量模式（日历条目删 / 活跃刻度归档 / 归档刻度删）────────────────── */
+/* 普通态只有一个入口，靠右贴齐所在独立行；批量态保留原有全选/计数/操作布局。 */
+.sp-batch-bar:not(.sp-batch-active) { justify-content: flex-end; }
 /* 批量工具条：入口钮或（全选 + 已选计数 + 退出 + 执行）横排，退出/执行推到最右。 */
 .sp-batch-bar {
     display     : flex;

@@ -40,6 +40,7 @@ let _queue = [];
 let _running = false;
 let _abortController = null;      // reserved for rebuild flow (see abortRebuild)
 let _jobAbortController = null;   // shared signal for per-job fetches; aborted on CHAT_CHANGED
+let _isRebuilding = false;        // block every persist while rebuildAll holds uncommitted memory
 
 // 把两路中止信号合成一个交给 fetch：_jobAbortController（切聊天时掐，防结果串写别的聊天）
 // 与 _abortController（用户点「中止」时掐，重构/补漏用）。历史 bug：fetch 只绑了前者，
@@ -105,6 +106,8 @@ function freshMeta() {
 function persist() {
     // 立即落盘（同 store.js persist）：切档 clearChat() 会取消防抖并清空 chat_metadata，
     // 防抖那份记忆就丢——补全过程多次写入、全吊在最后一个防抖上，尤其危险。
+    // rebuildAll 的新记忆必须整套完成后才能写入；期间任何路径都不能落盘半成品。
+    if (_isRebuilding) return;
     const ctx = getContext();
     if (!ctx) return;
     if (ctx.saveMetadata) ctx.saveMetadata();
@@ -368,22 +371,22 @@ async function handleJob(job) {
 }
 
 // ─── L0 generation ───────────────────────────────────────────────────────────
-async function runL0(groupKey) {
+async function runL0(groupKey, { queueL1 = true } = {}) {
     const m = meta();
     const groups = getStableGroups();
     const group = groups.find(g => g.key === groupKey);
-    if (!group) return;
+    if (!group) return false;
 
     const hash = groupHash(group);
     const existing = m.L0[groupKey];
-    if (existing && existing.hash === hash) return;
+    if (existing && existing.hash === hash) return true;
 
     // 净化后正文几乎为空：确定性结果，不调模型、不算模型失败。标记后直接返回，
     // 面板据此提示用户去查「保留标签」设置（多半正文被裹在自定义标签里）。
     if (isStrippedEmpty(group)) {
         recordStrippedEmpty(groupKey);
         if (m.L0[groupKey]) delete m.L0[groupKey];
-        return;
+        return true;   // 确定性「无可总结正文」是有效重建结果，不触发整次回滚
     }
 
     // Find previous group's summary for context
@@ -400,17 +403,17 @@ async function runL0(groupKey) {
     try {
         response = await _callApi(messages, jobSignal());
     } catch (err) {
-        if (err?.name === 'AbortError') return;          // chat switched; drop silently
+        if (err?.name === 'AbortError') return false;    // chat switched; drop silently
         recordFailure(groupKey, err);
-        return;
+        return false;
     }
 
     // Guard: don't write results into a different chat's metadata
-    if (getContext().chatId !== chatIdSnap) return;
+    if (getContext().chatId !== chatIdSnap) return false;
 
     if (!response || response.length < 10) {
         recordFailure(groupKey, new Error('响应为空或过短'));
-        return;
+        return false;
     }
 
     m.L0[groupKey] = {
@@ -423,7 +426,8 @@ async function runL0(groupKey) {
     m.system.consecutiveFails = 0;
     if (m.system.paused) m.system.paused = false;
 
-    maybeQueueL1();
+    if (queueL1) maybeQueueL1();
+    return true;
 }
 
 function recordFailure(groupKey, err) {
@@ -477,7 +481,7 @@ async function runL1(range) {
         if (s >= startNum && e <= endNum) entries.push(l0);
     }
     entries.sort((a, b) => parseInt(a.range[0], 10) - parseInt(b.range[0], 10));
-    if (entries.length < 2) return;
+    if (entries.length < 2) return true;   // 无足够 L0 可压缩 = 合法无操作
 
     const chatIdSnap = getContext().chatId;
     const messages = buildL1Prompt(entries);
@@ -485,15 +489,16 @@ async function runL1(range) {
     try {
         response = await _callApi(messages, jobSignal());
     } catch (err) {
-        if (err?.name === 'AbortError') return;
+        if (err?.name === 'AbortError') return false;
         m.system.lastError = 'L1 压缩失败：' + String(err?.message || err);
-        return;
+        return false;
     }
-    if (getContext().chatId !== chatIdSnap) return;
-    if (!response || response.length < 20) return;
+    if (getContext().chatId !== chatIdSnap) return false;
+    if (!response || response.length < 20) return false;
 
     m.L1.push({ range, text: response.trim(), ts: Date.now(), builtFrom: entries.length });
     m.L1.sort((a, b) => parseInt(a.range[0], 10) - parseInt(b.range[0], 10));
+    return true;
 }
 
 // ─── Health report ───────────────────────────────────────────────────────────
@@ -628,6 +633,7 @@ export async function rebuildAll(onProgress) {
     //（下面全是把 m.L0/L1/... 重新赋值成新对象），所以 backup 里的引用始终指向完好的旧数据。
     const backup = { L0: m.L0, L1: m.L1, failed: m.failed, system: m.system };
     let committed = false;
+    _isRebuilding = true;
     m.L0 = {}; m.L1 = []; m.failed = {};
     m.system = { paused: false, consecutiveFails: 0, lastError: null };
 
@@ -635,13 +641,13 @@ export async function rebuildAll(onProgress) {
         const groups = getStableGroups();
         for (let i = 0; i < groups.length; i++) {
             if (ctrl.signal.aborted) { onProgress?.({ current: i, total: groups.length, aborted: true }); return; }
-            await runL0(groups[i].key);
+            const succeeded = await runL0(groups[i].key, { queueL1: false });
             if (ctrl.signal.aborted) {   // 中止发生在这次 fetch 期间 → 立刻收尾，交给 finally 还原
                 onProgress?.({ current: i, total: groups.length, aborted: true });
                 return;
             }
+            if (!succeeded) throw new Error(`L0 重建失败：${groups[i].key}`);
             onProgress?.({ current: i + 1, total: groups.length });
-            persist();
         }
         // L1
         const l0Keys = getStableGroups().map(g => g.key).filter(k => m.L0[k]);
@@ -650,16 +656,19 @@ export async function rebuildAll(onProgress) {
             if (ctrl.signal.aborted) return;
             const chunk = l0Keys.slice(s, s + M);
             const range = [m.L0[chunk[0]].range[0], m.L0[chunk[chunk.length - 1]].range[1]];
-            await runL1(range);
-            persist();
+            const succeeded = await runL1(range);
+            if (ctrl.signal.aborted) return;
+            if (!succeeded) throw new Error(`L1 重建失败：${range.join('-')}`);
         }
         committed = true;   // 全流程走完，新记忆算数
+        _isRebuilding = false;
         persist();
         onProgress?.({ current: groups.length, total: groups.length, done: true });
     } finally {
         if (!committed) {
             // 中止或异常：整体还原到重构前，绝不留下"清空但没重建"的空记忆
             m.L0 = backup.L0; m.L1 = backup.L1; m.failed = backup.failed; m.system = backup.system;
+            _isRebuilding = false;
             persist();
         }
         if (_abortController === ctrl) _abortController = null;
