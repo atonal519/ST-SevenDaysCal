@@ -241,11 +241,11 @@ const timeTravel = createTimeTravelController({
     },
     onSequenceEnd: ({ sessionId }) => releaseTimeTravelClaim(sessionId),
     steps: [
-        { key: AUTOMATION_MODULES.LINES, run: ({ messageId }) => runGenerateLines(false, { mesId: Number(messageId) }) },
+        { key: AUTOMATION_MODULES.LINES, run: ({ messageId, destinationDate, promptAddon }) => runGenerateLines(false, { mesId: Number(messageId) }, { targetDate: destinationDate, promptAddon, feedback: 'time-travel' }) },
         { key: AUTOMATION_MODULES.OUTLINE, run: () => runJudgeOutlineStep() },
-        { key: AUTOMATION_MODULES.POINT, run: () => syncPointToToday(false) },
-        { key: AUTOMATION_MODULES.LEDGER_CAPTURE, run: () => runLedgerCaptureStep(true) },
-        { key: AUTOMATION_MODULES.LEDGER_JUDGE, run: () => runLedgerJudgeStep(true) },
+        { key: AUTOMATION_MODULES.POINT, run: ({ destinationDate, promptAddon }) => syncPointToToday(false, { targetDate: destinationDate, promptAddon, feedback: 'time-travel' }) },
+        { key: AUTOMATION_MODULES.LEDGER_CAPTURE, run: ({ destinationDate, promptAddon }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel' }) },
+        { key: AUTOMATION_MODULES.LEDGER_JUDGE, run: ({ destinationDate, promptAddon }) => runLedgerJudgeStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel' }) },
     ],
 });
 
@@ -297,6 +297,15 @@ function cancelTimeTravel() {
         const input = $('#send_textarea');
         if (input.length) input.val(removeTimeTravelBlocks(String(input.val() || ''))).trigger('input');
     }
+}
+
+function appendTravelPromptContext(prompt, travelContext = null) {
+    if (!travelContext || travelContext.feedback !== 'time-travel') return prompt;
+    const target = travelContext.targetDate;
+    const targetText = target && Number.isInteger(Number(target.month)) && Number.isInteger(Number(target.day))
+        ? `目标日期：${target.month}月${target.day}日`
+        : '';
+    return [prompt, travelContext.promptAddon, targetText].filter(Boolean).join('\n\n');
 }
 
 // 扩展目录绝对路径（引自身 style.css 进 shadow）；ST 站点根（引 fontawesome.min.css，
@@ -2638,7 +2647,7 @@ function parseLedgerCapture(raw) {
 
 // 标注一次：抄 runJudgeDateStep 的 abort/chatId/重入守卫。manual=true 时（历面板手动点）无论通知档位都反馈结果。
 // fire-and-forget，失败静默（自动车）/弹错（手动）。
-async function runLedgerCaptureStep(manual = false) {
+async function runLedgerCaptureStep(manual = false, travelContext = null) {
     if (isCapturingLedger) return;
     const ctx = getContext();
     const charKey = charStableKey(ctx);
@@ -2654,7 +2663,7 @@ async function runLedgerCaptureStep(manual = false) {
         // 账上全空 = 本卡首次建账：这一趟连角色卡/世界书里的既定机制（周期硬规则、死线、长期状态）一并扫入，
         // 而非只捞对话正文里的新事件。零额外 API——角色卡/世界书本就在 buildMessages 的 system 里，只是换一段指令。
         const isFirst = ledger.listEntries({ includeClosed: true }).length === 0;
-        const prompt = isFirst ? buildLedgerFirstScanPrompt() : buildLedgerCapturePrompt();
+        const prompt = appendTravelPromptContext(isFirst ? buildLedgerFirstScanPrompt() : buildLedgerCapturePrompt(), travelContext);
         const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, LEDGER_CAPTURE_FLOORS);
         if (ledgerCaptureAbort !== myCtrl) return;                          // 被更新的标注取代
         if (getContext().chatId !== chatIdSnap) { done(); return; }         // 已切 chat，丢弃
@@ -2662,7 +2671,7 @@ async function runLedgerCaptureStep(manual = false) {
         const picked = parseLedgerCapture(raw);
         if (!picked.length) { if (manual) showToast('未发现可登记的新事件'); return; }
         const floor = latestAiFloorId();
-        const today = almTodayAnchor();                                     // 历「今天」= 起始锚日期
+        const today = travelContext?.targetDate || almTodayAnchor();
         const seen = new Set(ledger.listEntries({ includeClosed: true }).map(e => normGist(e.事由)));
         const added = [];
         for (const p of picked) {
@@ -2865,7 +2874,7 @@ function parseLedgerJudge(raw) {
 
 // 判定一次：抄 runLedgerCaptureStep 的 abort/chatId/重入守卫。manual=true（手动点）无论通知档位都反馈结果。
 // fire-and-forget，失败静默（自动车）/弹错（手动）。无活跃条目直接跳过、不空烧 API。
-async function runLedgerJudgeStep(manual = false) {
+async function runLedgerJudgeStep(manual = false, travelContext = null) {
     if (isJudgingLedger) return;
     const ctx = getContext();
     const charKey = charStableKey(ctx);
@@ -2879,7 +2888,7 @@ async function runLedgerJudgeStep(manual = false) {
     const done = () => { isJudgingLedger = false; if (ledgerJudgeAbort === myCtrl) ledgerJudgeAbort = null; };
     try {
         const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-        const raw = await callCustomApi(ctx, buildLedgerJudgePrompt(), cfg, userName, charName, myCtrl.signal, LEDGER_JUDGE_FLOORS);
+        const raw = await callCustomApi(ctx, appendTravelPromptContext(buildLedgerJudgePrompt(), travelContext), cfg, userName, charName, myCtrl.signal, LEDGER_JUDGE_FLOORS);
         if (ledgerJudgeAbort !== myCtrl) return;                            // 被更新的判定取代
         if (getContext().chatId !== chatIdSnap) { done(); return; }         // 已切 chat，丢弃
         done();
@@ -2887,7 +2896,7 @@ async function runLedgerJudgeStep(manual = false) {
         if (!changes.length) { if (manual) showToast('本轮没有事件需要更新'); return; }
         const cal = loadCalDesc();
         const floor = latestAiFloorId();
-        const today = almTodayAnchor();
+        const today = travelContext?.targetDate || almTodayAnchor();
         const applied = [];
         for (const c of changes) {
             const e = ledger.getEntry(c.id);
@@ -2967,7 +2976,7 @@ function schedulePointNeedsSync() {
 // 让「点」从今天起排 7 天、与「历」同一天。反馈全在历（按钮态「同步中…」+ toast），结果落在点。
 // 绝不占用 pointState.isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
 let _autoRegenSchedAbort = null;
-async function syncPointToToday(auto = false) {
+async function syncPointToToday(auto = false, travelContext = null) {
     if (axisState._almSyncingPoint) { axisState._almSyncPending = true; return; }   // 同步在飞：标记待办，等它收尾自对账补一轮（都开态·快聊防丢，别硬丢）
     if (pointState.isGenerating) { if (!auto) showToast('点正在生成，稍候再同步', null, true); return; }
     const view = currentView, charName = charViewName;
@@ -2992,12 +3001,12 @@ async function syncPointToToday(auto = false) {
         const pc = parseCalendar(raw);
         for (const d of pc.days) for (const ev of d.events) if (ev.pin) pinnedEvents.push(ev);
         if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
-        const fresh = await generate(ctx, userName, cName, view, myCtrl.signal, pinnedEvents);
+        const fresh = await generate(ctx, userName, cName, view, myCtrl.signal, pinnedEvents, travelContext);
         if (_autoRegenSchedAbort !== myCtrl) return;         // 被更新的同步取代（或被手动生成掐断）
         if (pointState.isGenerating) return;                            // 期间前台手动生成插了队 → 让前台赢
         if (getContext().chatId !== chatIdSnap) return;      // 已切 chat → 丢弃
-        const today = almTodayAnchor();                      // 落地前重读今天：regen 期间今天可能又前进，钉最新值而非开跑时的旧值（都开态防落后一格）
-        const merged = forceStartDate(mergePinnedPoints(raw, fresh), today.month, today.day);   // C：钉到今天
+        const today = travelContext?.targetDate || almTodayAnchor();
+        const merged = forceStartDate(mergePinnedPoints(raw, fresh), today.month, today.day);
         writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
         syncLatestScheduleBlock();                           // 楼内点条即时刷到新日期
         // 修 pointState.cachedSchedule 陈旧：只要同步的视角 == 当前视角就刷缓存——哪怕此刻停在历面板，
@@ -6225,7 +6234,7 @@ async function triggerGenerate() {
     runGenerate();
 }
 
-async function runGenerate() {
+async function runGenerate(travelContext = null) {
     // Snapshot view state — user may switch views while the request is in flight
     const viewSnap = currentView;
     const charSnap = charViewName;
@@ -6245,7 +6254,7 @@ async function runGenerate() {
             for (const d of pc.days) for (const ev of d.events) if (ev.pin) pinnedEvents.push(ev);
             if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
         }
-        const raw = await generate(ctx, userName, charName, viewSnap, myCtrl.signal, pinnedEvents);
+        const raw = await generate(ctx, userName, charName, viewSnap, myCtrl.signal, pinnedEvents, travelContext);
         if (pointState.scheduleAbortController !== myCtrl) return;   // 生成途中被中止/取代：丢弃本次结果
         // F5：合并锁定，机制对齐 mergePinnedLines(oldRaw, aiRaw)
         let merged = prevRaw ? mergePinnedPoints(prevRaw, raw) : raw;
@@ -6354,13 +6363,13 @@ function findPieceById(id) {
         || null;
 }
 
-async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null) {
+async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null, travelContext = null) {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) {
         if (!settingsOpen) toggleSettings();
         throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
     }
-    const prompt = buildPrompt(userName, charName, perspective, pinned);
+    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned), travelContext);
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal);
 }
 
@@ -9490,7 +9499,7 @@ function _buildDashedSubsectionHtml() {
         + inner + '</div>';
 }
 
-async function runGenerateLines(silent = false, swipeCtx = null) {
+async function runGenerateLines(silent = false, swipeCtx = null, travelContext = null) {
     const viewSnap = currentView;
     const charSnap = charViewName;
     const chatIdSnap = getContext().chatId;
@@ -9515,7 +9524,7 @@ async function runGenerateLines(silent = false, swipeCtx = null) {
             const savedLines = readStore(cacheKey);
             if (savedLines?.raw) previousRaw = savedLines.raw;
         }
-        const prompt = buildLinesPrompt(userName, charName, viewSnap, previousRaw, getScale(charStableKey(ctx)));
+        const prompt = appendTravelPromptContext(buildLinesPrompt(userName, charName, viewSnap, previousRaw, getScale(charStableKey(ctx))), travelContext);
         const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal);
 
         if (linesAbortController !== myCtrl) return;
