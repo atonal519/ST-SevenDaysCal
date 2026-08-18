@@ -225,7 +225,7 @@ const renderAlmanacPanel = createAxisPanel({
 // when the rendered floor triggers the normal listeners in the same tick.
 const automationGate = createAutomationGate();
 const dateCoordinator = createDateCoordinator();
-const AUTOMATION_MODULES = Object.freeze({ LINES: 'lines', POINT: 'point', LEDGER_CAPTURE: 'ledger-capture', LEDGER_JUDGE: 'ledger-judge' });
+const AUTOMATION_MODULES = Object.freeze({ LINES: 'lines', OUTLINE: 'outline', POINT: 'point', LEDGER_CAPTURE: 'ledger-capture', LEDGER_JUDGE: 'ledger-judge' });
 const timeTravel = createTimeTravelController({
     getChatId: () => getContext().chatId,
     getChat: () => getContext().chat,
@@ -239,13 +239,43 @@ const timeTravel = createTimeTravelController({
         axisState.timeTravelState = state;
         if (axisState.almanacMode) renderAlmanacPanel();
     },
+    onSequenceEnd: ({ sessionId }) => releaseTimeTravelClaim(sessionId),
     steps: [
         { key: AUTOMATION_MODULES.LINES, run: ({ messageId }) => runGenerateLines(false, { mesId: Number(messageId) }) },
+        { key: AUTOMATION_MODULES.OUTLINE, run: () => runJudgeOutlineStep() },
         { key: AUTOMATION_MODULES.POINT, run: () => syncPointToToday(false) },
         { key: AUTOMATION_MODULES.LEDGER_CAPTURE, run: () => runLedgerCaptureStep(true) },
         { key: AUTOMATION_MODULES.LEDGER_JUDGE, run: () => runLedgerJudgeStep(true) },
     ],
 });
+
+// 自动化闸·会话级 token 登记：CMR 预检抢占（isInitialFloor 才占）→ 流程收尾（完成/失败/取消）经 onSequenceEnd 释放。
+const _timeTravelClaimTokens = new Map();   // sessionId → automationGate token
+function isAutomationSuppressed(messageId, moduleName) {
+    return automationGate.isSuppressed({ scopeId: getContext().chatId, messageId, module: moduleName });
+}
+function releaseTimeTravelClaim(sessionId) {
+    const token = _timeTravelClaimTokens.get(sessionId);
+    if (!token) return;
+    _timeTravelClaimTokens.delete(sessionId);
+    automationGate.release(token);
+}
+function clearAutomationClaims() {
+    _timeTravelClaimTokens.clear();
+    automationGate.clear();
+}
+// 日期协调的楼层级 key：chatId + messageId + swipe + 内容签名，与 almanacJudge 共用同一把 key，
+// 保证「戳直读」与「API 兜底」对同一楼层只解析一次（并发渲染去重）。
+function buildDateRenderKey(messageId) {
+    const ctx = getContext();
+    const mid = Number(messageId);
+    return {
+        chatId: String(ctx.chatId ?? ''),
+        messageId: mid,
+        swipeId: Number(ctx.chat?.[mid]?.swipe_id ?? 0),
+        contentSignature: _floorSig(mid) || 'empty',
+    };
+}
 
 function startTimeTravel(targetDate) {
     const sourceDate = almTodayAnchor();
@@ -259,6 +289,10 @@ function startTimeTravel(targetDate) {
 function cancelTimeTravel() {
     const active = timeTravel.getState();
     timeTravel.clear();
+    // clear() 不触发 onSequenceEnd（controller 只在 handleRendered 收尾时发），闸/协调器须随取消显式释放，
+    // 否则 token 滞留 → 后续正常自动化被误抑制（同 chatId+messageId 复活场景）或协调器内存滞留。
+    clearAutomationClaims();
+    dateCoordinator.clear();
     if (active?.phase === 'waiting') {
         const input = $('#send_textarea');
         if (input.length) input.val(removeTimeTravelBlocks(String(input.val() || ''))).trigger('input');
@@ -702,6 +736,10 @@ jQuery(async () => {
     };
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
     timeTravel.clear();
+    // 切 chat 一并释放时旅占用的自动化闸 + 日期协调器：闸按 scopeId(chatId) 分键，但
+    // 内存里的会话级 token 表/协调缓存仍须主动清，防跨 chat 滞留（与 cancel 同一套收尾）。
+    clearAutomationClaims();
+    dateCoordinator.clear();
     // 首屏补迁移：扩展初始化时当前 chat 往往已 ready（CHAT_CHANGED 早已错过），
     // 否则老用户要手动切一次 chat 才触发迁移。同步搬数据，冲突延后弹窗。
     try {
@@ -717,6 +755,23 @@ jQuery(async () => {
     // so the current (newest, still-unstable) message is NOT included in the LLM
     // context. The advance fires when the PREVIOUS message tips the counter over,
     // and this message just gets the freshly-generated result injected.
+    // 时光旅行·预检占闸：必须先于 char 注册（同一 CMR tick 内按注册序先跑）——时旅首楼定型时，
+    // 先把自动化闸整体占住（isInitialFloor 才占），让同 tick 的线/面/暗账/暗历/点全部 isSuppressed
+    // 短路，避免与显式时旅步骤重复生成/重复记账。token 随 onSequenceEnd（完成/失败/取消）或 cancel 释放。
+    if (_stListeners.timeTravelPreflight) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravelPreflight);
+    _stListeners.timeTravelPreflight = messageId => {
+        if (!pluginEnabled()) return;
+        if (!timeTravel.isInitialFloor(messageId)) return;
+        const session = timeTravel.getState();
+        if (!session?.sessionId) return;
+        const token = automationGate.claim({
+            scopeId: getContext().chatId,
+            messageId: Number(messageId),
+            modules: Object.values(AUTOMATION_MODULES),
+        });
+        if (token) _timeTravelClaimTokens.set(session.sessionId, token);
+    };
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravelPreflight);
     if (_stListeners.char) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     _stListeners.char = async (messageId, type) => {
         if (!pluginEnabled()) return;   // 插件总关：不补锚点 / 不挂楼内块 / 不推进 / 不生成
@@ -728,6 +783,9 @@ jQuery(async () => {
         // Master switch: linesEnabled=false disables auto-advance + inline block
         if (getSettings().linesEnabled === false) return;
         const mid = Number(messageId);
+        // 时旅首楼：自动化线被显式步骤接管——本楼只阻止重复请求，不推进、不提前消费累计进度。
+        // （预检占闸先于本监听注册，同一 tick 生效，故此时闸必然已占住。）
+        const autoSuppressed = isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES);
         // 🔄重生成握手消费：读一次即清，防陈旧标记泄漏到后续事件。放在 isNewFloor 判定前，但下方分支
         // 顺序保证 isNewFloor 优先——真·新楼即便撞上残留标记也走推进、不会误判成重 roll。
         const wasPendingReroll = _pendingReroll; _pendingReroll = false;
@@ -752,7 +810,9 @@ jQuery(async () => {
         if (isNewFloor) {
             _lastSeenMaxMesId = mid;
             const mode = getLinesMode();
-            if (mode === 'days') {
+            if (autoSuppressed) {
+                // 时旅流程进行中：显式流程尚未返回结果，本楼只阻止重复请求，不提前消费已有累计进度。
+            } else if (mode === 'days') {
                 shouldAdvance = detectInGameDayChange(mid, /* excludeCurrent */ true);
             } else if (mode === 'turns') {
                 const interval = getLinesInterval();
@@ -783,13 +843,10 @@ jQuery(async () => {
     if (_stListeners.timeTravel) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
     _stListeners.timeTravel = async messageId => {
         if (!pluginEnabled()) return;
-        const token = automationGate.claim({
-            scopeId: getContext().chatId,
-            messageId: Number(messageId),
-            modules: Object.values(AUTOMATION_MODULES),
-        });
-        try { await timeTravel.handleRendered(messageId); }
-        finally { if (token) automationGate.release(token); }
+        // 闸由预检 preflight 抢占（先于 char 注册，同一 tick 生效）；这里只负责执行流程，
+        // 占闸/释放全部走 preflight ↔ onSequenceEnd / cancel，杜绝「闸占在 char 之后」的死区。
+        if (!timeTravel.isInitialFloor(messageId)) return;
+        await timeTravel.handleRendered(messageId);
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
     if (_stListeners.timeTravelDeleted) eventSource.removeListener?.(event_types.MESSAGE_DELETED, _stListeners.timeTravelDeleted);
@@ -882,6 +939,8 @@ jQuery(async () => {
         if (messageId !== chat.length - 1) return;
         if (messageId <= outlineLastJudgedMsgId) return;
         outlineLastJudgedMsgId = messageId;
+        // 时旅首楼：面推进由显式步骤接管（OUTLINE step），跳过自动判定，防重复 API
+        if (isAutomationSuppressed(messageId, AUTOMATION_MODULES.OUTLINE)) return;
         // 攒够 interval 条真·新回复才跑判定（省 token）。计数只被真末楼 bump，历史重放到不了这
         if (++outlineJudgeMsgCounter < getOutlineJudgeInterval()) return;
         outlineJudgeMsgCounter = 0;
@@ -898,14 +957,19 @@ jQuery(async () => {
         if (messageId !== chat.length - 1) return;
         // 戳优先：戳开且本楼有戳 → 每次最新楼定型都直读落地（零 API、幂等），**不进单调闸**——
         // 重roll/swipe 复用同 messageId，若被闸挡掉，戳从 919 翻 920 时显示跟了、锚点没跟（论坛 bug）。
-        if (relandStoryClockAnchor()) return;
+        // 结果登记进日期协调器：同 renderKey 的并发渲染共享一次解析，杜绝重复 API。
+        const renderKey = buildDateRenderKey(messageId);
+        if (relandStoryClockAnchor()) {
+            dateCoordinator.recordResult(renderKey, { source: 'story-clock' });
+            return;
+        }
         // 到这＝戳关，或戳开但本楼读不到戳（漏打 / 「谷雨」无月日）→ API judge 兜底才需单调闸防重放/重算。
         if (messageId <= almanacLastJudgedMsgId) return;
         almanacLastJudgedMsgId = messageId;
         if (getSettings().almanacAutoDetect === false) return;
         if (++almanacJudgeCounter < getAlmanacJudgeInterval()) return;
         almanacJudgeCounter = 0;
-        runJudgeDateStep();   // fire-and-forget，自带守卫
+        dateCoordinator.runOnce(renderKey, () => runJudgeDateStep());   // fire-and-forget；runOnce 兼并发去重
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.almanacJudge);
     // 点不再独立判定日期、也无独立跟随开关：任何一处改「今天」锚点都经 runAnchorAftermath → 顺手把点重排到今天，点纯下游连带跟随。
@@ -919,6 +983,8 @@ jQuery(async () => {
         if (messageId !== chat.length - 1) return;
         if (messageId <= ledgerLastCapturedMsgId) return;
         ledgerLastCapturedMsgId = messageId;
+        // 时旅首楼：标注由显式步骤接管（LEDGER_CAPTURE step），跳过自动标注，防重复 API
+        if (isAutomationSuppressed(messageId, AUTOMATION_MODULES.LEDGER_CAPTURE)) return;
         if (++ledgerCaptureCounter < getLedgerCaptureInterval()) return;
         ledgerCaptureCounter = 0;
         runLedgerCaptureStep();   // fire-and-forget，自带守卫
@@ -935,6 +1001,8 @@ jQuery(async () => {
         if (messageId !== chat.length - 1) return;
         if (messageId <= ledgerLastJudgedMsgId) return;
         ledgerLastJudgedMsgId = messageId;
+        // 时旅首楼：判定由显式步骤接管（LEDGER_JUDGE step），跳过自动判定，防重复 API
+        if (isAutomationSuppressed(messageId, AUTOMATION_MODULES.LEDGER_JUDGE)) return;
         if (++ledgerJudgeCounter < getLedgerJudgeInterval()) return;
         ledgerJudgeCounter = 0;
         runLedgerJudgeStep();   // fire-and-forget，自带守卫
@@ -2870,7 +2938,12 @@ function runAnchorAftermath() {
     if (axisState.almanacMode) renderAlmanacPanel();
     // 点·后台自动跟随「今天」：仅在开关开时才自动重排点（每次一 API）；关（默认）时点原地不动，
     // 用户想对齐今天时去点面板手动刷新即可。syncPointToToday 内部还有「点从未生成过就 no-op」守卫，双保险。
-    if (getSettings().scheduleAutoDetect === true) syncPointToToday(true);
+    // 时旅首楼：点重排由显式步骤接管（POINT step），此处跳过自动跟随，防重复 API。
+    if (getSettings().scheduleAutoDetect === true) {
+        const floorId = (getContext().chat?.length ?? 1) - 1;
+        const pointSuppressed = Number.isInteger(floorId) && floorId >= 0 && isAutomationSuppressed(floorId, AUTOMATION_MODULES.POINT);
+        if (!pointSuppressed) syncPointToToday(true);
+    }
 }
 
 // 方案 B·点随「今天」按钮同步（历面板「同步到点」键触发，非自动）：
