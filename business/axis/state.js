@@ -14,4 +14,5 @@ export const axisState = {
     _almTodayEditing: false,         // 历面板「今天」栏的内联改日期态
     _almSyncingPoint: false,         // 历面板「同步到点」进行态
     _almSyncPending: false,          // 同步在飞时又有新的「今天」推进被丢 -> 置真，收尾自对账补一轮
+    timeTravelState: null,
 };

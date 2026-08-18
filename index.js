@@ -15,6 +15,14 @@ import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } fr
 import * as ledger from './ledger.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
+import { createAutomationGate } from './automation-gate.js';
+import { createDateCoordinator } from './date-coordinator.js';
+import {
+    buildTravelStoryPrompt,
+    createTimeTravelController,
+    removeTimeTravelBlocks,
+    sameMonthDay,
+} from './time-travel.js';
 import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom.js';
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, weatherChipHtml, fmtAnchorTs, maskKey } from './utils/format.js';
@@ -210,6 +218,52 @@ const renderAlmanacPanel = createAxisPanel({
     loadingHtml,
     _almGenLabel: () => axisState._almGenLabel,
 });
+
+// Time travel orchestration stays at the host boundary: the controller is
+// transport/UI agnostic while each existing domain keeps its own generation
+// and persistence logic. The gate/coordinator prevent duplicate automation
+// when the rendered floor triggers the normal listeners in the same tick.
+const automationGate = createAutomationGate();
+const dateCoordinator = createDateCoordinator();
+const AUTOMATION_MODULES = Object.freeze({ LINES: 'lines', POINT: 'point', LEDGER_CAPTURE: 'ledger-capture', LEDGER_JUDGE: 'ledger-judge' });
+const timeTravel = createTimeTravelController({
+    getChatId: () => getContext().chatId,
+    getChat: () => getContext().chat,
+    getCalendar: () => loadCalDesc(),
+    resolveDestinationDate: async ({ chatId, messageId, selectedTargetDate }) => {
+        const key = { chatId, messageId, swipeId: 0, contentSignature: 'time-travel-target' };
+        const result = await dateCoordinator.runOnce(key, async () => ({ status: 'updated', date: selectedTargetDate }));
+        return result?.date || selectedTargetDate;
+    },
+    onStateChange: ({ state }) => {
+        axisState.timeTravelState = state;
+        if (axisState.almanacMode) renderAlmanacPanel();
+    },
+    steps: [
+        { key: AUTOMATION_MODULES.LINES, run: ({ messageId }) => runGenerateLines(false, { mesId: Number(messageId) }) },
+        { key: AUTOMATION_MODULES.POINT, run: () => syncPointToToday(false) },
+        { key: AUTOMATION_MODULES.LEDGER_CAPTURE, run: () => runLedgerCaptureStep(true) },
+        { key: AUTOMATION_MODULES.LEDGER_JUDGE, run: () => runLedgerJudgeStep(true) },
+    ],
+});
+
+function startTimeTravel(targetDate) {
+    const sourceDate = almTodayAnchor();
+    if (!targetDate || sameMonthDay(sourceDate, targetDate)) return false;
+    const prompt = buildTravelStoryPrompt({ sourceDate, targetDate, calendar: loadCalDesc() });
+    if (!injectToST(prompt)) return false;
+    const started = timeTravel.begin({ chatId: getContext().chatId, sourceDate, selectedTargetDate: targetDate });
+    return started;
+}
+
+function cancelTimeTravel() {
+    const active = timeTravel.getState();
+    timeTravel.clear();
+    if (active?.phase === 'waiting') {
+        const input = $('#send_textarea');
+        if (input.length) input.val(removeTimeTravelBlocks(String(input.val() || ''))).trigger('input');
+    }
+}
 
 // 扩展目录绝对路径（引自身 style.css 进 shadow）；ST 站点根（引 fontawesome.min.css，
 // 与 ST 共用浏览器缓存）。import.meta.url = …/scripts/extensions/third-party/ST-SevenDaysCal/index.js
@@ -647,6 +701,7 @@ jQuery(async () => {
         refreshLedgerInjection();       // 暗历注入：切 chat → 账随 chat_metadata 变，重设（关/空时内部自清）
     };
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
+    timeTravel.clear();
     // 首屏补迁移：扩展初始化时当前 chat 往往已 ready（CHAT_CHANGED 早已错过），
     // 否则老用户要手动切一次 chat 才触发迁移。同步搬数据，冲突延后弹窗。
     try {
@@ -725,6 +780,21 @@ jQuery(async () => {
         if (shouldAdvance && getSettings().notifyMode === 'full') showToast('线已随剧情自动推进 · 请注意查看');
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
+    if (_stListeners.timeTravel) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
+    _stListeners.timeTravel = async messageId => {
+        if (!pluginEnabled()) return;
+        const token = automationGate.claim({
+            scopeId: getContext().chatId,
+            messageId: Number(messageId),
+            modules: Object.values(AUTOMATION_MODULES),
+        });
+        try { await timeTravel.handleRendered(messageId); }
+        finally { if (token) automationGate.release(token); }
+    };
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
+    if (_stListeners.timeTravelDeleted) eventSource.removeListener?.(event_types.MESSAGE_DELETED, _stListeners.timeTravelDeleted);
+    _stListeners.timeTravelDeleted = () => cancelTimeTravel();
+    eventSource.on(event_types.MESSAGE_DELETED, _stListeners.timeTravelDeleted);
     // 线·swipe：滑到新 swipe 时线跟着重算（临时存 localStorage，发下条消息即固定）。
     // pendingGeneration=true → 该 swipe 会触发新生成，此刻新回复还没好，先记标记，等它的
     // CHARACTER_MESSAGE_RENDERED 再从楼层基线 B0 重算；=false → 滑回已生成的 swipe，直接取临时层已存线，不请求 API。
@@ -4827,6 +4897,11 @@ function injectModal() {
     // 月历：翻月 / 选日（再点已选=取消回全月）/ 看全月 / 加到某天
     $almanac.on('click', '.sp-alm-cal-prev', function () { almNavMonth(-1); });
     $almanac.on('click', '.sp-alm-cal-next', function () { almNavMonth(1); });
+    $almanac.on('click', '.sp-alm-time-travel', function () {
+        const day = Number($(this).attr('data-day'));
+        if (Number.isInteger(day)) startTimeTravel({ month: almCalMonth() + 1, day });
+    });
+    $almanac.on('click', '.sp-alm-time-travel-stop', function () { cancelTimeTravel(); });
     $almanac.on('click', '.sp-alm-cell[data-day]', function () { almSelectDay(parseInt($(this).attr('data-day'), 10)); });
     $almanac.on('click', '.sp-alm-cal-clearsel', function () { axisState._almanacCalDay = null; renderAlmanacPanel(); });
     $almanac.on('click', '.sp-alm-add-day', function () {

@@ -5882,3 +5882,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     box-shadow : inset 0 0 0 1.5px color-mix(in oklab, var(--sp-primary) 40%, transparent);
 }
 
+.sp-alm-cell-time-travel {
+    outline: 2px solid var(--sp-primary);
+    outline-offset: -2px;
+}
+
