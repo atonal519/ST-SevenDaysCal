@@ -443,3 +443,22 @@ export function formatBytes(bytes) {
 }
 
 export { STORE_KEY, SCHEMA_VERSION };
+
+// ===== 共享 store 访问原语（Phase 2 从 index.js 搬入，原封不动 + 命名空间/闭包机械适配）=====
+// keyDesc/readStore/writeStore/removeStore 是全体业务域共用的存取入口；
+// keyDesc 的 view/charName 缺省时回退到当前视图/角色，二者仍是 index.js 的视图态，故用 getter 桥注入（同 api/client.js 的 bindApiClient 模式）。
+let _getCurrentView = () => 'user';
+let _getCharViewName = () => null;
+export function bindStoreViewFallback(getCurrentView, getCharViewName) {
+    if (getCurrentView) _getCurrentView = getCurrentView;
+    if (getCharViewName) _getCharViewName = getCharViewName;
+}
+
+// view/charName 在此解析成当前视角默认值；store 层据此算 `{kind}-{scope}` 子键。
+export function keyDesc(kind, view, charName) {
+    if (!getContext().chatId) return null;
+    return { kind, view: view ?? _getCurrentView(), charName: charName ?? _getCharViewName() };
+}
+export function readStore(desc)         { return desc ? readData(desc.kind, desc.view, desc.charName) : null; }
+export function writeStore(desc, value) { if (desc) writeData(desc.kind, desc.view, desc.charName, value); }
+export function removeStore(desc)       { if (desc) removeData(desc.kind, desc.view, desc.charName); }

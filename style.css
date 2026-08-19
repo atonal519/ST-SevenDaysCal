@@ -4,14 +4,6 @@
  * root（浏览器缓存，无感）。改样式注意两处同源——勿删全局份，shadow 那份负责窗口。
  * 2026-08-14 Shadow DOM 隔离改造批次1/5。
  */
-/* ST messageFormatting keeps literal quote characters inside <q>, while the
-   browser also adds quotes through q::before/q::after by default. ST disables
-   those pseudo-elements globally, but that rule cannot cross our shadow root. */
-q::before,
-q::after {
-    content: '';
-}
-
 /* 字体·构画自管控（不再跟随酒馆 --SmartThemeFontFamily）：
    --sp-font-user 承载「当前生效字体名」，默认＝内置 Nowar Rounded TW Wc（有爱圆体·
    经 index.js 动态 <link> 从 zeoseven 引入，unicode-range 分片、font-display:swap）。
@@ -944,7 +936,6 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius : inherit;
     display       : none;
     flex-direction: column;
-    min-height    : 0;
     overflow      : hidden;
 }
 
@@ -972,8 +963,6 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-height     : 0;
     overflow-y     : auto;
     overflow-x     : hidden;   /* Prevent stray wide content from making the panel scroll sideways */
-    overscroll-behavior: contain;
-    touch-action   : pan-y;
     padding        : 8px 0 4px;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
@@ -1879,12 +1868,21 @@ select.sp-input { appearance: none; cursor: pointer; }
     position       : absolute;
     bottom         : 0;
     right          : 0;
-    width          : 44px;
-    height         : 44px;
+    width          : 24px;
+    height         : 24px;
     display        : flex;
     align-items    : flex-end;
     justify-content: flex-end;
-    padding        : 8px;
+    padding        : 4px;
+    box-sizing     : border-box;
+    clip-path      : polygon(
+        75% 0,
+        100% 0,
+        100% 100%,
+        0 100%,
+        0 75%,
+        75% 75%
+    );
     cursor         : se-resize;
     color          : var(--sp-subtle);
     font-size      : var(--sp-fs-80);
@@ -2269,8 +2267,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-beat-setcur:hover            { color: var(--sp-primary); background: var(--sp-surface-high); }
 .sp-beat-setcur-on               { opacity: 1; color: var(--sp-primary); }
 /* 面·逐 step 复制钮：仿 .sp-beat-setcur/.sp-inject-btn，hover 节点卡片才显形 */
-.sp-beat-copy,
-.sp-beat-delete {
+.sp-beat-copy {
     width          : var(--sp-btn-22);
     height         : var(--sp-btn-22);
     border         : none;
@@ -2288,11 +2285,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-beat:hover .sp-beat-copy { opacity: 1; }
 .sp-beat-copy:hover          { color: var(--sp-primary); background: var(--sp-surface-high); }
-/* 删除按钮与其它节点操作一致：默认隐藏，卡片触碰/悬停时一同出现。 */
-.sp-beat-delete { opacity: 0; }
-.sp-beat:hover .sp-beat-delete,
-.sp-beat-delete:hover { opacity: 1; }
-.sp-beat-delete:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
 .sp-beat-index {
     width          : 20px;
     height         : 20px;
@@ -2516,8 +2508,6 @@ select.sp-input { appearance: none; cursor: pointer; }
     display       : flex;
     flex-direction: column;
     max-width     : 90%;
-    min-width     : 0;
-    box-sizing    : border-box;
 }
 .sp-chat-msg-wrap-user   { align-self: flex-end;   align-items: flex-end; }
 .sp-chat-msg-wrap-ai     { align-self: flex-start; align-items: flex-start; }
@@ -2528,116 +2518,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height  : 1.55;
     padding      : 5px 9px;
     border-radius: 8px;
-    min-width    : 0;
-    box-sizing   : border-box;
-    overflow-wrap: anywhere;
     word-break   : break-word;
     /* wrap now handles max-width + alignment; msg is just a filled block */
     max-width    : 100%;
 }
-.sp-chat-msg-content {
-    min-width    : 0;
-    max-width    : 100%;
-    box-sizing   : border-box;
-    overflow-wrap: anywhere;
-    word-break   : break-word;
-}
-.sp-chat-msg-content p {
-    margin: 0 0 0.7em;
-}
-.sp-chat-msg-content p:last-child {
-    margin-bottom: 0;
-}
-.sp-chat-msg-content h1,
-.sp-chat-msg-content h2,
-.sp-chat-msg-content h3,
-.sp-chat-msg-content h4,
-.sp-chat-msg-content h5,
-.sp-chat-msg-content h6 {
-    margin: 0.8em 0 0.35em;
-    color: var(--sp-on-surface);
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-}
-.sp-chat-msg-content h1 { font-size: 1.25em; }
-.sp-chat-msg-content h2 { font-size: 1.16em; }
-.sp-chat-msg-content h3 { font-size: 1.08em; }
-.sp-chat-msg-content h4,
-.sp-chat-msg-content h5,
-.sp-chat-msg-content h6 { font-size: 1em; }
-.sp-chat-msg-content ul,
-.sp-chat-msg-content ol {
-    margin: 0.35em 0 0.7em;
-    padding-left: 1.35em;
-}
-.sp-chat-msg-content li {
-    margin: 0.18em 0;
-    overflow-wrap: anywhere;
-}
-.sp-chat-msg-content blockquote {
-    margin: 0.65em 0;
-    padding: 0.2em 0.8em;
-    border-left: 2px solid var(--sp-divider);
-    color: var(--sp-subtle);
-}
-.sp-chat-msg-content strong { color: var(--sp-on-surface); }
-.sp-chat-msg-content em { color: var(--sp-subtle); }
-.sp-chat-msg-content code {
-    padding: 0.08em 0.3em;
-    border: 1px solid var(--sp-divider);
-    border-radius: 3px;
-    background: var(--sp-sheet-bg);
-    font-size: 0.92em;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
-.sp-chat-msg-content pre {
-    max-width: 100%;
-    margin: 0.65em 0;
-    padding: 0.65em 0.75em;
-    box-sizing: border-box;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border: 1px solid var(--sp-divider);
-    border-radius: 5px;
-    background: var(--sp-sheet-bg);
-    white-space: pre;
-}
-.sp-chat-msg-content pre > code {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    white-space: pre;
-    overflow-wrap: normal;
-    word-break: normal;
-}
-.sp-chat-msg-content table {
-    display: block;
-    max-width: 100%;
-    margin: 0.65em 0;
-    overflow-x: auto;
-    border-collapse: collapse;
-}
-.sp-chat-msg-content th,
-.sp-chat-msg-content td {
-    padding: 0.3em 0.55em;
-    border: 1px solid var(--sp-divider);
-    text-align: left;
-    overflow-wrap: anywhere;
-}
-.sp-chat-msg-content th {
-    color: var(--sp-on-surface);
-    background: var(--sp-sheet-bg);
-}
-.sp-chat-msg-content a {
-    color: var(--sp-primary);
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
-.sp-chat-msg-content img {
-    max-width: 100%;
-    height: auto;
-}
+.sp-chat-msg-content { min-width: 0; }
 /* Bubble backgrounds use dedicated --sp-chat-*-bg tokens (defined per theme)
    so we can tune contrast against text color independently of the general
    surface tokens (which have to stay usable for panels/cards). */
@@ -2849,13 +2734,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* ─── cfg-hint (shared) ──────────────────────────────────────────────────────── */
 .sp-cfg-hint { font-size: var(--sp-fs-75); color: var(--sp-subtle); margin: 0 0 2px; }
-/* 记忆源的展开信息与“使用……”文字起点对齐，不挤在复选框下方。 */
-.sp-mem-source-detail {
-    margin-left: calc(var(--sp-ctrl) + 5px);
-}
-.sp-mode-opt.sp-mem-source-detail {
-    margin-top: 4px;
-}
 /* 表单小标题：显式给正文色，别继承酒馆主题里对比过低的默认色 */
 .sp-cfg-label {
     display    : block;
@@ -3381,52 +3259,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-dialog-custom-input:focus { border-color: var(--sp-primary); }
 .sp-dialog-custom-input[hidden] { display: none; }
-
-/* 通用单选与异步选项弹窗。 */
-.sp-dialog-single-list {
-    display              : grid;
-    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-    gap                  : 6px;
-}
-.sp-dialog-single-option {
-    min-width    : 0;
-    padding      : 7px 9px;
-    border       : 0;
-    border-radius: 7px;
-    background   : transparent;
-    color        : var(--sp-subtle);
-    font-family  : var(--sp-font);
-    font-size    : var(--sp-fs-80);
-    cursor       : pointer;
-}
-.sp-dialog-single-option:hover { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
-.sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 16%, transparent); color: var(--sp-on-surface); }
-.sp-dialog-actions .sp-dialog-button:disabled { opacity: 0.45; cursor: default; }
-.sp-dialog-async-body { min-height: 44px; }
-.sp-dialog-async-list { grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--sp-divider); }
-.sp-dialog-async-list .sp-dialog-single-option {
-    width        : 100%;
-    display      : flex;
-    align-items  : flex-start;
-    gap          : 8px;
-    padding      : 10px 6px;
-    border       : 0;
-    border-bottom: 1px solid var(--sp-divider);
-    border-radius: 0;
-    background   : transparent;
-    color        : var(--sp-on-surface);
-    font-family  : var(--sp-font);
-    font-size    : var(--sp-fs-80);
-    line-height  : 1.5;
-    text-align   : left;
-    cursor       : pointer;
-}
-.sp-dialog-async-list .sp-dialog-single-option i { flex: 0 0 auto; margin-top: 3px; color: var(--sp-subtle); }
-.sp-dialog-async-list .sp-dialog-single-option span { min-width: 0; overflow-wrap: anywhere; }
-.sp-dialog-async-list .sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
-.sp-dialog-async-list .sp-dialog-single-selected i { color: var(--sp-primary); }
-.sp-dialog-async-loading,
-.sp-dialog-async-empty { color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.5; }
 @media (max-width: 420px) {
     .sp-dialog-multi-list { grid-template-columns: 1fr; }
 }
@@ -4032,39 +3864,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-theater-result-inner img { max-width: 100%; height: auto; }
 .sp-theater-result-inner p { margin: 0 0 0.8em; }
-.sp-theater-result-inner .sp-theater-prose {
-    max-width: 100%;
-}
-.sp-theater-result-inner .sp-theater-prose > :first-child { margin-top: 0; }
-.sp-theater-result-inner .sp-theater-prose > :last-child { margin-bottom: 0; }
-.sp-theater-result-inner .sp-theater-scene-break {
-    margin: 1.15em 0;
-    color: var(--sp-subtle);
-    text-align: center;
-}
-.sp-theater-result-inner .sp-theater-scene-break:empty::before {
-    content: '·  ·  ·';
-    display: inline-block;
-    border-top: 1px solid var(--sp-divider);
-    padding: 0.45em 1.1em 0;
-    line-height: 1;
-}
-.sp-theater-result-inner .sp-theater-inset {
-    margin: 1em 0;
-    padding: 0.7em 0.9em;
-    border: 1px solid var(--sp-divider);
-    border-left: 2px solid var(--sp-primary);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--sp-sheet-bg) 88%, var(--sp-primary));
-}
-.sp-theater-result-inner .sp-theater-aside {
-    color: var(--sp-subtle);
-    font-size: 0.94em;
-}
-.sp-theater-result-inner .sp-theater-emphasis {
-    color: var(--sp-primary);
-    font-weight: 600;
-}
 .sp-theater-result-empty { min-height: 120px; padding: 30px 20px; }
 
 /* ── 长篇预览折叠 ── */
@@ -4231,34 +4030,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap        : 8px;
 }
 .sp-theater-opbar #sp-theater-title { flex: 1 1 160px; }
-.sp-theater-source-wrap { width: 100%; margin-top: 10px; }
-.sp-theater-source-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    max-width: 220px;
-    padding: 6px 9px;
-    border: 1px solid var(--sp-divider);
-    border-radius: 999px;
-    background: color-mix(in oklab, var(--sp-primary) 8%, var(--sp-sheet-bg));
-    color: var(--sp-subtle);
-    font: inherit;
-    font-size: var(--sp-fs-75);
-    cursor: pointer;
-}
-.sp-theater-source-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-theater-source-toggle:hover { color: var(--sp-on-surface); border-color: var(--sp-primary); }
-.sp-theater-source-detail {
-    width: 100%;
-    box-sizing: border-box;
-    margin-top: 6px;
-    padding: 9px 10px;
-    border: 1px solid var(--sp-divider);
-    border-radius: 9px;
-    background: color-mix(in oklab, var(--sp-primary) 4%, var(--sp-sheet-bg));
-}
-.sp-theater-source-caption { margin-bottom: 5px; font-size: var(--sp-fs-72); color: var(--sp-subtle); }
-.sp-theater-source-detail pre { max-height: 340px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: var(--sp-fs-75); color: var(--sp-on-surface); }
 
 /* ── Draft / saved lists ── */
 .sp-theater-lists {
@@ -4970,19 +4741,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     align-items    : center;
     justify-content: space-between;
     gap            : 8px;
-    box-sizing     : border-box;
-    height         : 42px;
-    min-height     : 42px;
-    flex           : 0 0 42px;
-    padding        : 0 12px;
+    padding        : 8px 12px;
     border-bottom  : 1px solid var(--sp-divider);
     flex-shrink    : 0;
 }
 .sp-alm-sheet-toggle,
 .sp-lines-sheet-toggle {
     display      : inline-flex;
-    align-items  : stretch;
-    height       : 26px;
     border       : 1px solid var(--sp-divider);
     border-radius: 8px;
     overflow     : hidden;
@@ -4992,12 +4757,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     background : transparent;
     border     : 0;
     color      : var(--sp-subtle);
-    box-sizing : border-box;
-    display    : inline-flex;
-    align-items: center;
-    justify-content: center;
-    height     : 26px;
-    padding    : 0 14px;
+    padding    : 5px 14px;
     font-size  : var(--sp-fs-78);
     font-weight: 500;
     line-height: 1;
@@ -5514,47 +5274,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: 50%;
 }
 .sp-alm-cell-sel { background: var(--sp-hover-bg); box-shadow: inset 0 0 0 1.5px var(--sp-primary); }
-.sp-alm-cell-sel.sp-alm-cell-time-travel {
-    background: color-mix(in oklab, var(--sp-primary) 9%, var(--sp-hover-bg));
-    box-shadow: inset 0 0 0 1.5px var(--sp-primary);
-}
-.sp-alm-cell-time-travel::before,
-.sp-alm-cell-time-travel::after {
-    content       : '';
-    position      : absolute;
-    inset         : -1px;
-    border-radius : 9px;
-    pointer-events: none;
-}
-.sp-alm-cell-time-travel::before {
-    border    : 1px solid color-mix(in oklab, var(--sp-primary) 42%, transparent);
-    box-shadow: 0 0 4px color-mix(in oklab, var(--sp-primary) 20%, transparent);
-}
-@property --sp-alm-time-travel-angle {
-    syntax       : '<angle>';
-    inherits     : false;
-    initial-value: 0deg;
-}
-.sp-alm-cell-time-travel::after {
-    --sp-alm-time-travel-angle: 0deg;
-    padding   : 1.5px;
-    background: conic-gradient(
-        from var(--sp-alm-time-travel-angle),
-        transparent 0deg 245deg,
-        color-mix(in oklab, var(--sp-primary) 20%, transparent) 270deg,
-        var(--sp-primary) 325deg,
-        transparent 360deg
-    );
-    -webkit-mask          : linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask                  : linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    mask-composite        : exclude;
-    filter                : drop-shadow(0 0 2px color-mix(in oklab, var(--sp-primary) 60%, transparent));
-    animation             : sp-alm-time-travel-orbit 1.25s linear infinite;
-}
-@keyframes sp-alm-time-travel-orbit {
-    to { --sp-alm-time-travel-angle: 360deg; }
-}
 .sp-alm-cell-dots {
     display    : flex;
     gap        : 3px;
@@ -6124,14 +5843,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     .sp-icon-btn:active, .sp-mini-btn:active, .sp-ledger-pill:active,
     .sp-anchor-btn:active, .sp-tab:active, .sp-side-tab:active,
     .sp-btn:active, .sp-gen-btn:active, .sp-fab-btn:active { transform: none !important; }
-    .sp-alm-cell-time-travel::after {
-        animation : none !important;
-        background: var(--sp-primary);
-        filter    : none;
-    }
 }
 
-/* ── 历面板批量模式（日历条目删 / 活跃刻度归档 / 归档刻度删）──────────────────── */
+/* ── 历面板批量模式（日历条目删 / 活跃刻度归档 / 归档刻度删）────────────────── */
+/* 普通态只有一个入口，靠右贴齐所在独立行；批量态保留原有全选/计数/操作布局。 */
+.sp-batch-bar:not(.sp-batch-active) { justify-content: flex-end; }
 /* 批量工具条：入口钮或（全选 + 已选计数 + 退出 + 执行）横排，退出/执行推到最右。 */
 .sp-batch-bar {
     display     : flex;
@@ -6140,8 +5856,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap         : 6px;
     padding     : 1px 0 8px;
 }
-/* 普通态只有一个入口，靠右贴齐所在独立行；批量态保留原有全选/计数/操作布局。 */
-.sp-batch-bar:not(.sp-batch-active) { justify-content: flex-end; }
 .sp-batch-bar .sp-batch-all {
     display     : inline-flex;
     align-items : center;
@@ -6177,4 +5891,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-batch-row.sp-batch-checked {
     background : color-mix(in oklab, var(--sp-primary) 7%, transparent);
     box-shadow : inset 0 0 0 1.5px color-mix(in oklab, var(--sp-primary) 40%, transparent);
+}
+
+.sp-alm-cell-time-travel {
+    outline: 2px solid var(--sp-primary);
+    outline-offset: -2px;
 }

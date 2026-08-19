@@ -2,6 +2,19 @@ export const TIME_TRAVEL_MARKER = '【时间变更】';
 export const TIME_TRAVEL_BLOCK_OPEN = '<time-change>';
 export const TIME_TRAVEL_BLOCK_CLOSE = '</time-change>';
 
+export function didStepComplete(result) {
+    return result?.status === 'updated' || result?.status === 'unchanged';
+}
+
+// 重 roll 只排除发起当刻的末楼 assistant；删除末楼后不得向前误捕旧楼。
+export function snapshotLastAssistant(chat) {
+    if (!Array.isArray(chat) || !chat.length) return null;
+    const mesId = chat.length - 1;
+    const message = chat[mesId];
+    if (!message || message.is_user || message.is_system) return null;
+    return { mesId, text: String(message.mes ?? '') };
+}
+
 // 栈式配对让残缺外层中的完整内层仍能独立识别；未配对标签一律保留为用户文本。
 export function findTimeTravelBlocks(value) {
     const text = String(value ?? '');
@@ -328,11 +341,17 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                 if (myAbort.signal.aborted) break;
                 let result = { status: 'skipped' };
                 try {
-                    result = await step.run({
+                    const stepArgs = {
                         messageId: Number(messageId),
                         destinationDate,
                         promptAddon,
-                    }) || { status: 'skipped' };
+                        signal: myAbort.signal,
+                    };
+                    if (typeof step.canRun === 'function' && !step.canRun(stepArgs)) {
+                        result = { status: 'skipped' };
+                    } else {
+                        result = await step.run(stepArgs) || { status: 'skipped' };
+                    }
                 } catch (error) {
                     try { step.onError?.(error); }
                     catch (reportError) { console.error('[SP 时光旅行] 步骤错误处理失败', reportError); }
