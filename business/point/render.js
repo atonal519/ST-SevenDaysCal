@@ -5,8 +5,10 @@
 // 注入，避免反向 import index.js 造成循环依赖（其余依赖——store / axisState / 历法数据 /
 // escape / weatherChipHtml——均为已拆模块，直接 import）。
 import { parseCalendar, buildPointInjectText } from './parse.js';
+import { calendarDate, isGregorian, weekdayFor } from '../calendar/date.js';
+import { buildScheduleDateContext, scheduleDateAtOffset, scheduleWeekdayAtOffset } from './date-context.js';
 import { axisState } from '../axis/state.js';
-import { ALM_WEEKDAYS, almDayOfYear, almMonthDayFromDoy, loadCalDesc, DEFAULT_CAL } from '../axis/data.js';
+import { ALM_WEEKDAYS, almDayOfYear, loadCalDesc } from '../axis/data.js';
 import { escapeHtml, escapeAttr } from '../../utils/dom.js';
 import { weatherChipHtml } from '../../utils/format.js';
 import * as store from '../../store.js';
@@ -24,26 +26,28 @@ export const TYPE_META = {
 export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想调整这些点？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
 
 // 点条第 0..n-1 天的日期上下文（供点面板/楼内点条取 月/日/周几 用，与「历」同锚同源）
-export function scheduleDayCtx() {
-    const cal = loadCalDesc();
+export function scheduleDayCtx(startDate = null, calendarOverride = null) {
+    const cal = calendarOverride || loadCalDesc();
     const ref = env.almWeekdayRef(cal);   // 点周几改走年-free 锚（与历同源）；default 分支也要 ref
-    if (cal === DEFAULT_CAL) return { cal, ref };
-    const anchor = env.almTodayAnchor();
-    return { cal, ref, anchorDoy: almDayOfYear(anchor.month, anchor.day, cal) };
+    if (isGregorian(cal)) return { cal, ref, dateContext: buildScheduleDateContext(cal, startDate, ref) };
+    const anchor = startDate && !(startDate instanceof Date) ? startDate : env.almTodayAnchor();
+    return { cal, ref, anchorDoy: almDayOfYear(anchor.month, anchor.day, cal), dateContext: buildScheduleDateContext(cal, startDate || anchor, ref) };
 }
 // 点条第 i 天 → {month, day, wd(0..6,周日索引)}。公历分支与旧 `new Date(startDate)+i` 逐字节等价；
 // 自定义历法从共享今天锚点 seed、逐日在本历法内步进，令点条与历/今头同源同锚。
 export function scheduleDayLabel(i, startDate, ctx) {
-    if (ctx.cal === DEFAULT_CAL) {
+    if (isGregorian(ctx.cal)) {
         // 月/日仍按公历步进（跨月/闰日正确）；但周几改用年-free 锚 almWeekdayFor，不用 startDate.getDay()——
         // startDate 的年份是 forceStartDate 钉的 POINT_ANCHOR_YEAR（固定闰年、纯为拿月日），其 getDay() 是假年
         // 周几，会和用户设定的现实周几错位（bug：2021/8/20 周五显示成 2024 的周二）。历也走同一锚，两者一致。
         const d = new Date(startDate); d.setDate(d.getDate() + i);
         const month = d.getMonth() + 1, day = d.getDate();
-        return { month, day, wd: env.almWeekdayFor(month, day, ctx.ref, ctx.cal) };
+        return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? weekdayFor(calendarDate(d.getFullYear(), month, day), ctx.cal) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
     }
-    const { month, day } = almMonthDayFromDoy(ctx.anchorDoy + i, ctx.cal);
-    return { month, day, wd: env.almWeekdayFor(month, day, ctx.ref, ctx.cal) };
+    const date = scheduleDateAtOffset(ctx.dateContext, i);
+    if (!date) return { month: null, day: null, wd: null, unknown: true };
+    const { month, day } = date;
+    return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? weekdayFor(calendarDate(null, month, day), ctx.cal) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
 }
 
 function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
@@ -73,8 +77,8 @@ function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', d
     </div>`;
 }
 
-export function renderSchedule(raw, userName, perspective = 'user') {
-    const { days, future, startDate } = parseCalendar(raw);
+export function renderSchedule(raw, userName, perspective = 'user', calendar = null) {
+    const { days, future, startDate } = parseCalendar(raw, calendar);
     const hasFuture = future && future.events.length > 0;
 
     const totalTabs = days.length + (hasFuture ? 1 : 0);
@@ -103,14 +107,14 @@ export function renderSchedule(raw, userName, perspective = 'user') {
         return header + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
     }
 
-    const ctx = scheduleDayCtx();
+    const ctx = scheduleDayCtx(startDate, calendar);
     const tabs = days.map((_, i) => {
         let numLabel = String(i + 1);
         let wdLabel = '';
         if (startDate) {
             const { month, day, wd } = scheduleDayLabel(i, startDate, ctx);
-            wdLabel  = ALM_WEEKDAYS[wd];
-            numLabel = `${month}/${day}`;
+            wdLabel  = wd == null ? '日期未知' : ALM_WEEKDAYS[wd];
+            numLabel = month == null || day == null ? '日期未知' : `${month}/${day}`;
         }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
             <span class="sp-tab-num">${numLabel}</span>
@@ -125,7 +129,7 @@ export function renderSchedule(raw, userName, perspective = 'user') {
         let dateLabel = `第${di + 1}天`;
         if (startDate) {
             const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            dateLabel = `${month}月${dd}日 · ${ALM_WEEKDAYS[wd]}`;
+            dateLabel = month == null || dd == null ? '日期未知' : `${month}月${dd}日 · ${ALM_WEEKDAYS[wd] || '周几未知'}`;
         }
         return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
     });

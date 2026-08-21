@@ -1,6 +1,7 @@
 // ─── 点（日程）域 · 文本 codec / 存取辅助（纯函数，零跨域依赖）────────────────────
 // 从 index.js 机械搬移。全部为 <calendar_widget>「七天条」的 文本↔对象 互转与读写辅助，
 // 无 DOM / store / 历法(axis) 依赖。渲染层（renderSchedule 等）见 ./render.js，生成 prompt 见 ./prompt.js。
+import { calendarDate, formatCalendarDate, isGregorian, parseCalendarDate, validateCalendarDate } from '../calendar/date.js';
 
 export function parsePointEventRecord(text) {
     const parts = String(text || '').replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
@@ -91,21 +92,21 @@ export function numberedPointList(raw) {
 }
 
 // <calendar_widget> 文本 → {days, future, startDate}（days 已过滤空天；future 可为 null）
-export function parseCalendar(raw) {
+export function parseCalendar(raw, calendar = null) {
     const m = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     // Strip HTML comments across the whole widget body before splitting into lines.
     // LLM often emits multi-line <!-- 日程思考: ... --> blocks; per-line startsWith
     // would only skip the first line and treat the rest as content.
     const content = (m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, '');
 
-    const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
+    const dateMatch = content.match(/^StartDate:\s*((?:\d{4}|null)-\d{2}-\d{2})/m);
     let startDate = null;
     if (dateMatch) {
-        const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateMatch[1]);
-        const d = new Date(0);
-        d.setHours(0, 0, 0, 0);
-        if (parts) d.setFullYear(+parts[1], +parts[2] - 1, +parts[3]);
-        if (parts && d.getFullYear() === +parts[1] && d.getMonth() === +parts[2] - 1 && d.getDate() === +parts[3]) startDate = d;
+        const parsedDate = parseCalendarDate(dateMatch[1], calendar) || (Number(dateMatch[1].slice(5, 7)) > 12 ? calendarDate(+dateMatch[1].slice(0, 4), +dateMatch[1].slice(5, 7), +dateMatch[1].slice(8, 10)) : null);
+        if (parsedDate && isGregorian(calendar)) {
+            const d = new Date(0); d.setHours(0, 0, 0, 0); d.setFullYear(parsedDate.year, parsedDate.month - 1, parsedDate.day);
+            if (d.getFullYear() === parsedDate.year && d.getMonth() === parsedDate.month - 1 && d.getDate() === parsedDate.day) startDate = d;
+        } else if (parsedDate && validateCalendarDate(parsedDate, calendar)) startDate = parsedDate;
     }
 
     const days = []; let cur = null; let inFuture = false; let future = null; let eventBuffer = '';
@@ -144,14 +145,14 @@ export function parseCalendar(raw) {
     }
     flushEvent();
     if (cur && !inFuture) days.push(cur);
-    return { days: days.filter(d => d.events.length > 0), allDays: days, future, startDate };
+    return { days: days.filter(d => d.events.length > 0), allDays: days, future, startDate, startDateToken: dateMatch?.[1] || null };
 }
 
 // 生成响应写入前的结构闸门：只接受闭合的完整 Day 1–3 及至少 5 条 Future 事件。
 // 这是原始模型响应的硬门禁；锁定回并不能替模型补足缺失的 Future。
-export function validateGeneratedCalendar(raw) {
+export function validateGeneratedCalendar(raw, calendar = null) {
     const text = String(raw || '');
-    const parsed = parseCalendar(text);
+    const parsed = parseCalendar(text, calendar);
     const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));
     const counts = new Map(coreDays.map(day => [day.dayNumber, (coreDays.filter(x => x.dayNumber === day.dayNumber).length)]));
     const dayMarkers = [1, 2, 3].every(n => counts.get(n) === 1)
@@ -189,13 +190,17 @@ export function pointEventToRawLine(ev) {
 }
 
 // {days, future, startDate} → 规范 <calendar_widget> 文本（锁定回并 / 手动切换后重序列化用）。
-export function serializeCalendar(days, future, startDate) {
+export function serializeCalendar(days, future, startDate, calendar = null, startDateToken = null) {
     const out = ['<calendar_widget>'];
     if (startDate instanceof Date && !isNaN(startDate)) {
         const y  = startDate.getFullYear();
         const mo = String(startDate.getMonth() + 1).padStart(2, '0');
         const da = String(startDate.getDate()).padStart(2, '0');
         out.push(`StartDate: ${y}-${mo}-${da}`);
+    } else if (startDate && formatCalendarDate(startDate)) {
+        out.push(`StartDate: ${formatCalendarDate(startDate)}`);
+    } else if (typeof startDateToken === 'string' && startDateToken.trim()) {
+        out.push(`StartDate: ${startDateToken.trim()}`);
     }
     (days || []).forEach((d, i) => {
         // 天气随日头走回 raw：Day: N|天气|温度。缺则退回纯 Day: N（旧行为），mergePinnedPoints 才不会丢天气。
@@ -218,22 +223,23 @@ export function serializeCalendar(days, future, startDate) {
 export const POINT_ANCHOR_YEAR = 2024;
 
 // 把点的 StartDate 强钉到给定 month/day，保留天数 / 天气 / 事件 / 锁定——让点整体平移到「今天」。
-export function forceStartDate(raw, month, day) {
-    const { days, future } = parseCalendar(raw);
-    return serializeCalendar(days, future, new Date(POINT_ANCHOR_YEAR, month - 1, day));
+export function forceStartDate(raw, month, day, calendar = null) {
+    const { days, future } = parseCalendar(raw, calendar);
+    const startDate = isGregorian(calendar) ? new Date(POINT_ANCHOR_YEAR, month - 1, day) : calendarDate(null, month, day);
+    return serializeCalendar(days, future, startDate, calendar);
 }
 
 // 合并锁定（对齐 mergePinnedLines(oldRaw, aiRaw)）：从旧 raw 读出被锁事件（连同原所在天），
 // 按 title 在 AI 新 raw 里找——找到就重标 pin（采纳 AI 的推进）；AI 删了就按旧位置就近补回
 // （future/越界 → 未来块或最后一天）。有锁定项即重新序列化（把 pin 落回 raw），无则原样返回。
-export function mergePinnedPoints(oldRaw, aiRaw) {
-    const oldParsed = parseCalendar(oldRaw);
+export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
+    const oldParsed = parseCalendar(oldRaw, calendar);
     const oldPinned = [];
     oldParsed.days.forEach((d, i) => d.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: i }); }));
     if (oldParsed.future) oldParsed.future.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: 'future' }); });
     if (!oldPinned.length) return aiRaw;
 
-    const parsed = parseCalendar(aiRaw);
+    const parsed = parseCalendar(aiRaw, calendar);
     const all = [];
     for (const d of parsed.days) for (const ev of d.events) all.push(ev);
     if (parsed.future) for (const ev of parsed.future.events) all.push(ev);
@@ -259,7 +265,7 @@ export function mergePinnedPoints(oldRaw, aiRaw) {
             parsed.days.push({ events: [clone] });
         }
     }
-    return serializeCalendar(parsed.days, parsed.future, parsed.startDate);
+    return serializeCalendar(parsed.days, parsed.future, parsed.startDate, calendar, parsed.startDateToken);
 }
 
 // 单个点 → 注入参考文本（注入卡 / 楼内块抽屉用）

@@ -60,23 +60,12 @@ export function almTodayAnchor() {
             if (md) return md;
         }
     } catch { /* 往下走 */ }
-    // ③ 线：活跃线 when/desc/next 里的绝对日期
-    try {
-        const saved = readStore(env.getLinesCacheKey());
-        const lines = saved?.raw ? env.parseLines(saved.raw) : [];
-        for (const l of lines) {
-            if (!l.name || env.TERMINAL_STAGES.has(l.stage)) continue;
-            const md = monthDayFromDayKey(extractDayFromTime(l.when))
-                    || monthDayFromDayKey(extractDayFromTime(`${l.desc || ''} ${l.next || ''}`));
-            if (md) return md;
-        }
-    } catch { /* 往下走 */ }
-    // ④ 点：日程 StartDate（自定义历法不读取现实日期）
+    // ③ 点：日程 StartDate（自定义历法不读取现实日期）
     if (loadCalDesc() === DEFAULT_CAL) {
         try {
             const saved = readStore(env.getCacheKey());
             if (saved?.raw) {
-                const { startDate } = parseCalendar(saved.raw);
+                const { startDate } = parseCalendar(saved.raw, loadCalDesc());
                 if (startDate instanceof Date && !isNaN(startDate)) {
                     const md = almValidMonthDay({ month: startDate.getMonth() + 1, day: startDate.getDate() });
                     if (md) return md;
@@ -175,7 +164,7 @@ export function almWeekdayRef(cal = loadCalDesc()) {
         try {
             const saved = readStore(env.getCacheKey());
             if (saved?.raw) {
-                const { startDate } = parseCalendar(saved.raw);
+                const { startDate } = parseCalendar(saved.raw, loadCalDesc());
                 if (startDate instanceof Date && !isNaN(startDate)) {
                     return { refDoy: almDayOfYear(startDate.getMonth() + 1, startDate.getDate(), cal), refWd: startDate.getDay() };
                 }

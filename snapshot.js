@@ -21,13 +21,14 @@
 // 持久化用 saveChatDebounced（去抖非阻塞），避开 saveChat 同步 I/O 尖峰（ST 卡顿根因之一）。
 
 import { getContext } from '../../../extensions.js';
+import { isValidCalendarDescriptor, resolveSnapshotCalendar } from './runtime/chat-date-anchor.js';
 
 // message.extra 上的键，带 gouhua_ 前缀防和别的扩展撞。
 const SNAP_KEY = 'gouhua_snapshot';
 
 // 当前快照 schema 版本。字段只增不改、新字段追加末尾且可选（对齐构画一贯的格式演进纪律），
 // 老快照缺字段时读取端按缺省兜底，不强制迁移。
-const SNAP_VERSION = 1;
+const SNAP_VERSION = 2;
 
 function ctx() {
     try { return getContext?.() || null; } catch { return null; }
@@ -62,6 +63,8 @@ function messageAt(mesId) {
 export function writeSnapshot(mesId, snap) {
     const msg = messageAt(mesId);
     if (!msg) return false;
+    const calendar = snap?.calendar;
+    if (!isValidCalendarDescriptor(calendar)) return false;
 
     const payload = {
         v: SNAP_VERSION,
@@ -74,6 +77,7 @@ export function writeSnapshot(mesId, snap) {
             : null,
         pool:    Array.isArray(snap?.pool)   ? snap.pool   : [],
         recall:  Array.isArray(snap?.recall) ? snap.recall : [],
+        calendar: JSON.parse(JSON.stringify(calendar)),
     };
 
     // 幂等：内容没变就不写（ts 不参与比较，否则永远"变了"）。
@@ -105,6 +109,7 @@ function _sameSnapContent(a, b) {
     try {
         if (JSON.stringify(a.pool   || []) !== JSON.stringify(b.pool   || [])) return false;
         if (JSON.stringify(a.recall || []) !== JSON.stringify(b.recall || [])) return false;
+        if (JSON.stringify(a.calendar || null) !== JSON.stringify(b.calendar || null)) return false;
     } catch { return false; }
     return true;
 }
@@ -140,7 +145,45 @@ export function readSnapshot(mesId) {
             : null,
         pool:    Array.isArray(snap.pool)   ? snap.pool   : [],
         recall:  Array.isArray(snap.recall) ? snap.recall : [],
+        calendar: snap.v >= 2 && isValidCalendarDescriptor(snap.calendar) ? JSON.parse(JSON.stringify(snap.calendar)) : null,
     };
+}
+
+export { resolveSnapshotCalendar };
+
+export function scanSnapshotTargets() {
+    const c = ctx(); const chat = c?.chat; const out = [];
+    if (!Array.isArray(chat)) return out;
+    chat.forEach((msg, messageIndex) => {
+        if (msg?.extra?.[SNAP_KEY]) out.push({ messageIndex, swipeIndex: null, value: JSON.parse(JSON.stringify(msg.extra[SNAP_KEY])) });
+        if (Array.isArray(msg?.swipe_info)) msg.swipe_info.forEach((slot, swipeIndex) => { if (slot?.extra?.[SNAP_KEY]) out.push({ messageIndex, swipeIndex, value: JSON.parse(JSON.stringify(slot.extra[SNAP_KEY])) }); });
+    }); return out;
+}
+
+function targetValue(target) { const msg = ctx()?.chat?.[target.messageIndex]; return target.swipeIndex == null ? msg?.extra?.[SNAP_KEY] : msg?.swipe_info?.[target.swipeIndex]?.extra?.[SNAP_KEY]; }
+function setTargetValue(target, value) { const msg = ctx()?.chat?.[target.messageIndex]; if (!msg) return false; const holder = target.swipeIndex == null ? msg : (msg.swipe_info?.[target.swipeIndex] || null); if (!holder) return false; if (!holder.extra) holder.extra = {}; if (value == null) delete holder.extra[SNAP_KEY]; else holder.extra[SNAP_KEY] = JSON.parse(JSON.stringify(value)); return true; }
+
+export function stageSnapshotPatches(patches, { expectedChatId } = {}) {
+    if (!expectedChatId || ctx()?.chatId !== expectedChatId || !Array.isArray(patches)) return null;
+    const before = patches.map(p => ({ ...p, existed: targetValue(p) != null, value: targetValue(p) == null ? undefined : JSON.parse(JSON.stringify(targetValue(p))) }));
+    for (let i = 0; i < patches.length; i++) {
+        if (setTargetValue(patches[i], patches[i].value)) continue;
+        for (let j = i - 1; j >= 0; j--) { const old = before[j]; setTargetValue(old, old.existed ? old.value : null); }
+        return null;
+    }
+    return { token: `snapshot-${Date.now()}-${Math.random()}`, chatId: expectedChatId, before, patches, staged: true };
+}
+export function verifySnapshotPatches(token) { return !!token?.staged && ctx()?.chatId === token.chatId && token.patches.every(p => JSON.stringify(targetValue(p) ?? null) === JSON.stringify(p.value ?? null)); }
+export function restoreSnapshotPatches(token) {
+    if (!token?.staged || ctx()?.chatId !== token.chatId) return { ok: false, reason: 'chat-mismatch' };
+    if (!verifySnapshotPatches(token)) return { ok: false, reason: 'content-mismatch' };
+    token.before.forEach(p => setTargetValue(p, p.existed ? p.value : null)); return { ok: true };
+}
+export async function flushAwaitable({ expectedChatId } = {}) {
+    if (!expectedChatId || ctx()?.chatId !== expectedChatId) return { ok: false, reason: 'chat-mismatch', durability: 'unknown' };
+    const save = ctx()?.saveChat; if (typeof save !== 'function') return { ok: false, reason: 'saveChat-unavailable', durability: 'unknown' };
+    try { const result = save(); if (result?.then) await result; return { ok: ctx()?.chatId === expectedChatId, durability: 'host-returned-unconfirmed' }; }
+    catch (error) { return { ok: false, error, durability: 'unknown' }; }
 }
 
 export { SNAP_KEY, SNAP_VERSION };

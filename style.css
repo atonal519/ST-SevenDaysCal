@@ -2323,6 +2323,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-overflow: ellipsis;
     white-space  : nowrap;
 }
+.sp-line-card .sp-beat-type {
+    flex-basis: auto;
+    max-width : 8em;
+}
+.sp-line-card .sp-beat-time {
+    flex-basis: auto;
+}
 .sp-beat-line {
     font-size    : var(--sp-fs-68);
     font-weight  : 500;
