@@ -18,8 +18,9 @@ import { parseCalendar } from '../point/parse.js';
 import * as memory from '../../memory.js';
 import {
     DEFAULT_CAL, loadCalDesc, calYearLen, almDayOfYear, almClampInt, almItemCoversDoy,
-    almValidMonthDay, almDateFromChat, monthDayFromDayKey, calExplicitWeekdayRef, calRealWeekdayRef, parseWeekdayToken,
+    almValidMonthDay, almDateFromChat,
 } from './data.js';
+import { storyWeekdayRef } from './story-clock.js';
 
 let env = null;
 // env: { getDateAnchor, charStableKey, getLinesCacheKey, parseLines, TERMINAL_STAGES, getCacheKey }
@@ -91,93 +92,13 @@ export function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
 
 // 取「参照日→周几」锚：先扫所有来源的显式星期，再允许真实公历推算。返回 {refDoy, refWd}。
 export function almWeekdayRef(cal = loadCalDesc()) {
-    // 第一阶段：当前聊天/状态栏中的显式星期最高，不能被其它来源或 getDay 抢先。
-    try {
-        const hit = almDateFromChat(true);
-        if (hit?.wd != null) return { refDoy: almDayOfYear(hit.month, hit.day, cal), refWd: hit.wd };
-    } catch { /* 往下走 */ }
-    // 其次是柏宝书与记忆中的显式星期。
-    try {
-        const api = globalThis.STBaiBaiBook;
-        if (api && typeof api.getSnapshot === 'function') {
-            const msgs = getContext().chat || [];
-            let last = -1;
-            for (let i = 0; i < msgs.length; i++) if (!msgs[i].is_user) last = i;
-            if (last >= 0) {
-                const time = api.getSnapshot({ floor: last, at: 'after' })?.state?.time;
-                const explicit = calExplicitWeekdayRef(time, cal);
-                if (explicit) return explicit;
-                const wd = parseWeekdayToken(time);
-                if (wd != null) { const a = almTodayAnchor(); return { refDoy: almDayOfYear(a.month, a.day, cal), refWd: wd }; }
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ② 记忆库「时间锚点」尾段
-    try {
-        const memText = typeof memory.getMemoryContext === 'function' ? memory.getMemoryContext() : '';
-        const anchors = [...String(memText).matchAll(/时间锚点\s*[:：]\s*([^\n]+)/g)];
-        if (anchors.length) {
-            const line = anchors[anchors.length - 1][1];
-            const explicit = calExplicitWeekdayRef(line, cal);
-            if (explicit) return explicit;
-            const wd = parseWeekdayToken(line.split(/→|->/).pop()) ?? parseWeekdayToken(line);
-            if (wd != null) { const a = almTodayAnchor(); return { refDoy: almDayOfYear(a.month, a.day, cal), refWd: wd }; }
-        }
-    } catch { /* 往下走 */ }
-    // 第二阶段：没有显式星期后，才允许按现有来源计算真实公历周几。
-    // ① 柏宝书快照 time：无显式 token 时按真实年计算
-    try {
-        const api = globalThis.STBaiBaiBook;
-        if (api && typeof api.getSnapshot === 'function') {
-            const msgs = getContext().chat || [];
-            let last = -1;
-            for (let i = 0; i < msgs.length; i++) if (!msgs[i].is_user) last = i;
-            if (last >= 0) {
-                const real = calRealWeekdayRef(api.getSnapshot({ floor: last, at: 'after' })?.state?.time, cal);
-                if (real) return real;
-            }
-        }
-    } catch { /* 往下走 */ }
-    // ② 记忆库时间锚点：无显式 token 时按真实年计算
-    try {
-        const memText = typeof memory.getMemoryContext === 'function' ? memory.getMemoryContext() : '';
-        const anchors = [...String(memText).matchAll(/时间锚点\s*[:：]\s*([^\n]+)/g)];
-        if (anchors.length) {
-            const line = anchors[anchors.length - 1][1];
-            const real = calRealWeekdayRef(line, cal);
-            if (real) return real;
-        }
-    } catch { /* 往下走 */ }
-    // ③ 聊天正文（含状态栏）→ 无显式星期时按真实年 getDay()
-    if (cal === DEFAULT_CAL) {
-        try {
-            const hit = almDateFromChat();
-            if (hit) {
-                let refWd = null;
-                if (hit.date instanceof Date && !isNaN(hit.date)) refWd = hit.date.getDay();
-                if (refWd != null) return { refDoy: almDayOfYear(hit.month, hit.day, cal), refWd };
-            }
-        } catch { /* 往下走 */ }
-    }
-    // ④ 点 StartDate：最后的真实年份来源
-    if (cal === DEFAULT_CAL) {
-        try {
-            const saved = readStore(env.getCacheKey());
-            if (saved?.raw) {
-                const { startDate } = parseCalendar(saved.raw, loadCalDesc());
-                if (startDate instanceof Date && !isNaN(startDate)) {
-                    return { refDoy: almDayOfYear(startDate.getMonth() + 1, startDate.getDate(), cal), refWd: startDate.getDay() };
-                }
-            }
-        } catch { /* 往下走 */ }
-    }
-    // ⑤ 默认：1 月 1 日 = 周一
-    return { refDoy: 1, refWd: 1 };
+    return storyWeekdayRef(getContext(), cal, 100) || null;
 }
 
 // 某月日的周几（0..6），纯日序偏移，不涉年。ref 可复用（较重，整轮渲染算一次传进来）。
 export function almWeekdayFor(month, day, ref, cal = loadCalDesc()) {
     const r = ref || almWeekdayRef(cal);
+    if (!r || !Number.isInteger(r.refWd) || !Number.isInteger(r.refDoy)) return null;
     return ((r.refWd + almDayOfYear(month, day, cal) - r.refDoy) % 7 + 7) % 7;
 }
 

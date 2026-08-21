@@ -5,7 +5,7 @@
 // 注入，避免反向 import index.js 造成循环依赖（其余依赖——store / axisState / 历法数据 /
 // escape / weatherChipHtml——均为已拆模块，直接 import）。
 import { parseCalendar, buildPointInjectText } from './parse.js';
-import { calendarDate, isGregorian, weekdayFor } from '../calendar/date.js';
+import { isGregorian } from '../calendar/date.js';
 import { buildScheduleDateContext, scheduleDateAtOffset, scheduleWeekdayAtOffset } from './date-context.js';
 import { axisState } from '../axis/state.js';
 import { ALM_WEEKDAYS, almDayOfYear, loadCalDesc } from '../axis/data.js';
@@ -26,9 +26,9 @@ export const TYPE_META = {
 export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想调整这些点？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
 
 // 点条第 0..n-1 天的日期上下文（供点面板/楼内点条取 月/日/周几 用，与「历」同锚同源）
-export function scheduleDayCtx(startDate = null, calendarOverride = null) {
+export function scheduleDayCtx(startDate = null, calendarOverride = null, weekdayRefOverride = undefined) {
     const cal = calendarOverride || loadCalDesc();
-    const ref = env.almWeekdayRef(cal);   // 点周几改走年-free 锚（与历同源）；default 分支也要 ref
+    const ref = weekdayRefOverride === undefined ? env.almWeekdayRef(cal) : weekdayRefOverride;   // 历史楼传自身快照锚，避免被最新楼污染
     if (isGregorian(cal)) return { cal, ref, dateContext: buildScheduleDateContext(cal, startDate, ref) };
     const anchor = startDate && !(startDate instanceof Date) ? startDate : env.almTodayAnchor();
     return { cal, ref, anchorDoy: almDayOfYear(anchor.month, anchor.day, cal), dateContext: buildScheduleDateContext(cal, startDate || anchor, ref) };
@@ -42,12 +42,12 @@ export function scheduleDayLabel(i, startDate, ctx) {
         // 周几，会和用户设定的现实周几错位（bug：2021/8/20 周五显示成 2024 的周二）。历也走同一锚，两者一致。
         const d = new Date(startDate); d.setDate(d.getDate() + i);
         const month = d.getMonth() + 1, day = d.getDate();
-        return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? weekdayFor(calendarDate(d.getFullYear(), month, day), ctx.cal) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
+        return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
     }
     const date = scheduleDateAtOffset(ctx.dateContext, i);
     if (!date) return { month: null, day: null, wd: null, unknown: true };
     const { month, day } = date;
-    return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? weekdayFor(calendarDate(null, month, day), ctx.cal) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
+    return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
 }
 
 function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
@@ -113,7 +113,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         let wdLabel = '';
         if (startDate) {
             const { month, day, wd } = scheduleDayLabel(i, startDate, ctx);
-            wdLabel  = wd == null ? '日期未知' : ALM_WEEKDAYS[wd];
+            wdLabel  = wd == null ? '星期未记录' : ALM_WEEKDAYS[wd];
             numLabel = month == null || day == null ? '日期未知' : `${month}/${day}`;
         }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
@@ -129,7 +129,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         let dateLabel = `第${di + 1}天`;
         if (startDate) {
             const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            dateLabel = month == null || dd == null ? '日期未知' : `${month}月${dd}日 · ${ALM_WEEKDAYS[wd] || '周几未知'}`;
+            dateLabel = month == null || dd == null ? '日期未知' : `${month}月${dd}日 · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}`;
         }
         return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
     });

@@ -11,7 +11,7 @@
 // OWN_KEYS 白名单已含 'sp-ledger' → 存储管理面板经 store.ownKeyBytes / clearOwnKey 自动显示占用/可清，
 // 无需本模块再接线（那两个函数按 key 字符串直读 chat_metadata，与本模块是否被 import 无关）。
 
-import { getContext } from '../../../extensions.js';
+const { getContext = () => null } = await import('../../../../../extensions.js').catch(() => ({}));
 
 const LEDGER_KEY     = 'sp-ledger';
 const SCHEMA_VERSION = 1;
@@ -31,6 +31,8 @@ const TYPES  = ['持续状态', '约定待办', '周期'];
 const STATES = ['活跃', '已了结'];
 let activeWrites = 0;
 const cloneState = value => JSON.parse(JSON.stringify(value));
+import { reconcileLedgerEntries } from './reconcile.js';
+import { reconcileStateAtomic as reconcileStateAtomicCore } from './repository-transaction.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  chat_metadata 存取（照 store.js store()/persist() 同款：读路径不实例化空壳）
@@ -128,10 +130,12 @@ function normalizeAnchor(a) {
     if (!a || typeof a !== 'object') return { 楼层: null, 历日期: null };
     const rawFloor = a.楼层;
     const floor = rawFloor === null || rawFloor === undefined || typeof rawFloor === 'boolean' || String(rawFloor).trim() === '' ? null : Number(rawFloor);
-    return {
+    const out = {
         楼层  : Number.isFinite(floor) ? floor : null,
         历日期: a.历日期 ?? null,
     };
+    if (typeof a.来源指纹 === 'string' && a.来源指纹.trim()) out.来源指纹 = a.来源指纹.trim();
+    return out;
 }
 
 function strArr(v) {
@@ -141,7 +145,7 @@ function strArr(v) {
 // 把外部传入的松散对象补成齐整条目。id 由 addEntry 分配，此处只在缺失时兜底。
 function normalizeEntry(obj, id) {
     const o = (obj && typeof obj === 'object') ? obj : {};
-    return {
+    const entry = {
         id      : id || o.id || '',
         事由    : String(o.事由 || '').trim(),
         类型    : TYPES.includes(o.类型) ? o.类型 : '持续状态',
@@ -157,6 +161,8 @@ function normalizeEntry(obj, id) {
         ts      : Number.isFinite(+o.ts) ? +o.ts : Date.now(),         // 打点时间戳（新字段·末尾·可选）
         静音    : o.静音 === true,                                     // 暂停埋入（新字段·末尾·可选）：停注入、判定车不归档，仍活跃
     };
+    if (typeof o.来源状态 === 'string' && o.来源状态.trim()) entry.来源状态 = o.来源状态.trim();
+    return entry;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -205,6 +211,25 @@ export async function addEntriesAtomic(items) {
         m.seq = oldSeq;
         throw error;
     }
+}
+
+export async function reconcileEntriesAtomic(sources, chatLength) {
+    const m = ledger(true); if (!m) return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 } };
+    const result = await reconcileStateAtomicCore(m, sources, chatLength, persistAwaitable, normalizeEntry);
+    return result;
+}
+
+export async function reconcileStateAtomic(state, sources, chatLength, save) {
+    return reconcileStateAtomicCore(state, sources, chatLength, save, normalizeEntry);
+}
+
+// 测试/宿主注入 seam：复用本 repository 的 normalize 与原子事务，不依赖 ST runtime。
+export function createLedgerRepositorySeam({ state = { entries: [], seq: 0 }, save } = {}) {
+    return {
+        state,
+        normalize: value => normalizeEntry(value, value?.id || `L${++state.seq}`),
+        reconcile: (sources, chatLength) => reconcileStateAtomicCore(state, sources, chatLength, save, normalizeEntry),
+    };
 }
 
 // 局部更新（判定车刷现状/现状锚，或用户内联编辑）。只改传入的键。返回是否命中。

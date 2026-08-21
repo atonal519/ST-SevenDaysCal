@@ -14,7 +14,7 @@ import * as theater from './theater.js';
 import * as anchor from './anchor.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
-import * as ledger from './ledger.js';
+import * as ledger from './business/ledger/repository.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
 import { createAutomationGate } from './automation-gate.js';
@@ -103,8 +103,21 @@ import { createAxisPanel } from './business/axis/panel.js';
 import { renderAxisToolbar } from './business/axis/toolbar.js';
 import { renderAxisUpcoming } from './business/axis/upcoming.js';
 import { renderAxisCalendar } from './business/axis/calendar.js';
-import { openAxisEditor, closeAxisEditor, setAxisSheet, selectAxisDay, navigateAxisMonth } from './business/axis/editor.js';
-import { createCalendarManager } from './business/axis/manager.js';
+import { openAxisEditor, closeAxisEditor, setAxisSheet, selectAxisDay, navigateAxisMonth, createAxisEditorController, renderAxisEditor, renderAxisWeekdayHint } from './business/axis/editor.js';
+import { createCalendarManager, calendarCards, calendarBindingKey, calendarBoundTemplateId, setCalendarBinding, calendarBindingCandidates } from './business/axis/manager.js';
+import { createAxisUi } from './business/axis/ui.js';
+import { createAxisItemUi } from './business/axis/item-ui.js';
+import { createAxisActions } from './business/axis/actions.js';
+import { createAxisDateActions } from './business/axis/date-actions.js';
+import { createAxisCalendarActions } from './business/axis/calendar-actions.js';
+import { createAxisGenerationController } from './business/axis/generation.js';
+import { createAxisTransactionController } from './business/axis/transaction.js';
+import { createAxisPromptBuilder } from './business/axis/prompts.js';
+import { createAxisDateContext } from './business/axis/date-context.js';
+import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, DEFAULT_STORY_CLOCK_PROMPT, STORY_CLOCK_KEY, createStoryClockController } from './business/axis/story-clock.js';
+import { createWeekdayConsumerContext, weekdayContextForPoint } from './business/axis/weekday-coordinator.js';
+import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
+import { createDateDetectionController } from './business/axis/date-detection.js';
 
 // Must be initialized before the top-level bindAxisAnchor() wiring below.
 // Keeping this as a const preserves the shared terminal-stage semantics while
@@ -119,8 +132,23 @@ import { isGregorian as isGregorianCalendar } from './business/calendar/date.js'
 import { buildPrompt } from './business/point/prompt.js';
 import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
 import { togglePointPinRaw, deletePointEventRaw } from './business/point/mutations.js';
+import { bindPointRepository, getScheduleKey, loadCachedSchedule } from './business/point/repository.js';
+import { createPointActions } from './business/point/actions.js';
+import { createPointWidgetActions } from './business/point/widget.js';
+import { createPointController } from './business/point/controller.js';
+import { createPointInlineRenderer } from './business/point/inline.js';
 // ledger 检索前置选择器（纯逻辑三件套）已抽出到 business/ledger/select.js；到期/距今口径经 bindLedgerSelect 注入。
 import { bindLedgerSelect, scoreLedgerEntry, isLedgerSalient, selectLedgerForInject } from './business/ledger/select.js';
+import { bindLedgerDate, ledgerDaysSince, ledgerDueInfo, listJudgeableLedger, fmtLedgerForJudge } from './business/ledger/date.js';
+import { bindLedgerSchema, splitCnList, normGist, parseLedgerCapture as parseLedgerCaptureSchema, parseLedgerJudge as parseLedgerJudgeSchema } from './business/ledger/schema.js';
+import { createLedgerInjectionController } from './business/ledger/inject.js';
+import { createLedgerJudgeController } from './business/ledger/judge.js';
+import { createLedgerInlineRenderer } from './business/ledger/inline.js';
+import { createLedgerSnapshotBridge } from './business/ledger/snapshot.js';
+import { createLedgerActions } from './business/ledger/actions.js';
+import { bindLedgerEvents, createLedgerDeletedHandler } from './business/ledger/events.js';
+import { buildLedgerSources } from './business/ledger/reconcile.js';
+import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
 import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 import { createTaskOwnerManager } from './runtime/task-owner.js';
 import { evaluateTaskLifecycle } from './runtime/task-orchestration.js';
@@ -141,6 +169,7 @@ import {
     ledgerReadMd, saveLedgerEditor,
     batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet,
 } from './business/ledger/render.js';
+import { formatLedgerList } from './business/ledger/inline.js';
 
 const pointTaskOwners = createTaskOwnerManager();
 const linesTaskOwners = createTaskOwnerManager();
@@ -175,6 +204,20 @@ const chatAnchorRepository = createChatAnchorRepository({
         return value ? { ...value, identity: `${key}:${value.month}/${value.day}` } : null;
     },
 });
+const axisDateActions = createAxisDateActions({
+    repository: chatAnchorRepository,
+    charKey: () => charStableKey(getContext()),
+    calendar: loadCalDesc,
+    today: almTodayAnchor,
+    dayOfYear: almDayOfYear,
+    monthDayFromDoy: almMonthDayFromDoy,
+    monthCount: calMonthCount,
+    monthDays: calMonthDays,
+    pending: () => chatAnchorRepository.pending(),
+    confirm: spConfirm,
+    aftermath: () => runAnchorAftermath(),
+    toast: showToast,
+});
 
 // 绑定 API 网络层所需的 UI/业务回调（避免 api/client.js 反向依赖 index.js 造成循环引用）。
 bindApiClient({
@@ -186,10 +229,228 @@ bindApiClient({
 // 点渲染回调注入：render.js 的 scheduleDayCtx/scheduleDayLabel/renderEvent 需访问本文件的
 // almTodayAnchor/almWeekdayRef/almWeekdayFor/makeInjectBtn，经 bindPointRender 注入以避免反向依赖（循环引用）。
 bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn });
+bindPointRepository({ keyDesc, readStore, renderSchedule, loadCalendar: loadCalDesc });
+const pointActions = createPointActions({
+    inShadow: $inAll,
+    $,
+    getCacheKey: (...args) => getCacheKey(...args),
+    readStore,
+    writeStore,
+    renderSchedule,
+    loadCalendar: loadCalDesc,
+    parseCalendar,
+    togglePointPinRaw,
+    deletePointEventRaw,
+    setCached: html => { pointState.cachedSchedule = html; },
+    setBody,
+    currentView: () => currentView,
+    currentChar: () => charViewName,
+    syncLatestScheduleBlock,
+    showToast,
+    confirm: spConfirm,
+});
+const applyPointWidget = createPointWidgetActions({
+    firstPointEventBlock,
+    parsePointEventRecord,
+    getCacheKey: (...args) => getCacheKey(...args),
+    readStore,
+    writeStore,
+    replaceNthEventLine,
+    getUserName: () => getContext().name1 || '用户',
+    currentView: () => currentView,
+    renderSchedule,
+    loadCalendar: loadCalDesc,
+    setCached: html => { pointState.cachedSchedule = html; },
+    shouldShowPanel: () => !outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible'),
+    setBody,
+    syncLatestScheduleBlock,
+    showToast,
+});
+const pointController = createPointController({
+    owners: pointTaskOwners,
+    state: pointState,
+    evaluate: evaluateTaskLifecycle,
+    chatId: () => getContext().chatId,
+    enabled: pluginEnabled,
+    setButton: setExtBtnState,
+    showEmpty: showEmptyGenerate,
+    syncing: () => axisState._almSyncingPoint,
+    toast: showToast,
+    view: () => currentView,
+    char: () => charViewName,
+    precheck: memoryPreCheckConfirm,
+    panelVisible: () => $(`#${MODAL_ID}`).is(':visible'),
+    showPanel,
+    setBody,
+    loading: loadingHtml,
+    abortAuto: () => { _autoRegenSchedAbort?.abort(); },
+    context: getContext,
+    key: (...args) => getCacheKey(...args),
+    read: readStore,
+    write: writeStore,
+    parse: parseCalendar,
+    calendar: loadCalDesc,
+    generate,
+    validate: validateGeneratedCalendar,
+    mergePinned: mergePinnedPoints,
+    today: almTodayAnchor,
+    forceStart: forceStartDate,
+    render: renderSchedule,
+    sync: syncLatestScheduleBlock,
+    setChar: value => { charViewName = value; },
+    setCached: html => { pointState.cachedSchedule = html; },
+    notify: () => getSettings().notifyMode,
+    canCommit: (owner, travel) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), signal: travel?.signal, pluginEnabled: pluginEnabled() }).canCommit,
+    canCallback: owner => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback,
+    setView,
+    showEmpty: showEmptyGenerate,
+    escape: text => escapeHtml(text),
+    config: loadCfg,
+    setAuto: controller => { _autoRegenSchedAbort = controller; return controller; },
+    setSyncing: value => { axisState._almSyncingPoint = value; },
+    clearBusy: () => { if (axisState.almanacMode) renderAlmanacPanel(); $in('#sp-body .sp-refresh-schedule').removeClass('sp-refresh-busy'); },
+    cached: () => pointState.cachedSchedule,
+    monthName: month => calMonthName(loadCalDesc(), month),
+    followupState: (owner, travel, allow, pending) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: owner.chatRevision, signal: travel?.signal, pluginEnabled: pluginEnabled(), allowPendingFollowup: allow, pending }),
+    shouldFollowup: (life, travel, allow, owner) => shouldRunPendingPointFollowup({ pending: life.canFollowup, allowPendingFollowup: allow, signalAborted: travel?.signal?.aborted, chatSame: getContext().chatId === owner.chatId && pointTaskOwners.currentChatRevision() === owner.chatRevision, pointGenerating: pointState.isGenerating, needsSync: schedulePointNeedsSync() }) && life.canFollowup,
+});
+const pointInlineRenderer = createPointInlineRenderer({
+    settings: getSettings,
+    readRaw: () => readCacheRaw(getCacheKey('user', '')),
+    loadCalendar: loadCalDesc,
+    parseCalendar,
+    scheduleDayCtx,
+    scheduleDayLabel,
+    weatherGlyph,
+    escapeHtml,
+    escapeAttr,
+    weekdays: ALM_WEEKDAYS,
+    typeMeta: TYPE_META,
+    makeInjectBtn,
+    buildPointInjectText,
+    cleanText,
+});
+const parseJudgedDate = parseJudgedDatePure;
 
 // ledger 选择器注入：select.js 的打分/门槛依赖到期/距今口径 ledgerDueInfo/ledgerDaysSince
 // （二者仍滞留本文件、且另经历法助手触达），经 bindLedgerSelect 注入以免反向依赖循环引用。
 bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
+const axisDateContext = createAxisDateContext({ today: almTodayAnchor, daysUntil: almDaysUntil, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor });
+bindLedgerDate({ today: axisDateContext.today, daysUntil: axisDateContext.daysUntil, listEntries: () => ledger.listEntries() });
+bindLedgerSchema({ parseJudgedDate, ledgerTypes: ledger.TYPES });
+bindLedgerCapture({
+    context: getContext,
+    parseClock: parseStoryClockPure,
+    parseDate: parseJudgedDate,
+    stripTags: (text) => memory.stripTags(text, { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }),
+    settings: getSettings,
+    systemTypes: system_message_types,
+    eventTypes: LEDGER_EVENT_TYPES,
+    fieldSpec: LEDGER_FIELD_SPEC,
+});
+const ledgerCaptureController = createLedgerCaptureController({
+    context: getContext,
+    charKey: charStableKey,
+    config: loadCfg,
+    calendar: loadCalDesc,
+    validDate: almValidMonthDay,
+    today: almTodayAnchor,
+    appendTravel: appendTravelPromptContext,
+    callApi: callCustomApi,
+    parseCapture: parseLedgerCaptureSchema,
+    listEntries: options => ledger.listEntries(options),
+    normGist,
+    addAtomic: ledger.addEntriesAtomic,
+    bridge: bridgeAbortSignal,
+    confirm: spConfirm,
+    toast: showToast,
+    settings: getSettings,
+    refresh: () => ledgerInjectionController.refresh(),
+    refreshInline: refreshInlineWindow,
+    render: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); },
+    setProgress: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
+});
+const reconcileLedgerSources = async () => {
+    try {
+        const records = ledgerAiFloorRecords();
+        const result = await ledger.reconcileEntriesAtomic(buildLedgerSources(records), getContext()?.chat?.length || 0);
+        return result;
+    } catch (error) { return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 }, error }; }
+};
+const runLedgerCaptureStep = (manual = false, travelContext = null) => ledgerCaptureController.run(manual, travelContext);
+const ledgerInjectionController = createLedgerInjectionController({
+    context: getContext,
+    enabled: injectEnabled,
+    settings: getSettings,
+    entries: () => ledger.listEntries(),
+    select: selectLedgerForInject,
+    today: almTodayAnchor,
+    daysSince: ledgerDaysSince,
+    dueInfo: ledgerDueInfo,
+    narrative: ledgerNarrativeMessage,
+    stripTags: text => memory.stripTags(text, { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }),
+});
+const refreshLedgerInjection = () => ledgerInjectionController.refresh();
+const ledgerJudgeController = createLedgerJudgeController({
+    context: getContext,
+    charKey: charStableKey,
+    listJudgeable: () => listJudgeableLedger(),
+    fmtLedger: fmtLedgerForJudge,
+    config: loadCfg,
+    calendar: loadCalDesc,
+    validDate: almValidMonthDay,
+    today: almTodayAnchor,
+    floorContext: ledgerFloorDateContext,
+    appendTravel: appendTravelPromptContext,
+    callApi: callCustomApi,
+    parseJudge: parseLedgerJudgeSchema,
+    getEntry: id => ledger.getEntry(id),
+    reconcile: reconcileLedgerSources,
+    update: (id, patch) => ledger.updateEntry(id, patch),
+    close: id => ledger.closeEntry(id),
+    dayOfYear: almDayOfYear,
+    monthDayFromDoy: almMonthDayFromDoy,
+    bridge: bridgeAbortSignal,
+    toast: showToast,
+    refreshInject: refreshLedgerInjection,
+    refreshInline: refreshInlineWindow,
+    render: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); },
+});
+const runLedgerJudgeStep = (manual = false, travelContext = null) => ledgerJudgeController.run(manual, travelContext);
+const ledgerInlineRenderer = createLedgerInlineRenderer({
+    settings: getSettings,
+    calendar: loadCalDesc,
+    entries: () => ledger.listEntries(),
+    echo: () => ledgerInjectionController.echo,
+    judging: () => ledgerJudgeController.isBusy,
+    typeClass: ledgerTypeClass,
+});
+const _buildLedgerBlockHtml = (poolArg = null, readOnly = false, calendarOverride = undefined) => ledgerInlineRenderer.buildPool(poolArg, readOnly, calendarOverride);
+const _buildUserRecallBoxHtml = (snap, isLatest, calendarOverride = undefined) => ledgerInlineRenderer.buildRecall(snap, isLatest, calendarOverride);
+const ledgerSnapshotBridge = createLedgerSnapshotBridge({
+    context: getContext,
+    readPoint: () => readCacheRaw(getCacheKey('user', '')),
+    readLine: () => readStore(getLinesCacheKey())?.raw || '',
+    loadAlmanac,
+    today: almTodayAnchor,
+    entries: () => ledger.listEntries(),
+    calendar: loadCalDesc,
+    cloneCalendar: cloneCalDesc,
+    weekdayRef: () => almWeekdayRef(loadCalDesc()),
+    echo: () => ledgerInjectionController.echo,
+    write: (id, value) => snapshot.writeSnapshot(id, value),
+});
+const captureSnapshot = () => ledgerSnapshotBridge.capture();
+const captureRecallSnapshot = () => ledgerSnapshotBridge.captureRecall();
+const freezeSnapshotToFloor = mesId => ledgerSnapshotBridge.freeze(mesId);
+const ledgerActions = createLedgerActions({
+    get: id => ledger.getEntry(id), lock: id => ledger.lockEntry(id), unlock: id => ledger.unlockEntry(id),
+    mute: id => ledger.muteEntry(id), unmute: id => ledger.unmuteEntry(id), close: id => ledger.closeEntry(id),
+    reopen: id => ledger.reopenEntry(id), remove: id => ledger.removeEntry(id), confirm: spConfirm, toast: showToast,
+    refreshInject: refreshLedgerInjection,
+    refreshPanel: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); },
+    refreshInline: refreshInlineWindow,
+});
 
 // 轴锚点注入：anchor.js 的 almTodayAnchor/almWeekdayRef 需读本文件内的跨域来源
 // （日期锚点/角色键/线缓存键+解析/点缓存键/终态集），经 bindAxisAnchor 注入以避免反向依赖循环引用。
@@ -212,9 +473,9 @@ bindLedgerRender({
     syncLatestAlmanacBlock,
     renderAlmanacPanel: (...args) => renderAlmanacPanel(...args),
     getLedgerCaptureInterval,
-    getLedgerCaptureProgress,
-    isCapturingLedger: () => isCapturingLedger,
-    isJudgingLedger: () => isJudgingLedger,
+    getLedgerCaptureProgress: () => ledgerCaptureController.progress,
+    isCapturingLedger: () => ledgerCaptureController.isBusy,
+    isJudgingLedger: () => ledgerJudgeController.isBusy,
 });
 
 const MODAL_ID   = 'sp-modal-root';
@@ -229,15 +490,101 @@ const SIZE_KEY    = 'sp-size';
 // _spShadow 在 injectModal() 里赋值；applyTheme() 同步 shadow 内 wrapper 的主题类。
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
 const almToolbarHtml = () => renderAxisToolbar(actionMenuHtml);
-const renderAlmanacUpcoming = () => renderAxisUpcoming({
-    renderAlmanacEmpty,
-    batchBarHtml,
-    almRowHtml,
+const axisItemUi = createAxisItemUi({
+    typeMeta: almTypeMeta, weekdays: ALM_WEEKDAYS, weekdayFor: almWeekdayFor,
+    clampInt: almClampInt, yearLength: calYearLen, itemCoversDoy: almItemCoversDoy,
+    dateLabel: almDateLabel, batchScope: getBatchScope, batchSelected: getBatchSelected,
+    escapeHtml,
 });
-const renderAlmanacCalendar = () => renderAxisCalendar({ almRowHtml });
+const renderAlmanacUpcoming = () => renderAxisUpcoming({ renderAlmanacEmpty: axisItemUi.emptyHtml, batchBarHtml, almRowHtml: axisItemUi.rowHtml });
+const renderAlmanacCalendar = () => renderAxisCalendar({ almRowHtml: axisItemUi.rowHtml });
 const axisCalendarManager = createCalendarManager({
-    renderLegacy: (...args) => legacyRenderCalendarManager(...args),
-    refreshLegacy: (...args) => legacyRefreshCalendarManager(...args),
+    render: (...args) => renderAlmanacPanel(...args),
+    load: loadCalDesc,
+    clone: cloneCalDesc,
+    createState: () => ({ editing: false, draft: cloneCalDesc(loadCalDesc()), error: '', templatesOpen: false, bindTemplateId: null, bindQuery: '' }),
+    readDraft: () => readCalendarDraftForm(),
+    limits: CALENDAR_LIMITS,
+    confirm: (...args) => customDialog.confirm(...args),
+    chatId: () => getContext().chatId,
+    cards: currentCharacterCards,
+    bindings: calendarTemplateBindings,
+    currentAvatar: () => charStableKey(getContext()),
+    boundId: calendarBoundTemplateId,
+    bindingCandidates: calendarBindingCandidates,
+    templates: loadCalendarTemplates,
+    templateId: calendarTemplateId,
+    saveTemplates: saveCalendarTemplates,
+    sortTemplates: sortCalendarTemplatesForCurrent,
+    batchScope: getBatchScope,
+    batchSelected: getBatchSelected,
+    batchBar: batchBarHtml,
+    escapeHtml,
+    escapeAttr,
+    setBinding: setCalendarBinding,
+    writeBindings: bindings => { getSettings().calendarTemplateBindings = bindings; },
+    save: saveSettingsDebounced,
+    applyTemplate: options => maybeApplyBoundCalendarTemplate(options),
+    validate: validateCalendarDesc,
+    commit: cal => axisTransactionController.commit(cal),
+    applyCalendar: (template) => axisTransactionController.commit(template),
+    writeBindings: bindings => { getSettings().calendarTemplateBindings = bindings; },
+    onApplyError: error => { console.error('[SP calendar] 角色默认历法应用失败', error); showToast('角色绑定已更新，但默认历法没有应用成功，请稍后重试', null, true); },
+    limits: { ...CALENDAR_LIMITS, monthNameLength: CALENDAR_LIMITS.monthNameLength, eraNameLength: CALENDAR_LIMITS.eraNameLength },
+    root: () => $in('#sp-almanac-wrap'),
+    $,
+    activeElement: () => _spShadow?.activeElement,
+});
+const axisEditorController = createAxisEditorController({
+    read: () => ({ name: String($in('#sp-alm-f-name').val() || '').trim(), type: $in('#sp-alm-f-type').val(), month: $in('#sp-alm-f-month').val(), day: $in('#sp-alm-f-day').val(), days: $in('#sp-alm-f-days').val(), displayDate: $in('#sp-alm-f-disp').val(), note: $in('#sp-alm-f-note').val() }),
+    load: loadAlmanac,
+    id: almId,
+    normalize: normalizeAlmItem,
+    persist: items => { saveAlmanacItems(items); return true; },
+    render: () => closeAxisEditor(renderAlmanacPanel),
+    afterSave: syncLatestAlmanacBlock,
+});
+const axisActions = createAxisActions({
+    load: loadAlmanac, save: saveAlmanacItems, confirm: spConfirm, toast: showToast,
+    render: renderAlmanacPanel, sync: syncLatestAlmanacBlock, clear: () => $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked'),
+    calendar: loadCalDesc, month: almCalMonth, clamp: almClampInt, yearLength: calYearLen, dayOfYear: almDayOfYear, monthDayFromDoy: almMonthDayFromDoy,
+});
+const axisCalendarActions = createAxisCalendarActions({
+    selectedDay: () => axisState._almanacCalDay,
+    setSelectedDay: value => { axisState._almanacCalDay = value; },
+    render: () => renderAlmanacPanel(),
+    clearItemClass: () => $inAll('#sp-almanac-wrap .sp-alm-item-linked').removeClass('sp-alm-item-linked'),
+    clearCellClass: () => $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked'),
+    itemLinked: id => $in(`#sp-almanac-wrap .sp-alm-item[data-id="${id}"]`).hasClass('sp-alm-item-linked'),
+    setItemLinked: id => $in(`#sp-almanac-wrap .sp-alm-item[data-id="${id}"]`).addClass('sp-alm-item-linked'),
+    item: id => loadAlmanac().find(item => item.id === id),
+    highlight: item => axisActions.highlight(item),
+    linkCell: day => $in(`#sp-almanac-wrap .sp-alm-cell[data-day="${day}"]`).addClass('sp-alm-cell-linked'),
+    hasLinked: () => $inAll('#sp-almanac-wrap .sp-alm-item-linked').length > 0,
+});
+const axisPromptBuilder = createAxisPromptBuilder({ loadCalDesc, calMonthCount, calYearLen, isGregorianCalendar, getCalDescInjectText });
+const buildAlmanacPrompt = axisPromptBuilder.buildAlmanacPrompt;
+const buildAnniversarySupplementPrompt = axisPromptBuilder.buildAnniversarySupplementPrompt;
+const validateAlmanacResponse = raw => /<almanac_widget\b[^>]*>[\s\S]*<\/almanac_widget\s*>/i.test(String(raw || ''));
+const axisGenerationController = createAxisGenerationController({
+    context: getContext, config: loadCfg, callApi: callCustomApi,
+    prompt: (user, char) => buildAlmanacPrompt(user, char),
+    supplementPrompt: (user, char, existing) => buildAnniversarySupplementPrompt(user, char, existing),
+    validate: validateAlmanacResponse, parse: parseAlmanacWidget, merge: mergeAlmanac,
+    loadItems: loadAlmanac, saveItems: saveAlmanacItems, dedupKey: almDedupKey, dateLabel: almDateLabel,
+    sync: syncLatestAlmanacBlock, render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
+    notify: (message, generated) => { if (generated) { if (axisState.almanacMode) { if (getSettings().notifyMode !== 'off') showToast(message); } else showToast(message, () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); }); } else if (getSettings().notifyMode !== 'off') showToast(message); },
+    error: (error, supplement) => { if (axisState.almanacMode) showToast(`${supplement ? '补录失败：' : '生成失败：'}${escapeHtml(error.message || '未知错误')}`, null, true); else showToast(supplement ? '补录纪念日失败，请重试' : '轴生成失败，请重试', null, true); },
+    missingApi: () => { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); },
+    missingChat: () => showToast('请先打开一个聊天', null, true),
+    confirm: () => spConfirm({ title: '重新生成节日', body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。', confirmText: '生成', cancelText: '取消' }),
+});
+const axisTransactionController = createAxisTransactionController({
+    chatId: () => getContext().chatId, items: loadAlmanac, conflicts: calendarConflicts, charKey: () => charStableKey(getContext()), anchor: key => getSettings().dateAnchor?.[key],
+    monthCount: cal => calMonthCount(cal), monthDays: (cal, month) => calMonthDays(cal, month), choose: options => customDialog.choose(options), writeBatch: entries => store.writeBatch(entries), setAnchor: (key, month, day) => setDateAnchor(key, month, day),
+    syncAlmanac: syncLatestAlmanacBlock, syncSchedule: syncLatestScheduleBlock, pluginEnabled, readCal: () => readStore(getCalDescKey()), readItems: () => readStore(getAlmanacKey())?.items,
+    bindings: calendarTemplateBindings, bindingKey: calendarBindingKey, cards: currentCharacterCards, templates: loadCalendarTemplates, clone: cloneCalDesc, saveCal: saveCalDesc, saveSettings: saveSettingsDebounced,
+    render: () => { if (axisState.almanacMode) renderAlmanacPanel(); }, notifyMode: () => getSettings().notifyMode, toast: showToast,
 });
 const renderCalendarManager = axisCalendarManager.renderCalendarManager;
 const refreshCalendarManager = axisCalendarManager.refreshCalendarManager;
@@ -276,6 +623,48 @@ function bridgeAbortSignal(externalSignal, internalController) {
     else externalSignal.addEventListener('abort', abort, { once: true });
     return () => externalSignal.removeEventListener('abort', abort);
 }
+
+bindStoryClock({
+    loadCalendar: loadCalDesc,
+    validMonthDay: almValidMonthDay,
+    defaultCalendar: DEFAULT_CAL,
+    monthDayFromKey: monthDayFromDayKey,
+    extractDay: extractDayFromTime,
+    cnToNumber: _cnToNumber,
+    monthAlias: _CN_MONTH_ALIAS,
+    context: getContext,
+    dayOfYear: almDayOfYear,
+});
+const storyClockController = createStoryClockController({
+    context: getContext,
+    pluginEnabled,
+    enabled: () => getSettings().storyClockEnabled !== false,
+    settings: getSettings,
+});
+const storyClockEnabled = () => getSettings().storyClockEnabled !== false;
+const refreshStoryClockInjection = () => storyClockController.refresh();
+const latestStoryClock = () => latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT);
+const storyClockDate = () => storyClockDatePure(getContext(), parseJudgedDatePure, ALM_CHAT_SCAN_LIMIT);
+const dateDetectionController = createDateDetectionController({
+    context: getContext,
+    charKey: ctx => charStableKey(ctx),
+    config: loadUtilityCfg,
+    storyEnabled: storyClockEnabled,
+    storyDate: storyClockDate,
+    prompt: () => buildDateJudgePromptPure(getCalDescInjectText()),
+    callApi: callCustomApi,
+    parse: parseJudgedDatePure,
+    bridge: bridgeAbortSignal,
+    getAnchor: getDateAnchor,
+    setAnchor: setDateAnchor,
+    settings: getSettings,
+    monthName: month => calMonthName(loadCalDesc(), month),
+    toast: showToast,
+    aftermath: () => runAnchorAftermath(),
+});
+const applyDetectedDate = (charKey, md, { notify = true } = {}) => dateDetectionController.apply(charKey, md, notify);
+const relandStoryClockAnchor = () => dateDetectionController.reland();
+const runJudgeDateStep = options => dateDetectionController.run(options);
 const timeTravel = createTimeTravelController({
     getChatId: () => getContext().chatId,
     getChat: () => getContext().chat,
@@ -286,7 +675,7 @@ const timeTravel = createTimeTravelController({
         if (!target) throw new Error('无法读取时光旅行选择的目标日期');
         const chat = getContext().chat || [];
         const floor = chat[Number(messageId)];
-        const clock = parseStoryClock(floor?.mes || '');
+        const clock = parseStoryClockPure(floor?.mes || '');
         const clockDate = parseJudgedDate(clock.end) || parseJudgedDate(clock.start);
         const key = buildDateRenderKey(messageId);
         if (clockDate) {
@@ -375,16 +764,15 @@ function startTimeTravel(targetDate) {
 function cancelTimeTravel() {
     const active = timeTravel.getState();
     timeTravel.clear();
-    axisState._almSyncPending = false;
     // clear() 不触发 onSequenceEnd（controller 只在 handleRendered 收尾时发），闸/协调器须随取消显式释放，
     // 否则 token 滞留 → 后续正常自动化被误抑制（同 chatId+messageId 复活场景）或协调器内存滞留。
     clearAutomationClaims();
     dateCoordinator.clear();
-    almanacJudgeAbort?.abort();
+    dateDetectionController.abort();
     outlineJudgeAbort?.abort();
     _autoRegenSchedAbort?.abort();
-    ledgerCaptureAbort?.abort();
-    ledgerJudgeAbort?.abort();
+    ledgerCaptureController.abort();
+    ledgerJudgeController.abort();
     if (active?.phase === 'waiting') {
         const input = $('#send_textarea');
         if (input.length) input.val(removeTimeTravelBlocks(String(input.val() || ''))).trigger('input');
@@ -422,13 +810,13 @@ const _iKey  = (icon, name, desc) => `<div class="sp-intro-key"><i class="fa-sol
 
 const MODULE_INTROS = {
     schedule:
-        _iLede('「点」＝当前视角（我／TA）的近期待办与状态卡片：读剧情自动推断某人此刻在做什么、心情、所在地。只读展示，不注入正文。') +
+        _iLede('「点」＝当前视角（我／TA）的近期待办与状态卡片：读剧情自动推断某人此刻在做什么、心情、所在地。日期月日按历法步进；周几只认主楼 SDC 星期锚，缺锚时显示“星期未记录”，不从现实年份或 StartDate 猜。SDC 是主楼 AI 的额外元数据，不替代、不修改其他日期、时间或时间戳要求。') +
         _iKey('fa-rotate-right', '生成／刷新', '按最新剧情重算卡片') +
         _iKey('fa-lock',         '锁定',       '这条重算时保留不动') +
         _iKey('fa-thumbtack',    '固定 TA',    '把某人钉进 TA▾ 抽屉常驻') +
         _iKey('fa-xmark',        '删除',       '移除这张卡'),
     almanac:
-        _iLede('「轴」＝这个世界的历法＋节日日历，并内嵌「刻度（时间账）」。历法／节日反哺点／线／面的生成，让故事与世界历法自洽。') +
+        _iLede('「轴」＝这个世界的历法＋节日日历，并内嵌「刻度（时间账）」。月历固定周一至周日七列；周几只认主楼 SDC 星期锚，缺锚时不虚构现实星期，日期仍按故事历法相对顺推。SDC 是主楼 AI 的额外元数据，不替代、不修改其他日期、时间或时间戳要求。') +
         _iSub('节日 · 历法') +
         _iKey('fa-wand-magic-sparkles', '生成节日', 'AI 按世界观铺满一整年') +
         _iKey('fa-heart-circle-plus', '补录纪念日', '只增补新里程碑，不重铺、不动现有日历') +
@@ -479,15 +867,8 @@ let lastDebugPayload = null;
 // 无 chat 时返回 null（保留旧 getter「无 chat → null」语义，各处 if(!key) 守卫照旧生效）。
 
 // view: 'user' | 'char'   charName: confirmed char name
-function getCacheKey(view, charName) {
-    return keyDesc('schedule', view, charName);
-}
-
-function loadCachedForCurrentChat(view, charName) {
-    const saved = readStore(getCacheKey(view, charName));
-    if (saved?.raw) return renderSchedule(saved.raw, saved.userName || '用户', view ?? currentView, loadCalDesc());
-    return null;
-}
+const getCacheKey = getScheduleKey;
+const loadCachedForCurrentChat = (view, charName) => loadCachedSchedule(view ?? currentView, charName);
 
 // ─── ST theme detection ───────────────────────────────────────────────────────
 // Read ST's --SmartThemeBodyColor (text color on documentElement) to decide
@@ -718,7 +1099,6 @@ jQuery(async () => {
         pointState.isGenerating = false;
         pointState.scheduleAbortController = null;
         axisState._almSyncingPoint = false;
-        axisState._almSyncPending = false;
         // 老用户升级：把本 chat 散在 localStorage 的点线面间**同步**搬进 chat_metadata，
         // 必须早于下面任何 load（否则读的是空 metadata）。冲突（云端/本机各一份且不同）时
         // migrate 不动任何数据，稍后异步弹窗让用户决策。
@@ -727,8 +1107,7 @@ jQuery(async () => {
         clearAutomationClaims();
         dateCoordinator.clear();
         // 日期判定不属于 timeTravel controller 的步骤时，也必须在切 chat 时立即中止。
-        almanacJudgeAbort?.abort();
-        almanacJudgeAbort = null;
+        dateDetectionController.abort();
         // 插件总关：迁移照做（幂等·防老用户数据漂移），其余全屏隐藏/后台相关一律不跑。
         // 即使插件当前关闭，切 chat 也必须先失效两路聊天任务，避免旧任务继续占用忙碌状态。
         outlineChatAbortController?.abort();
@@ -763,18 +1142,15 @@ jQuery(async () => {
         // 历·自动确认日期：同理切 chat 复位单调闸到末楼、清计数、中断进行中的判定。
         almanacLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
         almanacJudgeCounter = 0;
-        almanacJudgeAbort?.abort();  almanacJudgeAbort = null;
-        isJudgingDate = false;
+        dateDetectionController.abort();
         // 暗账标注：切 chat 同理复位单调闸到末楼、清计数、中断进行中的标注。
         ledgerLastCapturedMsgId = (getContext().chat?.length ?? 0) - 1;
         ledgerCaptureCounter = 0;
-        ledgerCaptureAbort?.abort(); ledgerCaptureAbort = null;
-        isCapturingLedger = false;
+        ledgerCaptureController.reset();
         // 暗账判定：同理复位。
         ledgerLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
         ledgerJudgeCounter = 0;
-        ledgerJudgeAbort?.abort(); ledgerJudgeAbort = null;
-        isJudgingLedger = false;
+        ledgerJudgeController.reset();
         _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的「同步到点」后台生成
         _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
         spaceMode = false;
@@ -795,10 +1171,9 @@ jQuery(async () => {
         axisState._almanacCalDay = null;
         axisState._almanacEditor = null;
         resetLedgerRenderState();
-        axisState._almanacManager = null;
+        axisCalendarManager.close();
         axisState._almTodayEditing = false;
         axisState._almSyncingPoint = false;
-        axisState._almSyncPending = false;
         _lastMainView = 'schedule';   // 跨 chat：下次打开面板默认回到点（第一页）
         $inAll('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
         $in('.sp-side-tab.sp-view-btn[data-view="schedule"]').addClass('sp-view-active');
@@ -969,7 +1344,7 @@ jQuery(async () => {
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
     if (_stListeners.timeTravelDeleted) eventSource.removeListener?.(event_types.MESSAGE_DELETED, _stListeners.timeTravelDeleted);
-    _stListeners.timeTravelDeleted = () => cancelTimeTravel();
+    _stListeners.timeTravelDeleted = createLedgerDeletedHandler({ cancel: cancelTimeTravel, reconcile: reconcileLedgerSources, toast: showToast, refreshInject: refreshLedgerInjection, refreshInline: () => refreshInlineWindow(true), refreshPanel: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); } });
     eventSource.on(event_types.MESSAGE_DELETED, _stListeners.timeTravelDeleted);
     // 线·swipe：滑到新 swipe 时线跟着重算（临时存 localStorage，发下条消息即固定）。
     // pendingGeneration=true → 该 swipe 会触发新生成，此刻新回复还没好，先记标记，等它的
@@ -1141,7 +1516,7 @@ jQuery(async () => {
         if (getSettings().ledgerInject !== true) return;
         const chat = getContext().chat;
         if (!Array.isArray(chat) || messageId !== chat.length - 1) return;   // 只跟最新楼，别为改旧楼空转
-        // 先重挑注入集（更新 _ledgerInjectEcho），再刷窗——本监听器在 char 之后触发，char 那趟冻的是
+        // 先重挑注入集（更新 ledger injection controller echo），再刷窗——本监听器在 char 之后触发，char 那趟冻的是
         // 上一楼的旧回显；这里重挑后刷窗，让最新楼的「标注打捞」框读到本楼实际注入的那几条并重冻快照。
         try { refreshLedgerInjection(); } catch {}
         try { refreshInlineWindow(true); } catch {}
@@ -1230,18 +1605,18 @@ function _abortAllBackground() {
         linesAbortController, dashedAbortController, spaceChatAbortController,
         pointState.scheduleAbortController, outlineAbortController, theaterAbortController,
         axisState.almanacAbortController, outlineChatAbortController,
-        outlineJudgeAbort, almanacJudgeAbort, _autoRegenSchedAbort,
-        ledgerCaptureAbort, ledgerJudgeAbort,
+        outlineJudgeAbort, dateDetectionController.abortController, _autoRegenSchedAbort,
+        ledgerCaptureController.abortController, ledgerJudgeController.abortController,
     ]) { try { c?.abort(); } catch {} }
     linesAbortController = dashedAbortController = spaceChatAbortController = null;
     pointState.scheduleAbortController = outlineAbortController = theaterAbortController = null;
     axisState.almanacAbortController = outlineChatAbortController = null;
-    outlineJudgeAbort = almanacJudgeAbort = _autoRegenSchedAbort = null;
-    ledgerCaptureAbort = ledgerJudgeAbort = null;
+    outlineJudgeAbort = _autoRegenSchedAbort = null;
+    ledgerJudgeController.reset();
     isGeneratingOutline = isGeneratingLines = isGeneratingDashed = false;
     isGeneratingTheater = axisState.isGeneratingAlmanac = false;
-    isJudgingOutline = isJudgingDate = false;
-    isCapturingLedger = isJudgingLedger = false;
+    isJudgingOutline = false;
+    ledgerCaptureController.reset();
     isOutlineChatting = false;
     isSpaceChatting = false;
     if (outlineMode) renderCreativeChatHistory();
@@ -1270,8 +1645,8 @@ function applyPluginEnabled(on) {
         _abortAllBackground();
         try { ctx.setExtensionPrompt?.(LINES_INJECT_KEY, ''); } catch {}
         try { ctx.setExtensionPrompt?.(OUTLINE_INJECT_KEY, ''); } catch {}
-        try { ctx.setExtensionPrompt?.(SDC_CLOCK_INJECT_KEY, ''); } catch {}
-        try { ctx.setExtensionPrompt?.(LEDGER_INJECT_KEY, ''); _ledgerInjectEcho = []; } catch {}
+        try { ctx.setExtensionPrompt?.(STORY_CLOCK_KEY, ''); } catch {}
+        try { ledgerInjectionController.clear(); } catch {}
     }
 }
 
@@ -1319,57 +1694,6 @@ function detectInGameDayChange(messageId, excludeCurrent = false) {
 // 采集「当前最新」的点/线/历/锚点 → 一份快照对象。这是权威源（sp-store 缓存 + 锚点）的
 // 一次性抓拍；写进某层 AI 楼的 message.extra 后即成为那层楼的「死历史」。
 // 只读、无副作用：任何时候调都安全。
-function captureSnapshot() {
-    let point = '', line = '', almanac = [], anchorMD = null;
-    try { point = readCacheRaw(getCacheKey('user', '')) || ''; } catch { /* 空 */ }
-    try {
-        const saved = readStore(getLinesCacheKey());
-        line = saved?.raw || '';
-    } catch { /* 空 */ }
-    try { almanac = loadAlmanac(); } catch { almanac = []; }
-    try {
-        const a = almTodayAnchor();
-        if (a && Number.isFinite(+a.month) && Number.isFinite(+a.day)) anchorMD = { month: +a.month, day: +a.day };
-    } catch { /* null */ }
-    // 标注池：封存当前活跃暗历条目 → 该 AI 楼「当时的标注池」。字段照标注池闭环：
-    //   起始/周期/终止锚 + 标签 + 锁态（供高亮），不冻现状（现状是「召回」框的活、标注池只摆台账事实）。
-    let pool = [];
-    try {
-        const cloneAnchor = a => (a && typeof a === 'object') ? { ...a } : null;
-        pool = (ledger.listEntries() || []).map(e => ({
-            id: e.id, 事由: e.事由, 类型: e.类型,
-            起始锚: cloneAnchor(e.起始锚), 周期长度: e.周期长度, 到期锚: cloneAnchor(e.到期锚),
-            标签: Array.isArray(e.标签) ? e.标签.slice() : [], 锁: e.锁, 静音: e.静音,
-        }));
-    } catch { pool = []; }
-    return { point, line, almanac, anchor: anchorMD, pool, calendar: cloneCalDesc(loadCalDesc()) };
-}
-
-// 用户楼快照：封存本回合召回注入回显（丰富版 [{id,事由,类型,起始锚,现状}]）。
-// 与 captureSnapshot 分工：AI 楼冻标注池、用户楼冻召回，各挂各的框（见 freezeSnapshotToFloor 分派）。
-function captureRecallSnapshot() {
-    const recall = Array.isArray(_ledgerInjectEcho) ? _ledgerInjectEcho.slice() : [];
-    return { recall, calendar: cloneCalDesc(loadCalDesc()) };
-}
-
-// 把当前最新态封存进第 mesId 层（幂等：内容没变不写、不触发保存）。按楼性质分派：
-//   AI 楼 → captureSnapshot()（点/线/历/锚点/标注池）；用户楼 → captureRecallSnapshot()（召回）。
-// 挂在各「最新楼」路径上——数据一有变化就汇流到这，达成最终一致。
-function freezeSnapshotToFloor(mesId) {
-    if (mesId == null) return;
-    try {
-        const msg = getContext()?.chat?.[Number(mesId)];
-        if (msg?.is_user) {
-            const snap = captureRecallSnapshot();
-            if (!snap.recall.length) return;   // 用户楼无召回 → 不建空快照（不挂框、不占存档）
-            if (!snapshot.writeSnapshot(Number(mesId), snap)) return;
-        } else {
-            // 历史 v1 楼的唯一兼容历法：首次实际生成快照时建立 write-once fallback，后续历法变更不覆盖。
-            snapshot.writeSnapshot(Number(mesId), captureSnapshot());
-        }
-    } catch { /* 存档失败不影响渲染 */ }
-}
-
 // ─── Storylines inline block (appended to AI messages) ────────────────────────
 
 // 线注入正文时给 Next 加「下一步：/恢复条件：」前缀。模型有时已在 l.next 里
@@ -1455,56 +1779,6 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
 // readOnly=false（最新楼）：summary 带「标注/更新」两文字胶囊、每条带「锁定/归档了结」；true（历史楼）：纯只读。
 // 空池 → 返回 ''（该楼不挂此段；与线/点/历子块空态、及旧「空回显不挂」一致，默认开关下不冒空条）。
 // 字段照标注池闭环：类型胶囊(上色) + 事由 + 起始/周期/终止 + 标签；不显现状（现状归「召回」框）。
-function _buildLedgerBlockHtml(poolArg = null, readOnly = false, calendarOverride = undefined) {
-    if (getSettings().ledgerInlineEnabled === false) return '';   // 显隐开关单独关 → 不渲这段（与线/点/历子开关自门控对齐；与注入 ledgerInject 解耦）
-    let items;
-    if (poolArg != null) {
-        items = Array.isArray(poolArg) ? poolArg.filter(x => x && x.事由) : [];
-    } else {
-        try { items = (ledger.listEntries() || []).filter(x => x && x.事由); } catch { items = []; }
-    }
-    if (!items.length) return '';   // 空池 → 不挂
-
-    const cal = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    // 打捞/更新：照主面板改文字胶囊（图标看不懂）——复用 .sp-mini-btn.sp-ledger-pill，CSS 里另有覆盖免被 summary 22px 方钮规则压扁。
-    const judging = isJudgingLedger;
-    const actions = readOnly ? '' : `<span class="sp-inline-summary-actions">
-            <button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-capture" title="打捞新标注">标注</button>
-            <button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-judge" title="按时间更新现状" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button>
-        </span>`;
-    const rows = items.map(it => {
-        const tcls = ledgerTypeClass(it.类型);   // 行挂类型类 → --ledger-c 级联给类型胶囊上色（持续状态/约定/周期各一色）
-        const type = it.类型 ? `<span class="sp-ledger-type">${escapeHtml(it.类型)}</span>` : '';
-        const locked = it.锁 === '用户锁';
-        const paused = it.静音 === true;   // 暂停埋入
-        let rowActions = '';
-        if (!readOnly) {
-            rowActions = `<span class="sp-beat-actions">
-                    <button class="sp-inline-ledger-lock${locked ? ' sp-inline-locked' : ''}" data-id="${escapeAttr(it.id)}" title="${locked ? '已锁定 · 点击解锁' : '锁定 · AI 判定不再改动此条'}"><i class="fa-solid fa-${locked ? 'lock' : 'lock-open'}"></i></button>
-                    <button class="sp-inline-ledger-mute${paused ? ' sp-inline-paused' : ''}" data-id="${escapeAttr(it.id)}" title="${paused ? '已暂停埋入 · 点击恢复' : '暂停埋入 · 暂不注入主楼'}"><i class="fa-solid fa-${paused ? 'bell-slash' : 'bell'}"></i></button>
-                    <button class="sp-inline-ledger-close" data-id="${escapeAttr(it.id)}" title="归档了结 · 移出活跃、可捞回"><i class="fa-solid fa-box-archive"></i></button>
-                </span>`;
-        }
-        const start = fmtLedgerAnchorDate(it.起始锚?.历日期, cal);
-        const startTag = start ? `<span class="sp-ledger-meta">起 ${escapeHtml(start)}</span>` : '';
-        const cyc = it.周期长度 ? `<span class="sp-ledger-meta">周期${escapeHtml(String(it.周期长度))}天</span>` : '';
-        const dueStr = fmtLedgerAnchorDate(it.到期锚?.历日期, cal);
-        const due = dueStr ? `<span class="sp-ledger-meta">终 ${escapeHtml(dueStr)}</span>` : '';
-        const dates = `${startTag}${cyc}${due}`;
-        const datesRow = dates ? `<div class="sp-ledger-dates">${dates}</div>` : '';
-        const tags = (it.标签 || []).map(t => `<span class="sp-ledger-tag">${escapeHtml(t)}</span>`).join('');
-        const tagsRow = tags ? `<div class="sp-ledger-r3">${tags}</div>` : '';
-        return `<div class="sp-ledger-inline-row sp-ledger-${tcls}${locked ? ' sp-line-pinned' : ''}${paused ? ' sp-ledger-paused' : ''}" data-id="${escapeAttr(it.id)}">
-                <div class="sp-inline-head">${type}${rowActions}</div>
-                <div class="sp-inline-name">${escapeHtml(it.事由)}</div>
-                ${datesRow}
-                ${tagsRow}
-            </div>`;
-    }).join('');
-    return `<summary class="sp-inline-summary"><span class="sp-inline-title">标注池</span><span class="sp-inline-count">${items.length} 条</span>${actions}</summary><div class="sp-inline-body sp-ledger-inline-body">${rows}</div>`;
-}
-
-
 // Remove inline lines block from ALL AI messages — enforces "only the latest floor holds it".
 // 虚线冷知识已折进 .sp-lines-inline 的 body（合并成一个楼内块），清线块即连虚线一并清；
 // 仍带上 .sp-dashed-inline 兜底，扫掉合并前旧版本残留在 DOM 里的独立虚线块。
@@ -1558,7 +1832,7 @@ function syncLatestInlineBlock(expectedChatId = null) {
 // 纯读 loadAlmanac()+锚点，不请求 API、不受 linesEnabled 影响，只受 almanacInlineEnabled 开关控制。
 // itemsArg：null=读当前活历 loadAlmanac()（最新楼）；数组=快照里的历条目（历史楼）。
 // anchorArg：null=读当前锚点 almTodayAnchor()；{month,day}=快照锚点。历本就只读，无按钮需 gate。
-function _buildAlmanacBlockHtml(itemsArg = null, anchorArg = null, calendarOverride = undefined) {
+function _buildAlmanacBlockHtml(itemsArg = null, anchorArg = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
     if (getSettings().almanacInlineEnabled === false) return null;
     const items = Array.isArray(itemsArg) ? itemsArg : loadAlmanac();
     if (!items.length) return null;   // 无任何历条目 → 不打扰聊天，不显示
@@ -1566,7 +1840,7 @@ function _buildAlmanacBlockHtml(itemsArg = null, anchorArg = null, calendarOverr
         ? { month: +anchorArg.month, day: +anchorArg.day }
         : almTodayAnchor();
     const cal     = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const ref     = almWeekdayRef(cal);
+    const ref     = weekdayRefOverride !== undefined ? weekdayRefOverride : almWeekdayRef(cal);
     const baseDoy = almDayOfYear(anchor.month, anchor.day, cal);
     const baseWd  = almWeekdayFor(anchor.month, anchor.day, ref, cal);
     const total   = calYearLen(cal);
@@ -1578,7 +1852,7 @@ function _buildAlmanacBlockHtml(itemsArg = null, anchorArg = null, calendarOverr
         const i   = k + 1;
         const doy = ((baseDoy - 1 + i) % total) + 1;
         const md  = almMonthDayFromDoy(doy, cal);
-        const wd  = ALM_WEEKDAYS[(baseWd + i) % 7];   // 线性偏移 → 周几连续（不受年尾接缝影响）
+        const wd  = baseWd == null ? '星期未记录' : ALM_WEEKDAYS[(baseWd + i) % 7];   // 线性偏移 → 周几连续（不受年尾接缝影响）
         const cover = items.filter(it => almItemCoversDoy(it, doy, cal));
         const has = cover.length > 0;
         if (has) { hasAny = true; cover.forEach(it => coveredItems.add(it)); }
@@ -1626,11 +1900,12 @@ function _buildAlmanacBlockHtml(itemsArg = null, anchorArg = null, calendarOverr
 // 七天条：某一天(doy) 的就地详情 HTML（点某格时填进该条的 .sp-alm-sday）。
 // 只读 loadAlmanac()、按覆盖该天筛选；空 → 「这天没有安排」。
 // itemsArg：null=读活历（最新楼）；数组=快照历条目（历史楼）。历只读，无按钮需 gate。
-function _almanacStripDayHtml(doy, itemsArg = null, calendarOverride = undefined) {
+function _almanacStripDayHtml(doy, itemsArg = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
     const cal   = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const ref   = almWeekdayRef(cal);
+    const ref   = weekdayRefOverride !== undefined ? weekdayRefOverride : almWeekdayRef(cal);
     const md    = almMonthDayFromDoy(doy, cal);
-    const wd    = ALM_WEEKDAYS[almWeekdayFor(md.month, md.day, ref, cal)];
+    const wdIndex = almWeekdayFor(md.month, md.day, ref, cal);
+    const wd    = wdIndex == null ? '星期未记录' : ALM_WEEKDAYS[wdIndex];
     const head  = `<div class="sp-alm-sday-head">${calMonthName(cal, md.month)}${md.day}日 · ${wd}</div>`;
     const src   = Array.isArray(itemsArg) ? itemsArg : loadAlmanac();
     const day   = src.filter(it => almItemCoversDoy(it, doy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
@@ -1670,7 +1945,7 @@ function initAlmanacStripDelegation() {
         this.classList.add('sp-alm-scell-open');
         const { snap, resolvedCalendar, resolution, readOnly } = _inlineTapCtx(this);
         if (readOnly && !resolution?.resolved) { sday.innerHTML = '<div class="sp-alm-sday-empty">历法未知 / 日期未知</div>'; sday.hidden = false; return; }
-        sday.innerHTML = _almanacStripDayHtml(Number(this.dataset.doy), snap ? (snap.almanac || []) : null, resolvedCalendar);
+        sday.innerHTML = _almanacStripDayHtml(Number(this.dataset.doy), snap ? (snap.almanac || []) : null, resolvedCalendar, _inlineTapCtx(this).localWeekdayRef);
         sday.hidden = false;
     });
 }
@@ -1693,119 +1968,19 @@ function syncLatestAlmanacBlock(expectedChatId = null) {
 // 外壳/标题条走线的 .sp-inline-* 类，与线块/历条一致；只有条内格子用独立的 .sp-sch-* 类。
 // rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
 // readOnly：true=历史楼，drawer 去掉注入/删除/锁定按钮（在旧楼改点语义矛盾）。
-function _buildScheduleBlockHtml(rawArg = null, readOnly = false, calendarOverride = null) {
-    if (getSettings().scheduleInlineEnabled === false) return '';
-    const raw = rawArg != null ? rawArg : readCacheRaw(getCacheKey('user', ''));
-    if (!raw) return '';   // 当前视角还没生成点 → 不打扰聊天
-    const calendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const { days, future, startDate } = parseCalendar(raw, calendar);
-    const hasFuture = future && future.events.length > 0;
-    if (!days.length && !hasFuture) return '';   // 解析失败/全空 → 不显示
-    let total = 0;
-    // 两行格：第一行相对日（今天/明天/后天/未来），第二行 日期+天气+待办数 挤一行省空间。
-    const REL = ['今天', '明天', '后天'];
-    const cellHtml = (relLabel, mdLabel, wx, n, cls, dayKey) =>
-        `<div class="sp-sch-scell${cls}" data-day="${escapeAttr(String(dayKey))}">
-            <span class="sp-sch-scell-rel">${escapeHtml(relLabel)}</span>
-            <span class="sp-sch-scell-line">${mdLabel ? `<span class="sp-sch-scell-md">${escapeHtml(mdLabel)}</span>` : ''}${wx ? `<span class="sp-sch-scell-wx">${wx}</span>` : ''}<span class="sp-sch-scell-n">${n}</span></span>
-        </div>`;
-    const ctx = scheduleDayCtx(startDate, calendar);
-    const cells = days.map((day, i) => {
-        const n = day.events.length; total += n;
-        let mdLabel = `第${i + 1}天`;
-        if (startDate) {
-            const { month, day: dd } = scheduleDayLabel(i, startDate, ctx);
-            mdLabel = month == null || dd == null ? '日期未知' : `${month}/${dd}`;
-        }
-        const cls = (i === 0 ? ' sp-sch-scell-today' : '') + (n ? ' sp-sch-scell-has' : '');
-        return cellHtml(REL[i] || `第${i + 1}天`, mdLabel, weatherGlyph(day.weather), n, cls, i);
-    });
-    if (hasFuture) {
-        const n = future.events.length;
-        cells.push(cellHtml('未来', '', '', n, ' sp-sch-scell-future' + (n ? ' sp-sch-scell-has' : ''), 'future'));
-    }
-    const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">点</span><span class="sp-inline-count">${total}件待办</span></summary>`;
-    const strip   = `<div class="sp-sch-strip">${cells.join('')}</div>`;
-    return `${summary}<div class="sp-inline-body sp-sch-inline-body"><div class="sp-sch-strip-wrap sp-sch-strip-live">${strip}<div class="sp-sch-sday" hidden></div></div></div>`;
-}
+const _buildScheduleBlockHtml = (...args) => pointInlineRenderer.buildScheduleBlock(...args);
 
 // 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
 // 每次都重读 raw（点 raw 会被重算/锁定改写），按天筛事件；空 → 「这天没有安排」。
 // dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
 // readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
-function _scheduleStripDayHtml(dayKey, rawArg = null, readOnly = false, calendarOverride = null) {
-    const calendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const { days, future, startDate } = parseCalendar(rawArg != null ? rawArg : readCacheRaw(getCacheKey('user', '')), calendar);
-    let evs = [], headLabel = '', dateLabel = '', wx = '', tp = '';
-    if (dayKey === 'future') {
-        evs = future?.events || [];
-        headLabel = '未来';
-        dateLabel = '未来';
-    } else {
-        const di  = Number(dayKey);
-        const day = days[di];
-        evs = day?.events || [];
-        wx = String(day?.weather || '').trim();
-        tp = String(day?.temp || '').trim();
-        if (startDate) {
-            const ctx = scheduleDayCtx(startDate, calendar);
-            const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            headLabel = month == null || dd == null ? '日期未知' : `${month}月${dd}日 · ${ALM_WEEKDAYS[wd] || '周几未知'}`;
-        } else {
-            headLabel = `第${di + 1}天`;
-        }
-        dateLabel = headLabel;   // 注入用干净日期（不含天气）；天气随后另拼进 headLabel 仅供显示
-        if (wx || tp) headLabel += ` · ${weatherGlyph(wx)}${wx}${tp ? ' ' + tp : ''}`;
-    }
-    const head = `<div class="sp-sch-sday-head">${escapeHtml(headLabel)}</div>`;
-    if (!evs.length) return `${head}<div class="sp-sch-sday-empty">这天没有安排</div>`;
-    // 完整事项 + 逐条注入/删除（对齐线：注入用共享 builder 带上当天天气，删除走 .sp-sch-del-one）。
-    const rows = evs.map((ev, ei) => {
-        const meta = TYPE_META[ev.type] || TYPE_META.main;
-        const actions = readOnly ? '' : `<span class="sp-sch-drawer-actions">
-                    ${makeInjectBtn(buildPointInjectText(ev, wx, tp, dateLabel))}
-                    <button class="sp-sch-del-one" data-day="${escapeAttr(String(dayKey))}" data-ev="${ei}" title="删除这个点"><i class="fa-solid fa-xmark"></i></button>
-                </span>`;
-        return `<div class="sp-sch-drawer-item${ev.pin ? ' sp-sch-drawer-pinned' : ''}">
-            <div class="sp-sch-drawer-head">
-                <span class="sp-sch-drawer-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>
-                <span class="sp-sch-drawer-title">${escapeHtml(ev.title || '')}</span>
-                ${ev.time ? `<span class="sp-sch-drawer-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
-                ${ev.pin ? `<i class="fa-solid fa-lock sp-sch-drawer-lock" title="已锁定"></i>` : ''}
-                ${actions}
-            </div>
-            ${ev.desc ? `<div class="sp-sch-drawer-desc">${escapeHtml(cleanText(ev.desc))}</div>` : ''}
-            ${(ev.location || ev.npcAction) ? `<div class="sp-sch-drawer-meta">
-                ${ev.location  ? `<span class="sp-sch-drawer-loc"><i class="fa-solid fa-location-dot"></i>${escapeHtml(ev.location)}</span>` : ''}
-                ${ev.npcAction ? `<span class="sp-sch-drawer-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>` : ''}
-            </div>` : ''}
-        </div>`;
-    }).join('');
-    return `${head}<div class="sp-sch-sday-list">${rows}</div>`;
-}
+
+const _scheduleStripDayHtml = (...args) => pointInlineRenderer.buildScheduleDay(...args);
 
 // 日程条 per-day tap：点某格 → 下方就地展开当天事件（再点同格收起、点别格切换）。委托到 document、
 // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-sch-strip-live 生效。
 function initScheduleStripDelegation() {
-    $(document).on('click.spschstrip', '.sp-schedule-inline .sp-sch-strip-live .sp-sch-scell', function (e) {
-        e.preventDefault();
-        e.stopPropagation();   // 别冒泡到 ST 的楼层点击
-        const wrap = this.closest('.sp-sch-strip-live');
-        if (!wrap) return;
-        const sday = wrap.querySelector('.sp-sch-sday');
-        if (!sday) return;
-        if (this.classList.contains('sp-sch-scell-open')) {
-            this.classList.remove('sp-sch-scell-open');
-            sday.hidden = true; sday.innerHTML = '';
-            return;
-        }
-        wrap.querySelectorAll('.sp-sch-scell-open').forEach(c => c.classList.remove('sp-sch-scell-open'));
-        this.classList.add('sp-sch-scell-open');
-        const { readOnly, snap, resolvedCalendar, resolution } = _inlineTapCtx(this);
-        if (readOnly && !resolution?.resolved) { sday.innerHTML = '<div class="sp-sch-sday-empty">历法未知 / 日期未知</div>'; sday.hidden = false; return; }
-        sday.innerHTML = _scheduleStripDayHtml(this.dataset.day, snap ? (snap.point || '') : null, readOnly, resolvedCalendar);
-        sday.hidden = false;
-    });
+    pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: _inlineTapCtx });
 }
 
 function _removeAllScheduleBlocks() {
@@ -1856,15 +2031,20 @@ function _hasDateData(snap) {
 
 // 今头（masthead）：大日期块。月/日 + 周几为主体；天气取点当天格；纪年名(era)由日历描述符驱动，
 // 有则点亮、无则不撑（公历默认无 era）。anchor 缺则退活锚点。
-function _dashMastheadHtml(snap, floorClock = null, calendarOverride = undefined) {
+function _dashMastheadHtml(snap, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
     let anchor = _dashAnchor(snap);
     if (storyClockEnabled() && floorClock) {
         const floorDate = parseJudgedDate(floorClock.end) || parseJudgedDate(floorClock.start);
         if (floorDate) anchor = floorDate;
     }
     const cal = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    let wd = '';
-    try { wd = ALM_WEEKDAYS[almWeekdayFor(anchor.month, anchor.day, null, cal)]; } catch { wd = ''; }
+    let wd = '星期未记录';
+    try {
+        const meta = floorClock?.endMeta?.valid ? floorClock.endMeta : (floorClock?.startMeta?.valid ? floorClock.startMeta : null);
+        const localRef = weekdayRefOverride !== undefined ? weekdayRefOverride : (meta?.weekdayIndex == null ? (!snap ? almWeekdayRef(cal) : null) : { refDoy: almDayOfYear(meta.month, meta.day, cal), refWd: meta.weekdayIndex });
+        const wdIndex = almWeekdayFor(anchor.month, anchor.day, localRef, cal);
+        if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '星期未记录';
+    } catch { /* unknown */ }
     // 天气：从点当天格（days[0].weather）拿；拿不到留空。历史楼用快照点 raw。
     let wxHtml = '';
     try {
@@ -1913,7 +2093,7 @@ function parseStampDate(stamp) {
 function storyClockHeadParts(isLatest, a, anchorWd, floorClock = null, calendarOverride = undefined) {
     const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
     const today = (inner, tip) => `<span class="sp-dash-sum-today"${tip ? ` title="${tip}"` : ''}>${inner}</span>`;
-    const fallback = { todayHtml: today(`今 ${a.month}月${a.day}日${anchorWd ? ' ' + anchorWd : ''}`), timeHtml: '' };
+    const fallback = { todayHtml: today(`今 ${a.month}月${a.day}日 ${anchorWd || '星期未记录'}`), timeHtml: '' };
     if (!storyClockEnabled()) return fallback;
     let clk = floorClock;
     if (isLatest) {
@@ -1922,27 +2102,31 @@ function storyClockHeadParts(isLatest, a, anchorWd, floorClock = null, calendarO
     const stamp = clk && (clk.end || clk.start);
     if (!stamp) return fallback;
     const tip = '时间戳·主楼 AI 每楼隐形打点读回';
+    const clockMeta = clk?.endMeta?.valid ? clk.endMeta : (clk?.startMeta?.valid ? clk.startMeta : null);
+    if (clockMeta) {
+        const swd = clockMeta.weekdayIndex == null ? (anchorWd || '星期未记录') : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
+        const timeHtml = clockMeta.time ? `<span class="sp-dash-sum-time">${escapeHtml(clockMeta.time)}</span>` : '';
+        return { todayHtml: today(`今 ${clockMeta.month}月${clockMeta.day}日 ${swd}`, tip), timeHtml };
+    }
     const p = parseStampDate(stamp);
     if (!p) return { todayHtml: today(`今 ${escapeHtml(stamp)}`, tip), timeHtml: '' };   // 古风/无法解析 → 原样抬
-    let swd = '';
-    try {
-        const explicit = calExplicitWeekdayRef(stamp, renderCalendar);
-        const explicitToken = explicit?.refWd;
-        swd = explicitToken != null
-            ? (ALM_WEEKDAYS[explicitToken] || '')
-            : (ALM_WEEKDAYS[almWeekdayFor(p.month, p.day, null, renderCalendar)] || '');
-    } catch { swd = ''; }
+    const swd = '星期未记录';
     const ymd = `${p.year ? p.year + '年' : ''}${p.month}月${p.day}日`;
     const timeHtml = p.time ? `<span class="sp-dash-sum-time">${escapeHtml(p.time)}</span>` : '';
     return { todayHtml: today(`今 ${ymd}${swd ? ' ' + swd : ''}`, tip), timeHtml };
 }
-function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined) {
+function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
     const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
     let head = '';
     if (hasDate) {
         const a = _dashAnchor(snap);
-        let wd = '';
-        try { wd = ALM_WEEKDAYS[almWeekdayFor(a.month, a.day, null, renderCalendar)]; } catch { wd = ''; }
+        let wd = '星期未记录';
+        try {
+            const meta = floorClock?.endMeta?.valid ? floorClock.endMeta : (floorClock?.startMeta?.valid ? floorClock.startMeta : null);
+            const localRef = weekdayRefOverride !== undefined ? weekdayRefOverride : (meta?.weekdayIndex == null ? (!snap ? almWeekdayRef(renderCalendar) : null) : { refDoy: almDayOfYear(meta.month, meta.day, renderCalendar), refWd: meta.weekdayIndex });
+            const wdIndex = almWeekdayFor(a.month, a.day, localRef, renderCalendar);
+            if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '星期未记录';
+        } catch { /* unknown */ }
         // 天气：从点当天格（days[0].weather）拿，与大头 masthead 同源；拿不到就不显。历史楼用快照点 raw。
         let wxHtml = '';
         try {
@@ -1990,15 +2174,16 @@ function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, is
 // 面板内点/线各自是 <details> 可折叠；历区顶行（今头+即将到来）+ 满宽六格条构成一组。
 // 「今 M/D 周X ☀」在折叠条里恒显（只要有日期数据，与三个显示开关无关）；三区全关但有日期
 // → 退成纯日期扁条（不可展开）。isLatest=true：最新楼、全功能；false：历史楼、只读。
-function _buildInlineBoxHtml(snap, isLatest, floorClock = null) {
+function _buildInlineBoxHtml(snap, isLatest, floorClock = null, floor = null) {
     const readOnly = !isLatest;
     const fallbackRecord = readStore(keyDesc('caldesc-fallback', 'user', ''));
     const resolvedResult = isLatest ? { resolved: true, calendar: loadCalDesc() } : snapshot.resolveSnapshotCalendar(snap, { fallback: fallbackRecord, marker: !!fallbackRecord, current: loadCalDesc() });
     const resolvedCalendar = resolvedResult.calendar;
     if (!resolvedCalendar) return '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>';
     // 历区返回结构 {summary,upHtml,stripHtml}|null；点/线返回内层字符串或 ''。各自门控开关/空态。
-    const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar);
-    const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar);
+    const localWeekdayRef = isLatest ? undefined : createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor, resolveLocal: f => storyWeekdayRefPure(getContext(), resolvedCalendar, ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
+    const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar, localWeekdayRef);
+    const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar, localWeekdayRef);
     const linesInner = _buildLinesBlockHtml(snap ? (snap.line || '') : null, readOnly);
     // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
     const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
@@ -2021,11 +2206,11 @@ function _buildInlineBoxHtml(snap, isLatest, floorClock = null) {
         // 历整块：满宽 summary 头（点它折叠整个历单元）+ [方形今头 + 即将到来清单] 行 + 满宽六格条。
         // summary 提到顶行上方通栏铺满（原来缩在右列、今头上方左侧留空白）；今头与清单/六格条一起
         // 挂在 details 内，随历折叠一并收起——原生 <details> 折叠即隐藏，不再需要 :has() 联动隐藏六格条。
-        const dashTop  = `<div class="sp-dash-top">${_dashMastheadHtml(snap, floorClock, resolvedCalendar)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
+        const dashTop  = `<div class="sp-dash-top">${_dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
         const stripRow = alm.stripHtml ? `<div class="sp-alm-strip-region">${alm.stripHtml}</div>` : '';
         top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}</details>`;
     } else if (hasDateRegion) {
-        top = `<div class="sp-dash-top sp-dash-top-noalm">${_dashMastheadHtml(snap, floorClock, resolvedCalendar)}</div>`;
+        top = `<div class="sp-dash-top sp-dash-top-noalm">${_dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}</div>`;
     }
     const schRegion   = region('sp-schedule-inline', 'schedule', schInner);
     const linesRegion = region('sp-lines-inline', 'lines', linesInner);
@@ -2035,43 +2220,21 @@ function _buildInlineBoxHtml(snap, isLatest, floorClock = null) {
     const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
     // 面板体为空但有日期数据（三区都关，只剩日期）→ 纯日期扁条：不可折叠，只显今头缩写。
     if (!body) {
-        const flatBar = _dashSummaryHtml(snap, true, false, false, false, true, isLatest, floorClock, resolvedCalendar);
+        const flatBar = _dashSummaryHtml(snap, true, false, false, false, true, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
         const cls = 'sp-inline-box sp-dash sp-dash-flat' + (readOnly ? ' sp-inline-box-ro' : '');
         return `<div class="${cls}">${flatBar}</div>`;
     }
 
-    const summary = _dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar);
+    const summary = _dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
     const cls = 'sp-inline-box sp-dash' + (readOnly ? ' sp-inline-box-ro' : '');
     // 默认折叠成一小条（不带 open）：只显摘要「今 M/D 周X ☀ · 历N 点N 线N」，点开才展开完整面板。
     return `<details class="${cls}">${summary}<div class="sp-dash-body">${body}</div></details>`;
 }
 
 // 用户楼「召回框」：外壳复用 .sp-inline-box/.sp-dash（与 AI 楼一摸一样形式），内含本回合召回注入回显（丰富版）。
-// snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；最新用户楼传 null → 读活态 _ledgerInjectEcho。
+// snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；最新用户楼传 null → 读 injection controller echo。
 // 字段照召回闭环：类型胶囊(上色) + 事由 + 起始 + 推测应至状态(现状)。纯只读——召回是给用户核对「AI 这轮收到了啥」，无逐条操作。
 // 空召回 → 返回 ''（该用户楼不挂框；关注入/无召回的楼天然无此块）。
-function _buildUserRecallBoxHtml(snap, isLatest, calendarOverride = undefined) {
-    if (getSettings().recallInlineEnabled === false) return '';   // 召回显隐开关（独立于 AI 楼标注池）关 → 不渲
-    const src = snap ? snap.recall : _ledgerInjectEcho;
-    const items = Array.isArray(src) ? src.filter(x => x && x.事由) : [];
-    if (!items.length) return '';
-    const cal = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const rows = items.map(it => {
-        const tcls = ledgerTypeClass(it.类型);   // 行挂类型类 → --ledger-c 级联给类型胶囊上色
-        const type = it.类型 ? `<span class="sp-ledger-type">${escapeHtml(it.类型)}</span>` : '';
-        const start = fmtLedgerAnchorDate(it.起始锚?.历日期, cal);
-        const startTag = start ? `<span class="sp-inline-when">起 ${escapeHtml(start)}</span>` : '';
-        return `<div class="sp-recall-row sp-ledger-${tcls}">
-                <div class="sp-inline-head">${type}${startTag}</div>
-                <div class="sp-inline-name">${escapeHtml(it.事由)}</div>
-                ${it.现状 ? `<div class="sp-inline-desc">推测应为「${escapeHtml(it.现状)}」</div>` : ''}
-            </div>`;
-    }).join('');
-    const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">召回</span><span class="sp-inline-count">${items.length} 条</span></summary>`;
-    const cls = 'sp-inline-box sp-dash sp-recall-box' + (isLatest ? '' : ' sp-inline-box-ro');
-    return `<details class="${cls}">${summary}<div class="sp-inline-body sp-recall-body">${rows}</div></details>`;
-}
-
 // strip 委托（历/点的 per-day tap）共用：从被点元素回溯它所在的框，判断是否历史楼只读框，
 // 若是则取该楼快照，供 drawer 用快照数据渲染（历史楼 tap 展开看到的是那层楼当时的态，非活缓存）。
 // 返回 { readOnly, snap }：readOnly=false（最新楼）时 snap=null，drawer 各 helper 退回读活缓存。
@@ -2083,7 +2246,8 @@ function _inlineTapCtx(el) {
     const snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
     const fallback = readStore(keyDesc('caldesc-fallback', 'user', ''));
     const resolution = snapshot.resolveSnapshotCalendar(snap, { fallback, marker: !!fallback, current: loadCalDesc() });
-    return { readOnly: true, snap, resolvedCalendar: resolution.calendar, resolution };
+    const localWeekdayRef = createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor: mid == null ? null : Number(mid), resolveLocal: f => storyWeekdayRefPure(getContext(), resolution.calendar || loadCalDesc(), ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
+    return { readOnly: true, snap, resolvedCalendar: resolution.calendar, resolution, localWeekdayRef };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2174,9 +2338,10 @@ function mountInlineBox(el, isLatest) {
         snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
         if (!snap) { unmountInlineBox(el); return; }   // 历史楼无快照（老楼 / 用户楼无召回）→ 不显框
     }
-    const floorClock = !isLatest && !isUser ? parseStoryClock(getContext()?.chat?.[Number(el.getAttribute('mesid'))]?.mes || '') : null;
+    const floor = Number(el.getAttribute('mesid'));
+    const floorClock = !isLatest && !isUser ? parseStoryClockPure(getContext()?.chat?.[floor]?.mes || '') : null;
     const recallResult = !isLatest && snap ? snapshot.resolveSnapshotCalendar(snap, { fallback: readStore(keyDesc('caldesc-fallback', 'user', '')), marker: !!readStore(keyDesc('caldesc-fallback', 'user', '')), current: loadCalDesc() }) : null;
-    const html = isUser ? (recallResult && !recallResult.calendar ? '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>' : _buildUserRecallBoxHtml(snap, isLatest, recallResult?.calendar)) : _buildInlineBoxHtml(snap, isLatest, floorClock);
+    const html = isUser ? (recallResult && !recallResult.calendar ? '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>' : _buildUserRecallBoxHtml(snap, isLatest, recallResult?.calendar)) : _buildInlineBoxHtml(snap, isLatest, floorClock, floor);
     const existing = msgEl.querySelector(':scope > ' + INLINE_BOX_SELECTOR);
     if (!html) { if (existing) existing.remove(); return; }   // 全空 → 不挂
     if (existing && existing.dataset.sig === _boxSig(html, isLatest)) return;   // 幂等：签名没变不重建
@@ -2322,19 +2487,13 @@ let   outlineLastJudgedMsgId = -1;   // 防重放：只判「比上次判过的�
 let   outlineJudgeMsgCounter = 0;    // 攒够 interval 条真·新回复才跑一次判定（照 linesAiMsgCounter 套路）
 
 // 历·自动确认日期的判定状态（抄 outline 那套三闸：防重入 + 单调 msgId + 攒够计数）。仅 API 兜底路用；戳优先路每楼直读不占这些。
-let   isJudgingDate          = false; // 写 dateAnchor 的重入锁
-let   almanacJudgeAbort      = null;
 let   almanacLastJudgedMsgId = -1;
 let   almanacJudgeCounter    = 0;
 
 // 暗账·标注的判定状态（自成一套三闸：防重入 + 单调 msgId + 攒够计数）。与历/点判定各自独立。
-let   isCapturingLedger      = false; // 标注重入锁
-let   ledgerCaptureAbort     = null;
 let   ledgerLastCapturedMsgId = -1;
 let   ledgerCaptureCounter   = 0;
 // 暗账·判定（刷现状）的一套闸，独立于标注：判定车重算「距今多久」、只让 AI 回该变的那几条。
-let   isJudgingLedger        = false; // 判定重入锁
-let   ledgerJudgeAbort       = null;
 let   ledgerLastJudgedMsgId  = -1;
 let   ledgerJudgeCounter     = 0;
 
@@ -2424,81 +2583,26 @@ function refreshOutlineInjection() {
 //   ③ 往回扫 + 兜底——读「当前时间」从末楼往前扫第一条可解析的（end 优先），漏了也不崩。
 // 本片只做「注入 + 回读 + 历面板只读显示一行」，**不**改 almTodayAnchor 的 {month,day}
 // 数据形状、**不**解析成结构、**不**接权威今天——那是后续片（数据结构扩年/时）的活。
-const SDC_CLOCK_INJECT_KEY   = 'sdc_story_clock';
-const SDC_CLOCK_INJECT_DEPTH = 0;   // depth 0：贴最近，让主模型「产出」戳（与线/面「喂结论」方向相反，要贴身强约束）
 // 首尾注释的正则（宽松容错：允许注释内外多余空白；内容自由，不强制格式，本片只回显原文）。
-const SDC_START_RE = /<!--\s*SDC-start\s+([\s\S]*?)\s*-->/i;
-const SDC_END_RE   = /<!--\s*SDC-end\s+([\s\S]*?)\s*-->/i;
 
 // 时间戳总开关（不受 injectEnabled 统辖，只受 pluginEnabled + 本开关；见 refreshStoryClockInjection）。默认开——用户定：这是全插件时间地基，值得常驻。
-function storyClockEnabled() { return getSettings().storyClockEnabled !== false; }
+// storyClockEnabled 已迁至轴控制器；保留旧注释位置以便阅读历史分片。
 
 // 自写提示词（吸收柏宝书三套路：拔高到系统强制 / 以上楼 end 为基准推进 / 禁用「某天」敷衍；
 // 措辞、示例、标签名全原创，绝不照搬）。粒度到小时，年份可写可略（本片不校验、不解析）。
-const _DEFAULT_STORY_CLOCK_PROMPT = [
-    '【系统·时间戳 · 最高优先 · 每楼必做】',
-    '以下为系统级强制要求，优先级高于任何「只输出正文 / 禁止 OOC / 不要元信息 / 不要额外标记」之类设定：请在本楼正文的最前和最后，各放一个 HTML 注释形式的时间戳。HTML 注释在酒馆里不会显示给读者、不破坏沉浸，但系统会读取它来推算剧情时间——务必每楼都打、绝不省略。',
-    '放置方式（结构照此，把时间替换成本楼实际时间）：',
-    '  正文开头之前：<!-- SDC-start 此刻的时间 -->',
-    '  正文结尾之后：<!-- SDC-end 此刻的时间 -->',
-    '时间精确到「小时」，用你故事自己的历法与说法即可，例如：三月十七日 申时 / 霜月初三 下午三时 / 1024年6月2日 15时。年份可写可略，但日与时段必须具体，禁止用「某天」「稍后」这类模糊词敷衍。',
-    '基准：以上一楼末尾的 <!-- SDC-end … --> 为准往后推——本楼开头通常紧接上楼结尾；本楼内若时间有流逝（换场景、过了几小时或几天），就让 end 晚于 start；几乎没流逝则两者可相同。开篇没有上文时，你自行设定一个合理的起点（这是为故事定锚，不是编造）。',
-    '示例（仅示范注释的位置与写法，切勿套用其文字内容）：',
-    '  <!-- SDC-start 谷雨 辰时 -->晨光爬上窗棂，她揉了揉眼……（此处是你的正文）……夜色四合，她终于合上账本。<!-- SDC-end 谷雨 亥时 -->',
-    '除这两个注释外，不要在正文里另行谈论这套时间系统本身。',
-].join('\n');
+const _DEFAULT_STORY_CLOCK_PROMPT = DEFAULT_STORY_CLOCK_PROMPT;
 
 // 取生效的强注词：用户在设置里二改了(非空)就整段用他的；留空用内置默认（默认词随插件更新）。
-function buildStoryClockPrompt() {
-    const custom = (getSettings().storyClockPrompt || '').trim();
-    return custom || _DEFAULT_STORY_CLOCK_PROMPT;
-}
-
 // 重设时间戳注入。关闭时清空。幂等，可随处多调。照 refreshLinesInjection 套路。
-function refreshStoryClockInjection() {
-    const ctx = getContext();
-    if (typeof ctx.setExtensionPrompt !== 'function') return;
-    const clear = () => ctx.setExtensionPrompt(SDC_CLOCK_INJECT_KEY, '');
-    if (!pluginEnabled()) { clear(); return; }   // 只受插件总闸约束：时间戳是"让 AI 产出数据"，与线/面注入闸(injectEnabled)语义相反，不挂其下
-    if (!storyClockEnabled()) { clear(); return; }
-    const pt = ctx.constants?.promptTypes?.IN_CHAT ?? 1;
-    const pr = ctx.constants?.promptRoles?.SYSTEM  ?? 0;
-    ctx.setExtensionPrompt(SDC_CLOCK_INJECT_KEY, buildStoryClockPrompt(), pt, SDC_CLOCK_INJECT_DEPTH, false, pr);
-}
+// refreshStoryClockInjection 已迁至 storyClockController。
 
 // 从单楼正文解析首尾戳。返回 { start, end }（各为去空白后的原文字符串，缺失=null）。本片不解析成结构。
-function parseStoryClock(mes) {
-    const s = String(mes || '');
-    const sm = SDC_START_RE.exec(s);
-    const em = SDC_END_RE.exec(s);
-    return {
-        start: sm ? sm[1].trim() : null,
-        end:   em ? em[1].trim() : null,
-    };
-}
-
 // 从 chat 末尾往回扫，取最近一楼「可解析出至少一个戳」的 AI 楼。end 优先作「当前时间」。
 // 漏了/坏了不崩：某楼无戳就继续往上找；全无 → 返回 null（显示层据此不显示这一行）。
-function latestStoryClock() {
-    const msgs = getContext().chat || [];
-    let scanned = 0;
-    for (let i = msgs.length - 1; i >= 0 && scanned < ALM_CHAT_SCAN_LIMIT; i--) {
-        const msg = msgs[i];
-        if (!msg || msg.is_user || !msg.mes) continue;
-        scanned++;
-        const { start, end } = parseStoryClock(msg.mes);
-        if (start || end) return { start, end, floor: i };
-    }
-    return null;
-}
+// latestStoryClock 已迁至 story-clock.js。
 
 // 从最近一楼的戳解析出结构化 {month,day}。end 优先(当前时间)、退 start。无戳/解析不出 → null（交回兜底）。
-function storyClockDate() {
-    let clk = null;
-    try { clk = latestStoryClock(); } catch { return null; }
-    if (!clk) return null;
-    return parseJudgedDate(clk.end) || parseJudgedDate(clk.start);
-}
+// storyClockDate 已迁至 story-clock.js。
 
 const OUTLINE_JUDGE_PROMPT = (cur, nxt, curScene, nxtScene) =>
 `请暂停角色扮演，作为剧情分析助手，判断上面的最近对话是否已经把剧情推进到了「下一个节点」。
@@ -2598,598 +2702,18 @@ async function runRelocateOutlineCursor(promptAddon = '', externalSignal = null)
     }
 }
 
-const DATE_JUDGE_PROMPT =
-`请暂停角色扮演，作为剧情分析助手，只做一件事：判断以上最近的对话里，故事此刻发生在哪一天。
-只回答「当前剧情日期」，格式为 M月D日（例如 3月15日）；年份不重要、无需回答。
-若最近对话中并无明确日期线索、无法确定具体月日，就只回答「未知」。
-不要解释，不要输出任何多余文字。`;
-
 // 自定义历法下，正文用的是自定义月名（如「霜月」），公历式发问会答非所问。带上历法描述、
 // 并允许 AI 用「第M月D日」或月名作答；内置公历返回上面的原版 prompt（零行为变化）。
-function buildDateJudgePrompt() {
-    const calDesc = getCalDescInjectText();
-    if (!calDesc) return DATE_JUDGE_PROMPT;
-    return `请暂停角色扮演，作为剧情分析助手，只做一件事：判断以上最近的对话里，故事此刻发生在哪一天。
-本世界观使用自定义历法（非公历）——${calDesc}
-只回答「当前剧情日期」，格式为「第M月D日」（M=第几个月的序号，D=该月第几日，例如第3月15日），或直接用上面列出的月名，如「霜月15日」；年份不重要、无需回答。
-若最近对话中并无明确日期线索、无法确定具体月日，就只回答「未知」。
-不要解释，不要输出任何多余文字。`;
-}
-
-// 从 judge 回答里抠出 {month, day}。先认「M月D日」，再兜底走 extractDayFromTime（认 3/15、
-// 2024-3-15、三月十五 等格式）。认不出 / 明确「未知」→ 返回 null（＝保持上次锚点不动）。
-function parseJudgedDate(ans) {
-    const s = String(ans || '').trim();
-    if (!s || /未知|无法|不确定|不清楚|没有|无明确/.test(s)) return null;
-    const cal = loadCalDesc();
-    // 「第M月D日」（自定义历序号式）或「M月D日」（公历/序号式）：M 一律当「第几个月」序号。
-    let m = s.match(/第?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
-    if (m) {
-        const md = almValidMonthDay({ month: +m[1], day: +m[2] }, cal);
-        if (md) return md;
-    }
-    // 自定义月名式（如「霜月15日」）：在历法月名里找匹配，取其序号。仅自定义历需要（公历月名即「N月」，上面已covered）。
-    if (cal !== DEFAULT_CAL) {
-        for (let i = 0; i < cal.months.length; i++) {
-            const nm = String(cal.months[i].name || '').trim();
-            if (!nm) continue;
-            const nmEsc = nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const mm = s.match(new RegExp(nmEsc + '\\s*(?:第\\s*)?(初[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]|[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]+|\\d{1,2})\\s*日?'));
-            if (mm) {
-                const da = /^\d+$/.test(mm[1]) ? +mm[1] : (mm[1].startsWith('初') ? _cnToNumber(mm[1].slice(1)) : _cnToNumber(mm[1]));
-                const md = almValidMonthDay({ month: i + 1, day: da }, cal);
-                if (md) return md;
-            }
-        }
-    }
-    // 中文数字「M月D日/初X」：三月十七日 / 冬月初三 → 序号月+日（与 extractDayFromTime 古代中文段同源，但不要求年份）。
-    const cnMD = s.match(/(正|冬|腊|[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]+)\s*月\s*(初[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]|[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]+)\s*日?/);
-    if (cnMD) {
-        const mo = (cnMD[1] in _CN_MONTH_ALIAS) ? _CN_MONTH_ALIAS[cnMD[1]] : _cnToNumber(cnMD[1]);
-        const da = cnMD[2].startsWith('初') ? _cnToNumber(cnMD[2].slice(1)) : _cnToNumber(cnMD[2]);
-        const md = almValidMonthDay({ month: mo, day: da }, cal);
-        if (md) return md;
-    }
-    return monthDayFromDayKey(extractDayFromTime(s));
-}
-
-// 落地检测到的剧情日期：变了才写/才弹 → 共享善后（runAnchorAftermath 内含点连带跟随）。
-// 戳优先路（almanacJudge 每楼直读戳）与 API 兜底路（runJudgeDateStep）共用。
-function applyDetectedDate(charKey, md, { notify = true } = {}) {
-    if (!charKey || !md) return { status: 'unresolved' };
-    const prev = getDateAnchor(charKey);
-    if (prev && prev.month === md.month && prev.day === md.day) return { status: 'unchanged', date: { month: md.month, day: md.day } }; // 日期没变 → 免重渲染
-    const stored = setDateAnchor(charKey, md.month, md.day, 'detected');
-    if (!stored.ok) { if (notify) showToast('剧情日期自动保存失败，请重试', null, true); return { status: 'failed', reason: stored.reason }; }
-    // 全量通知：真把「今天」改了才弹（上面 prev 相等已 return，到这里必是真变）
-    if (getSettings().notifyMode === 'full') showToast(`剧情日期已自动更新为 ${calMonthName(loadCalDesc(), md.month)}${md.day}日 · 请注意查看`);
-    runAnchorAftermath();   // 共享善后：刷历条/点条/历面板 + 点连带跟随今天
-    return { status: 'updated', date: { month: md.month, day: md.day } };
-}
-
-// 戳优先·落地：戳开且最新楼扫到可解析戳 → 直读落地到 dateAnchor（零 API、幂等，未变即 no-op）。
-// 必须在**每次**最新楼定型时跑（新楼 / 重roll / swipe），否则显示读活戳跳了、轴读陈旧锚点没跟——
-// 锚点是 almTodayAnchor ①′ 最高优先，压过活戳，刷新也不会自愈（论坛：戳 920、轴停 919、刷新无效）。
-// 返回结构化状态：no-date 才允许 API 兜底；write-failed 视为本楼已处理。
-function relandStoryClockAnchor() {
-    if (!storyClockEnabled()) return { status: 'no-date', reason: 'disabled' };
-    const md = storyClockDate();
-    if (!md) return { status: 'no-date', reason: 'missing-date' };
-    const applied = applyDetectedDate(charStableKey(getContext()), md);
-    if (applied.status === 'failed') return { status: 'write-failed', reason: applied.reason, date: md };
-    return { status: applied.status === 'updated' ? 'updated' : 'handled', date: md };
-}
-
-// 历·API 兜底判定当前剧情日期（仅在读不到戳、almanacAutoDetect 开时调用）：抄 runJudgeOutlineStep 的 abort/chatId/重入守卫。
-// fire-and-forget，失败静默。识别不到日期 → 不动锚点（保留上次值），符合「无信号不动」的兜底。
-async function runJudgeDateStep({ signal: externalSignal = null } = {}) {
-    if (isJudgingDate) return { status: 'skipped' }; // 历、点共一把锁：都写同一个锚点，不必并发
-    const ctx = getContext();
-    const charKey = charStableKey(ctx);
-    if (!charKey) return { status: 'skipped' };      // 无卡（群聊/无角色）→ 锚点无处落键，跳过
-    const chatIdSnap = ctx.chatId;
-    const cfg = loadUtilityCfg();                    // 机械任务：可分流到轻量预设，未设则=主 API
-    if (!cfg.url || !cfg.key) return { status: 'failed', error: new Error('未配置 API') };
-    const setAbort = c => { almanacJudgeAbort = c; };
-    const getAbort = ()  =>   almanacJudgeAbort;
-    const myCtrl = new AbortController(); setAbort(myCtrl);
-    const abortFromCaller = () => myCtrl.abort();
-    if (externalSignal?.aborted) myCtrl.abort();
-    else externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
-    isJudgingDate = true;
-    const done = () => { isJudgingDate = false; setAbort(null); };
-    try {
-        const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-        // historyLimit=4：只需最近几楼就能读出剧情内日期，省 token（与历生成同量级）。
-        const raw = await callCustomApi(ctx, buildDateJudgePrompt(), cfg, userName, charName, myCtrl.signal, 4);
-        if (getAbort() !== myCtrl) return { status: 'cancelled' };           // 被更新的判定取代
-        if (getContext().chatId !== chatIdSnap || myCtrl.signal.aborted) { done(); return { status: 'cancelled' }; }         // 已切 chat，丢弃结果
-        done();
-        if (myCtrl.signal.aborted) return { status: 'cancelled' };
-        const md = parseJudgedDate(raw);
-        if (!md) return { status: 'unresolved' };                           // 识别不到 → 保持上次不动
-        const applied = applyDetectedDate(charKey, md);                    // 变了才写/才弹 + 点连带跟随（共享咽喉）
-        if (myCtrl.signal.aborted) return { status: 'cancelled' };
-        if (applied.status === 'failed') return applied;
-        return { ...applied, date: md };
-    } catch (err) {
-        if (getAbort() !== myCtrl) return { status: 'cancelled' }; // 被更新的判定取代 → 新判定接管状态，别动
-        done();
-        if (err?.name === 'AbortError' || myCtrl.signal.aborted) return { status: 'cancelled' };            // 中止 / 切档 → 不算失败
-        if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' }; // 已切 chat → 结果作废，别弹
-        // 判定失败也弹（不动锚点，纯提示）：判定按每 N 楼跑，用户未必每楼盯着，失败要让他知道去查 API。
-        // isError toast 不受通知三档静音；下一轮 AI 回复攒够计数会自动再判，无需手动重试。
-        showToast('剧情日期自动确认失败，请检查 API 或网络', null, true);
-        return { status: 'failed', error: err };
-    } finally {
-        externalSignal?.removeEventListener('abort', abortFromCaller);
-    }
-}
 
 // ═══ 暗账·标注 ═════════════════════════════════════════════════════════════════
 // 构画 AI 从最近正文里捞「需按时间追踪」的新事件，标注入 sp-ledger（此时·此物·此状态）。
 // 起始锚 = 此刻楼层 + 历「今天」(almTodayAnchor)，钉死不改；判定/注入是后续切片。
 // 触发：每 N 楼自动车(runLedgerCaptureStep 无参) + 历面板「暗账」页手动「立即标注」(manual=true)。
-const LEDGER_CAPTURE_FLOORS = 6;   // 标注窗口：读最近几楼 AI 正文找新事件（比日期判定的 4 稍宽，捞得全）
-
-// 全角/半角顿号逗号分隔 → 去空数组（牵扯/标签用）。
-function splitCnList(v) {
-    return String(v || '').split(/[、,，;；]/).map(x => x.trim()).filter(Boolean);
-}
-// 事由归一化（JS 侧兜底去重键）：去空白。中文无大小写，够用。
-function normGist(s) { return String(s || '').replace(/\s+/g, ''); }
-// 最近剧情 assistant 楼下标；generic/comment/help 等非剧情系统楼不算，找不到返回 -1。
-function latestAiFloorId() {
-    const chat = getContext().chat || [];
-    for (let i = chat.length - 1; i >= 0; i--) if (ledgerNarrativeMessage(chat[i])) return i;
-    return -1;
-}
-// 读取指定（或当前最新）AI 楼的 SDC 日期；纯读取，不写 dateAnchor/ledger。
-// 戳优先取 end（当前时间），缺失或无法判定时退取 start；调用方负责最终 almTodayAnchor 兜底。
-function ledgerFloorDateContext(floor = null) {
-    const chat = getContext().chat || [];
-    const floorId = Number.isInteger(floor) ? floor : latestAiFloorId();
-    const message = floorId >= 0 ? chat[floorId] : null;
-    if (!message || !ledgerNarrativeMessage(message)) return { floor: null, date: null };
-    const clock = parseStoryClock(message.mes || '');
-    const date = parseJudgedDate(clock.end) || parseJudgedDate(clock.start);
-    return { floor: floorId, date: date || null };
-}
-// 现有活跃条目摘要（喂进提示词供 AI 去重）。
-function listActiveLedgerBrief() {
-    const act = ledger.listEntries();   // 默认只活跃
-    if (!act.length) return '（暂无，本次都是新登记）';
-    return act.map(e => `- ${e.事由}${e.标签?.length ? `（${e.标签.join('、')}）` : ''}`).join('\n');
-}
-// 已了结条目摘要（喂进提示词，防「用户归档过的事又被重新捞进新池」）。空则回空串，调用端据此省掉整段。
-function listClosedLedgerBrief() {
-    const closed = ledger.listEntries({ includeClosed: true }).filter(e => e.状态 === '已了结');
-    if (!closed.length) return '';
-    return closed.map(e => `- ${e.事由}${e.标签?.length ? `（${e.标签.join('、')}）` : ''}`).join('\n');
-}
-
-// 两个标注提示词（首次建账 / 日常增量）共用的两段——单一来源，防两处 7 字段格式漂移。
-const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
-- 持续状态：身体伤情 / 病症、怀孕、显著且会延续的情绪等——会随天数自然演变（如割伤→结痂→愈合）。
-- 约定待办：约好要做的事（哪天见面、答应帮忙），无论有没有定下具体日期都要记。
-- 周期：规律反复发生的事（月经、发薪、值班），带大致周期天数。
-【主语永远是「人」】每条都登记在某个人物身上——记 TA 的状态，或 TA 牵扯的约定/周期。不要给物品单独立条（如「桌上有把枪」「仓库存着粮」不记）；但物品作用到人身上的状态要记（如「A 中了毒、尚未解」「B 戴着诅咒项链、受其束缚」）。`;
-
-const LEDGER_FIELD_SPEC = `- 每个事件一行，用全角竖线「｜」分隔 8 个字段，顺序固定：
- 事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚
-  · 类型：持续状态 / 约定待办 / 周期（只能三选一，原样写这三个词之一）
-  · 牵扯：涉及的人物，多个用顿号「、」分隔；没有就留空
-  · 标签：检索关键词，多个用「、」分隔（如：伤、左手、身体）
-  · 现状：此刻状态一句话（如「新伤口，仍在流血」）
-  · 到期：只有这件事有一个「你会特意关心的具体未来日子」才填——约定的赴约日、或周期里你想知道「下次哪天」的（月经、发薪、值班）。纯背景例行、天天都在做、不用盯某天的（每日洗漱更衣、每天喂马、日常晨练）到期留空。填时写大致哪天（如「第3月20日」，本世界观自定义历法请按其月名/月序），说不清也留空
-  · 周期：仅周期类填天数（如 30）；其它类型留空
-  · 来源锚：只能填正文前的可信 FxxS/FxxE 令牌；角色卡/世界书既定机制填 SET；没有把握时留空`;
-
-let ledgerCaptureProgress = null; // { done, total }；仅用于首次来源溯源进度显示
-let ledgerCaptureProgressOwner = null;
-
-function ledgerSourceFloors(limit = null) {
-    return ledgerAiFloorRecords(limit).flatMap(item => item.sources);
-}
-
-// ST 的 is_system 只表示渲染/来源标记，不等于“没有剧情内容”。官方 system_message_types 中
-// narrator/assistant_message 可承载叙事；help/welcome/generic/comment 等是 UI/帮助消息，应排除。
-// extra.type 缺失的 hidden assistant 保留，避免把旧聊天的普通 AI 楼误判成系统 UI。
-const LEDGER_NON_NARRATIVE_TYPES = new Set([
-    system_message_types?.HELP, system_message_types?.WELCOME, system_message_types?.EMPTY,
-    system_message_types?.GENERIC, system_message_types?.COMMENT, system_message_types?.SLASH_COMMANDS,
-    system_message_types?.FORMATTING, system_message_types?.HOTKEYS, system_message_types?.MACROS,
-    system_message_types?.WELCOME_PROMPT, system_message_types?.ASSISTANT_NOTE,
-].filter(Boolean).map(type => String(type).toLowerCase()));
-
-function ledgerNarrativeMessage(msg) {
-    if (!msg || msg.is_user || !String(msg.mes || '').trim()) return false;
-    const type = String(msg.extra?.type || '').trim().toLowerCase();
-    if (type && LEDGER_NON_NARRATIVE_TYPES.has(type)) return false;
-    if (msg.extra?.uses_system_ui === true && type !== String(system_message_types?.NARRATOR || '').toLowerCase()) return false;
-    return true;
-}
-
-function ledgerAiFloorRecords(limit = null) {
-    const chat = getContext().chat || [];
-    const floors = [];
-    for (let i = 0; i < chat.length; i++) {
-        const msg = chat[i];
-        if (!ledgerNarrativeMessage(msg)) continue;
-        const clock = parseStoryClock(msg.mes);
-        const parts = [];
-        if (clock.start && parseJudgedDate(clock.start)) parts.push({ side: 'S', stamp: clock.start, date: parseJudgedDate(clock.start) });
-        if (clock.end && parseJudgedDate(clock.end)) parts.push({ side: 'E', stamp: clock.end, date: parseJudgedDate(clock.end) });
-        const sourceParts = parts.map(part => ({
-            token: `F${i}${part.side}`,
-            floor: i,
-            date: part.date,
-            stamp: part.stamp,
-            signature: String(msg.mes),
-        }));
-        floors.push({
-            floor: i,
-            signature: String(msg.mes),
-            identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') },
-            content: memory.stripTags(String(msg.mes), { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }).trim(),
-            sources: sourceParts,
-        });
-    }
-    const selected = limit == null ? floors : floors.slice(-Math.max(0, limit));
-    return selected.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, content: item.content })) }));
-}
-
-function ledgerSourceMap(sources) {
-    return new Map((sources || []).map(source => [String(source.token), source]));
-}
-
-function ledgerSourceAnchor(token, sourceMap) {
-    const key = String(token || '').trim();
-    if (key === 'SET') return { 楼层: null, 历日期: null };
-    const source = sourceMap?.get(key);
-    if (!source) return null;
-    const chat = getContext().chat || [];
-    const raw = chat[source.floor]?.mes || '';
-    const clock = parseStoryClock(raw);
-    const stamp = source.token.endsWith('S') ? clock.start : clock.end;
-    const date = stamp ? parseJudgedDate(stamp) : null;
-    if (!date) return null;
-    return { 楼层: source.floor, 历日期: date };
-}
-
-function ledgerSourcesStable(sources, chatId) {
-    if (getContext().chatId !== chatId) return false;
-    const chat = getContext().chat || [];
-    return (sources || []).every(source => {
-        const msg = chat[source.floor];
-        return ledgerNarrativeMessage(msg) && String(msg.mes || '') === source.signature;
-    });
-}
-
-function ledgerRecordsStable(records, chatId) {
-    if (getContext().chatId !== chatId) return false;
-    const chat = getContext().chat || [];
-    return (records || []).every(record => {
-        const msg = chat[record.floor];
-        if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false;
-        const identity = record.identity || {};
-        if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false;
-        if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false;
-        return (record.sources || []).every(source => {
-            const token = String(source.token || '');
-            const side = token.endsWith('S') ? 'S' : token.endsWith('E') ? 'E' : '';
-            if (!side || source.signature !== record.signature) return false;
-            const clock = parseStoryClock(String(msg.mes || ''));
-            const stamp = side === 'S' ? clock.start : clock.end;
-            const date = stamp ? parseJudgedDate(stamp) : null;
-            return !!date && date.month === source.date.month && date.day === source.date.day;
-        });
-    });
-}
-
-function ledgerLegacyAnchor(sourceList) {
-    const dates = new Map();
-    for (const source of sourceList || []) {
-        const key = `${source.date.month}/${source.date.day}`;
-        dates.set(key, source.date);
-    }
-    if (dates.size !== 1) return { 楼层: null, 历日期: null };
-    return { 楼层: null, 历日期: [...dates.values()][0] };
-}
-
-function setLedgerCaptureProgress(done, total, owner = null) {
-    if (owner && ledgerCaptureProgressOwner && ledgerCaptureProgressOwner !== owner) return;
-    if (total > 0) ledgerCaptureProgressOwner = owner;
-    else if (!owner || ledgerCaptureProgressOwner === owner) ledgerCaptureProgressOwner = null;
-    ledgerCaptureProgress = total > 0 ? { done, total } : null;
-    if (axisState.almanacMode) renderAlmanacPanel();
-}
-
-function getLedgerCaptureProgress() {
-    return ledgerCaptureProgress;
-}
-
-function buildLedgerCapturePrompt() {
-    const closed = listClosedLedgerBrief();
-    const closedSection = closed
-        ? `\n【已了结·别重新登记】
-下面这些已经完结、或被用户手动归档了。默认**一律别再登记**；只有正文里出现了**明确的新进展**（旧事重新启动、或又发生了一次全新的独立事件）才重新记，并在现状里点明「新」在哪：
-${closed}\n`
-        : '';
-    return `请暂停角色扮演，作为剧情分析助手，只做一件事：从以上最近的对话正文里，捞取「需要按时间追踪」的新事件，记入「刻度」。
-
-${LEDGER_EVENT_TYPES}
-
-【已在刻度上的（不要重复登记）】
-${listActiveLedgerBrief()}
-${closedSection}
-【规则】
-- 只登记上面对话里【新出现】的，或【虽同名但明显是另一次独立事件】的；已在刻度上的同一件事跳过。
-- **同一件事只记一条**：判断「是不是同一件事」看的是**事情本身**，不是措辞——同一个人的同一桩事，哪怕换了说法、换了角度、详略不同，也算重复。这有两层：① 别登记与上面清单里已有的重复；② 你这一次别把一件事拆成两三条近义的分别登记。
-- 宁可多记，但「多记」指的是多记【确实是新的、不同的】事——拿不准是不是新事就记下；不是把同一件事重复记，也不是把已了结/已归档的翻出来重记。
-${LEDGER_FIELD_SPEC}
-- 若没有任何新事件可登记，只回一个字：无
-不要解释，不要输出表头，不要输出多余文字。`;
-}
-
-// 首次建账专用（账上全空时用，见 runLedgerCaptureStep 的 isFirst 分支）：除了对话正文里的已发生事件，
-// 额外指向【角色卡背景资料 / 世界书设定】——把开局就存在、却不会在正文里「新冒出来」的既定机制（周期硬规则、
-// 死线、长期状态/契约）一并种进账。角色卡/世界书本就在 buildMessages 的 system 里，故零额外 API，只换这段指令。
-function buildLedgerFirstScanPrompt() {
-    return `请暂停角色扮演，作为剧情分析助手，只做一件事：这是本故事**第一次**建立「刻度」，请把所有【需要长期按时间追踪】的事项一次性记入刻度，覆盖两个来源：
-
-【来源一·既定机制（最重要，务必别漏）】从【角色卡背景资料 / 场景 / 世界书设定】里，找出开局就存在、需要长期盯着时间的**规则型设定**，尤其：
-- 周期性硬规则：如「每 N 天必须做某事，否则触发严重后果」「每逢某日会发生某事」——务必抓出周期天数。
-- 死线 / 倒计时：如「X 天内必须完成某事，否则……」。
-- 长期状态 / 契约 / 诅咒 / 期限：会随时间推进演变或到期的既定设定。
-这类往往是这张卡的核心机制、甚至关乎生死，最该盯——哪怕最近对话还没提到，也要从设定里登记下来。
-
-【来源二·已发生事件】再从最近对话正文里，捞取已经出现、需要追踪的事件（同下三类）。
-
-${LEDGER_EVENT_TYPES}
-
-【规则】
-- 宁可多记：拿不准也记下，漏记的代价比多记大；既定机制哪怕暂时还没触发也要记。
-${LEDGER_FIELD_SPEC}
-- 若确实没有任何可登记的，只回一个字：无
-不要解释，不要输出表头，不要输出多余文字。`;
-}
-
-function buildLedgerProvenancePrompt(candidates, batchNo, batchTotal) {
-    const list = (candidates || []).map(item => `- ${item._candidateId}｜${item.事由}（${item.类型}）${item.标签?.length ? `｜标签：${item.标签.join('、')}` : ''}`).join('\n');
-    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚。候选ID 必须原样抄写；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据就不要输出。不要输出 SET，不要解释。`;
-}
-
-// 解析标注回答 → 松散条目数组（起始锚由 runLedgerCaptureStep 补钉）。认全角竖线分隔行，其余行忽略。
-function parseLedgerCapture(raw) {
-    const s = String(raw || '').trim();
-    if (!s || /^无[。.！!]?$/.test(s)) return [];
-    const out = [];
-    for (const line of s.split('\n')) {
-        const t = line.trim();
-        if (!t || !t.includes('｜')) continue;                 // 只认带全角竖线的登记行（跳过表头/寒暄）
-        if (/^(?:事由|候选ID)\s*｜/.test(t)) continue;           // AI 若误输出表头，跳过
-        const cols = t.split('｜').map(x => x.trim());
-        const provenance = cols.length >= 9;
-        const candidateId = provenance ? cols[0] : '';
-        const offset = provenance ? 1 : 0;
-        const 事由 = cols[offset];
-        if (!事由) continue;
-        const entry = {
-            事由,
-            类型: ledger.TYPES.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态',
-            牵扯: splitCnList(cols[offset + 2]),
-            标签: splitCnList(cols[offset + 3]),
-            现状: cols[offset + 4] || '',
-        };
-        const cyc = parseInt(cols[offset + 6], 10);
-        if (Number.isFinite(cyc) && cyc > 0) entry.周期长度 = cyc;
-        const due = parseJudgedDate(cols[offset + 5] || '');            // 复用日期解析（认「第M月D日」/月名式）；相对日「三天后」认不出即留空
-        if (due) entry.到期锚 = { 历日期: due };
-        if (provenance) {
-            entry._candidateId = candidateId;
-            entry._sourceToken = cols[8] || '';
-        } else if (cols.length >= 8) entry._sourceToken = cols[7] || '';
-        out.push(entry);
-    }
-    return out;
-}
-
-function ledgerSourceBatches(sources, size = LEDGER_CAPTURE_FLOORS) {
-    const floors = Array.isArray(sources) ? sources : [];
-    const batches = [];
-    for (let i = 0; i < floors.length; i += size) batches.push(floors.slice(i, i + size));
-    return batches;
-}
-
-function resolveLedgerStartAnchor(item, sourceMap, legacySources) {
-    const token = String(item?._sourceToken || '').trim();
-    if (token === 'SET') return { 楼层: null, 历日期: null };
-    const trusted = ledgerSourceAnchor(token, sourceMap);
-    if (trusted) return trusted;
-    if (!token) return ledgerLegacyAnchor(legacySources);
-    return { 楼层: null, 历日期: null };
-}
-
-// 标注一次：抄 runJudgeDateStep 的 abort/chatId/重入守卫。manual=true 时（历面板手动点）无论通知档位都反馈结果。
-// fire-and-forget，失败静默（自动车）/弹错（手动）。
-async function runLedgerCaptureStep(manual = false, travelContext = null) {
-    if (isCapturingLedger) return { status: 'skipped' };
-    const ctx = getContext();
-    const charKey = charStableKey(ctx);
-    if (!charKey) { if (manual) showToast('当前没有角色卡，无法标注', null, true); return { status: 'skipped' }; }
-    const chatIdSnap = ctx.chatId;
-    const cfg = loadCfg();                            // 标注＝从正文捞事件（内容活）→ 走内容生成 API，不分流机械
-    if (!cfg.url || !cfg.key) { if (manual) showToast('请先在设置中填写 API', null, true); return { status: 'failed', error: new Error('未配置 API') }; }
-    const myCtrl = new AbortController(); ledgerCaptureAbort = myCtrl;
-    const removeAbortBridge = bridgeAbortSignal(travelContext?.signal, myCtrl);
-    isCapturingLedger = true;
-    const done = () => {
-        if (ledgerCaptureAbort !== myCtrl) return false;
-        isCapturingLedger = false;
-        ledgerCaptureAbort = null;
-        setLedgerCaptureProgress(0, 0, myCtrl);
-        return true;
-    };
-    try {
-        const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-        // 账上全空 = 本卡首次建账：这一趟连角色卡/世界书里的既定机制（周期硬规则、死线、长期状态）一并扫入，
-        // 而非只捞对话正文里的新事件。零额外 API——角色卡/世界书本就在 buildMessages 的 system 里，只是换一段指令。
-        const isFirst = ledger.listEntries({ includeClosed: true }).length === 0;
-        const prompt = appendTravelPromptContext(isFirst ? buildLedgerFirstScanPrompt() : buildLedgerCapturePrompt(), travelContext);
-        const targetDate = almValidMonthDay(travelContext?.targetDate, loadCalDesc());
-        const captureContext = ledgerFloorDateContext();
-        const captureFloor = captureContext.floor;
-        const captureDate = targetDate || captureContext.date || almTodayAnchor();
-        const recentRecords = ledgerAiFloorRecords(LEDGER_CAPTURE_FLOORS);
-        const recentSources = recentRecords.flatMap(record => record.sources);
-        const recentSourceMap = ledgerSourceMap(recentSources);
-        const allRecords = isFirst ? ledgerAiFloorRecords() : null;
-        const sourceFloorCount = allRecords ? allRecords.length : 0;
-        const aiFloorCount = isFirst ? sourceFloorCount : 0;
-        const needsHistoricalProvenance = isFirst && aiFloorCount > LEDGER_CAPTURE_FLOORS && sourceFloorCount > LEDGER_CAPTURE_FLOORS;
-        const provenanceBatches = needsHistoricalProvenance ? ledgerSourceBatches(allRecords) : [];
-        if (needsHistoricalProvenance) {
-            if (!manual) {
-                done();
-                showToast(`历史较长（${aiFloorCount} 个 AI 楼），自动捕获不会静默启动多批溯源；请点「立即标注」并确认。`);
-                return { status: 'needs-confirmation' };
-            }
-            const ok = await spConfirm({
-                title: '确认完整溯源刻度',
-                body: `当前 ledger 为空，共 ${aiFloorCount} 个 AI 楼。将先提取清单，再按每批最多 ${LEDGER_CAPTURE_FLOORS} 个 AI 回复溯源，最多调用 ${1 + provenanceBatches.length} 次（1 次清单 + ${provenanceBatches.length} 批）。找到全部来源后会提前结束；过程会增加 API 消耗和等待时间，可随时中止；确认后统一落库。`,
-                note: '取消不会发起请求，也不会写入任何刻度。',
-                confirmText: '开始溯源',
-                cancelText: '取消',
-            });
-            if (!ok) { done(); return { status: 'cancelled' }; }
-            if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        }
-        const captureOpts = { ...(travelContext || {}), noAlmanac: true };
-        if (recentRecords.length) captureOpts.ledgerSourceFloors = recentRecords;
-        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, LEDGER_CAPTURE_FLOORS, captureOpts);
-        if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted) return { status: 'cancelled' };
-        if (getContext().chatId !== chatIdSnap) { done(); return { status: 'cancelled' }; }
-        if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        let picked = parseLedgerCapture(raw);
-        if (!picked.length) { if (manual) showToast('未发现可登记的新事件'); return { status: 'unchanged' }; }
-        picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
-        let sourceList = recentSources;
-        let sourceMap = recentSourceMap;
-        let recordsForCommit = recentRecords;
-        if (needsHistoricalProvenance) {
-            sourceList = allRecords.flatMap(record => record.sources);
-            sourceMap = ledgerSourceMap(sourceList);
-            recordsForCommit = allRecords;
-            const candidates = picked.filter(item => String(item._sourceToken || '').trim() !== 'SET');
-            for (const candidate of candidates) candidate._sourceToken = ''; // 长历史必须从最早批次重新锁定，不能把首轮最近窗口当最早来源
-            const batches = provenanceBatches;
-            setLedgerCaptureProgress(0, batches.length, myCtrl);
-            for (let i = 0; i < batches.length; i++) {
-                if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-                const unresolved = candidates.filter(item => !String(item._sourceToken || '').trim());
-                if (!unresolved.length) break;
-                const batch = batches[i];
-                const batchResult = await callCustomApi(ctx, buildLedgerProvenancePrompt(unresolved, i + 1, batches.length), cfg, userName, charName, myCtrl.signal, 0, { ...(travelContext || {}), noAlmanac: true, ledgerSourceFloors: batch });
-                if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-                const found = parseLedgerCapture(batchResult);
-                const batchMap = ledgerSourceMap(batch.flatMap(record => record.sources));
-                const hits = [];
-                for (const item of found) {
-                    const candidate = candidates.find(x => x._candidateId === item._candidateId && !String(x._sourceToken || '').trim());
-                    if (!candidate) continue;
-                    const token = String(item._sourceToken || '').trim();
-                    if (ledgerSourceAnchor(token, batchMap)) hits.push({ candidate, token, source: batchMap.get(token) });
-                }
-                hits.sort((a, b) => a.source.floor - b.source.floor || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
-                for (const hit of hits) {
-                    if (!String(hit.candidate._sourceToken || '').trim()) hit.candidate._sourceToken = hit.token;
-                }
-                setLedgerCaptureProgress(i + 1, batches.length, myCtrl);
-            }
-        }
-        const seen = new Set(ledger.listEntries({ includeClosed: true }).map(e => normGist(e.事由)));
-        const plans = [];
-        for (const p of picked) {
-            const g = normGist(p.事由);
-            if (!g || seen.has(g)) continue;                               // JS 侧兜底去重（同名事由）
-            seen.add(g);
-            const startAnchor = resolveLedgerStartAnchor(p, sourceMap, sourceList);
-            plans.push({ ...p, 起始锚: startAnchor, 现状锚: { 楼层: captureFloor, 历日期: captureDate } });
-        }
-        if (!plans.length) { if (manual) showToast('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
-        if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap || !ledgerRecordsStable(recordsForCommit, chatIdSnap)) {
-            showToast('原始剧情楼在溯源期间发生变化，已取消本轮刻度落库', null, true);
-            return { status: 'cancelled' };
-        }
-        const added = await ledger.addEntriesAtomic(plans.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; return clean; }));
-        if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) {
-            done();
-            return { status: 'cancelled', stale: true };
-        }
-        if (!added.length) { if (manual) showToast('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
-        // 通知：手动必反馈；自动仅 full 档弹（照三档静音约定）。
-        if (manual || getSettings().notifyMode === 'full') {
-            showToast(`刻度标注 ${added.length} 条：${added.map(e => e.事由).join('、')} · 请注意查看`);
-        }
-        refreshLedgerInjection();   // 新条目入账 → 重算注入集（关/空时内部自清）
-        refreshInlineWindow(true);  // 标注池变了 → 刷楼内框（最新 AI 楼读活账重挂标注池）
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-        setLedgerCaptureProgress(0, 0, myCtrl);
-        done();
-        return { status: 'updated' };
-    } catch (err) {
-        if (ledgerCaptureAbort !== myCtrl) return { status: 'cancelled', stale: true };
-        done();
-        if (err?.name === 'AbortError' || travelContext?.signal?.aborted) return { status: 'cancelled' };
-        if (err?.spDisabled) return { status: 'skipped' };
-        if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        showToast('刻度标注失败，请检查 API 或网络', null, true);
-        return { status: 'failed', error: err };
-    } finally {
-        setLedgerCaptureProgress(0, 0, myCtrl);
-        if (ledgerCaptureAbort === myCtrl) done();
-        removeAbortBridge();
-    }
-}
+// capture 窗口与来源批次大小由 business/ledger/capture.js 统一提供。
 
 // ═══ 暗历③·判定·刷现状 ═══════════════════════════════════════════════════════
 // 每 N 楼把活跃条目连同「距今几天」（纯 JS 算好，LLM 不擅长日期差）喂给构画 AI，
 // 只让它回「状态该随时间变化的那几条」的新现状/了结/周期滚动。CODE 算数、AI 只下结论——正是暗历立意。
-const LEDGER_JUDGE_FLOORS = 4;   // 判定读最近几楼正文（比标注窄，够看「刚发生了什么」即可）
-
-// 距今天数：从起始锚(历日期)到今天，环形不涉年（<1 年场景足够）。缺锚/非法 → null。
-function ledgerDaysSince(entry, today = almTodayAnchor()) {
-    const a = entry?.起始锚?.历日期;
-    if (!a || !Number.isFinite(+a.month) || !Number.isFinite(+a.day)) return null;
-    const t = today;
-    return almDaysUntil(t.month, t.day, a);
-}
-// 到期口径：{天数, 过期}。无到期锚 → null；今天到期 → {天数:0}；已过 → {过期:true}。环形取短弧判过期。
-function ledgerDueInfo(entry, today = almTodayAnchor()) {
-    const d = entry?.到期锚?.历日期;
-    if (!d || !Number.isFinite(+d.month) || !Number.isFinite(+d.day)) return null;
-    const t = today;
-    const to = almDaysUntil(d.month, d.day, t);          // 今天→到期
-    const since = almDaysUntil(t.month, t.day, d);       // 到期→今天
-    if (to === 0) return { 天数: 0, 过期: false };
-    return to <= since ? { 天数: to, 过期: false } : { 天数: since, 过期: true };
-}
-// 参与判定的活跃条目（排除「用户锁」——用户手改过的不许判定车再动，照点/线锁机制）。
-function listJudgeableLedger() {
-    return ledger.listEntries().filter(e => e.锁 !== '用户锁');
-}
-// 一行摘要（喂进判定提示词）。天数由 CODE 算好塞进去，AI 据此下结论、不自己算日期。
-function fmtLedgerForJudge(e, today = almTodayAnchor()) {
-    const since = ledgerDaysSince(e, today);
-    const sinceStr = since == null ? '起始不明' : (since === 0 ? '今天登记' : `距登记 ${since} 天`);
-    const du = ledgerDueInfo(e, today);
-    const dueStr = !du ? '' : (du.天数 === 0 ? '·今天到期' : (du.过期 ? `·已过期 ${du.天数} 天` : `·还有 ${du.天数} 天到期`));
-    const cyc = e.周期长度 ? `·周期 ${e.周期长度} 天` : '';
-    const who = e.牵扯?.length ? `·涉及 ${e.牵扯.join('、')}` : '';
-    return `[${e.id}] ${e.事由}（${e.类型}）：现状「${e.现状 || '—'}」｜${sinceStr}${dueStr}${cyc}${who}`;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 //  检索·注入前置选择器（挑「哪几条」喂主楼 AI——全亮注入会撑爆 token 且喧宾夺主）
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3198,240 +2722,6 @@ function fmtLedgerForJudge(e, today = almTodayAnchor()) {
 // 天然排除。留 RAG 口子：scoreLedgerEntry 整个可换（将来接 arg 检索只改这一处打分器）。
 
 // 最近 N 楼 AI 正文拼成一段（去标记）。供场景加权命中判断；只读、无副作用。
-function _recentLedgerSceneText(nFloors = LEDGER_JUDGE_FLOORS) {
-    const chat = getContext().chat || [];
-    const s = getSettings();
-    const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
-    const parts = [];
-    for (let i = chat.length - 1; i >= 0 && parts.length < nFloors; i--) {
-        const m = chat[i];
-        if (!ledgerNarrativeMessage(m)) continue;   // system 标志不改变剧情 assistant 资格；已知 UI/help 类型由统一 helper 排除
-        const raw = String(m.mes || '');
-        if (!raw.trim()) continue;
-        const cleaned = memory.stripTags(raw, stripOpts).trim();
-        if (cleaned) parts.unshift(cleaned);
-    }
-    return parts.join('\n');
-}
-
-// 单条打分 / 相关度门槛 / 选注入集（scoreLedgerEntry·isLedgerSalient·selectLedgerForInject）
-// 已抽出到 business/ledger/select.js（纯逻辑，经 bindLedgerSelect 注入 ledgerDueInfo/ledgerDaysSince）。
-
-// 组注入文本：分两组（①持续身心状态·带距今天数+现应如何 ②约定/周期·倒计时）。
-// 天数由 CODE 用 ledgerDaysSince/ledgerDueInfo 算好塞进去，主楼 AI 只据此表达、不自算日期。
-function buildLedgerInjectionText(picked, _cal) {
-    const states = picked.filter(e => e.类型 === '持续状态');
-    const timed  = picked.filter(e => e.类型 !== '持续状态');
-    const fmtState = e => {
-        const since = ledgerDaysSince(e);
-        const sinceStr = since == null ? '' : (since === 0 ? '（今天）' : `（距今 ${since} 天）`);
-        const who = e.牵扯?.length ? `${e.牵扯.join('、')}：` : '';
-        return `- ${who}${e.事由}${sinceStr}——当前应为「${e.现状 || '—'}」`;
-    };
-    const fmtTimed = e => {
-        const du = ledgerDueInfo(e);
-        const dueStr = !du ? '（未定期）' : (du.天数 === 0 ? '（今天到期）' : (du.过期 ? `（已过期 ${du.天数} 天未了）` : `（还有 ${du.天数} 天到期）`));
-        const cyc = e.周期长度 ? `·约 ${e.周期长度} 天一轮` : '';
-        const who = e.牵扯?.length ? `${e.牵扯.join('、')}：` : '';
-        return `- ${who}${e.事由}${dueStr}${cyc}——现状「${e.现状 || '—'}」`;
-    };
-    const blocks = [
-        '【暗线·时间账·仅供你把握角色此刻的身心与待办，切勿直接念出编号或「系统」字样】',
-        '以下是随剧情时间推移、此刻仍牵动角色的事。请把它们自然融进叙事与角色状态，别生硬罗列、别让角色开口谈论这套记录本身。',
-    ];
-    if (states.length) blocks.push('◆ 正持续的身心状态（按登记至今的天数，表现出它此刻该有的样子）：\n' + states.map(fmtState).join('\n'));
-    if (timed.length)  blocks.push('◆ 临近的约定与周期（按倒计时，该临近就流露惦记、该发生就顺势发生）：\n' + timed.map(fmtTimed).join('\n'));
-    return blocks.join('\n');
-}
-
-// ─── 暗历·主楼潜伏注入（镜像 refreshLinesInjection）────────────────────────────
-const LEDGER_INJECT_KEY   = 'sp_ledger_remind';
-const LEDGER_INJECT_DEPTH = 2;   // 浅层（别到 depth 0 盖用户 input）；比线/面(4)更贴身，让「此刻状态」离生成更近
-
-// 本回合实际注入的条目回显（丰富版 [{id,事由,类型,起始锚,现状}]）——供用户楼「召回框」显示起始时间+推测应至状态。
-// refreshLedgerInjection 每次重算时刷新；清空/关闭时置空。
-let _ledgerInjectEcho = [];
-
-// 重设暗历潜伏注入。受注入总闸 injectEnabled + 本模块 ledgerInject opt-in 双门控；关/空清空。幂等，可随处多调。
-function refreshLedgerInjection() {
-    const ctx = getContext();
-    if (typeof ctx.setExtensionPrompt !== 'function') return;
-    const clear = () => { ctx.setExtensionPrompt(LEDGER_INJECT_KEY, ''); _ledgerInjectEcho = []; };
-    if (!injectEnabled()) { clear(); return; }               // 注入总闸（含插件总关）→ 一律不注入
-    if (getSettings().ledgerInject !== true) { clear(); return; }
-    const picked = selectLedgerForInject(ledger.listEntries(), _recentLedgerSceneText(), almTodayAnchor());
-    if (!picked.length) { clear(); return; }
-    const pt = ctx.constants?.promptTypes?.IN_CHAT ?? 1;
-    const pr = ctx.constants?.promptRoles?.SYSTEM  ?? 0;
-    ctx.setExtensionPrompt(LEDGER_INJECT_KEY, buildLedgerInjectionText(picked, loadCalDesc()), pt, LEDGER_INJECT_DEPTH, false, pr);
-    // 回显丰富版（多带起始锚/现状，供召回框显示起始时间+推测应至状态；picked 是完整条目，字段齐）。
-    _ledgerInjectEcho = picked.map(e => ({ id: e.id, 事由: e.事由, 类型: e.类型, 起始锚: e.起始锚, 现状: e.现状 }));
-}
-
-
-function buildLedgerJudgePrompt(today = almTodayAnchor()) {
-    const lines = listJudgeableLedger().map(e => fmtLedgerForJudge(e, today)).join('\n');
-    return `请暂停角色扮演，作为剧情连续性助手，只做一件事：根据下面【已登记事件】各自「距今过了多少天」和最近正文，判断哪些事件的状态**该随时间变化了**，只输出需要更新的那几条。
-
-【已登记事件】（方括号是编号，天数已由系统算好，你不必自己算日期）
-${lines || '（暂无活跃事件）'}
-
-【怎么判断该不该变】
-- 持续状态：随天数自然演变（如割伤：当天流血→两三天结痂→约一周愈合；病症、孕期同理）。到该愈合/该缓解的天数了就更新现状；已彻底痊愈/结束的标「了结」。
-- 约定待办：到期或已过期还没兑现→在现状里点出「今天该…／已过 X 天未…」；正文里已兑现→标「了结」。
-- 周期：到期即本轮该发生（如月经）；正文印证发生了→更新现状并标「滚周期」（系统会把下次到期顺延一个周期）。
-- 退场／翻篇（跨类型通用，务必保守）：某条对应的人物或事件已明显退出当前剧情（角色离场且短期不会回、情节段落翻篇、长期不再牵动剧情）——即便没有明确结果，也标「了结」让它淡出，账只留此刻仍牵动剧情的事。反过来：只是最近几楼碰巧没提、但人物仍在场或事情仍悬着的，一律「维持」，别误清还悬着的事。
-
-【输出格式】只输出状态**有变化**的条目，每条一行，全角竖线「｜」分隔 4 段，顺序固定：
-  编号｜新现状｜动作｜新到期
-  · 编号：原样抄方括号里的（如 L3），不带方括号
-  · 新现状：更新后的一句话状态（如「伤口已结痂，隐隐作痒」）
-  · 动作：维持 / 了结 / 滚周期（三选一，原样写）
-  · 新到期：仅在「约定待办」改期、或有明确下次日子的周期（月经、发薪、值班）本轮滚动时填（如「第3月20日」，自定义历按其月名/月序）；永久例行周期（每日洗漱、每天喂马这类，本就没盯着某天）与其余情况一律留空
-- 没有任何该变的，就只回一个字：无
-不要解释、不要输出表头、不要输出没变化的条目。`;
-}
-
-// 判定动作归一：严格等值匹配会把 AI 的近义/多字写法（「结束」「完结」「滚动」）静默降级成「维持」，
-// 让本该了结的条目一直悬在活账里注入。故按关键词宽松认——先认「滚周期」再认「了结」，都不像才退
-// 「维持」（安全默认·不动账）。canonical 的「维持/了结/滚周期」三串各自命中对应分支，行为不变。
-function normalizeJudgeAction(raw) {
-    const s = String(raw || '').replace(/\s+/g, '');
-    if (!s) return '维持';
-    if (/滚|周期|顺延|续期/.test(s)) return '滚周期';
-    if (/了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复|已了/.test(s)) return '了结';
-    return '维持';
-}
-
-// 解析判定回答 → 三态结果：none（明确无变化）、changes（至少一条合法变化）、invalid（空/损坏/字段不合约）。
-// 同时兼容全角/半角竖线；代码围栏只作包装剥除，内部仍严格要求 4 列。
-function parseLedgerJudge(raw) {
-    const s = String(raw ?? '').trim()
-        .replace(/^```[^\n]*\n?/i, '')
-        .replace(/\n?```\s*$/i, '').trim();
-    const noneText = s.replace(/[。.!！！？?]+$/u, '').trim();
-    const explicitNone = new Set([
-        '无', '无需更新', '无须更新', '无需变更', '无须变更',
-        '本轮无需更新', '没有需要更新的事件',
-    ]);
-    if (explicitNone.has(noneText)) return { status: 'none', changes: [] };
-    if (!s) return { status: 'invalid', changes: [] };
-    const out = [];
-    let invalid = false;
-    for (const line of s.split('\n')) {
-        const t = line.trim();
-        if (!t) continue;
-        if (/^编号\s*[｜|]/.test(t)) continue;                 // AI 若误输出表头，跳过
-        if (!/[｜|]/.test(t)) { invalid = true; continue; }
-        const cols = t.split(/[｜|]/).map(x => x.trim());
-        if (cols.length !== 4) { invalid = true; continue; }
-        const id = cols[0].replace(/[\[\]【】]/g, '').trim().toUpperCase();
-        const actionText = cols[2];
-        if (!/^L\d+$/i.test(id) || !cols[1] || !actionText || !/(?:维持|滚|周期|顺延|续期|了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复|已了)/.test(actionText)) {
-            invalid = true; continue;
-        }
-        const 动作 = normalizeJudgeAction(actionText);
-        const chg = { id, 现状: cols[1] || '', 动作 };
-        const due = parseJudgedDate(cols[3] || '');
-        if (due) chg.到期 = due;
-        out.push(chg);
-    }
-    // 严格整批：任何一行损坏/解释文本都会使整份响应失效，不能部分落库。
-    if (invalid || !out.length) return { status: 'invalid', changes: [] };
-    return { status: 'changes', changes: out };
-}
-
-// 判定一次：抄 runLedgerCaptureStep 的 abort/chatId/重入守卫。manual=true（手动点）无论通知档位都反馈结果。
-// fire-and-forget，失败静默（自动车）/弹错（手动）。无活跃条目直接跳过、不空烧 API。
-async function runLedgerJudgeStep(manual = false, travelContext = null) {
-    if (isJudgingLedger) {
-        if (manual) showToast('已有刻度更新正在进行，请稍候');
-        return { status: 'busy' };
-    }
-    const ctx = getContext();
-    const charKey = charStableKey(ctx);
-    if (!charKey) { if (manual) showToast('当前没有角色卡，无法判定', null, true); return { status: 'skipped' }; }
-    if (!listJudgeableLedger().length) { if (manual) showToast('暂无可判定的活跃事件'); return { status: 'skipped' }; }
-    const chatIdSnap = ctx.chatId;
-    const cfg = loadCfg();                            // 判定 API 干的是「据天数写新现状」(内容活)；时间重算是上面零-API 的 JS → 走内容生成 API
-    if (!cfg.url || !cfg.key) { if (manual) showToast('请先在设置中填写 API', null, true); return { status: 'failed', error: new Error('未配置 API') }; }
-    const myCtrl = new AbortController(); ledgerJudgeAbort = myCtrl;
-    const removeAbortBridge = bridgeAbortSignal(travelContext?.signal, myCtrl);
-    isJudgingLedger = true;
-    const done = () => {
-        if (ledgerJudgeAbort !== myCtrl) return false;
-        isJudgingLedger = false;
-        ledgerJudgeAbort = null;
-        if (getContext().chatId === chatIdSnap) {
-            if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-            refreshInlineWindow(true);
-        }
-        return true;
-    };
-    if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    refreshInlineWindow(true);
-    try {
-        const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-        const targetDate = almValidMonthDay(travelContext?.targetDate, loadCalDesc());
-        const judgeContext = ledgerFloorDateContext();
-        const judgeFloor = judgeContext.floor;
-        const judgeDate = targetDate || judgeContext.date || almTodayAnchor();
-        const raw = await callCustomApi(ctx, appendTravelPromptContext(buildLedgerJudgePrompt(judgeDate), travelContext), cfg, userName, charName, myCtrl.signal, LEDGER_JUDGE_FLOORS, { ...(travelContext || {}), noAlmanac: true });
-        if (ledgerJudgeAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted) return { status: 'cancelled' };
-        if (getContext().chatId !== chatIdSnap) { done(); return { status: 'cancelled' }; }
-        if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        const parsed = parseLedgerJudge(raw);
-        if (parsed.status === 'none') { done(); if (manual) showToast('本轮无需更新刻度'); return { status: 'unchanged' }; }
-        if (parsed.status === 'invalid') { done(); if (manual) showToast('刻度判定格式无法识别', null, true); return { status: 'invalid' }; }
-        const changes = parsed.changes;
-        const cal = loadCalDesc();
-        const applied = [];
-        for (const c of changes) {
-            if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap || ledgerJudgeAbort !== myCtrl) return { status: 'cancelled' };
-            const e = ledger.getEntry(c.id);
-            if (!e || e.状态 === '已了结' || e.锁 === '用户锁') continue;   // 目标须活跃、非用户锁（AI 乱报编号也挡掉）
-            // 静音（暂停埋入）条遇「了结」判定：整条跳过——不改现状、不归档。它没被注入、天然不在近景，
-            // 退场/翻篇规则几乎必然误判它「该了结」；静音语义正是「留着、只是别提」。若只吞 closeEntry、仍套 patch，
-            // 现状会被每轮改写成退场话术。维持/滚周期不受此限（后台照常跟进）。
-            if (e.静音 === true && c.动作 === '了结') continue;
-            const patch = { 现状锚: { 楼层: judgeFloor, 历日期: judgeDate } }; // 现状锚每次刷到今天（起始锚永不动）
-            if (c.现状) patch.现状 = c.现状;
-            if (c.动作 === '滚周期' && e.周期长度 > 0 && e.到期锚?.历日期) {
-                const base = e.到期锚.历日期;                               // 保相位：从上次到期顺延一个周期
-                patch.到期锚 = { 历日期: almMonthDayFromDoy(almDayOfYear(base.month, base.day, cal) + e.周期长度, cal) };
-                // 无到期锚的周期（永久例行，如每日洗漱、每天喂马）不凭空造死线：滚周期只更现状，到期恒空。
-            } else if (c.到期 && c.动作 !== '滚周期') {                       // 新到期只服务「约定改期」；滚周期的下次日子只由上面顺延，AI 给的到期一律忽略
-                patch.到期锚 = { 历日期: c.到期 };
-            }
-            ledger.updateEntry(e.id, patch);
-            if (c.动作 === '了结') ledger.closeEntry(e.id);                  // 静音条已在上方跳过，此处到不了
-            applied.push(e.事由);
-        }
-        if (ledgerJudgeAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        if (!applied.length) { done(); if (manual) showToast('本轮变化均无效或受保护，刻度未更新'); return { status: 'unchanged' }; }
-        // 手动终态唯一反馈；自动判定保持静默。
-        if (manual) {
-            showToast(`刻度刷新 ${applied.length} 条：${applied.join('、')} · 请注意查看`);
-        }
-        refreshLedgerInjection();   // 现状/了结变了 → 重算注入集（关/空时内部自清）
-        refreshInlineWindow(true);  // 标注池现状变了 → 刷楼内框（最新 AI 楼读活账重挂标注池）
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-        done();
-        return { status: 'updated' };
-    } catch (err) {
-        if (ledgerJudgeAbort !== myCtrl) return { status: 'cancelled' };
-        done();
-        if (err?.name === 'AbortError' || travelContext?.signal?.aborted) return { status: 'cancelled' };
-        if (err?.spDisabled) return { status: 'skipped' };
-        if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        if (manual) showToast('刻度判定失败，请检查 API 或网络', null, true);
-        return { status: 'failed', error: err };
-    } finally {
-        if (ledgerJudgeAbort === myCtrl) done();
-        removeAbortBridge();
-    }
-}
-
 // ─── 共享锚点善后 ───────────────────────────────────────────────────────────
 // 任何一处改「今天」锚点（自动判定 applyDetectedDate / 历面板 ±1天·改·恢复自动）后都走这里，统一善后：
 //   1) 刷楼内历条 / 点条、历面板；2) 点恒跟随今天——把点重排到今天（点纯下游连带，无独立开关）。
@@ -3472,113 +2762,7 @@ function schedulePointNeedsSync() {
 // 让「点」从今天起排 7 天、与「历」同一天。反馈全在历（按钮态「同步中…」+ toast），结果落在点。
 // 绝不占用 pointState.isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
 let _autoRegenSchedAbort = null;
-async function syncPointToToday(auto = false, travelContext = null) {
-    if (!pluginEnabled()) return { status: 'skipped' };
-    const allowPendingFollowup = travelContext?.allowPendingFollowup !== false;
-    if (axisState._almSyncingPoint) {
-        if (allowPendingFollowup) pointTaskOwners.setPending('point-auto', {
-            chatId: getContext().chatId,
-            chatRevision: pointTaskOwners.currentChatRevision(),
-            targetDate: travelContext?.targetDate,
-        });
-        return { status: 'skipped' };
-    }
-    if (pointState.isGenerating) { if (!auto) showToast('点正在生成，稍候再同步', null, true); return { status: 'skipped' }; }
-    const view = currentView, charName = charViewName;
-    const cacheKey = getCacheKey(view, charName);
-    if (!cacheKey) return { status: 'skipped' };
-    const raw = readStore(cacheKey)?.raw || '';
-    if (!raw) return { status: 'skipped' };                  // refresh-only：没生成过 → 不凭空建
-    _autoRegenSchedAbort?.abort();
-    const chatIdSnap = getContext().chatId;
-    const owner = pointTaskOwners.create('point-auto', {
-        chatId: chatIdSnap,
-        chatRevision: pointTaskOwners.currentChatRevision(),
-        view,
-        charName,
-        targetDate: travelContext?.targetDate,
-    });
-    const myCtrl = _autoRegenSchedAbort = owner.controller;
-    const removeAbortBridge = bridgeAbortSignal(travelContext?.signal, myCtrl);
-    axisState._almSyncingPoint = true;
-    if (axisState.almanacMode) renderAlmanacPanel();                   // 今天条：「同步到点」→「同步中…」
-    $in('#sp-body .sp-refresh-schedule').addClass('sp-refresh-busy');   // 点面板此刻正开着也即时置灰，不等重渲染
-    try {
-        const ctx = getContext();
-        const cfg = loadCfg();
-        if (!cfg.url || !cfg.key) { showToast('未配置主 API，无法同步点', null, true); return { status: 'failed', error: new Error('未配置主 API') }; }
-        const userName = ctx.name1 || '用户';
-        const cName = view === 'char' ? (charName || ctx.name2 || '角色') : (ctx.name2 || '角色');
-        const subject = view === 'char' ? cName : userName;
-        const pinnedEvents = [];
-        const pc = parseCalendar(raw, loadCalDesc());
-        for (const d of pc.days) for (const ev of d.events) if (ev.pin) pinnedEvents.push(ev);
-        if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
-        const fresh = await generate(ctx, userName, cName, view, myCtrl.signal, pinnedEvents, travelContext);
-        if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: chatIdSnap, chatRevision: owner.chatRevision, signal: travelContext?.signal, pluginEnabled: pluginEnabled() }).canCommit) return { status: 'cancelled' };
-        if (pointState.isGenerating) return { status: 'cancelled' };    // 期间前台手动生成插了队 → 让前台赢
-        if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' }; // 已切 chat → 丢弃
-        const today = travelContext?.targetDate || almTodayAnchor();
-        const freshCheck = validateGeneratedCalendar(fresh, loadCalDesc());
-        if (!freshCheck.ok) {
-            showToast('点同步返回不完整（需要闭合的 Day 1–3 及至少 5 条 Future 事件），旧点数据未改变，请重试', null, true);
-            return { status: 'failed', error: new Error('返回不完整') };
-        }
-        const merged = forceStartDate(mergePinnedPoints(raw, fresh, loadCalDesc()), today.month, today.day, loadCalDesc());
-        if (!validateGeneratedCalendar(merged, loadCalDesc()).ok) {
-            showToast('点同步结果结构不完整，旧点数据未改变，请重试', null, true);
-            return { status: 'failed', error: new Error('同步结果不完整') };
-        }
-        writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
-        syncLatestScheduleBlock();                           // 楼内点条即时刷到新日期
-        // 修 pointState.cachedSchedule 陈旧：只要同步的视角 == 当前视角就刷缓存——哪怕此刻停在历面板，
-        // 回头切到点也拿到新版（不再限「点面板正开着」才更新，否则切过去会看到旧点）。
-        if (currentView === view && (view !== 'char' || charViewName === charName)) {
-            pointState.cachedSchedule = renderSchedule(merged, subject, view, loadCalDesc());
-            const onPointPanel = !axisState.almanacMode && !outlineMode && !linesMode && !spaceMode && !theaterMode && !anchorMode;
-            if (onPointPanel && $(`#${MODAL_ID}`).is(':visible')) setBody(pointState.cachedSchedule);
-        }
-        if (auto ? getSettings().notifyMode === 'full' : getSettings().notifyMode !== 'off') showToast(`点已同步到 ${calMonthName(loadCalDesc(), today.month)}${today.day}日`);
-        return { status: 'updated', targetDate: today };
-    } catch (err) {
-        // 报错弹窗：同步失败要让用户看见——#41 自愈也靠它，静默会把真问题藏掉。
-        // 排除中止 / 被更新的同步取代 / 切档——那些不是失败。isError toast 不受 notifyMode 静默。
-        if (err?.name !== 'AbortError' && evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: chatIdSnap, chatRevision: owner.chatRevision, signal: travelContext?.signal, pluginEnabled: pluginEnabled() }).canCommit) {
-            showToast('点同步到今天失败，请重试', null, true);
-        }
-        return { status: err?.name === 'AbortError' || travelContext?.signal?.aborted ? 'cancelled' : 'failed', error: err };
-    }
-    finally {
-        removeAbortBridge();
-        const pendingItem = pointTaskOwners.peekPending(owner);
-        const lifecycle = evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: chatIdSnap, chatRevision: owner.chatRevision, signal: travelContext?.signal, pluginEnabled: pluginEnabled(), allowPendingFollowup, pending: pendingItem });
-        const ownerStillOwned = lifecycle.canCleanup;
-        if (ownerStillOwned) _autoRegenSchedAbort = null;
-        if (!ownerStillOwned) return;
-        axisState._almSyncingPoint = false;
-        if (axisState.almanacMode) renderAlmanacPanel();               // 恢复今天条（同步键消失，或仍需同步则复现）
-        $in('#sp-body .sp-refresh-schedule').removeClass('sp-refresh-busy');   // 同步结束：解除刷新圆圈置灰
-        // 自对账：同步在飞期间被丢过新的「今天」推进 → 若点仍落后今天且环境未变，收尾补一轮，保证都开态最终收敛（不会永久停在旧日期）。
-        const pending = lifecycle.canFollowup;
-        if (!pending) pointTaskOwners.discardPending(owner);
-        const followupContext = pendingItem?.targetDate
-            ? { ...(travelContext || {}), targetDate: pendingItem.targetDate }
-            : travelContext;
-        if (shouldRunPendingPointFollowup({
-            pending,
-            allowPendingFollowup,
-            signalAborted: followupContext?.signal?.aborted,
-            chatSame: getContext().chatId === chatIdSnap && pointTaskOwners.currentChatRevision() === owner.chatRevision,
-            pointGenerating: pointState.isGenerating,
-            needsSync: schedulePointNeedsSync(),
-        }) && lifecycle.canFollowup) {
-            syncPointToToday(auto, { ...followupContext, targetDate: lifecycle.pendingTargetDate });
-        }
-        pointTaskOwners.finish(owner);
-    }
-}
-
-// ─── 锚·收藏楼层：每楼收藏入口（快照捕获）────────────────────────────────────────
+async function syncPointToToday(auto = false, travelContext = null) { return pointController.syncPointToToday(auto, travelContext); }
 // 楼层头部（char 名旁）挂一枚「坐标」按钮，点一下 = 抓 live .mes_text.innerHTML 快照存服务器。
 // 已收藏则点按跳锚面板定位。按钮态靠内存里的 _anchorSavedKeys（`chatId::mesid`）同步。
 // 扫描幂等：已有按钮的楼跳过；靠 CHAR_MSG_RENDERED / CHAT_CHANGED / MutationObserver 三路补齐。
@@ -4414,11 +3598,11 @@ function injectModal() {
                                         <input type="checkbox" id="sp-storyclock-enabled" ${getSettings().storyClockEnabled !== false ? 'checked' : ''}>
                                         <span>启用时间戳</span>
                                     </label>
-                                    <p class="sp-cfg-hint" style="margin-top:2px">给整个故事一个<b>跟着剧情走的时间源</b>：向主楼 AI 注入一段指令，让它在<b>每楼正文首尾各打一个隐形时间戳</b>（HTML 注释，聊天里看不到），构画读回它来把握「现在是什么时候」，精确到<b>小时</b>。这是时间系统的地基——默认开。<br><span style="opacity:.75">注：会给每楼多加一小段系统提示词（占少量 token）；导出聊天原文时能看到这些 <code>&lt;!-- … --&gt;</code> 注释。不受「允许潜伏注入」总闸控制——关掉那个总闸不会关掉时间戳。它是让主楼 AI 产出时间数据的地基（与线/面「把数据喂给 AI」方向相反），只由插件总开关和上面这个开关控制。</span></p>
+                                    <p class="sp-cfg-hint" style="margin-top:2px">给整个故事一个<b>跟着剧情走的时间源</b>：向主楼 AI 注入一段指令，让它在<b>每楼正文首尾各打一个隐形时间戳</b>（HTML 注释，聊天里看不到），并写出标准故事星期（周一至周日）。构画读回 SDC，把它作为全局唯一星期锚；点三天与轴月历只按故事月日相对顺推，缺星期时显示“星期未记录”，不回退现实年份或 StartDate。<br><span style="opacity:.75">注：SDC 是额外元数据，不替代或接管上下文中的其他日期、时间和时间戳格式；会给每楼多加一小段系统提示词（占少量 token）。</span></p>
                                     <p class="sp-cfg-hint" style="margin-top:4px; opacity:.75">另：所有刷新判定都挂钩时间戳；不开启时，遇到楼尾的额外变量计算（如 MVU）可能<b>重复调用 API</b>。</p>
                                     <hr class="sp-mem-divider">
                                     <label class="sp-cfg-group" style="margin-top:10px">强制注入提示词（可二改）</label>
-                                    <p class="sp-cfg-hint"><strong>留空＝用内置默认</strong>（默认词随插件更新走）。想自定义就点「载入默认再改」把默认全文拉进编辑框，<strong>改成什么就整段注入什么</strong>；想回到跟随更新的原版，点「恢复默认」清空即可。⚠️ 务必保留 <code>&lt;!-- SDC-start … --&gt;</code> / <code>&lt;!-- SDC-end … --&gt;</code> 这对注释结构——构画靠它读回时间戳；改坏了只是时间戳读空、轴 / 点仍照常兜底，不影响其它。</p>
+                                    <p class="sp-cfg-hint"><strong>留空＝用内置默认</strong>（默认词随插件更新走）。自定义正文仍会保留；机器合同会自动追加，不能被自定义正文替换。务必保留 <code>&lt;!-- SDC-start … --&gt;</code> / <code>&lt;!-- SDC-end … --&gt;</code>，并让两端各带月日、周一至周日之一和时间；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
                                     <textarea id="sp-storyclock-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝用内置默认强制词。"></textarea>
                                     <div style="display:flex; gap:8px; margin-top:6px">
                                         <button id="sp-storyclock-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button>
@@ -5003,50 +4187,6 @@ function injectModal() {
         triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx, { view: 'user', charName: '' });
     });
 
-    // 楼内「标注池」框（AI 楼）：summary 的打捞/更新 + 每条锁定/归档了结。钮在 <summary>/行内，需 stopPropagation 免折叠。
-    $('#chat').on('click', '.sp-inline-ledger-capture', function (e) {
-        e.stopPropagation();
-        if (isCapturingLedger) { showToast('正在标注中…'); return; }
-        runLedgerCaptureStep(true);   // 手动打捞：无新事件/无 API 时自带 toast
-    });
-    $('#chat').on('click', '.sp-inline-ledger-judge', function (e) {
-        e.stopPropagation();
-        runLedgerJudgeStep(true);     // 手动判定：无活跃条目/无改动时自带 toast
-    });
-    $('#chat').on('click', '.sp-inline-ledger-lock', function (e) {
-        e.stopPropagation();
-        const id = $(this).attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        if (it.锁 === '用户锁') { ledger.unlockEntry(id); showToast('已解锁 · AI 判定可再更新此条'); }
-        else { ledger.lockEntry(id); showToast('已锁定 · AI 判定不再改动此条'); }
-        refreshInlineWindow(true);
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    $('#chat').on('click', '.sp-inline-ledger-mute', function (e) {
-        e.stopPropagation();
-        const id = $(this).attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        if (it.静音 === true) { ledger.unmuteEntry(id); showToast('已恢复埋入 · 重新参与注入'); }
-        else { ledger.muteEntry(id); showToast('已暂停埋入 · 保留跟进、暂不注入主楼'); }
-        refreshLedgerInjection();   // 注入集变了 → 当场重算
-        refreshInlineWindow(true);
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    $('#chat').on('click', '.sp-inline-ledger-close', async function (e) {
-        e.stopPropagation();
-        const id = $(this).attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        const ok = await spConfirm({ title: '了结条目', body: `把「${it.事由}」移出活跃刻度？可在刻度页归档里捞回。`, confirmText: '了结', cancelText: '取消' });
-        if (!ok) return;
-        ledger.closeEntry(id);
-        refreshLedgerInjection();
-        refreshInlineWindow(true);
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-
     // Inject buttons (event delegation)——双绑拆分：面板三区在 shadow 内走 $inAll；楼内注入钮在 light DOM #chat 保持原查询。
     // 逗号选择器必须 $inAll：$in=querySelector 只取首个容器(#sp-body)，outline/lines 两区的注入钮会静默失效。
     $inAll('#sp-body, #sp-outline-wrap, #sp-lines-wrap').on('click', '.sp-inject-btn', function () {
@@ -5359,155 +4499,15 @@ function injectModal() {
     // ── 历（日历）事件（委托到 #sp-almanac-wrap，两个 sheet 动态重渲染）──
     const $almanac = $in('#sp-almanac-wrap');
     $almanac.on('click', '.sp-alm-sheet-btn', function () { almSetSheet($(this).attr('data-sheet')); });
-    // 暗账页：自动标注开关 / 间隔 / 立即标注。委托到 #sp-almanac-wrap，随 sheet 重渲染存活。
-    $almanac.on('change', '.sp-ledger-auto-toggle', function () {
-        getSettings().ledgerCaptureEnabled = this.checked;
-        saveSettingsDebounced();
-        ledgerCaptureCounter = 0;   // 开/关都重置计数，避免残留计数刚开就触发
-        renderAlmanacPanel();       // 开/关切换后空态提示措辞跟着变（关态催勾开关、开态提示已自动）
-    });
-    $almanac.on('change', '.sp-ledger-interval', function () {
-        const n = Math.max(1, Math.min(30, Math.floor(Number(this.value) || 5)));
-        getSettings().ledgerCaptureInterval = n;
-        this.value = String(n);     // 规范化回填
-        saveSettingsDebounced();
-        ledgerCaptureCounter = 0;
-    });
-    $almanac.on('click', '.sp-ledger-capture-now', function () {
-        if (isCapturingLedger) { ledgerCaptureAbort?.abort(); showToast('已请求中止刻度标注'); return; }
-        const p = runLedgerCaptureStep(true);   // 同步内设 isCapturingLedger=true（守卫通过时）
-        renderAlmanacPanel();                    // 立刻渲染成 busy 态（spinner + 禁用）
-        p.then(() => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); });
-    });
-    $almanac.on('click', '.sp-ledger-judge-now', function () {
-        const p = runLedgerJudgeStep(true);      // manual=true：无活跃条目/无改动时给 toast
-        p.then(() => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); });
-    });
-    // 暗历行操作：编辑 / 锁·解锁 / 了结（软删·可捞回）。id 从行容器取。
-    $almanac.on('click', '.sp-ledger-edit', function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        if (id) openLedgerEditor(id);
-    });
-    $almanac.on('click', '.sp-ledger-lock-toggle', function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        if (it.锁 === '用户锁') { ledger.unlockEntry(id); showToast('已解锁 · AI 判定可再更新此条'); }
-        else { ledger.lockEntry(id); showToast('已锁定 · AI 判定不再改动此条'); }
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    // 暗历行·暂停埋入（静音）：翻标志位。注入集当场变 → 必刷 refreshLedgerInjection（区别于锁：锁不动注入集）。
-    $almanac.on('click', '.sp-ledger-mute-toggle', function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        if (it.静音 === true) { ledger.unmuteEntry(id); showToast('已恢复埋入 · 重新参与注入'); }
-        else { ledger.muteEntry(id); showToast('已暂停埋入 · 保留跟进、暂不注入主楼'); }
-        refreshLedgerInjection();   // 注入集变了 → 当场重算（静音条即刻退出/回归注入）
-        refreshInlineWindow(true);  // 标注池静音态变了 → 刷楼内框
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    $almanac.on('click', '.sp-ledger-close', async function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        const ok = await spConfirm({ title: '了结条目', body: `把「${it.事由}」移出活跃刻度？可在归档里捞回。`, confirmText: '了结', cancelText: '取消' });
-        if (!ok) return;
-        ledger.closeEntry(id);
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    // 归档折叠区：标题条切换展开/收起。
-    $almanac.on('click', '.sp-ledger-archive-head', function (e) {
-        e.stopPropagation();
-        toggleLedgerArchiveOpen();
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    // 归档条：捞回（回活跃）/ 彻底删（物理删·带确认·不可逆）。
-    $almanac.on('click', '.sp-ledger-reopen', function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        if (!id || !ledger.getEntry(id)) return;
-        ledger.reopenEntry(id);
-        showToast('已捞回 · 回到活跃、判定车重新跟进');
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    $almanac.on('click', '.sp-ledger-remove', async function (e) {
-        e.stopPropagation();
-        const id = $(this).closest('.sp-ledger-row').attr('data-id');
-        const it = id && ledger.getEntry(id);
-        if (!it) return;
-        const ok = await spConfirm({ title: '彻底删除', body: `「${it.事由}」将被永久删除，无法恢复。确定？`, confirmText: '删除', cancelText: '取消' });
-        if (!ok) return;
-        ledger.removeEntry(id);
-        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
-    });
-    // 暗历编辑窗内：保存 / 取消 / 返回 / 展开改起始锚。
-    $almanac.on('click', '.sp-led-editor-save', saveLedgerEditor);
-    $almanac.on('click', '.sp-led-editor-cancel, .sp-led-editor-back', closeLedgerEditor);
-    $almanac.on('click', '.sp-led-adv-open', function () {
-        const ed = getLedgerEditor();
-        if (ed) { ed.advanced = true; renderAlmanacPanel(); }
-    });
-    $almanac.on('click', '.sp-alm-add', function () { openAlmanacEditor(null); });
-    $almanac.on('click', '.sp-alm-gen', triggerGenerateAlmanac);
-    $almanac.on('click', '.sp-alm-supplement', triggerSupplementAnniversary);
-    $almanac.on('click', '.sp-alm-manage', openCalendarManager);
-    $almanac.on('click', '.sp-action-menu-toggle', function (event) {
-        event.stopPropagation();
-        const menu = $(this).closest('.sp-action-menu')[0];
-        const willOpen = !$(menu).hasClass('sp-action-menu-open');
-        closeActionMenus(menu);
-        $(menu).toggleClass('sp-action-menu-open', willOpen).find('.sp-action-menu-list').attr('hidden', !willOpen);
-        $(this).attr('aria-expanded', String(willOpen));
-    });
-    $almanac.on('click', '.sp-action-menu-item', function () {
-        const action = $(this).attr('data-action');
-        closeActionMenus();
-        if (action === 'generate-almanac') triggerGenerateAlmanac();
-        else if (action === 'supplement-anniversary') triggerSupplementAnniversary();
-        else if (action === 'manage-calendar') openCalendarManager();
-    });
-    $almanac.on('click', '.sp-alm-pin', function () { toggleAlmanacPin($(this).attr('data-id')); });
-    $almanac.on('click', '.sp-alm-edit', function () { openAlmanacEditor($(this).attr('data-id')); });
-    $almanac.on('click', '.sp-alm-del', function () { deleteAlmanacItem($(this).attr('data-id')); });
-    // ── 历面板批量模式：三个入口（日历条目删 / 活跃刻度归档 / 归档刻度删）。严格限定 scope，不接模板管理。──
-    $almanac.on('click', '.sp-batch-enter', function (e) {
-        e.stopPropagation();
-        const scope = $(this).attr('data-scope');
-        if (!BATCH_SCOPES.includes(scope)) return;   // 严格限定入口：仅 'almanac' / 'ledger-active' / 'ledger-archive'
-        setBatchScope(scope);
-        getBatchSelected().clear();
-        renderAlmanacPanel();
-    });
-    $almanac.on('click', '.sp-batch-exit', function (e) {
-        e.stopPropagation();
-        batchReset();
-        renderAlmanacPanel();
-    });
-    $almanac.on('change', '.sp-batch-selall', function () {
-        const scope = getBatchScope();
-        if (!scope || !BATCH_SCOPES.includes(scope)) return;
-        if (this.checked) batchScopeIds(scope).forEach(id => getBatchSelected().add(id));
-        else getBatchSelected().clear();
-        renderAlmanacPanel();
-    });
-    $almanac.on('change', '.sp-batch-check', function () {
-        const id = $(this).closest('[data-id]').attr('data-id');
-        if (id == null) return;
-        if (this.checked) getBatchSelected().add(id);
-        else getBatchSelected().delete(id);
-        renderAlmanacPanel();
-    });
-    $almanac.on('click', '.sp-batch-exec', async function (e) {
-        e.stopPropagation();
-        const scope = getBatchScope();
-        const ids = [...getBatchSelected()];
-        if (!scope || !BATCH_SCOPES.includes(scope) || !ids.length) return;
-        await execBatch(scope, ids);
+    bindLedgerEvents({
+        almanac: $almanac, chat: $('#chat'), $, settings: getSettings, saveSettings: saveSettingsDebounced,
+        capture: { run: runLedgerCaptureStep, abort: () => ledgerCaptureController.abort() },
+        judge: { run: runLedgerJudgeStep }, captureState: () => ({ busy: ledgerCaptureController.isBusy }), actions: ledgerActions,
+        render: renderAlmanacPanel,
+        editor: { open: openLedgerEditor, save: saveLedgerEditor, close: closeLedgerEditor, get: getLedgerEditor },
+        archive: { toggle: toggleLedgerArchiveOpen },
+        batch: { scopes: BATCH_SCOPES, scope: getBatchScope, setScope: setBatchScope, selected: getBatchSelected, reset: batchReset, ids: batchScopeIds, exec: execBatch },
+        toast: showToast, resetCapture: () => { ledgerCaptureCounter = 0; },
     });
     // 历面板「今天」栏：±1天 / 改（内联月日） / 自动（清锚） / 同步到点。前三者经 runAnchorAftermath 共享善后
     // （刷两条只读条 + 历面板）；改今天不再自动烧点，点要跟随由「同步到点」键显式触发（历点共用这枚今天锚点）。
@@ -5520,33 +4520,17 @@ function injectModal() {
     });
     $almanac.on('click', '.sp-alm-today-cancel', function () { axisState._almTodayEditing = false; renderAlmanacPanel(); });
     $almanac.on('click', '.sp-alm-today-save', async function () {
-        if (storyClockEnabled()) { axisState._almTodayEditing = false; renderAlmanacPanel(); return; }   // 戳开时手动钉禁用（防陈旧 DOM 误触）
-        const key = charStableKey(getContext());
-        if (!key) { showToast('当前没有角色卡，无法钉日期', null, true); return; }
         const mo = parseInt($in('#sp-alm-today-month').val(), 10);
         const da = parseInt($in('#sp-alm-today-day').val(), 10);
-        const _tcal = loadCalDesc();
-        const _tmc = calMonthCount(_tcal);
-        if (!(mo >= 1 && mo <= _tmc)) { showToast(`请填 1-${_tmc} 月`, null, true); return; }
-        const _tdmax = calMonthDays(_tcal, mo);
-        if (!(da >= 1 && da <= _tdmax)) { showToast(`${mo} 月只有 1-${_tdmax} 日`, null, true); return; }
-        const pending = chatAnchorRepository.pending();
-        let stored;
-        if (pending) {
-            const confirmed = await spConfirm({ title: '发现旧版日期锚点', body: '是否将旧版全局日期仅认领到当前聊天？', confirmText: '认领', cancelText: '取消' });
-            if (!confirmed) { showToast('已取消认领，未写入日期', null, true); return; }
-            stored = chatAnchorRepository.claim(mo, da);
-        } else stored = setDateAnchor(key, mo, da);
-        if (!stored.ok) { showToast('日期保存失败，请重试', null, true); return; }
+        const result = await axisDateActions.saveManual(mo, da, { storyClock: storyClockEnabled() });
+        if (!result.ok) { if (result.reason === 'story-clock') { axisState._almTodayEditing = false; renderAlmanacPanel(); } return; }
         axisState._almTodayEditing = false;
-        runAnchorAftermath();
-        showToast(`已把今天钉为 ${mo}月${da}日`);
     });
     $almanac.on('click', '.sp-alm-today-clear', function () {
         if (storyClockEnabled()) return;   // 戳开时无「恢复自动」概念（今天恒由戳钉）；防陈旧 DOM 误触
         const key = charStableKey(getContext());
         if (!key) return;
-        const cleared = setDateAnchor(key, null);   // 清锚 → 恢复自动确认
+        const cleared = axisDateActions.clearAnchor(key);   // 清锚 → 恢复自动确认
         if (!cleared.ok) { showToast('日期清除失败，请重试', null, true); return; }
         runAnchorAftermath();
         showToast('已清除手动日期，恢复自动确认');
@@ -5559,33 +4543,22 @@ function injectModal() {
         if (Number.isInteger(day)) startTimeTravel({ month: almCalMonth() + 1, day });
     });
     $almanac.on('click', '.sp-alm-time-travel-stop', function () { cancelTimeTravel(); });
-    $almanac.on('click', '.sp-alm-cell[data-day]', function () { almSelectDay(parseInt($(this).attr('data-day'), 10)); });
-    $almanac.on('click', '.sp-alm-cal-clearsel', function () { axisState._almanacCalDay = null; renderAlmanacPanel(); });
+    $almanac.on('click', '.sp-alm-cell[data-day]', function () { axisCalendarActions.selectDay(parseInt($(this).attr('data-day'), 10)); });
+    $almanac.on('click', '.sp-alm-cal-clearsel', function () { axisCalendarActions.selectDay(null); });
     $almanac.on('click', '.sp-alm-add-day', function () {
         openAlmanacEditor(null, { month: almCalMonth() + 1, day: parseInt($(this).attr('data-day'), 10) || 1 });
     });
     // 上下联动：点日历详情里某条 → 高亮它在网格覆盖的那天/那几天，再点一下取消（就地改 class，不重渲）
     $almanac.on('click', '.sp-alm-cal-detail .sp-alm-item', function (e) {
         if ($(e.target).closest('button').length) return;   // 不劫持锁/编辑/删除按钮
-        const wasLinked = $(this).hasClass('sp-alm-item-linked');
-        $inAll('#sp-almanac-wrap .sp-alm-item-linked').removeClass('sp-alm-item-linked');
-        almClearHilite();
-        if (wasLinked) return;   // 再点=取消高亮
-        $(this).addClass('sp-alm-item-linked');
-        almHiliteCells(loadAlmanac().find(x => x.id === $(this).attr('data-id')));
+        axisCalendarActions.toggleItem($(this).attr('data-id'), { targetIsButton: false });
     });
     $almanac.on('click', '#sp-abort-almanac', abortAlmanacGen);
     // F4：日历里点空白处（非日格/条目/控件）→ 清掉当前瞬时态。既回退「选中某天」，也清「上下联动高亮」，两者任一存在都响应，做到点空白必回干净全月。
     $almanac.on('click', function (e) {
         if (!axisState.almanacMode || axisState._almanacEditor || axisState._almanacSheet !== 'calendar') return;
         if ($(e.target).closest('.sp-alm-cell,.sp-alm-item,button,input,select,textarea,.sp-alm-cal-detail-head').length) return;
-        if (axisState._almanacCalDay != null) {
-            axisState._almanacCalDay = null;
-            renderAlmanacPanel();   // 重渲染顺带把联动高亮的 class 冲掉
-        } else if ($inAll('#sp-almanac-wrap .sp-alm-item-linked').length) {
-            $inAll('#sp-almanac-wrap .sp-alm-item-linked').removeClass('sp-alm-item-linked');
-            almClearHilite();       // 只清高亮 class，不重渲，避免闪
-        }
+        axisCalendarActions.blankClick();
     });
     // 内联编辑器：保存 / 取消 / 返回
     $almanac.on('click', '.sp-alm-editor-save', saveAlmanacEditor);
@@ -5599,103 +4572,44 @@ function injectModal() {
         else if (getSettings().notifyMode !== 'off') showToast('已把历法需求预填到间');
     });
     $almanac.on('click', '.sp-alm-manager-edit-start', function () {
-        axisState._almanacManager.editing = true;
-        axisState._almanacManager.draft = cloneCalDesc(loadCalDesc());
-        axisState._almanacManager.error = '';
-        renderAlmanacPanel();
+        axisCalendarManager.startEditing();
     });
     $almanac.on('click', '.sp-alm-manager-edit-cancel', function () {
-        axisState._almanacManager.editing = false;
-        axisState._almanacManager.draft = cloneCalDesc(loadCalDesc());
-        axisState._almanacManager.error = '';
-        renderAlmanacPanel();
+        axisCalendarManager.cancelEditing();
     });
     $almanac.on('click', '.sp-alm-manager-add-month', function () {
-        captureCalendarDraft();
-        if (axisState._almanacManager.draft.months.length >= CALENDAR_LIMITS.monthCount) {
-            axisState._almanacManager.error = `最多只能有 ${CALENDAR_LIMITS.monthCount} 个月份`;
-            renderAlmanacPanel();
-            return;
-        }
-        const index = axisState._almanacManager.draft.months.length;
-        axisState._almanacManager.draft.months.push({ name: `${index + 1}月`, days: CALENDAR_LIMITS.defaultMonthDays });
-        axisState._almanacManager.error = '';
-        renderAlmanacPanel({ reveal: { kind: 'month', index }, focus: { kind: 'month', index, selector: '.sp-alm-manager-month-name' } });
+        axisCalendarManager.addMonth();
     });
     $almanac.on('click', '.sp-alm-manager-month-delete', async function () {
-        captureCalendarDraft();
-        if (axisState._almanacManager.draft.months.length <= 1) { axisState._almanacManager.error = '至少保留一个月份'; renderAlmanacPanel(); return; }
-        const manager = axisState._almanacManager;
-        const chatIdSnap = getContext().chatId;
         const index = Number($(this).closest('.sp-alm-manager-month-row').attr('data-index'));
-        const month = manager.draft.months[index];
-        if (!month) return;
-        const ok = await customDialog.confirm({
-            title: '删除月份',
-            body: `确定删除月份「${month.name}」吗？保存历法时会继续检查受影响的纪念日。`,
-            confirmText: '删除',
-            cancelText: '取消',
-        });
-        if (!ok || axisState._almanacManager !== manager || getContext().chatId !== chatIdSnap || manager.draft.months[index] !== month) return;
-        manager.draft.months.splice(index, 1);
-        manager.error = '';
-        const nextIndex = Math.min(index, manager.draft.months.length - 1);
-        renderAlmanacPanel({ reveal: { kind: 'month', index: nextIndex }, focus: { kind: 'month', index: nextIndex, selector: '.sp-alm-manager-month-delete' } });
+        await axisCalendarManager.deleteMonth(index);
     });
     $almanac.on('click', '.sp-alm-manager-month-copy', function () {
-        captureCalendarDraft();
         const index = Number($(this).closest('.sp-alm-manager-month-row').attr('data-index'));
-        if (!copyCalendarMonth(axisState._almanacManager.draft.months, index, CALENDAR_LIMITS.monthCount)) {
-            axisState._almanacManager.error = axisState._almanacManager.draft.months.length >= CALENDAR_LIMITS.monthCount ? `最多只能有 ${CALENDAR_LIMITS.monthCount} 个月份` : '找不到要复制的月份';
-            renderAlmanacPanel();
-            return;
-        }
-        axisState._almanacManager.error = '';
-        renderAlmanacPanel({ reveal: { kind: 'month', index: index + 1 }, focus: { kind: 'month', index: index + 1, selector: '.sp-alm-manager-month-name' } });
+        axisCalendarManager.copyMonth(index);
     });
     $almanac.on('click', '.sp-alm-manager-month-up, .sp-alm-manager-month-down', function () {
-        captureCalendarDraft();
         const index = Number($(this).closest('.sp-alm-manager-month-row').attr('data-index'));
         const movingUp = $(this).hasClass('sp-alm-manager-month-up');
-        const nextIndex = index + (movingUp ? -1 : 1);
-        if (nextIndex < 0 || nextIndex >= axisState._almanacManager.draft.months.length) return;
-        [axisState._almanacManager.draft.months[index], axisState._almanacManager.draft.months[nextIndex]] = [axisState._almanacManager.draft.months[nextIndex], axisState._almanacManager.draft.months[index]];
-        renderAlmanacPanel({ reveal: { kind: 'month', index: nextIndex }, focus: { kind: 'month', index: nextIndex, selector: movingUp ? '.sp-alm-manager-month-up' : '.sp-alm-manager-month-down' } });
+        axisCalendarManager.moveMonth(index, movingUp ? -1 : 1);
     });
     $almanac.on('input', '.sp-alm-manager-edit-fields input', function () {
-        if (!axisState._almanacManager?.error) return;
-        axisState._almanacManager.error = '';
+        if (!axisCalendarManager.hasError()) return;
+        axisCalendarManager.clearError();
         $inAll('#sp-almanac-wrap .sp-alm-manager-error').remove();
     });
     $almanac.on('click', '.sp-alm-manager-edit-save', async function () {
-        axisState._almanacManager.draft = readCalendarDraftForm();
-        axisState._almanacManager.error = '';
-        $inAll('#sp-almanac-wrap .sp-alm-manager-error').remove();
-        const checked = validateCalendarDesc(axisState._almanacManager.draft);
-        if (!checked.value) {
-            showToast(checked.error, null, true);
-            return;
-        }
-        const result = await commitCalendarDesc(checked.value);
+        const result = await axisCalendarManager.saveDraft();
         if (!result.ok) {
             if (result.cancelled) return;
             const message = result.error || '历法保存失败';
             showToast(message, null, true);
             return;
         }
-        if (axisState._almanacManager) {
-            axisState._almanacManager.editing = false;
-            axisState._almanacManager.draft = cloneCalDesc(result.cal);
-            axisState._almanacManager.error = '';
-            renderAlmanacPanel();
-        }
         if (getSettings().notifyMode !== 'off') showToast(`历法已更新：${calendarSummary(result.cal)}`);
     });
     $almanac.on('click', '.sp-alm-manager-template-head', function () {
-        axisState._almanacManager.templatesOpen = !axisState._almanacManager.templatesOpen;
-        axisState._almanacManager.bindTemplateId = null;
-        axisState._almanacManager.bindQuery = '';
-        renderAlmanacPanel({ focus: { selector: '.sp-alm-manager-template-head' } });
+        axisCalendarManager.toggleTemplates();
     });
     $almanac.on('click', '.sp-alm-manager-template-save-current', async function () {
         const list = loadCalendarTemplates();
@@ -5707,22 +4621,14 @@ function injectModal() {
             maxLength: CALENDAR_TEMPLATE_NAME_LENGTH,
             validate: value => !value ? '请填写模板名称' : (list.some(template => template.name === value) ? '模板名称已存在，请换一个名称' : ''),
         });
-        if (name == null || !axisState._almanacManager) return;
-        const latest = loadCalendarTemplates();
-        if (latest.some(template => template.name === name)) {
-            showToast('模板名称已存在，请换一个名称', null, true);
-            return;
-        }
-        const now = Date.now();
-        const id = calendarTemplateId();
-        latest.push({ ...cloneCalDesc(loadCalDesc()), id, name, createdAt: now, updatedAt: now });
-        saveCalendarTemplates(latest);
-        renderAlmanacPanel({ reveal: { kind: 'template', id } });
+        if (name == null || !axisCalendarManager.isOpen()) return;
+        const result = await axisCalendarManager.create({ name, calendar: loadCalDesc() });
+        if (!result.ok) showToast(result.error || '模板保存失败', null, true);
     });
     $almanac.on('click', '.sp-alm-manager-template-rename', async function () {
         const id = $(this).attr('data-id');
         const list = loadCalendarTemplates();
-        const template = list.find(item => item.id === id);
+        const template = axisCalendarManager.template(id);
         if (!template) { showToast('模板已不存在', null, true); renderAlmanacPanel(); return; }
         const name = await customDialog.prompt({
             title: '重命名历法模板',
@@ -5732,58 +4638,45 @@ function injectModal() {
             maxLength: CALENDAR_TEMPLATE_NAME_LENGTH,
             validate: value => !value ? '请填写模板名称' : (list.some(item => item.id !== id && item.name === value) ? '模板名称已存在，请换一个名称' : ''),
         });
-        if (name == null || !axisState._almanacManager || name === template.name) return;
-        const latest = loadCalendarTemplates();
-        if (latest.some(item => item.id !== id && item.name === name)) { showToast('模板名称已存在，请换一个名称', null, true); return; }
-        if (!latest.some(item => item.id === id)) { showToast('模板已不存在', null, true); renderAlmanacPanel(); return; }
-        saveCalendarTemplates(renameCalendarTemplate(latest, id, name));
-        if (axisState._almanacManager) renderAlmanacPanel({ reveal: { kind: 'template', id }, focus: { kind: 'template', id, selector: '.sp-alm-manager-template-rename' } });
+        if (name == null || !axisCalendarManager.isOpen() || name === template.name) return;
+        const result = await axisCalendarManager.rename(id, name);
+        if (!result.ok) showToast(result.error || '模板重命名失败', null, true);
     });
     $almanac.on('click', '.sp-alm-manager-template-apply', async function () {
-        const template = loadCalendarTemplates().find(item => item.id === $(this).attr('data-id'));
+        const id = $(this).attr('data-id');
+        const template = axisCalendarManager.template(id);
         if (!template) { showToast('模板已不存在', null, true); renderAlmanacPanel(); return; }
         const ok = await customDialog.confirm({ title: '应用历法模板', body: `确定用「${template.name}」覆盖当前历法吗？`, confirmText: '应用', cancelText: '取消' });
-        if (!ok || !axisState._almanacManager) return;
-        const result = await commitCalendarDesc(template);
+        if (!ok || !axisCalendarManager.isOpen()) return;
+        const result = await axisCalendarManager.apply(id);
         if (!result.ok) { if (!result.cancelled) showToast(result.error || '模板应用失败', null, true); return; }
-        axisState._almanacManager.draft = cloneCalDesc(result.cal);
-        axisState._almanacManager.editing = false;
+        axisCalendarManager.cancelEditing();
         renderAlmanacPanel({ reveal: { kind: 'template', id: template.id }, focus: { kind: 'template', id: template.id, selector: '.sp-alm-manager-template-apply' } });
         if (getSettings().notifyMode !== 'off') showToast(`已应用历法模板：${template.name}`);
     });
     $almanac.on('click', '.sp-alm-manager-template-delete', async function () {
         const id = $(this).attr('data-id');
-        const template = loadCalendarTemplates().find(item => item.id === id);
+        const template = axisCalendarManager.template(id);
         if (!template) { showToast('模板已不存在', null, true); renderAlmanacPanel(); return; }
-        if (!await customDialog.confirm({ title: '删除历法模板', body: `确定删除「${template.name}」吗？角色卡绑定也会一并解除。`, confirmText: '删除', cancelText: '取消' })) return;
-        const bindings = { ...calendarTemplateBindings() };
-        for (const avatar of Object.keys(bindings)) if (bindings[avatar] === id) delete bindings[avatar];
-        getSettings().calendarTemplateBindings = bindings;
-        saveCalendarTemplates(loadCalendarTemplates().filter(item => item.id !== id));
-        if (axisState._almanacManager) { axisState._almanacManager.bindTemplateId = null; renderAlmanacPanel({ focus: { selector: '.sp-alm-manager-template-head' } }); }
+        const result = await axisCalendarManager.delete(id, { confirm: () => customDialog.confirm({ title: '删除历法模板', body: `确定删除「${template.name}」吗？角色卡绑定也会一并解除。`, confirmText: '删除', cancelText: '取消' }) });
+        if (!result.ok && result.reason !== 'cancelled') showToast(result.error || '模板删除失败', null, true);
     });
     $almanac.on('click', '.sp-alm-manager-template-bind', function () {
         const id = $(this).attr('data-id');
-        const opening = axisState._almanacManager.bindTemplateId !== id;
-        axisState._almanacManager.bindTemplateId = opening ? id : null;
-        axisState._almanacManager.bindQuery = '';
-        renderAlmanacPanel({
-            reveal: { kind: 'template', id, selector: opening ? '.sp-alm-manager-bind-search' : '.sp-alm-manager-template-bind' },
-            focusBindingId: opening ? id : null,
-            focus: opening ? null : { kind: 'template', id, selector: '.sp-alm-manager-template-bind' },
-        });
+        const opening = axisCalendarManager.bindingId() !== id;
+        axisCalendarManager.setBindingView(id, opening);
     });
     $almanac.on('input', '.sp-alm-manager-bind-search', function () {
-        if (!axisState._almanacManager) return;
-        axisState._almanacManager.bindQuery = String($(this).val() ?? '');
+        if (!axisCalendarManager.isOpen()) return;
+        axisCalendarManager.setBindingQuery($(this).val());
         const id = $(this).attr('data-template-id');
-        $(this).closest('.sp-alm-manager-bind-panel').find('.sp-alm-manager-bind-results').html(renderCalendarBindingOptions(id));
+        $(this).closest('.sp-alm-manager-bind-panel').find('.sp-alm-manager-bind-results').html(axisCalendarManager.renderBindingOptions(id));
     });
     $almanac.on('click', '.sp-alm-manager-bind-option', async function () {
-        await updateCalendarTemplateBinding($(this).attr('data-avatar'), $(this).attr('data-template-id'));
+        await axisCalendarManager.updateBinding($(this).attr('data-avatar'), $(this).attr('data-template-id'));
     });
     $almanac.on('click', '.sp-alm-manager-bind-chip-remove', async function () {
-        await updateCalendarTemplateBinding($(this).attr('data-avatar'), null, $(this).attr('data-template-id'));
+        await axisCalendarManager.updateBinding($(this).attr('data-avatar'), null, $(this).attr('data-template-id'));
     });
 
     // 批次3：同 spIntro——action 菜单在 shadow 内，target 重定向失效，改 composedPath 判断。
@@ -6497,7 +5390,7 @@ function resetPanelToScheduleHome() {
     $in('#sp-almanac-wrap').hide();
     axisState._almanacEditor = null;
     resetLedgerRenderState();
-    axisState._almanacManager = null;
+    axisCalendarManager.close();
     $in('#sp-body').show();
     $in('#sp-sub-toggle').show();
     $in('#sp-content-title').text('点');
@@ -6792,143 +5685,18 @@ function loadingHtml(baseText, abortId) {
 // ─── Generation ───────────────────────────────────────────────────────────────
 
 function cleanupManualOwner(owner) {
-    const lifecycle = evaluateTaskLifecycle({
-        manager: pointTaskOwners,
-        owner,
-        chatId: getContext().chatId,
-        chatRevision: pointTaskOwners.currentChatRevision(),
-        pluginEnabled: pluginEnabled(),
-    });
-    if (!lifecycle.canCleanup) return false;
-    if (pointState.scheduleAbortController === null || pointState.scheduleAbortController === owner.controller) {
-        pointState.scheduleAbortController = null;
-    }
-    pointState.isGenerating = false;
-    setExtBtnState(null);
-    pointTaskOwners.finish(owner);
-    return true;
+    return pointController.cleanupManualOwner(owner);
 }
 
 async function triggerGenerate() {
-    if (pointState.isGenerating) return;
-    if (axisState._almSyncingPoint) { showToast('点正在同步到今天，稍候', null, true); return; }   // 同步在飞：拦住点这边的生成，避免跟后台同步双写
-    const viewSnap = currentView;
-    const charSnap = charViewName;
-    const owner = pointTaskOwners.create('point-manual', {
-        chatId: getContext().chatId,
-        chatRevision: pointTaskOwners.currentChatRevision(),
-        view: viewSnap,
-        charName: charSnap,
-    });
-    if (!await memoryPreCheckConfirm()) { cleanupManualOwner(owner); return; }
-    if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled() }).canCommit) { cleanupManualOwner(owner); return; }
-    // F5 锁点对齐线：不清 raw，保留旧 raw（含 pin 标记）供 mergePinnedPoints 回并；
-    // 生成失败/中止则旧点原样留存，成功后 runGenerate 覆写。
-    pointState.cachedSchedule = null;
-    pointState.isGenerating = true;
-    setExtBtnState('generating');
-    if (!$(`#${MODAL_ID}`).is(':visible')) showPanel();
-    setBody(loadingHtml('正在规划', 'sp-abort-generate'));
-    runGenerate({ reroll: true, module: 'point' }, owner);
+    return pointController.triggerGenerate();
 }
 
-async function runGenerate(travelContext = null, owner = null) {
-    // Snapshot view state — user may switch views while the request is in flight
-    const viewSnap = owner?.view ?? currentView;
-    const charSnap = owner?.charName ?? charViewName;
-    if (!owner) owner = pointTaskOwners.create('point-manual', {
-        chatId: getContext().chatId,
-        chatRevision: pointTaskOwners.currentChatRevision(),
-        view: viewSnap,
-        charName: charSnap,
-    });
-    const myCtrl = pointState.scheduleAbortController = owner.controller;
-    _autoRegenSchedAbort?.abort();   // 手动生成优先：掐掉可能在飞的「同步到点」后台生成，免得它慢半拍回来覆盖手动结果
-    try {
-        const ctx      = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
-        const subject  = viewSnap === 'char' ? charName : userName;
-        const cacheKey = getCacheKey(viewSnap, charSnap);
-        const prevRaw  = readStore(cacheKey)?.raw || '';   // F5：旧 raw（含 pin 标记），对齐线
-        // 已锁事件抽出来喂提示，让 AI 尽量别删（真删了 mergePinnedPoints 也会按 title 补回）
-        const pinnedEvents = [];
-        if (prevRaw) {
-            const pc = parseCalendar(prevRaw, loadCalDesc());
-            for (const d of pc.days) for (const ev of d.events) if (ev.pin) pinnedEvents.push(ev);
-            if (pc.future) for (const ev of pc.future.events) if (ev.pin) pinnedEvents.push(ev);
-        }
-        const raw = await generate(ctx, userName, charName, viewSnap, myCtrl.signal, pinnedEvents, travelContext);
-        if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled() }).canCommit) return;   // 生成途中被中止/切 chat：丢弃本次结果
-        const completeness = validateGeneratedCalendar(raw, loadCalDesc());
-        if (!completeness.ok) {
-            const err = new Error('返回不完整（需要闭合的 Day 1–3 及至少 5 条 Future 事件），旧点数据未改变，请重试');
-            err.pointIncomplete = true;
-            throw err;
-        }
-        // F5：合并锁定，机制对齐 mergePinnedLines(oldRaw, aiRaw)
-        let merged = prevRaw ? mergePinnedPoints(prevRaw, raw, loadCalDesc()) : raw;
-        // 点恒跟随今天：手动生成也把 StartDate 钉到「今天」，与轴同日（今天由戳/手动钉/兜底经 almTodayAnchor 单一咽喉给出）。
-        // 不钉的话 AI 常不产 StartDate → 点只显 1/2/3/未来相对天、无日期，正是用户困惑的「没日期」态。
-        const t = almTodayAnchor();
-        merged = forceStartDate(merged, t.month, t.day, loadCalDesc());
-        if (!validateGeneratedCalendar(merged, loadCalDesc()).ok) throw new Error('生成结果结构不完整，旧点数据未改变，请重试');
-        const html   = renderSchedule(merged, subject, viewSnap, loadCalDesc());
-
-        if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled() }).canCommit) return { status: 'cancelled' };
-        writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
-        syncLatestScheduleBlock();   // 点生成 → 楼内日程条即时刷
-        if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled() }).canCommit) return;
-        pointState.isGenerating = false;
-        pointState.scheduleAbortController = null;
-        setExtBtnState('done');
-
-        if (viewSnap === 'char') charViewName = charSnap;
-
-        const stillOnView = currentView === viewSnap &&
-            (viewSnap !== 'char' || charViewName === charSnap);
-        if (stillOnView) {
-            pointState.cachedSchedule = html;
-            if ($(`#${MODAL_ID}`).is(':visible')) { setBody(html); if (getSettings().notifyMode !== 'off') showToast('点已生成'); }
-            else showToast('点已生成，点击查看', () => { if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback) return; showPanel(); setBody(html); });
-        } else {
-            showToast('点已生成，点击查看', () => {
-                if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback) return;
-                setView(viewSnap, charSnap);
-                pointState.cachedSchedule = html;
-                showPanel();
-                setBody(html);
-            });
-        }
-        setTimeout(() => { if (evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback) setExtBtnState(null); }, 6000);
-        pointTaskOwners.finish(owner);
-    } catch (err) {
-        if (!evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled() }).canCommit) return;   // 已中止/切 chat：状态与界面已另处理
-        pointState.isGenerating = false;
-        pointState.scheduleAbortController = null;
-        setExtBtnState(null);
-        if (err.name === 'AbortError') {
-            if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap) showEmptyGenerate();
-            return;
-        }
-        const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
-        if ($(`#${MODAL_ID}`).is(':visible') && currentView === viewSnap) setBody(errHtml);
-        else showToast('点生成失败，请重试', null, true);
-    } finally {
-        cleanupManualOwner(owner);
-    }
-}
-
-// 中止生成：立即撤下 loading、复位状态并 abort，不等待管线。
+async function runGenerate(travelContext = null, owner = null) { return pointController.runGenerate(travelContext, owner); }
 // 前置阶段（世界书组装等）不可打断，若只 abort 不即时复位界面，用户点"中止"会觉得没反应。
 // 被中止的旧管线随后走各自 run* 的身份守卫（controller !== myCtrl）静默丢弃，不覆盖界面。
 function abortScheduleGen() {
-    if (!pointState.isGenerating) return;
-    pointState.scheduleAbortController?.abort();
-    pointState.scheduleAbortController = null;
-    pointState.isGenerating = false;
-    setExtBtnState(null);
-    showEmptyGenerate();
+    pointController.abort();
 }
 function abortOutlineGen() {
     if (!isGeneratingOutline) return;
@@ -7098,13 +5866,7 @@ function getDateAnchor(charKey) {
 }
 
 function setDateAnchor(charKey, month, day, source = 'explicit') {
-    if (!charKey) return { ok: false, reason: 'missing-character' };
-    if (month == null) {
-        const result = chatAnchorRepository.clear();
-        return result;
-    }
-    const result = chatAnchorRepository.set(month, day, source);
-    return result;
+    return axisDateActions.saveAnchor(charKey, month, day, source);
 }
 
 // ─── Per-character narrative scale ──────────────────────────────────────────
@@ -8015,62 +6777,8 @@ function replaceNthLineBlock(raw, idx0, newBlock) {
         : `<storylines_widget>\n${newInner}\n</storylines_widget>`;
 }
 
-// ─── Apply widget to schedule (点) ────────────────────────────────────────
-// Body is the raw text between <schedule_widget>...</schedule_widget>.
-// 无 edit 序号：追加到 Future（用户不用操心归到哪天，去"未来"列看）。
-// 有 edit="N"：就地替换现有第 N 条 Event。
-function applyScheduleWidget(body, $btn, editIdx = null) {
-    // 提取完整 Event 块（含续行），并与点 parser 共享字段校验，避免只取首行造成半条点。
-    const eventLine = firstPointEventBlock(body);
-    const event = eventLine ? parsePointEventRecord(eventLine) : null;
-    if (!event || !event.title || !event.time) { showToast('卡片格式不完整（Event 至少需要标题和时间），无法应用', null, true); return; }
-    // “间”应用到点属于聊天级 canonical user；不把当前点 TA 视角写成 schedule-char。
-    const key = getCacheKey('user', '');
-    if (!key) { showToast('当前 chat 没有可写入的待办缓存', null, true); return; }
-    let raw = '';
-    const saved = readStore(key);
-    if (saved?.raw) raw = saved.raw;
-    if (editIdx != null) {
-        // 改现有第 N 条
-        const newRaw = raw ? replaceNthEventLine(raw, editIdx - 1, eventLine) : null;
-        if (newRaw == null) { showToast(`找不到第 ${editIdx} 条点，请刷新面板后重试`, null, true); return; }
-        raw = newRaw;
-    } else if (!raw) {
-        // If no existing schedule → build minimal wrapper containing just Future
-        raw = `<calendar_widget>\nFuture:\n${eventLine}\n</calendar_widget>`;
-    } else {
-        // Find (or create) Future: section inside calendar_widget
-        const widgetMatch = raw.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-        if (widgetMatch) {
-            const inner = widgetMatch[1];
-            let newInner;
-            if (/^\s*Future\s*:/im.test(inner)) {
-                // Future section exists — append event line to the end
-                newInner = inner.replace(/(Future\s*:[^\n]*\n?)([\s\S]*)$/i, (_m, header, tail) => {
-                    return `${header}${tail}${tail.endsWith('\n') || !tail ? '' : '\n'}${eventLine}\n`;
-                });
-            } else {
-                // No Future section — append one
-                newInner = `${inner.replace(/\s+$/, '')}\nFuture:\n${eventLine}\n`;
-            }
-            raw = raw.replace(widgetMatch[0], `<calendar_widget>${newInner}</calendar_widget>`);
-        } else {
-            // No calendar_widget wrapper — wrap what's there and append Future
-            raw = `<calendar_widget>\n${raw}\nFuture:\n${eventLine}\n</calendar_widget>`;
-        }
-    }
-    const subject = getContext().name1 || '用户';
-    writeStore(key, { raw, userName: subject, ts: Date.now() });
-    // canonical 写入照常完成；只有当前确实是点 user 视角时才更新点面板缓存/UI，避免 char 点被覆盖。
-    if (currentView === 'user') {
-        const rendered = renderSchedule(raw, subject, 'user', loadCalDesc());
-        pointState.cachedSchedule = rendered;
-        if (!outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible')) setBody(rendered);
-    }
-    syncLatestScheduleBlock();   // 楼内点条即时刷（对齐 applyLineWidget → syncLatestInlineBlock）
-    $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到点·未来列'}`);
-    showToast(editIdx != null ? `已替换点·第 ${editIdx} 条` : '已加到点：请去"未来"列查看');
-}
+// 点 widget 由 business/point/widget.js 承担；线 widget 保持冻结。
+const applyScheduleWidget = applyPointWidget;
 
 // ─── Apply widget to storylines (线) ──────────────────────────────────────
 // 无 edit 序号：新增一条线；有 edit="N"：就地替换现有第 N 条线。
@@ -8498,18 +7206,7 @@ function numberedLedgerList() {
     let items = [];
     try { items = ledger.listEntries() || []; } catch { return ''; }
     if (!items.length) return '';
-    return items.map(e => {
-        const who = e.牵扯?.length ? `${e.牵扯.join('、')}：` : '';
-        if (e.类型 === '持续状态') {
-            const since = ledgerDaysSince(e);
-            const s = since == null ? '' : (since === 0 ? '（今天起）' : `（已 ${since} 天）`);
-            return `- ${who}${e.事由}${s}——现状「${e.现状 || '—'}」`;
-        }
-        const du = ledgerDueInfo(e);
-        const dueStr = !du ? '（未定期）' : (du.天数 === 0 ? '（今天到期）' : (du.过期 ? `（已过期 ${du.天数} 天）` : `（还有 ${du.天数} 天）`));
-        const cyc = e.周期长度 ? `·约 ${e.周期长度} 天一轮` : '';
-        return `- ${who}${e.事由}${dueStr}${cyc}——现状「${e.现状 || '—'}」`;
-    }).join('\n');
+    return formatLedgerList(items, { daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo });
 }
 
 // 「间」排障/答疑知识：插件功能 + 每个开关的真实位置（照设置面板实际文案/结构，不是模块简介）。
@@ -9210,9 +7907,7 @@ function _floorSig(mid) {
         const sm = SDC_START_RE.exec(t);
         const em = SDC_END_RE.exec(t);
         let body = t;
-        if (sm && em && em.index > sm.index + sm[0].length) {
-            body = t.slice(sm.index + sm[0].length, em.index);
-        }
+        if (sm && em && em.index > sm.index + sm[0].length) body = t.slice(sm.index + sm[0].length, em.index);
         return body.length + '|' + body.slice(0, 32) + '|' + body.slice(-32);
     } catch { return ''; }
 }
@@ -9812,10 +8507,8 @@ async function renderStorageUsage() {
 }
 
 function invalidateLedgerTasksForStoreClear() {
-    ledgerCaptureAbort?.abort(); ledgerCaptureAbort = null;
-    ledgerJudgeAbort?.abort(); ledgerJudgeAbort = null;
-    isCapturingLedger = false; isJudgingLedger = false;
-    ledgerCaptureProgress = null; ledgerCaptureProgressOwner = null;
+    ledgerCaptureController.reset();
+    ledgerJudgeController.reset();
     resetLedgerRenderState();
 }
 
@@ -9830,7 +8523,7 @@ function invalidateAlmanacTasksForStoreClear() {
     axisState.almanacAbortController = null;
     axisState.isGeneratingAlmanac = false;
     axisState._almanacEditor = null;
-    axisState._almanacManager = null;
+    axisCalendarManager.close();
     axisState._almanacCalDay = null;
     axisState._almanacCalMonth = null;
     axisState._almTodayEditing = false;
@@ -10893,216 +9586,42 @@ function closeActionMenus(except = null) {
     });
 }
 
-function actionMenuHtml(menuId) {
-    const items = ACTION_MENU_CONFIGS[menuId] || [];
-    const rows = items.map(item => `<button type="button" class="sp-action-menu-item" data-action="${escapeAttr(item.action)}" title="${escapeAttr(item.title)}">
-        <i class="fa-solid ${escapeAttr(item.icon)}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span>
-    </button>`).join('');
-    return `<div class="sp-action-menu" data-menu-id="${escapeAttr(menuId)}">
-        <button type="button" class="sp-icon-btn sp-action-menu-toggle" title="更多操作" aria-label="更多操作" aria-expanded="false"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-        <div class="sp-action-menu-list" hidden>${rows}</div>
-    </div>`;
-}
-
-// 历面板「今天」栏（仅时间戳关时显示；戳开时整行隐藏——时间戳条已明写当日日期、古风无「周几」概念，只读也多余）。
-//   ‹ / ›  = 把「今天」锚点往前/后挪一天（挪一下即固定成手动锚点）
-//   改      = 内联输入月/日（不弹窗，_almTodayEditing 切换）
-//   自动    = 清锚，恢复自动确认（仅当前已手动钉住时出现）
-// 点恒跟随今天：这里挪/钉/清今天都走 runAnchorAftermath → 顺带把点重排到今天（无独立「同步到点」键）。
-// 正是给「AI 老提取不准、每天都得去设置里重钉」的卡准备的顺手推进入口。无角色卡 → 只读显示、不给控制。
-function almTodayBarHtml() {
-    if (storyClockEnabled()) return '';   // 戳开（默认）：今天由戳一线钉，整行隐藏；校准改为回那一楼 reroll
-    const key = charStableKey(getContext());
-    const cal = loadCalDesc();
-    const t = almTodayAnchor();
-    const wd = ALM_WEEKDAYS[almWeekdayFor(t.month, t.day, null, cal)];
-    if (!key) {
-        return `<div class="sp-alm-today">
-            <span class="sp-alm-today-lbl">今天</span>
-            <span class="sp-alm-today-date">${calMonthName(cal, t.month)}${t.day}日·${wd}</span>
-            <span class="sp-alm-today-hint">无角色卡，无法钉</span>
-        </div>`;
-    }
-    if (axisState._almTodayEditing) {
-        const maxDim = Math.max(...cal.months.map(x => x.days));
-        return `<div class="sp-alm-today sp-alm-today-editing">
-            <span class="sp-alm-today-lbl">今天</span>
-            <input id="sp-alm-today-month" class="sp-input sp-alm-today-input" type="number" min="1" max="${calMonthCount(cal)}" placeholder="月" value="${t.month}">
-            <span class="sp-alm-today-lbl">月</span>
-            <input id="sp-alm-today-day" class="sp-input sp-alm-today-input" type="number" min="1" max="${maxDim}" placeholder="日" value="${t.day}">
-            <span class="sp-alm-today-lbl">日</span>
-            <span class="sp-alm-today-acts">
-                <button class="sp-icon-btn sp-alm-today-save" title="确定"><i class="fa-solid fa-check"></i></button>
-                <button class="sp-icon-btn sp-alm-today-cancel" title="取消"><i class="fa-solid fa-xmark"></i></button>
-            </span>
-        </div>`;
-    }
-    const pinned = getDateAnchor(key);
-    const pinTag = pinned ? '<span class="sp-alm-today-pin" title="已手动钉住，压过自动确认"><i class="fa-solid fa-thumbtack"></i></span>' : '';
-    const autoBtn = pinned ? '<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动确认"><i class="fa-solid fa-rotate"></i></button>' : '';
-    return `<div class="sp-alm-today">
-        <span class="sp-alm-today-lbl">今天</span>
-        <span class="sp-alm-today-date">${calMonthName(cal, t.month)}${t.day}日·${wd}</span>${pinTag}
-        <span class="sp-alm-today-acts">
-            <button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）"><i class="fa-solid fa-chevron-left"></i></button>
-            <button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）"><i class="fa-solid fa-chevron-right"></i></button>
-            <button class="sp-icon-btn sp-alm-today-edit" title="改日期"><i class="fa-solid fa-pen"></i></button>${autoBtn}
-        </span>
-    </div>`;
-}
-// 时间戳·只读显示行。开关关 → 空串（整行不显）。开着但还没扫到戳 → 显示占位（可诊断）。
-// 扫到戳 → 起→止（只有其一就单显）。本片只回显原文、不解析。放今天条下方，与「今天(历日期)」并列作参考。
-function storyClockBarHtml() {
-    if (!storyClockEnabled()) return '';
-    let clk = null;
-    try { clk = latestStoryClock(); } catch { clk = null; }
-    let val;
-    if (!clk || (!clk.start && !clk.end)) {
-        // 开着但还没扫到任何戳：显示占位，让用户区分「显示层/开关坏了」还是「主楼 AI 还没产出戳」。
-        val = '<span class="sp-alm-clock-wait">等待主楼 AI 打点…（发几楼后自动出现）</span>';
-    } else if (clk.start && clk.end && clk.start !== clk.end) {
-        val = `${escapeHtml(clk.start)} <span class="sp-alm-clock-arrow">→</span> ${escapeHtml(clk.end)}`;
-    } else {
-        val = escapeHtml(clk.end || clk.start);
-    }
-    return `<div class="sp-alm-clock" title="由主楼 AI 每楼打的隐形时间戳读回，精确到小时">
-        <span class="sp-alm-clock-lbl"><i class="fa-regular fa-clock"></i>时间戳</span>
-        <span class="sp-alm-clock-val">${val}</span>
-    </div>`;
-}
-// 「今天」±1 天：以当前显示的今天（可能来自自动源）为基准挪 delta 天，钉成手动锚点，走共享善后。
+const axisUi = createAxisUi({
+    actionMenus: ACTION_MENU_CONFIGS,
+    escapeHtml, escapeAttr,
+    storyClockEnabled,
+    latestClock: latestStoryClock,
+    charKey: () => charStableKey(getContext()),
+    calendar: loadCalDesc,
+    today: almTodayAnchor,
+    weekday: almWeekdayFor,
+    weekdays: ALM_WEEKDAYS,
+    monthName: (cal, month) => calMonthName(cal, month),
+    monthCount: cal => calMonthCount(cal),
+    anchor: key => getDateAnchor(key),
+    editing: () => axisState._almTodayEditing,
+});
+const actionMenuHtml = axisUi.actionMenuHtml;
+const almTodayBarHtml = axisUi.todayBarHtml;
+const storyClockBarHtml = axisUi.storyClockBarHtml;
 function almNudgeToday(delta) {
-    if (storyClockEnabled()) return;   // 戳开时今天由戳一线钉、手动挪键已隐；防手机端陈旧 DOM 误触
-    const key = charStableKey(getContext());
-    if (!key) { showToast('当前没有角色卡，无法钉日期', null, true); return; }
-    const cal = loadCalDesc();
-    const t = almTodayAnchor();
-    const nd = almMonthDayFromDoy(almDayOfYear(t.month, t.day, cal) + delta, cal);
-    const stored = setDateAnchor(key, nd.month, nd.day);
-    if (!stored.ok) { showToast('日期保存失败，请重试', null, true); return; }
-    runAnchorAftermath();
+    axisDateActions.nudgeToday(delta, { storyClock: storyClockEnabled() });
 }
-function almRowHtml(it, ctx) {
-    const meta = almTypeMeta(it.type);
-    const wd = ALM_WEEKDAYS[almWeekdayFor(it.month, it.day, ctx?.wkRef, ctx?.cal)];   // 起始日周几（年-free）
-    const days = almClampInt(it.days, 1, calYearLen(ctx?.cal), 1);
-    const spanTag = days > 1 ? `<span class="sp-alm-span-tag">共${days}天</span>` : '';
-    const active = days > 1 && ctx?.todayDoy != null && almItemCoversDoy(it, ctx.todayDoy, ctx?.cal);
-    const activeTag = active ? '<span class="sp-alm-active-tag">进行中</span>' : '';
-    const srcTag = it.source === 'user' ? '<span class="sp-alm-src-tag">自填</span>' : '';
-    // 批量模式：日历条目对应 'almanac' scope。命中当前 scope 才出勾选框、隐藏行操作钮。
-    const batchOn = getBatchScope() === 'almanac';
-    const checked = batchOn && getBatchSelected().has(it.id);
-    const checkbox = batchOn
-        ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此条">`
-        : '';
-    // 三行布局（旧两行把日期/周几/名字/标签全塞第一行，长节日名会把末尾操作按钮顶掉）：
-    //   L1 = 日期 + 周几 + 持续天数「共N天」…… 右对齐三个操作按钮（全是短、定宽内容，按钮永不被挤掉）
-    //   L2 = 节日名 + 类型标签 + 自填 + 进行中（可变长的名字独占一行、溢出省略号，不再顶按钮）
-    //   L3 = 备注（整行）
-    return `<div class="sp-alm-item sp-alm-type-${meta.cls}${it.pin ? ' sp-alm-pinned' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}" data-id="${it.id}">
-        <div class="sp-alm-top">
-            ${checkbox}<i class="fa-solid ${meta.icon} sp-alm-date-icon"></i>
-            <span class="sp-alm-date-txt">${escapeHtml(almDateLabel(it, ctx?.cal))}</span>
-            <span class="sp-alm-wd">${wd}</span>${spanTag}
-            ${batchOn ? '' : `<span class="sp-alm-acts">
-                <button class="sp-icon-btn sp-alm-pin" data-id="${it.id}" title="${it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留'}"><i class="fa-solid ${it.pin ? 'fa-lock' : 'fa-lock-open'}"></i></button>
-                <button class="sp-icon-btn sp-alm-edit" data-id="${it.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
-                <button class="sp-icon-btn sp-alm-del" data-id="${it.id}" title="删除"><i class="fa-solid fa-trash"></i></button>
-            </span>`}
-        </div>
-        <div class="sp-alm-meta">
-            <span class="sp-alm-name">${escapeHtml(it.name)}</span>
-            <span class="sp-alm-type-tag">${meta.label}</span>${srcTag}${activeTag}
-        </div>
-        ${it.note ? `<div class="sp-alm-note">${escapeHtml(it.note)}</div>` : ''}
-    </div>`;
-}
-
-function renderAlmanacEmpty() {
-    return `<div class="sp-empty sp-alm-empty">
-        <span class="sp-alm-empty-glyph"><i class="fa-regular fa-calendar"></i></span>
-        <p>还没有历法数据</p>
-        <p class="sp-alm-empty-hint">点「生成节日」让 AI 按当前世界观铺满一整年，或「添加」手动录入生日、纪念日等</p>
-        <div class="sp-alm-empty-actions">
-            <button class="sp-gen-btn sp-alm-gen">生成节日</button>
-            <button class="sp-alm-add-link sp-alm-add">手动添加</button>
-        </div>
-    </div>`;
-}
-
-function legacyRenderAlmanacUpcoming() {
-    const items = loadAlmanac();
-    if (!items.length) return renderAlmanacEmpty();
-    const anchor = almTodayAnchor();
-    const cal = loadCalDesc();
-    const ctx = { cal, wkRef: almWeekdayRef(cal), todayDoy: almDayOfYear(anchor.month, anchor.day, cal) };
-    const sorted = sortAlmanacUpcoming(items, cal);
-    return batchBarHtml('almanac', sorted.length, '批量删除', true) + `<div class="sp-alm-list">${sorted.map(it => almRowHtml(it, ctx)).join('')}</div>`;
-}
-
-// 暗账页（ledger sheet）渲染/编辑/批量交互整套已迁入 business/ledger/render.js（Option B）；index.js 宿主经 bindLedgerRender 注入，事件层经访问器读写迁出的渲染态。
-function currentCharacterCards() {
-    const ctx = getContext();
-    const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
-    const currentAvatar = charStableKey(ctx);
-    const seen = new Set();
-    return characters.map(character => {
-        const avatar = String(character?.avatar ?? '');
-        if (!avatar || seen.has(avatar)) return null;
-        seen.add(avatar);
-        const rawName = character?.name == null ? '' : String(character.name);
-        return { avatar, name: rawName === '' ? avatar : rawName, current: avatar === currentAvatar };
-    }).filter(Boolean).sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name, 'zh-CN'));
-}
-
-// 早期 WIP 曾裁剪 avatar；精确键优先，只有不存在同名精确角色时才兼容旧裁剪键。
-function calendarBindingKey(bindings, avatar, cards = currentCharacterCards()) {
-    if (Object.prototype.hasOwnProperty.call(bindings, avatar)) return avatar;
-    const legacy = avatar.trim();
-    if (legacy !== avatar && Object.prototype.hasOwnProperty.call(bindings, legacy) && !cards.some(card => card.avatar === legacy)) return legacy;
-    return avatar;
-}
-
-function calendarBoundTemplateId(bindings, avatar, cards = currentCharacterCards()) {
-    return bindings[calendarBindingKey(bindings, avatar, cards)] || '';
-}
-
-function setCalendarBinding(bindings, avatar, templateId, cards = currentCharacterCards()) {
-    const oldKey = calendarBindingKey(bindings, avatar, cards);
-    delete bindings[oldKey];
-    delete bindings[avatar];
-    if (templateId) bindings[avatar] = templateId;
-}
-
-function calendarBindingCandidates(cards, bindings, templateId, query = '') {
-    const normalizedQuery = String(query ?? '').toLocaleLowerCase();
-    return cards.filter(card => {
-        if (calendarBoundTemplateId(bindings, card.avatar, cards) === templateId) return false;
-        return !normalizedQuery || card.name.toLocaleLowerCase().includes(normalizedQuery) || card.avatar.toLocaleLowerCase().includes(normalizedQuery);
-    });
-}
+const currentCharacterCards = () => calendarCards(getContext(), charStableKey);
 
 function openCalendarManager() {
     axisState._almanacEditor = null;
-    axisState._almanacManager = { editing: false, draft: cloneCalDesc(loadCalDesc()), error: '', templatesOpen: false, bindTemplateId: null, bindQuery: '' };
+    axisCalendarManager.begin();
     if (axisState.almanacMode) renderAlmanacPanel();
 }
 
 function closeCalendarManager() {
-    axisState._almanacManager = null;
-    if (axisState.almanacMode) renderAlmanacPanel();
+    axisCalendarManager.close();
 }
 
 function readCalendarDraftForm() {
-    if (!axisState._almanacManager?.editing) return axisState._almanacManager?.draft;
-    const previous = axisState._almanacManager?.draft || loadCalDesc();
+    if (!axisCalendarManager.isEditing()) return null;
     return {
-        kind: previous.kind, id: previous.id, revision: previous.revision, weekdayCycle: previous.weekdayCycle,
-        ...(Number.isInteger(previous.epochYear) ? { epochYear: previous.epochYear } : {}),
-        ...(Number.isInteger(previous.epochOrdinal) ? { epochOrdinal: previous.epochOrdinal } : {}),
-        ...(Number.isInteger(previous.epochWeekday) ? { epochWeekday: previous.epochWeekday } : {}),
-        ...(previous.absoluteCycle === true ? { absoluteCycle: true } : {}),
         era: String($in('#sp-alm-manager-era').val() || ''),
         months: $inAll('#sp-almanac-wrap .sp-alm-manager-month-row').map(function () {
             return { name: String($(this).find('.sp-alm-manager-month-name').val() || ''), days: $(this).find('.sp-alm-manager-month-days').val() };
@@ -11110,686 +9629,34 @@ function readCalendarDraftForm() {
     };
 }
 
-function captureCalendarDraft() {
-    if (axisState._almanacManager?.editing) axisState._almanacManager.draft = readCalendarDraftForm();
-}
-
-function copyCalendarMonth(months, index, maxMonths) {
-    if (!Array.isArray(months) || months.length >= maxMonths || !months[index]) return false;
-    const source = months[index];
-    months.splice(index + 1, 0, { name: source.name, days: source.days });
-    return true;
-}
-
-function renderCalendarCard() {
-    const manager = axisState._almanacManager;
-    const cal = manager.editing ? manager.draft : cloneCalDesc(loadCalDesc());
-    const actionButtons = manager.editing
-        ? `<button class="sp-icon-btn sp-alm-manager-edit-cancel" title="取消编辑" aria-label="取消编辑"><i class="fa-solid fa-xmark"></i></button>
-           <button class="sp-icon-btn sp-alm-manager-edit-save" title="保存历法" aria-label="保存历法"><i class="fa-solid fa-check"></i></button>`
-        : `<button class="sp-icon-btn sp-alm-manager-edit-start" title="编辑历法" aria-label="编辑历法"><i class="fa-solid fa-pen"></i></button>`;
-    const actions = `<span class="sp-alm-manager-card-actions">${actionButtons}</span>`;
-    if (!manager.editing) {
-        const months = cal.months.map(month => `<span class="sp-alm-manager-month-chip">${escapeHtml(month.name)} · ${month.days}天</span>`).join('');
-        return `<section class="sp-alm-manager-card"><div class="sp-alm-manager-card-head">
-            <div class="sp-alm-manager-card-title">当前历法</div>${actions}
-        </div><div class="sp-alm-manager-card-body">${cal.era ? `<div class="sp-alm-manager-current-name">${escapeHtml(cal.era)}</div>` : ''}<div class="sp-alm-manager-months">${months}</div></div></section>`;
-    }
-    const rows = cal.months.map((month, index) => `<div class="sp-alm-manager-month-row" data-index="${index}">
-        <label class="sp-alm-manager-month-field sp-alm-manager-month-field-name"><span>月份名称</span><input class="sp-input sp-alm-manager-month-name" maxlength="${CALENDAR_LIMITS.monthNameLength}" value="${escapeAttr(month.name)}" aria-label="第 ${index + 1} 月名称"></label>
-        <label class="sp-alm-manager-month-field sp-alm-manager-month-field-days"><span>天数</span><input class="sp-input sp-alm-manager-month-days" type="number" min="${CALENDAR_LIMITS.monthDaysMin}" max="${CALENDAR_LIMITS.monthDaysMax}" value="${escapeAttr(month.days)}" aria-label="第 ${index + 1} 月天数"></label>
-        <span class="sp-alm-manager-month-actions">
-            <button class="sp-icon-btn sp-alm-manager-month-up" title="上移月份" aria-label="上移月份"${index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
-            <button class="sp-icon-btn sp-alm-manager-month-down" title="下移月份" aria-label="下移月份"${index === cal.months.length - 1 ? ' disabled' : ''}><i class="fa-solid fa-chevron-down"></i></button>
-            <button class="sp-icon-btn sp-alm-manager-month-copy" title="复制月份" aria-label="复制月份"><i class="fa-solid fa-copy"></i></button>
-            <button class="sp-icon-btn sp-alm-manager-month-delete" title="删除月份" aria-label="删除月份"><i class="fa-solid fa-trash"></i></button>
-        </span>
-    </div>`).join('');
-    return `<section class="sp-alm-manager-card"><div class="sp-alm-manager-card-head">
-        <div class="sp-alm-manager-card-title">编辑当前历法</div>${actions}
-    </div><div class="sp-alm-manager-edit-fields">
-        ${manager.error ? `<div class="sp-alm-manager-error" role="alert"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml(manager.error)}</div>` : ''}
-        <label class="sp-alm-field"><span>纪年名 <small>选填</small></span><input id="sp-alm-manager-era" maxlength="${CALENDAR_LIMITS.eraNameLength}" value="${escapeAttr(cal.era)}"></label>
-        ${rows}<button class="sp-alm-manager-add-month" type="button"><i class="fa-solid fa-plus" aria-hidden="true"></i><span>添加月份</span></button>
-    </div></section>`;
-}
-
-function renderCalendarBindingOptions(templateId) {
-    const manager = axisState._almanacManager;
-    if (!manager) return '';
-    const cards = currentCharacterCards();
-    const bindings = calendarTemplateBindings();
-    const query = String(manager.bindQuery ?? '');
-    const shown = calendarBindingCandidates(cards, bindings, templateId, query);
-    if (!shown.length) return `<div class="sp-alm-manager-bind-empty">${query ? '没有匹配的角色卡' : '没有更多可添加的角色卡'}</div>`;
-    return shown.map(card => `<button type="button" class="sp-alm-manager-bind-option${card.current ? ' sp-alm-manager-bind-option-current' : ''}" role="option" aria-selected="false" data-template-id="${escapeAttr(templateId)}" data-avatar="${escapeAttr(card.avatar)}" title="${escapeAttr(card.avatar)}">
-        <i class="fa-solid fa-user" aria-hidden="true"></i><span class="sp-alm-manager-bind-option-label"><span class="sp-alm-manager-bind-option-name">${escapeHtml(card.name)}</span>${card.current ? '<small class="sp-alm-manager-bind-option-hint">(当前角色卡)</small>' : ''}</span>
-    </button>`).join('');
-}
-
-function renderCalendarBindingEditor(templateId, cards, bindings) {
-    const selected = cards.filter(card => calendarBoundTemplateId(bindings, card.avatar, cards) === templateId);
-    const chips = selected.map(card => `<button type="button" class="sp-alm-manager-bind-chip-remove${card.current ? ' sp-alm-manager-bind-chip-current' : ''}" data-template-id="${escapeAttr(templateId)}" data-avatar="${escapeAttr(card.avatar)}" aria-label="解除角色卡 ${escapeAttr(card.name)} 的模板绑定" title="解除绑定">
-        <span>${escapeHtml(card.name)}</span><i class="fa-solid fa-xmark" aria-hidden="true"></i>
-    </button>`).join('');
-    return `<div class="sp-alm-manager-bind-panel">
-        <div class="sp-alm-manager-bind-chips">${chips || '<span class="sp-alm-manager-bind-empty">尚未绑定角色卡 · 当绑定角色的当前聊天既没有历法，也没有纪念日时，将自动采用此历法</span>'}</div>
-        <input type="text" class="sp-input sp-alm-manager-bind-search" role="combobox" aria-expanded="true" aria-controls="sp-alm-manager-bind-results-${escapeAttr(templateId)}" data-template-id="${escapeAttr(templateId)}" value="${escapeAttr(axisState._almanacManager.bindQuery)}" placeholder="搜索角色卡名称…" autocomplete="off">
-        <div id="sp-alm-manager-bind-results-${escapeAttr(templateId)}" class="sp-alm-manager-bind-results" role="listbox">${renderCalendarBindingOptions(templateId)}</div>
-    </div>`;
-}
-
-function renderCalendarTemplates() {
-    const manager = axisState._almanacManager;
-    const cards = currentCharacterCards();
-    const bindings = calendarTemplateBindings();
-    const currentAvatar = charStableKey(getContext());
-    const currentTemplateId = currentAvatar ? calendarBoundTemplateId(bindings, currentAvatar, cards) : '';
-    const countFor = id => Object.values(bindings).filter(value => value === id).length;
-    const batchOn = getBatchScope() === 'calendar';
-    const templateRows = sortCalendarTemplatesForCurrent(loadCalendarTemplates(), currentTemplateId);
-    const rows = templateRows.map(template => {
-        const bindOpen = manager.bindTemplateId === template.id;
-        const isCurrent = template.id === currentTemplateId;
-        const bindTitle = isCurrent ? '当前角色已绑定此模板' : '绑定角色卡';
-        const checked = batchOn && getBatchSelected().has(template.id);
-        const checkbox = batchOn
-            ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此模板">`
-            : '';
-        const acts = batchOn ? '' : `<span class="sp-alm-manager-template-actions">
-                <button class="sp-icon-btn sp-alm-manager-template-rename" data-id="${escapeAttr(template.id)}" title="重命名模板" aria-label="重命名模板"><i class="fa-solid fa-i-cursor"></i></button>
-                <button class="sp-icon-btn sp-alm-manager-template-apply" data-id="${escapeAttr(template.id)}" title="应用此模板" aria-label="应用此模板"><i class="fa-solid fa-file-import"></i></button>
-                <button class="sp-icon-btn sp-alm-manager-template-bind${isCurrent ? ' sp-btn-active' : ''}" data-id="${escapeAttr(template.id)}" title="${bindTitle}" aria-label="${bindTitle}" aria-expanded="${bindOpen}"><i class="fa-solid fa-link"></i></button>
-                <button class="sp-icon-btn sp-alm-manager-template-delete" data-id="${escapeAttr(template.id)}" title="删除模板" aria-label="删除模板"><i class="fa-solid fa-trash"></i></button>
-            </span>`;
-        return `<div class="sp-alm-manager-template-entry${isCurrent ? ' sp-alm-manager-template-current' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}" data-template-id="${escapeAttr(template.id)}">
-            <div class="sp-alm-manager-template-row">${checkbox}<div class="sp-alm-manager-template-main">
-                <div class="sp-alm-manager-template-name">${escapeHtml(template.name)}</div>
-                <div class="sp-alm-manager-template-meta">已绑定 ${countFor(template.id)} 张角色卡</div>
-            </div>${acts}</div>
-            ${!batchOn && bindOpen ? renderCalendarBindingEditor(template.id, cards, bindings) : ''}
-        </div>`;
-    }).join('');
-    const batchBar = batchBarHtml('calendar', templateRows.length, '批量删除', true);
-    return `<section class="sp-alm-manager-templates">
-        <button class="sp-alm-manager-template-head" type="button" aria-expanded="${manager.templatesOpen}"><span>模板管理</span><i class="fa-solid fa-chevron-${manager.templatesOpen ? 'up' : 'down'}"></i></button>
-        ${manager.templatesOpen ? `<div class="sp-alm-manager-template-body">
-            <button type="button" class="sp-alm-manager-template-save-current"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>保存当前历法为模板</span></button>
-            ${batchBar}
-            <div class="sp-alm-manager-template-list">${rows || '<div class="sp-alm-manager-empty-templates">还没有历法模板</div>'}</div>
-        </div>` : ''}
-    </section>`;
-}
-
-// 绑定写入设置唯一状态源后立即局部重绘；ST 设置保存没有可靠的逐次成功回执，因此不显示成功提示。
-async function updateCalendarTemplateBinding(avatar, nextTemplateId, expectedTemplateId = null) {
-    const manager = axisState._almanacManager;
-    if (!manager || !avatar) return false;
-    const cards = currentCharacterCards();
-    const bindings = { ...calendarTemplateBindings() };
-    const currentId = calendarBoundTemplateId(bindings, avatar, cards);
-    if (expectedTemplateId != null && currentId !== expectedTemplateId) return false;
-    if (currentId === (nextTemplateId || '')) return true;
-
-    const chatIdSnap = getContext().chatId;
-    const currentAvatarSnap = charStableKey(getContext());
-    setCalendarBinding(bindings, avatar, nextTemplateId, cards);
-    getSettings().calendarTemplateBindings = bindings;
-    manager.bindQuery = '';
-    refreshCalendarManager({ scope: 'templates', reveal: { kind: 'template', id: manager.bindTemplateId, selector: '.sp-alm-manager-bind-search' }, focusBindingId: manager.bindTemplateId });
-    saveSettingsDebounced();
-
-    if (nextTemplateId && avatar === currentAvatarSnap && getContext().chatId === chatIdSnap) {
-        // 先让移动端绘制绑定结果；连续改绑时，只有仍然生效的最后一次操作可以应用默认历法。
-        await new Promise(resolve => (globalThis.requestAnimationFrame || (callback => setTimeout(callback, 0)))(resolve));
-        const latestCards = currentCharacterCards();
-        const stillCurrent = getContext().chatId === chatIdSnap
-            && charStableKey(getContext()) === currentAvatarSnap
-            && calendarBoundTemplateId(calendarTemplateBindings(), avatar, latestCards) === nextTemplateId;
-        if (stillCurrent) {
-            try {
-                const applied = await maybeApplyBoundCalendarTemplate({ render: false });
-                if (applied && axisState._almanacManager) refreshCalendarManager({ scope: 'card' });
-            } catch (error) {
-                console.error('[SP calendar] 角色默认历法应用失败', error);
-                showToast('角色绑定已更新，但默认历法没有应用成功，请稍后重试', null, true);
-            }
-        }
-    }
-    return true;
-}
-
-function legacyRenderCalendarManagerBody() { return renderCalendarCard() + renderCalendarTemplates(); }
-
-function calendarManagerTarget(target, $content) {
-    if (!target) return $();
-    if (target.kind === 'month') {
-        const $row = $content.find('.sp-alm-manager-month-row').filter(function () { return Number($(this).attr('data-index')) === target.index; }).first();
-        return target.selector ? $row.find(target.selector).first() : $row;
-    }
-    if (target.kind === 'template') {
-        const $entry = $content.find('.sp-alm-manager-template-entry').filter(function () { return $(this).attr('data-template-id') === target.id; }).first();
-        return target.selector ? $entry.find(target.selector).first() : $entry;
-    }
-    return target.selector ? $content.find(target.selector).first() : $();
-}
-
-function focusCalendarManagerTarget($target) {
-    const element = $target?.get?.(0);
-    if (!element || typeof element.focus !== 'function' || element.disabled) return;
-    try { element.focus({ preventScroll: true }); }
-    catch (_) { element.focus(); }
-}
-
-function revealCalendarManagerTarget($target, $scroller) {
-    const element = $target?.get?.(0), scroller = $scroller?.get?.(0);
-    if (!element || !scroller) return;
-    const targetRect = element.getBoundingClientRect(), scrollRect = scroller.getBoundingClientRect();
-    if (targetRect.top < scrollRect.top) scroller.scrollTop += targetRect.top - scrollRect.top - 6;
-    else if (targetRect.bottom > scrollRect.bottom) scroller.scrollTop += targetRect.bottom - scrollRect.bottom + 6;
-}
-
-// 管理页内部只替换业务内容，保留真正的滚动容器；否则每次操作都会重建 scrollTop 和焦点。
-function legacyRefreshCalendarManager(options = {}) {
-    const $wrap = $in('#sp-almanac-wrap');
-    const $scroller = $wrap.find('.sp-alm-body').first();
-    const $content = $scroller.children('.sp-alm-editor-body').first();
-    if (!$wrap.find('.sp-alm-manager-hint').length || !$content.length) return false;
-
-    const scope = options.scope || 'body';
-    const $oldSearch = $content.find('.sp-alm-manager-bind-search').first();
-    const oldBindingView = $oldSearch.length ? {
-        id: $oldSearch.attr('data-template-id'),
-        query: String($oldSearch.val() ?? ''),
-        // focus 在 shadow 内时 document.activeElement 被重定向为 host（拿不到内部输入框）→ 查 _spShadow.activeElement，否则搜索框每次重渲都丢焦点
-        active: (_spShadow?.activeElement ?? document.activeElement) === $oldSearch.get(0),
-        selectionStart: $oldSearch.get(0).selectionStart,
-        selectionEnd: $oldSearch.get(0).selectionEnd,
-        resultsScrollTop: $oldSearch.closest('.sp-alm-manager-bind-panel').find('.sp-alm-manager-bind-results').scrollTop() || 0,
-    } : null;
-
-    if (scope === 'templates') {
-        const $templates = $content.children('.sp-alm-manager-templates').first();
-        if (!$templates.length) return false;
-        $templates.replaceWith(renderCalendarTemplates());
-    } else if (scope === 'card') {
-        const $card = $content.children('.sp-alm-manager-card').first();
-        if (!$card.length) return false;
-        $card.replaceWith(renderCalendarCard());
-    } else {
-        $content.html(legacyRenderCalendarManagerBody());
-    }
-
-    const focusBindingId = options.focusBindingId || (oldBindingView?.active ? oldBindingView.id : null);
-    if (oldBindingView) {
-        const $newSearch = $content.find('.sp-alm-manager-bind-search').filter(function () { return $(this).attr('data-template-id') === oldBindingView.id; }).first();
-        if ($newSearch.length && String($newSearch.val() ?? '') === oldBindingView.query) {
-            $newSearch.closest('.sp-alm-manager-bind-panel').find('.sp-alm-manager-bind-results').scrollTop(oldBindingView.resultsScrollTop);
-            if (oldBindingView.active) {
-                focusCalendarManagerTarget($newSearch);
-                $newSearch.get(0).setSelectionRange(oldBindingView.selectionStart, oldBindingView.selectionEnd);
-            }
-        }
-    }
-    if (focusBindingId) {
-        const $search = $content.find('.sp-alm-manager-bind-search').filter(function () { return $(this).attr('data-template-id') === focusBindingId; }).first();
-        focusCalendarManagerTarget($search);
-    } else if (options.focus) {
-        focusCalendarManagerTarget(calendarManagerTarget(options.focus, $content));
-    }
-    revealCalendarManagerTarget(calendarManagerTarget(options.reveal, $content), $scroller);
-    return true;
-}
-
-function legacyRenderCalendarManager() {
-    return `<div class="sp-alm-editor-head">
-        <button class="sp-icon-btn sp-alm-manager-back" title="返回" aria-label="返回"><i class="fa-solid fa-arrow-left"></i></button>
-        <span class="sp-alm-editor-title">历法管理</span>
-    </div><div class="sp-alm-manager-hint">不想自己填？<button type="button" class="sp-alm-manager-chat-link">和间聊聊吧 →</button></div>
-    <div class="sp-alm-body"><div class="sp-alm-editor-body">${legacyRenderCalendarManagerBody()}</div></div>`;
-}
-
-// 调用方负责传入已规范化的历法；本函数只处理日期冲突、统一写入和消费者刷新。
-async function commitCalendarDesc(cal) {
-    const chatIdSnap = getContext().chatId;
-    const items = loadAlmanac();
-    const conflicts = calendarConflicts(items, cal);
-    const charKey = charStableKey(getContext());
-    const rawAnchor = charKey ? getSettings().dateAnchor?.[charKey] : null;
-    const anchorConflict = rawAnchor && !(Number(rawAnchor.month) >= 1 && Number(rawAnchor.month) <= calMonthCount(cal) && Number(rawAnchor.day) >= 1 && Number(rawAnchor.day) <= calMonthDays(cal, Number(rawAnchor.month)));
-    let action = 'keep';
-    if (conflicts.length || anchorConflict) {
-        const shown = conflicts.slice(0, 12).map(conflict => `• ${conflict.item.name}：${conflict.item.month}/${conflict.item.day} → ${conflict.fixed.month}/${conflict.fixed.day}`);
-        if (conflicts.length > shown.length) shown.push(`• 另有 ${conflicts.length - shown.length} 条`);
-        if (anchorConflict) {
-            const fixedMonth = Math.min(Math.max(Number(rawAnchor.month) || 1, 1), calMonthCount(cal));
-            const fixedDay = Math.min(Math.max(Number(rawAnchor.day) || 1, 1), calMonthDays(cal, fixedMonth));
-            shown.push(`• 当前剧情日期：${rawAnchor.month}/${rawAnchor.day} → ${fixedMonth}/${fixedDay}`);
-        }
-        action = await customDialog.choose({
-            title: '有日期不适用于新历法',
-            body: shown.join('\n'),
-            note: '自动修改会保留条目并夹取到有效日期；删除只删除上面列出的日期。',
-            choices: [
-                { value: 'cancel', label: '取消' },
-                { value: 'delete', label: '删除这些日期' },
-                { value: 'fix', label: '自动修改', primary: true },
-            ],
-        });
-        if (!action || action === 'cancel' || getContext().chatId !== chatIdSnap) return { ok: false, cancelled: true };
-    }
-    const conflictIds = new Set(conflicts.map(conflict => conflict.item.id));
-    const fixedById = new Map(conflicts.map(conflict => [conflict.item.id, conflict.fixed]));
-    const nextItems = action === 'delete' ? items.filter(item => !conflictIds.has(item.id)) : items.map(item => fixedById.get(item.id) || item);
-    if (getContext().chatId !== chatIdSnap) return { ok: false, cancelled: true };
-    const ts = Date.now();
-    const ok = store.writeBatch([
-        { kind: 'caldesc', view: 'user', charName: '', value: { ...cal, ts } },
-        { kind: 'almanac', view: 'user', charName: '', value: { items: nextItems, ts } },
-    ]);
-    if (!ok) return { ok: false, error: '当前聊天无法写入历法' };
-    if (anchorConflict && charKey) {
-        let anchorWrite;
-        if (action === 'delete') anchorWrite = setDateAnchor(charKey, null);
-        else {
-            const fixedMonth = Math.min(Math.max(Number(rawAnchor.month) || 1, 1), calMonthCount(cal));
-            const fixedDay = Math.min(Math.max(Number(rawAnchor.day) || 1, 1), calMonthDays(cal, fixedMonth));
-            anchorWrite = setDateAnchor(charKey, fixedMonth, fixedDay);
-        }
-        if (!anchorWrite?.ok) return { ok: false, error: '当前聊天无法写入日期锚点' };
-    }
-    axisState._almanacCalMonth = null;
-    axisState._almanacCalDay = null;
-    axisState._almTodayEditing = false;
-    syncLatestAlmanacBlock();
-    syncLatestScheduleBlock();
-    return { ok: true, cal };
-}
-
-async function maybeApplyBoundCalendarTemplate({ notify = true, render = true } = {}) {
-    if (!pluginEnabled() || !getContext().chatId) return false;
-    const charKey = charStableKey(getContext());
-    if (!charKey || readStore(getCalDescKey()) != null) return false;
-    const rawItems = readStore(getAlmanacKey())?.items;
-    if (Array.isArray(rawItems) && rawItems.length) return false; // 已有日期时完全静默，避免打扰和隐式迁移。
-    const bindings = calendarTemplateBindings();
-    const bindingKey = calendarBindingKey(bindings, charKey, currentCharacterCards());
-    const templateId = bindings[bindingKey] || '';
-    if (!templateId) return false;
-    const template = loadCalendarTemplates().find(item => item.id === templateId);
-    if (!template) {
-        delete bindings[bindingKey];
-        saveSettingsDebounced();
-        return false;
-    }
-    const cal = cloneCalDesc(template);
-    const chatIdSnap = getContext().chatId;
-    if (getContext().chatId !== chatIdSnap) return false;
-    if (!saveCalDesc(cal)) throw new Error('当前聊天无法写入角色默认历法');
-    // 角色模板不得静默认领 legacy global anchor；保留 pending，交由日期交互入口显式确认。
-    axisState._almanacCalMonth = null;
-    axisState._almanacCalDay = null;
-    syncLatestAlmanacBlock(chatIdSnap);
-    syncLatestScheduleBlock(chatIdSnap);
-    if (render && axisState.almanacMode) renderAlmanacPanel();
-    if (notify && getSettings().notifyMode === 'full') showToast(`已采用角色默认历法：${template.name}`);
-    return true;
-}
-
+async function commitCalendarDesc(cal) { return axisTransactionController.commit(cal); }
+async function maybeApplyBoundCalendarTemplate(options = {}) { return axisTransactionController.applyBound(options); }
 function almCalMonth() {
     if (Number.isFinite(axisState._almanacCalMonth)) return axisState._almanacCalMonth;
     axisState._almanacCalMonth = almTodayAnchor().month - 1;
     return axisState._almanacCalMonth;
 }
 
-function legacyRenderAlmanacCalendar() {
-    const cal = loadCalDesc();
-    const m0 = almCalMonth();
-    const month1 = m0 + 1;
-    const items = loadAlmanac();
-    const wkRef = almWeekdayRef(cal);
-    // 多日节假日在每个「覆盖到本月」的日子都打点：逐条按 days 折算覆盖日，落在本月才计入。
-    const byDay = {};
-    for (const it of items) {
-        const days = almClampInt(it.days, 1, calYearLen(cal), 1);
-        const startDoy = almDayOfYear(it.month, it.day, cal);
-        for (let k = 0; k < days; k++) {
-            const md = almMonthDayFromDoy(startDoy + k, cal);
-            if (md.month !== month1) continue;
-            (byDay[md.day] = byDay[md.day] || []).push(it);
-        }
-    }
-    const dim = calMonthDays(cal, month1);
-    const anchor = almTodayAnchor();
-    const todayDoy = almDayOfYear(anchor.month, anchor.day, cal);
-    const ctx = { cal, wkRef, todayDoy };
-    const isThisMonth = (anchor.month - 1) === m0;   // 只比月/日，不比年
-    const todayD = anchor.day;
-    const selDay = axisState._almanacCalDay;
-
-    // 周一起表头 + 首日前留白：day1 的周几决定 lead（周一=0 空格 … 周日=6 空格）。
-    const weekHead = ['一', '二', '三', '四', '五', '六', '日']
-        .map(w => `<div class="sp-alm-weekhead-cell">${w}</div>`).join('');
-    const wd1 = almWeekdayFor(month1, 1, wkRef, cal);
-    const lead = (wd1 + 6) % 7;
-    const leadCells = Array.from({ length: lead }, () => '<div class="sp-alm-cell-empty"></div>').join('');
-
-    const cells = [];
-    for (let dnum = 1; dnum <= dim; dnum++) {
-        const dayItems = byDay[dnum] || [];
-        const has = dayItems.length > 0;
-        const dots = has
-            ? `<span class="sp-alm-cell-dots">${dayItems.slice(0, 3).map(it => `<i class="sp-alm-dot sp-alm-type-${almTypeMeta(it.type).cls}"></i>`).join('')}</span>`
-            : '';
-        cells.push(`<div class="sp-alm-cell${has ? ' sp-alm-cell-has' : ''}${isThisMonth && dnum === todayD ? ' sp-alm-cell-today' : ''}${selDay === dnum ? ' sp-alm-cell-sel' : ''}" data-day="${dnum}">
-            <span class="sp-alm-cell-num">${dnum}</span>${dots}
-        </div>`);
-    }
-
-    const header = `<div class="sp-alm-cal-head">
-        <button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button>
-        <span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span>
-        <button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button>
-    </div>`;
-
-    let detailItems, detailHead;
-    if (selDay != null) {
-        // 详情列出「覆盖选中日」的条目（含跨月延续来的多日节假日），按起始日排序。
-        const selDoy = almDayOfYear(month1, selDay, cal);
-        detailItems = items.filter(it => almItemCoversDoy(it, selDoy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
-        detailHead = `<div class="sp-alm-cal-detail-head">
-            <span>${calMonthName(cal, month1)}${selDay}日 · ${ALM_WEEKDAYS[almWeekdayFor(month1, selDay, wkRef, cal)]}</span>
-            <span class="sp-alm-cal-detail-tools">
-                <button class="sp-alm-add-day sp-mini-btn" data-day="${selDay}">＋加到这天</button>
-                <button class="sp-alm-cal-clearsel sp-mini-btn">看全月</button>
-            </span>
-        </div>`;
-    } else {
-        detailItems = items.filter(it => it.month === month1).sort((a, b) => a.day - b.day);
-        detailHead = `<div class="sp-alm-cal-detail-head"><span>本月日期</span></div>`;
-    }
-    const detailRows = detailItems.length
-        ? `<div class="sp-alm-list">${detailItems.map(it => almRowHtml(it, ctx)).join('')}</div>`
-        : `<div class="sp-alm-cal-empty">${selDay != null ? '这天没有日期' : '本月暂无日期'}</div>`;
-
-    return `<div class="sp-alm-cal">
-        ${header}
-        <div class="sp-alm-weekhead">${weekHead}</div>
-        <div class="sp-alm-grid">${leadCells}${cells.join('')}</div>
-        <div class="sp-alm-cal-detail">${detailHead}${detailRows}</div>
-    </div>`;
-}
-
 // ── 子视图 / 导航 ──
 function almSetSheet(sheet) {
     if (axisState._almanacSheet === sheet) return;
     setAxisSheet(sheet, renderAlmanacPanel, batchReset);
-    return;
-    batchReset();   // 切换 sheet 退出批量模式，避免跨列表误删
-    renderAlmanacPanel();
 }
 function almNavMonth(delta) {
     navigateAxisMonth(delta, () => calMonthCount(loadCalDesc()), almCalMonth, renderAlmanacPanel);
-    return;
-    axisState._almanacCalMonth = (almCalMonth() + delta + mc) % mc;   // 只在有效月数内循环，不涉及年
-    axisState._almanacCalDay = null;
-    renderAlmanacPanel();
 }
 function almSelectDay(day) {
     selectAxisDay(day, renderAlmanacPanel);
 }
 
 // ── 生成 ──
-async function triggerGenerateAlmanac() {
-    if (axisState.isGeneratingAlmanac) return;
-    const cfg = loadCfg();
-    if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); return; }
-    if (!getContext().chatId) { showToast('请先打开一个聊天', null, true); return; }
-    if (loadAlmanac().length) {
-        const ok = await spConfirm({
-            title: '重新生成节日',
-            body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。',
-            confirmText: '生成', cancelText: '取消',
-        });
-        if (!ok) return;
-    }
-    runGenerateAlmanac();
-}
-async function runGenerateAlmanac() {
-    const chatIdSnap = getContext().chatId;
-    const myCtrl = axisState.almanacAbortController = new AbortController();
-    axisState.isGeneratingAlmanac = true;
-    axisState._almGenLabel = '正在编排历法';
-    if (axisState.almanacMode) renderAlmanacPanel();
-    try {
-        const ctx = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const cfg = loadCfg();
-        const prompt = buildAlmanacPrompt(userName, charName);
-        // 抬温 1.05：锚定周年靠记忆撑着不会跑，受益的是次要节日/风味文案更发散、每次不雷同
-        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 4, { fullMemory: true });
-        if (axisState.almanacAbortController !== myCtrl) return;
-        if (getContext().chatId !== chatIdSnap) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return; }
-        if (!validateAlmanacResponse(raw)) throw new Error('返回不完整（缺少 almanac_widget 结束标签），旧轴数据未改变，请重试');
-        const aiItems = parseAlmanacWidget(raw);
-        if (!aiItems.length) throw new Error('没有解析到有效日期，请重试');
-        saveAlmanacItems(mergeAlmanac(loadAlmanac(), aiItems));
-        axisState.isGeneratingAlmanac = false;
-        axisState.almanacAbortController = null;
-        syncLatestAlmanacBlock();   // 历生成 → 楼内七天条即时刷
-        if (axisState.almanacMode) { renderAlmanacPanel(); if (getSettings().notifyMode !== 'off') showToast('轴已生成'); }
-        else showToast('轴已生成，点击查看', () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); });
-    } catch (err) {
-        if (axisState.almanacAbortController !== myCtrl) return;
-        axisState.isGeneratingAlmanac = false;
-        axisState.almanacAbortController = null;
-        if (err.name === 'AbortError') { if (axisState.almanacMode) renderAlmanacPanel(); return; }
-        if (getContext().chatId === chatIdSnap) {
-            if (axisState.almanacMode) { renderAlmanacPanel(); showToast('生成失败：' + escapeHtml(err.message || '未知错误'), null, true); }
-            else showToast('轴生成失败，请重试', null, true);
-        }
-    }
-}
-
-// 历法全量生成与增量补录共用同一闭合门禁；句号或可解析到一部分 Item 都不能代替结束标签。
-function validateAlmanacResponse(raw) {
-    return /<almanac_widget\b[^>]*>[\s\S]*<\/almanac_widget\s*>/i.test(String(raw || ''));
-}
-
-function buildAlmanacPrompt(userName, charName) {
-    const cal = loadCalDesc();
-    const monthCount = calMonthCount(cal);
-    const yearLen = calYearLen(cal);
-    const maxDim = Math.max(...cal.months.map(m => m.days));
-    const isGregorian = isGregorianCalendar(cal);
-
-    // 自定义历法才需要把月份结构讲给 AI；内置公历不赘述（AI 本就按公历走）。
-    const calLine = isGregorian
-        ? ''
-        : `\n**本世界采用自定义历法**：${getCalDescInjectText()}。下面所有日期都要落在这套历法上（按其月份数与每月天数），**不要套用公历的 12 月 / 31 日**。`;
-
-    // 通用节日地板：公历世界**先判地域文化、再铺该地域的真实节日**（别默认中华节庆——美国人不过中秋）；自定义历法改成「贴该历法与设定自编节令」。
-    const festivalFloor = isGregorian
-        ? `- **先从角色卡 / 世界书 / 场景设定判断这个故事发生在哪个国家 / 地区 / 文化圈**，然后**只铺这个地域真实通行的节日**，逐月覆盖。切忌不看背景就默认套中华节庆——请对号入座，例如：
-    · 美国 / 北美：新年、情人节、复活节、独立日(7/4)、万圣节(10/31)、感恩节(11 月第四个周四)、圣诞等
-    · 欧洲：新年、情人节、复活节、各国国庆 / 主保日、万圣节、圣诞、跨年等
-    · 华语圈（仅当设定确为中华背景才用）：元旦、春节、元宵、清明、端午、七夕、中秋、国庆、圣诞等
-    · 日本：正月、成人节、女儿节、黄金周、七夕、盂兰盆、文化日、圣诞、大晦日等
-    · 其它地域 / 宗教文化（伊斯兰、印度、拉美等）：按其真实主要节庆同样逐月铺满
-  设定含糊、看不出具体地域时，只铺情人节 / 万圣节 / 圣诞 / 新年这类跨文化通用节，别硬塞地域专属节。`
-        : `- 这个世界用的是自定义历法，**不要套用公历节日与日期**。请贴合该历法的月份名与世界观设定，自编合理的年度节令（如某月祭典、某位神祇诞辰、丰收节、纪元庆典等），并逐月铺满、别只堆在前几个月。`;
-
-    const tailMonthHint = isGregorian
-        ? `下半年（尤其 7 月、10 月、11 月、12 月）同样要有内容。`
-        : `越靠后的月份越容易被跳过，务必一路排到第 ${monthCount} 月。`;
-
-    const bigFestCheck = isGregorian
-        ? `这个地域 / 文化该有的主要节日是否都逐月铺到了、有没有误把别国节日硬塞进来？`
-        : `这套历法里该有的年度节令是否都逐月铺到了？`;
-
-    const gridSection = isGregorian
-        ? `【日期与网格】无论世界观如何，每条都必须给一个能排到普通日历上的 month(1-12) 与 day(1-31)：
-- 现实节日按其公历日期（农历 / 宗教历 / 阴历节日就近折算到一个公历月日）
-- 架空/幻想历法：映射到 1-12 月、1-31 日的格子上，保持先后顺序合理`
-        : `【日期与网格】每条都必须给出符合本世界历法的 month（1-${monthCount}）与 day（1 到该月天数、最多 ${maxDim}）：
-- 严格按上面列出的历法逐月对应，day 不要超过该月的实际天数
-- 保持先后顺序合理，节令尽量分散到不同月份`;
-
-    return `请暂停角色扮演，以世界观设定分析者的身份，为当前故事所处的世界编排**完整一整年（${monthCount} 个月、共 ${yearLen} 天全覆盖）**的「历法·重要日期」。${calLine}
-【任务】依据以上角色卡设定、背景、世界书与人物设定，先判断这个世界的**时代与类型**，据此先铺一层该世界的**通用重要日期**：
-- 现代 / 近现代：采用现实世界对应文化的节假日
-- 古代 / 架空历史：采用该朝代或文化泛化的节庆与要事（元日、上元、寒食、端阳、七夕、中元、重阳，以及围猎、春闱、秋狝、祭天大典等）
-- 西幻 / 玄幻 / 赛博 / 科幻等特殊世界观：贴合设定编造合理的节日与纪念日（如某神祇的祭典、双月同辉之夜、建城纪念日、企业年庆等），须与世界观自洽
-若设定中能明确推断出 ${userName} 或 ${charName} 的生日，一并列出（type 用 birthday）；不确定的生日不要瞎编，留给用户自填。
-
-【本故事专属日期 · 让日历长在这个故事上｜与通用节日同等重要】
-通用节日只是底盘。真正让这份历有灵魂的，是从**上文的「故事记忆库」、角色卡、世界书、人物关系与既有剧情**里挖出**只属于这个故事**的日子——通用模板里绝不会出现、一看就知道属于这个世界 / 这段关系的。数量**随故事长度水涨船高，宁多勿少**：短对话至少 3-5 条，剧情丰富的长故事请挖到 **8 条以上**（一千楼的长文抓出十条八条纪念日都不嫌多，别只留最标志性的两三个就收手）：
-- 记忆库线索（若上文提供了「故事记忆库」，**从头到尾通读整条时间线，别只盯最近几段**）：初遇、立约、告白、离别、重逢、生死、胜负、失去、初次同行、并肩作战、背叛与和解、重大抉择、身份揭晓、失而复得、命运转折这类**里程碑**——无论发生在故事早期、中段还是近期，只要记忆库里有明确日期或可推断出时序，都值得挑出来立为**周年纪念**（type 用 anniversary）。**宁可多列几条稍次要的，也别漏掉**，并尽量分散到一年的不同月份，别扎堆
-- 关系与人物：${userName} 与 ${charName} 的初遇纪念、结缔 / 同居纪念、某位角色的忌日或人生重要转折日、家族或组织的成立日（type 用 anniversary）
-- 世界书里的既定事件：某场战役 / 灾变 / 建城 / 立国 / 传说神迹发生的周年（type 用 anniversary 或 custom）
-- 这个世界独有的习俗节令：设定里提到、或可由设定合理推演出的地方性节庆、阵营 / 行业的年度活动（type 用 custom 或 festival）
-要求：宁可具体贴脸，不要空泛套话；能从设定或记忆库找到依据的优先。若这是一段全新对话、既没有记忆库也没有足够剧情，就跳过「记忆库」这一路，别硬编。**anniversary 与 custom 两个类型主要就靠这一段用起来，别让它们空着。**
-
-【完整性要求 · 通用节日的地板】和上面的专属日期同等重要，务必做到：
-- **必须从第 1 月一路排到第 ${monthCount} 月，逐月检查，绝不能排到头两三个月就停下**。${tailMonthHint}
-${festivalFloor}
-- 数量不设上限，宁全勿缺；通用节日 + 专属日期加起来，一整年 15 条以上是正常的。**不要因为"够了"就提前收尾**。
-- 输出前先自查两遍：① 第 1 到第 ${monthCount} 月每个月是否都被考虑过？${bigFestCheck}② 专属日期够不够——短对话至少 3-5 条，长故事至少 8 条 anniversary/custom（来自记忆库或设定）？记忆库里还有没有没被立成纪念日的里程碑漏网？任一条没达到就补上再输出。
-
-${gridSection}
-- displayDate 填该世界观下的**风味日期名**（如"正月十五""星陨月第三日""霜降前夜""两人初遇之日"）；若与"M月D日"无异可留空
-
-【持续天数 days】每条都要给一个 days（放假/持续几天）：
-- 单日节日或纪念日：days=1（绝大多数情况）
-- 连放多天的长假：给实际天数，且 month/day 填**第一天**。例：春节黄金周 days=7、五一黄金周 days=5、国庆黄金周 days=7；其它世界观里的连日庆典（如三日祭、七日狩猎节）同理。
-- 拿不准就填 1。
-
-【说明（每条最后一段）· 这是点/线/大纲乃至主楼 AI 日后展开这个日子的唯一依据，务必写全、写实，别只写一句泛泛套话】
-最后一段「说明」要在**同一行内**（严禁换行，可用逗号 / 分号分隔要点）交代清楚：
-- 由来与意义：纪念什么、为何重要；
-- 涉及的人物 / 阵营：谁的生日 / 忌日 / 纪念，哪些人会参与或格外在意；
-- 典型活动 / 习俗：这天通常做什么（祭祀、团聚、赠礼、休战、狩猎、庆典……）；
-- 专属日期（anniversary / custom）额外点明它绑定的那段剧情或关系，让读者一看就知道来龙去脉。
-宁可信息少写，也不要编造与设定冲突的细节；但至少要让人明白「这天该发生什么、和谁有关、怎么过」。
-
-【输出格式（严格遵守，只输出下面结构，不要任何多余解释）】
-<almanac_widget>
-Item: 名称|type|month|day|days|displayDate|说明（由来+涉及人物+习俗活动，写全关键信息，单行不换行）
-Item: 名称|type|month|day|days|displayDate|说明（同上）
-</almanac_widget>
-按 month、day 从小到大排列。type 只能是 festival / birthday / anniversary / custom。所有文字用中文（专有名词可保留原文）。`;
-}
-
-// ── 增量补录纪念日（不重生成整历，只增补新里程碑）──
-// 动机：历原本只能整体「生成节日」重铺；用户想在剧情推进后把**新冒出来的里程碑**增量补进去，
-// 又不愿重铺一整年、更不想每件小事都被写成纪念日。故单开一条**高门槛、限量、纯追加去重**的管线：
-// 只挖 anniversary/custom 里程碑、把已在账上的排除掉、上限 3 条、宁缺毋滥（可补 0 条）；命中项
-// pin=true（与「间→历」应用一致），日后「生成节日」整历重算也冲不掉。绝不走 mergeAlmanac
-// （那会清掉未锁 AI 节日），照 applyAlmanacWidget 逐条 almDedupKey 去重后追加、绝不动任何现有条。
-function buildAnniversarySupplementPrompt(userName, charName, existingList) {
-    const cal = loadCalDesc();
-    const monthCount = calMonthCount(cal);
-    const maxDim = Math.max(...cal.months.map(m => m.days));
-    const isGregorian = isGregorianCalendar(cal);
-    const cap = 3;
-
-    const calLine = isGregorian
-        ? ''
-        : `\n**本世界采用自定义历法**：${getCalDescInjectText()}。下面所有日期都要落在这套历法上（按其月份数与每月天数），**不要套用公历的 12 月 / 31 日**。`;
-
-    const gridLine = isGregorian
-        ? `month 用 1-12、day 用 1-31（架空历法映射到普通日历格子上，保持时序合理）`
-        : `month 用 1-${monthCount}、day 用 1 到该月天数（最多 ${maxDim}），严格落在本世界历法上`;
-
-    const already = existingList && existingList.trim()
-        ? `【已在历上·请勿重复】以下日期已经在这份历里了，**绝不要再列出来**（即便措辞略有不同、只要指的是同一件事 / 同一天，就算重复，跳过）：\n${existingList}\n`
-        : `【历上暂无既有条目】这是一份还很空的历，但本任务**仍只补真正够格的里程碑**，不要借机把普通剧情铺成一堆纪念日。\n`;
-
-    return `请暂停角色扮演，以世界观设定分析者的身份，通读当前故事的完整时间线，为这份**已存在的历**做一次「里程碑纪念日」的**增量补录**。${calLine}
-
-【这是补录，不是重做】历里的节日和既有纪念日都已经铺好了，你**唯一**的任务是：找出剧情推进到现在、**新浮现出来、却还没被立成纪念日**的重大里程碑，把它们补进去。**只补 anniversary / custom 两类里程碑，绝不要再列任何节日 / 生日 / 通用节庆**（那些已经有了）。
-
-${already}
-【什么才够格立为纪念日 · 门槛必须高】只挑真正**够分量、值得每年一记**的里程碑——初遇、立约、告白、定情、离别、重逢、生死攸关、重大胜负、身份揭晓、命运转折、失而复得、并肩之战、背叛与和解这类**改变了关系或故事走向**的节点。判断标准：
-- **宁缺毋滥，这不是流水账**：一次普通的约会、一顿饭、一句寻常对话、一场无关痛痒的小摩擦、一件当天就翻篇的小事，**统统不够格**，绝不要写成纪念日。够不够格的自问：一年后的这一天，角色真的会想起、会在意吗？答案不是斩钉截铁的「会」，就不要立。
-- **必须确有其事**：只从剧情 /【故事记忆库】/ 世界书 / 角色卡里**真实发生过**的事件取材，且能定位到具体或可合理推断的日期。凭空编造的、尚未发生的、只是"可能会怎样"的，一律不要。
-- **最多 ${cap} 条**（大多数情况 0-2 条就够）。真没有够格的新里程碑，就**一条都不要写**、直接输出空的 <almanac_widget></almanac_widget>——补录不到东西是完全正常、甚至常见的结果，**绝不能为凑数硬编**。
-
-【日期与网格】每条给出 ${gridLine}；单日纪念 days=1。displayDate 填该世界观下的风味日期名（如"两人初遇之日""断桥重逢日"），与"M月D日"无异则留空。
-
-【说明（每条最后一段·单行不换行）】交代：纪念的是哪段剧情 / 哪个节点、涉及谁、为何值得每年一记，让人一看就知道来龙去脉。
-
-【输出格式（严格遵守，只输出下面结构；没有够格的就输出空 widget，不要任何多余解释）】
-<almanac_widget>
-Item: 名称|type|month|day|days|displayDate|说明（单行不换行）
-</almanac_widget>
-type 只能是 anniversary 或 custom。所有文字用中文（专有名词可保留原文）。`;
-}
+async function triggerGenerateAlmanac() { return axisGenerationController.trigger(false); }
+async function runGenerateAlmanac() { return axisGenerationController.run(false); }
 
 // 跑补录：照 runGenerateAlmanac 的骨架（共用 isGeneratingAlmanac / almanacAbortController 互斥同一 store），
 // 但合并阶段走**纯追加去重**（非 mergeAlmanac）+ pin=true，且补 0 条时给出「没有够格」的正常态提示、不报错。
-async function runSupplementAnniversary() {
-    const chatIdSnap = getContext().chatId;
-    const myCtrl = axisState.almanacAbortController = new AbortController();
-    axisState.isGeneratingAlmanac = true;
-    axisState._almGenLabel = '正在通读全程·补录纪念日';
-    if (axisState.almanacMode) renderAlmanacPanel();
-    try {
-        const ctx = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const cfg = loadCfg();
-        // 已在账上的日期清单（含全部类型），喂给提示词排除，防它重复列已有条
-        const existingList = loadAlmanac().map(it => `- ${it.name}（${almDateLabel(it)}）`).join('\n');
-        const prompt = buildAnniversarySupplementPrompt(userName, charName, existingList);
-        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 4, { fullMemory: true });
-        if (axisState.almanacAbortController !== myCtrl) return;
-        if (getContext().chatId !== chatIdSnap) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return; }
-        if (!validateAlmanacResponse(raw)) throw new Error('补录返回不完整（缺少 almanac_widget 结束标签），旧历数据未改变，请重试');
-        const aiItems = parseAlmanacWidget(raw);
-        // 纯追加去重（照 applyAlmanacWidget）：重新取一次现表避开生成期间被别处改，
-        // 逐条按 almDedupKey 去重、命中的补录项 pin=true 防日后整历重算冲掉，绝不 mergeAlmanac。
-        const base = loadAlmanac();
-        const seen = new Set(base.map(almDedupKey));
-        const added = [];
-        for (const it of aiItems) {
-            const k = almDedupKey(it);
-            if (seen.has(k)) continue;
-            seen.add(k);
-            it.pin = true;
-            added.push(it);
-        }
-        axisState.isGeneratingAlmanac = false;
-        axisState.almanacAbortController = null;
-        if (added.length) { saveAlmanacItems([...base, ...added]); syncLatestAlmanacBlock(); }
-        if (axisState.almanacMode) renderAlmanacPanel();
-        if (added.length) {
-            showToast(`已补录 ${added.length} 条纪念日`);
-        } else if (getSettings().notifyMode !== 'off') {
-            showToast('通读全程后没有够格补录的新里程碑（这很正常）');
-        }
-    } catch (err) {
-        if (axisState.almanacAbortController !== myCtrl) return;
-        axisState.isGeneratingAlmanac = false;
-        axisState.almanacAbortController = null;
-        if (err.name === 'AbortError') { if (axisState.almanacMode) renderAlmanacPanel(); return; }
-        if (getContext().chatId === chatIdSnap) {
-            if (axisState.almanacMode) { renderAlmanacPanel(); showToast('补录失败：' + escapeHtml(err.message || '未知错误'), null, true); }
-            else showToast('补录纪念日失败，请重试', null, true);
-        }
-    }
-}
-
-// 补录纪念日是**纯追加、不动任何现有条** → 无需「生成节日」那种破坏性重铺确认，校验齐 API/chat 即直接跑。
-async function triggerSupplementAnniversary() {
-    if (axisState.isGeneratingAlmanac) return;
-    const cfg = loadCfg();
-    if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); return; }
-    if (!getContext().chatId) { showToast('请先打开一个聊天', null, true); return; }
-    runSupplementAnniversary();
-}
-
+async function runSupplementAnniversary() { return axisGenerationController.run(true); }
+async function triggerSupplementAnniversary() { return axisGenerationController.trigger(true); }
 // ── 手动新增 / 编辑（内联窗，不用弹窗）──
 // 用户明确怕浮层弹窗出问题（会盖住/卡住），故表单直接渲进 #sp-almanac-wrap 里，
 // 走 renderAlmanacPanel 的正常重渲，跟着 CHAT_CHANGED 一起被清，绝不残留浮层。
@@ -11800,129 +9667,47 @@ function closeAlmanacEditor() {
     closeAxisEditor(renderAlmanacPanel);
 }
 function renderAlmanacEditor() {
-    const { id, prefill } = axisState._almanacEditor;
-    const cal = loadCalDesc();
-    const maxDim = Math.max(...cal.months.map(x => x.days));
-    const editing = id ? loadAlmanac().find(it => it.id === id) : null;
-    const it = editing || {
-        name: '', type: 'custom',
-        month: prefill?.month || (almCalMonth() + 1),
-        day: prefill?.day || (prefill ? 1 : almTodayAnchor().day),
-        days: 1,
-        displayDate: '', note: '', pin: true, source: 'user',
-    };
-    const typeOpts = ALM_TYPES.map(t => `<option value="${t}"${it.type === t ? ' selected' : ''}>${almTypeMeta(t).label}</option>`).join('');
-    return `<div class="sp-alm-editor-head">
-        <button class="sp-icon-btn sp-alm-editor-back" title="返回"><i class="fa-solid fa-arrow-left"></i></button>
-        <span class="sp-alm-editor-title">${editing ? '编辑日期' : '添加日期'}</span>
-    </div>
-    <div class="sp-alm-body">
-        <div class="sp-alm-editor-body">
-            <label class="sp-alm-field"><span>名称</span><input type="text" id="sp-alm-f-name" maxlength="40" placeholder="如 元宵节 / 阿露的生日" value="${escapeAttr(it.name)}"></label>
-            <label class="sp-alm-field"><span>类型</span><select id="sp-alm-f-type">${typeOpts}</select></label>
-            <div class="sp-alm-field-row">
-                <label class="sp-alm-field sp-alm-field-sm"><span>月</span><input type="number" id="sp-alm-f-month" min="1" max="${calMonthCount(cal)}" value="${it.month}"></label>
-                <label class="sp-alm-field sp-alm-field-sm"><span>日</span><input type="number" id="sp-alm-f-day" min="1" max="${maxDim}" value="${it.day}"></label>
-                <label class="sp-alm-field sp-alm-field-sm"><span>天数</span><input type="number" id="sp-alm-f-days" min="1" max="${calYearLen(cal)}" value="${it.days || 1}"></label>
-            </div>
-            <div class="sp-alm-wd-hint" id="sp-alm-f-wdhint"></div>
-            <label class="sp-alm-field"><span>风味日期 <small>选填，如"正月十五"</small></span><input type="text" id="sp-alm-f-disp" maxlength="40" placeholder="留空则显示 M月D日" value="${escapeAttr(it.displayDate)}"></label>
-            <label class="sp-alm-field"><span>说明 <small>选填</small></span><textarea id="sp-alm-f-note" rows="2" maxlength="200" placeholder="这个日子的意义 / 习俗">${escapeHtml(it.note)}</textarea></label>
-        </div>
-        <div class="sp-alm-editor-actions">
-            <button class="sp-mini-btn sp-alm-editor-cancel">取消</button>
-            <button class="sp-gen-btn sp-alm-editor-save">保存</button>
-        </div>
-    </div>`;
+    return renderAxisEditor({
+        calendar: loadCalDesc, items: loadAlmanac, monthIndex: almCalMonth, today: almTodayAnchor,
+        types: ALM_TYPES, typeLabel: type => almTypeMeta(type).label, monthCount: calMonthCount,
+        monthDays: calMonthDays, yearLength: calYearLen, escapeHtml, escapeAttr,
+    });
 }
 // 编辑器里月/日/天数变动时，实时刷新只读周几提示（纯提示，不入库）。
 function almRenderWdHint() {
     const $h = $in('#sp-alm-f-wdhint');
     if (!$h.length) return;
-    const cal = loadCalDesc();
-    const month = almClampInt($in('#sp-alm-f-month').val(), 1, calMonthCount(cal), 1);
-    const day = almClampInt($in('#sp-alm-f-day').val(), 1, calMonthDays(cal, month), 1);
-    const days = almClampInt($in('#sp-alm-f-days').val(), 1, calYearLen(cal), 1);
-    const ref = almWeekdayRef(cal);
-    const wd = ALM_WEEKDAYS[almWeekdayFor(month, day, ref, cal)];
-    if (days > 1) {
-        const e = almEndMonthDay({ month, day, days }, cal);
-        const ewd = ALM_WEEKDAYS[almWeekdayFor(e.month, e.day, ref, cal)];
-        $h.text(`${calMonthName(cal, month)}${day}日 ${wd} · 共 ${days} 天，至 ${calMonthName(cal, e.month)}${e.day}日 ${ewd}`);
-    } else {
-        $h.text(`${calMonthName(cal, month)}${day}日 · ${wd}`);
-    }
+    $h.text(renderAxisWeekdayHint({ calendar: loadCalDesc, monthValue: () => $in('#sp-alm-f-month').val(), dayValue: () => $in('#sp-alm-f-day').val(), durationValue: () => $in('#sp-alm-f-days').val(), clamp: almClampInt, monthCount: calMonthCount, monthDays: calMonthDays, yearLength: calYearLen, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor, weekdays: ALM_WEEKDAYS, monthName: calMonthName, endMonthDay: almEndMonthDay }));
 }
 function saveAlmanacEditor() {
     if (!axisState._almanacEditor) return;
-    const name = String($in('#sp-alm-f-name').val() || '').trim();
-    if (!name) { showToast('请填写名称', null, true); $in('#sp-alm-f-name').trigger('focus'); return; }
-    const editing = axisState._almanacEditor.id ? loadAlmanac().find(x => x.id === axisState._almanacEditor.id) : null;
-    const rec = normalizeAlmItem({
-        id: editing ? editing.id : almId(),
-        name,
-        type: $in('#sp-alm-f-type').val(),
-        month: $in('#sp-alm-f-month').val(),
-        day: $in('#sp-alm-f-day').val(),
-        days: $in('#sp-alm-f-days').val(),
-        displayDate: $in('#sp-alm-f-disp').val(),
-        note: $in('#sp-alm-f-note').val(),
-        pin: editing ? editing.pin : true,       // 自填默认自动锁定（用户最看重，别被生成冲掉）
-        source: editing ? editing.source : 'user',
-    });
-    const list = loadAlmanac();
-    if (editing) {
-        const idx = list.findIndex(x => x.id === editing.id);
-        if (idx >= 0) list[idx] = rec; else list.push(rec);
-    } else {
-        list.push(rec);
+    const result = axisEditorController.save();
+    if (!result.ok) {
+        if (result.reason === 'name') { showToast('请填写名称', null, true); $in('#sp-alm-f-name').trigger('focus'); }
+        else if (result.reason === 'persist') showToast('日期保存失败，请重试', null, true);
     }
-    saveAlmanacItems(list);
-    closeAlmanacEditor();
-    syncLatestAlmanacBlock();   // 历改动 → 楼内七天条即时刷
 }
 
 function toggleAlmanacPin(id) {
-    const list = loadAlmanac();
-    const it = list.find(x => x.id === id);
-    if (!it) return;
-    it.pin = !it.pin;
-    saveAlmanacItems(list);
+    const result = axisActions.togglePin(id); if (!result) return;
     // 就地更新该行（锁不改排序），不整面重渲 → 不会把滚动/视觉焦点弹回页头
     if (axisState.almanacMode) {
         const $rows = $in(`#sp-almanac-wrap .sp-alm-item[data-id="${id}"]`);
-        $rows.toggleClass('sp-alm-pinned', it.pin);
+        $rows.toggleClass('sp-alm-pinned', result.pin);
         $rows.find('.sp-alm-pin')
-            .attr('title', it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留')
-            .find('i').attr('class', `fa-solid ${it.pin ? 'fa-lock' : 'fa-lock-open'}`);
+            .attr('title', result.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留')
+            .find('i').attr('class', `fa-solid ${result.pin ? 'fa-lock' : 'fa-lock-open'}`);
     }
-    showToast(it.pin ? '已锁定 · 生成时保留' : '已解锁');
 }
 // 日历详情↔网格联动：把某条目在当前月覆盖到的日子高亮到上方网格（直接改 class，不重渲）。
 function almHiliteCells(it) {
-    almClearHilite();
-    if (!it) return;
-    const cal = loadCalDesc();
-    const month1 = almCalMonth() + 1;
-    const days = almClampInt(it.days, 1, calYearLen(cal), 1);
-    const startDoy = almDayOfYear(it.month, it.day, cal);
-    for (let k = 0; k < days; k++) {
-        const md = almMonthDayFromDoy(startDoy + k, cal);
-        if (md.month === month1) $in(`#sp-almanac-wrap .sp-alm-cell[data-day="${md.day}"]`).addClass('sp-alm-cell-linked');
-    }
+    for (const day of axisActions.highlight(it)) $in(`#sp-almanac-wrap .sp-alm-cell[data-day="${day}"]`).addClass('sp-alm-cell-linked');
 }
 function almClearHilite() {
-    $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked');
+    axisActions.clearHighlight();
 }
 async function deleteAlmanacItem(id) {
-    const list = loadAlmanac();
-    const it = list.find(x => x.id === id);
-    if (!it) return;
-    const ok = await spConfirm({ title: '删除日期', body: `确定删除「${it.name}」？`, confirmText: '删除', cancelText: '取消' });
-    if (!ok) return;
-    saveAlmanacItems(list.filter(x => x.id !== id));
-    if (axisState.almanacMode) renderAlmanacPanel();
-    syncLatestAlmanacBlock();   // 删条目 → 楼内七天条即时刷
+    await axisActions.remove(id);
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -13263,75 +11048,9 @@ function showToast(msg, onClick, isError = false) {
     setTimeout(() => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); }, holdMs);
 }
 
-// ─── Rendering ────────────────────────────────────────────────────────────────
-
-// 手动锁/解一个点（对齐 triggerToggleLinePin）：解析 raw → 翻转该事件 pin → 重序列化写回
-// raw → 原地重渲染（不重算）。pin 就活在 raw 里，无旁挂结构。
-function restorePointActiveDay(dayKey) {
-    const $tabs = $inAll('#sp-body .sp-tab');
-    if (!$tabs?.length) return;
-    let found = false;
-    $tabs.each((_, el) => {
-        const $tab = $(el);
-        const match = String($tab.attr('data-day')) === String(dayKey);
-        $tab.toggleClass('sp-tab-active', match);
-        if (match) { $tab.trigger('click'); found = true; }
-    });
-    if (!found) $tabs.eq(0).trigger('click');
-}
-
-function triggerTogglePointPin(dayKey, evIdx) {
-    const key = getCacheKey();
-    const saved = readStore(key);
-    const raw = saved?.raw || '';
-    if (!raw) { showToast('待办已失效，请刷新面板', null, true); return; }
-    const result = togglePointPinRaw(raw, dayKey, evIdx, loadCalDesc());
-    if (!result.ok) { showToast('这个点已不存在，请刷新面板', null, true); return; }
-    const newRaw = result.raw;
-    writeStore(key, { raw: newRaw, userName: saved.userName || '用户', ts: Date.now() });
-    const html = renderSchedule(newRaw, saved.userName || '用户', currentView, loadCalDesc());
-    pointState.cachedSchedule = html;
-    setBody(html);
-    restorePointActiveDay(dayKey);
-    syncLatestScheduleBlock();   // 锁/解点 → 楼内日程条锁标即时刷
-    showToast(result.pinned ? '已锁定这个点' : '已解锁这个点');
-}
-
-// 删除单个点（楼内抽屉专用，对齐线的 triggerDeleteOneLine）：确认 → 从解析结果里 splice
-// 掉该事件 → 重序列化写回 raw → 原地重渲染 + 刷楼内条。pin 活在 raw 里，删除即连带清掉。
-async function triggerDeletePointEvent(dayKey, evIdx, target = {}) {
-    // 目标在调用前冻结：确认弹窗等待期间切 tab 不得漂移到另一套点数据。
-    const view = target.view === 'char' ? 'char' : 'user';
-    const charName = view === 'char' ? String(target.charName || '').trim() : '';
-    const key = getCacheKey(view, charName);
-    const saved = readStore(key);
-    const raw = saved?.raw || '';
-    if (!raw) { showToast('待办已失效，请刷新面板', null, true); return; }
-    const parsed = parseCalendar(raw, loadCalDesc());
-    const arr = dayKey === 'future' ? (parsed.future?.events || null) : (parsed.days?.[Number(dayKey)]?.events || null);
-    const ev = arr?.[evIdx] || null;
-    if (!ev) { showToast('这个点已不存在，请刷新面板', null, true); return; }
-    const ok = await spConfirm({
-        title: '删除这个点',
-        body : `将删除「${ev.title || '未命名'}」这一条，其它安排保留。此操作不可撤销。`,
-        confirmText: '删除',
-        cancelText : '取消',
-    });
-    if (!ok) return;
-    const result = deletePointEventRaw(raw, dayKey, evIdx, loadCalDesc());
-    if (!result.ok) return;
-    const newRaw = result.raw;
-    writeStore(key, { raw: newRaw, userName: saved.userName || '用户', ts: Date.now() });
-    const stillOnTarget = currentView === view && (view !== 'char' || charViewName === charName);
-    if (stillOnTarget) {
-        const html = renderSchedule(newRaw, saved.userName || '用户', view, loadCalDesc());
-        pointState.cachedSchedule = html;
-        setBody(html);
-        restorePointActiveDay(dayKey);
-    }
-    syncLatestScheduleBlock();
-    showToast('已删除这个点');
-}
+// 点行内 actions 已迁入 business/point/actions.js；这里仅保留薄事件转发。
+const triggerTogglePointPin = (...args) => pointActions.togglePin(...args);
+const triggerDeletePointEvent = (...args) => pointActions.deleteEvent(...args);
 
 // 聊天输入框随内容自增高：先归零再按 scrollHeight 撑，CSS 用 max-height 封顶后转滚动条。
 // 清空发送后也调一次即可缩回单行。

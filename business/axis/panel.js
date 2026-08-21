@@ -5,7 +5,7 @@ import { axisState } from './state.js';
 
 const ledgerScrollState = { snapshot: null, generation: 0, pendingFrame: null, currentRenderedMode: 'unknown' };
 
-function cancelLedgerScrollRestore() {
+export function resetAxisPanelScrollState() {
     if (ledgerScrollState.pendingFrame != null) {
         (globalThis.cancelAnimationFrame || clearTimeout)(ledgerScrollState.pendingFrame);
         ledgerScrollState.pendingFrame = null;
@@ -13,7 +13,7 @@ function cancelLedgerScrollRestore() {
     ledgerScrollState.generation++;
 }
 
-function captureLedgerScroll($wrap) {
+export function captureAxisPanelScroll($wrap) {
     const body = $wrap.find('.sp-alm-body').first().get?.(0);
     if (!body) return null;
     const rows = [...body.querySelectorAll('.sp-ledger-row[data-id]')];
@@ -33,8 +33,8 @@ function captureLedgerScroll($wrap) {
     };
 }
 
-function scheduleLedgerScrollRestore($wrap, snapshot) {
-    cancelLedgerScrollRestore();
+export function scheduleAxisPanelScrollRestore($wrap, snapshot) {
+    resetAxisPanelScrollState();
     if (!snapshot || snapshot.sheet !== 'ledger') return;
     const generation = ledgerScrollState.generation;
     const apply = () => {
@@ -65,7 +65,7 @@ export function createAxisPanel(env) {
         const $wrap = env.$in('#sp-almanac-wrap');
         const oldMode = ledgerScrollState.currentRenderedMode;
         if (oldMode === 'ledger-list' && ledgerScrollState.pendingFrame == null) {
-            const current = captureLedgerScroll($wrap);
+            const current = captureAxisPanelScroll($wrap);
             if (current) ledgerScrollState.snapshot = { ...current, generation: ledgerScrollState.generation };
         }
         const ledgerEditor = env.getLedgerEditor();
@@ -77,10 +77,10 @@ export function createAxisPanel(env) {
             : axisState._almanacSheet === 'calendar' ? 'calendar'
             : 'upcoming';
         if (targetMode === 'ledger-list' && oldMode !== 'ledger-list' && oldMode !== 'ledger-editor') ledgerScrollState.snapshot = null;
-        if (targetMode !== 'ledger-list') cancelLedgerScrollRestore();
+        if (targetMode !== 'ledger-list') resetAxisPanelScrollState();
         const finish = () => {
             ledgerScrollState.currentRenderedMode = targetMode;
-            if (targetMode === 'ledger-list') scheduleLedgerScrollRestore($wrap, ledgerScrollState.snapshot);
+            if (targetMode === 'ledger-list') scheduleAxisPanelScrollRestore($wrap, ledgerScrollState.snapshot);
         };
         if (axisState._almanacManager) {
             if (env.refreshCalendarManager(options)) { finish(); return; }

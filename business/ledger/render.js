@@ -1,12 +1,12 @@
 // ─── 刻度（ledger）域 · 渲染 / 编辑 / 批量交互 ────────────────────────────────
 // 从 index.js 迁入「暗账页」（历面板第三 sheet）整套：条目行/内联编辑窗/批量条/暗账列表。
-// 按 Lead 裁定 Option B 独立成 ledger 渲染子模块；ledger 数据层仍在 ../../ledger.js（不混入 axis）。
+// 按 Lead 裁定 Option B 独立成 ledger 渲染子模块；ledger 数据层位于同域 repository.js。
 // axis 编排器（axis/panel 的 renderAlmanacPanel）经本模块导出的 renderLedgerSheet/renderLedgerEditor 调用；
 // 本模块反向经 env 调 renderAlmanacPanel（避免与 axis/panel 形成 ESM 循环 import）。
 //
 // 依赖：
 //  · 直接 import（叶子/姊妹纯模块，无循环）：utils/dom(转义)、runtime/settings(getSettings)、
-//    axis/state(axisState)、axis/data(历法/日历/almanac 读写)、ledger.js(数据 CRUD)。
+//    axis/state(axisState)、axis/data(历法/日历/almanac 读写)、repository.js(数据 CRUD)。
 //  · env 注入（index.js 宿主：shadow 查询/toast/确认框/中文列表切分/主楼同步/面板重绘/间隔与忙碌态）：
 //    $in, showToast, splitCnList, spConfirm, syncLatestAlmanacBlock, renderAlmanacPanel,
 //    getLedgerCaptureInterval, isCapturingLedger(), isJudgingLedger()
@@ -20,7 +20,7 @@ import { escapeHtml, escapeAttr } from '../../utils/dom.js';
 import { getSettings } from '../../runtime/settings.js';
 import { axisState } from '../axis/state.js';
 import { calMonthName, calMonthCount, calMonthDays, loadCalDesc, loadAlmanac, saveAlmanacItems } from '../axis/data.js';
-import * as ledger from '../../ledger.js';
+import * as ledger from './repository.js';
 
 let env = null;
 export function bindLedgerRender(e) { env = e; }
@@ -56,6 +56,7 @@ export function ledgerRowHtml(e, cal, archived = false) {
     const startTag = start ? `<span class="sp-ledger-meta">起 ${escapeHtml(start)}</span>` : '';
     const cyc = e.周期长度 ? `<span class="sp-ledger-meta">周期${e.周期长度}天</span>` : '';
     const due = e.到期锚?.历日期 ? `<span class="sp-ledger-meta">终 ${escapeHtml(fmtLedgerAnchorDate(e.到期锚.历日期, cal))}</span>` : '';
+    const sourceState = e.来源状态 ? `<span class="sp-ledger-meta">${escapeHtml(e.来源状态)}</span>` : '';
     const locked = e.锁 === '用户锁';
     const paused = e.静音 === true;   // 暂停埋入
     // 牵扯人物上提到第一行（跟类型徽章同排、填首行空档）；标签仍留末行。
@@ -76,7 +77,7 @@ export function ledgerRowHtml(e, cal, archived = false) {
             + `</span>`;
     // 起/周期/终固定独占一行：这仨凑一起（尤其古风长日期「大梁二十九年十一月廿六未时」）放进事由那行会挤爆，
     // 无条件挪到第二行、换行标准统一（不再靠 flex-wrap 超出才折）。三者全空则整行不渲染。
-    const dates = `${startTag}${cyc}${due}`;
+    const dates = `${startTag}${cyc}${due}${sourceState}`;
     const r15 = dates ? `<div class="sp-ledger-dates">${dates}</div>` : '';
     // 批量模式：归档条对应 'ledger-archive'、活跃条对应 'ledger-active'。命中当前 scope 才出勾选框、隐藏行操作钮。
     const batchScope = archived ? 'ledger-archive' : 'ledger-active';

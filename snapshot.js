@@ -79,6 +79,7 @@ export function writeSnapshot(mesId, snap) {
         recall:  Array.isArray(snap?.recall) ? snap.recall : [],
         calendar: JSON.parse(JSON.stringify(calendar)),
     };
+    if (snap?.weekdayRef && Number.isInteger(+snap.weekdayRef.refDoy) && Number.isInteger(+snap.weekdayRef.refWd)) payload.weekdayRef = { refDoy: +snap.weekdayRef.refDoy, refWd: +snap.weekdayRef.refWd };
 
     // 幂等：内容没变就不写（ts 不参与比较，否则永远"变了"）。
     const prev = msg.extra?.[SNAP_KEY];
@@ -105,6 +106,7 @@ function _sameSnapContent(a, b) {
     try {
         if (JSON.stringify(a.almanac || []) !== JSON.stringify(b.almanac || [])) return false;
     } catch { return false; }
+    if (JSON.stringify(a.weekdayRef || null) !== JSON.stringify(b.weekdayRef || null)) return false;
     // 标注池（AI 楼）/召回（用户楼）：同粗比 JSON（量小、顺序由取数端稳定给出）。
     try {
         if (JSON.stringify(a.pool   || []) !== JSON.stringify(b.pool   || [])) return false;
@@ -134,7 +136,7 @@ export function readSnapshot(mesId) {
     const snap = msg?.extra?.[SNAP_KEY];
     if (!snap || typeof snap !== 'object') return null;
     // 容错归一：老/脏快照缺字段时补齐缺省，读取端拿到的形状恒定。
-    return {
+    const out = {
         v: Number.isFinite(+snap.v) ? +snap.v : 0,
         ts: +snap.ts || 0,
         point:   typeof snap.point === 'string' ? snap.point : '',
@@ -147,6 +149,8 @@ export function readSnapshot(mesId) {
         recall:  Array.isArray(snap.recall) ? snap.recall : [],
         calendar: snap.v >= 2 && isValidCalendarDescriptor(snap.calendar) ? JSON.parse(JSON.stringify(snap.calendar)) : null,
     };
+    if (snap.weekdayRef && Number.isInteger(+snap.weekdayRef.refDoy) && Number.isInteger(+snap.weekdayRef.refWd)) out.weekdayRef = { refDoy: +snap.weekdayRef.refDoy, refWd: +snap.weekdayRef.refWd };
+    return out;
 }
 
 export { resolveSnapshotCalendar };
