@@ -544,9 +544,10 @@ const axisEditorController = createAxisEditorController({
     render: () => closeAxisEditor(renderAlmanacPanel),
     afterSave: syncLatestAlmanacBlock,
 });
+function deferredRenderAlmanacPanel(...args) { return renderAlmanacPanel(...args); }
 const axisActions = createAxisActions({
     load: loadAlmanac, save: saveAlmanacItems, confirm: spConfirm, toast: showToast,
-    render: renderAlmanacPanel, sync: syncLatestAlmanacBlock, clear: () => $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked'),
+    render: deferredRenderAlmanacPanel, sync: syncLatestAlmanacBlock, clear: () => $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked'),
     calendar: loadCalDesc, month: almCalMonth, clamp: almClampInt, yearLength: calYearLen, dayOfYear: almDayOfYear, monthDayFromDoy: almMonthDayFromDoy,
 });
 const axisCalendarActions = createAxisCalendarActions({
