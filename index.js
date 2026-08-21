@@ -589,6 +589,10 @@ const axisTransactionController = createAxisTransactionController({
 const renderCalendarManager = axisCalendarManager.renderCalendarManager;
 const refreshCalendarManager = axisCalendarManager.refreshCalendarManager;
 
+// 面板工厂在 axisUi 的后置初始化前创建；包装只在实际渲染时读取目标函数。
+function deferredAlmTodayBarHtml(...args) { return almTodayBarHtml(...args); }
+function deferredStoryClockBarHtml(...args) { return storyClockBarHtml(...args); }
+
 // Axis sheet orchestration lives in business/axis; render details are injected
 // from this host to keep DOM/runtime dependencies out of the business module.
 const renderAlmanacPanel = createAxisPanel({
@@ -602,8 +606,8 @@ const renderAlmanacPanel = createAxisPanel({
     renderAlmanacCalendar,
     renderAlmanacUpcoming,
     almToolbarHtml,
-    almTodayBarHtml,
-    storyClockBarHtml,
+    almTodayBarHtml: deferredAlmTodayBarHtml,
+    storyClockBarHtml: deferredStoryClockBarHtml,
     almRenderWdHint,
     loadingHtml,
     _almGenLabel: () => axisState._almGenLabel,
@@ -9607,7 +9611,7 @@ const storyClockBarHtml = axisUi.storyClockBarHtml;
 function almNudgeToday(delta) {
     axisDateActions.nudgeToday(delta, { storyClock: storyClockEnabled() });
 }
-const currentCharacterCards = () => calendarCards(getContext(), charStableKey);
+function currentCharacterCards() { return calendarCards(getContext(), charStableKey); }
 
 function openCalendarManager() {
     axisState._almanacEditor = null;

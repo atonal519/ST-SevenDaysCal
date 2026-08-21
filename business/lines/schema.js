@@ -51,7 +51,9 @@ export function validateLinesResponse(raw) {
         if (!name || !type || !stage || !level || !when || !AGENCIES.has(agency) || !BOOLS.has(stall) || !BOOLS.has(pin)) return { ok: false, reason: 'invalid-field' };
         if (!LINE_TYPES.has(type) || !LINE_STAGES.has(stage) || !LINE_LEVELS.has(level)) return { ok: false, reason: 'invalid-field' };
         if ([name, type, stage, level, when, agency, stall, pin, block.desc, block.next].some(v => String(v ?? '').includes('|'))) return { ok: false, reason: 'ambiguous-pipe' };
-        model.push(normalizeLine({ name, type, stage, level, when, agency, stall, pin, desc: block.desc, next: block.next }));
+        // pin 只允许来自本地旧存储；AI 输出的值仅为兼容格式而读取，不能成为锁。
+        model.push(normalizeLine({ name, type, stage, level, when, agency, stall, pin: false, desc: block.desc, next: block.next }));
     }
-    return { ok: true, model, raw: source };
+    // 返回给 merge 的 raw 也必须来自规范化模型，避免调用方绕过 model 让 AI pin 落地。
+    return { ok: true, model, raw: serializeLines(model) };
 }
