@@ -1868,21 +1868,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     position       : absolute;
     bottom         : 0;
     right          : 0;
-    width          : 24px;
-    height         : 24px;
+    width          : 44px;
+    height         : 44px;
     display        : flex;
     align-items    : flex-end;
     justify-content: flex-end;
-    padding        : 4px;
+    padding        : 8px;
     box-sizing     : border-box;
-    clip-path      : polygon(
-        75% 0,
-        100% 0,
-        100% 100%,
-        0 100%,
-        0 75%,
-        75% 75%
-    );
     cursor         : se-resize;
     color          : var(--sp-subtle);
     font-size      : var(--sp-fs-80);
@@ -2302,6 +2294,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     font-family: 'Roboto Mono', monospace;
     font-size  : var(--sp-fs-72);
     color      : var(--sp-subtle);
+    min-width  : 0;
+    flex       : 0 1 9em;
+    overflow   : hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 /* 线卡日期独占一行（在头部下方）：古风长日期「大梁二十九年十一月廿六未时」放进头部会把那行挤爆、
    逼近右侧图标组。挪成单独一行后，无论长短都不再和阶段/类型/珠子/图标抢横向空间。 */
@@ -2320,6 +2317,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: 99px;
     background   : rgba(208,188,255,0.15);
     color        : var(--sp-primary);
+    min-width    : 0;
+    flex         : 0 1 8em;
+    overflow     : hidden;
+    text-overflow: ellipsis;
+    white-space  : nowrap;
 }
 .sp-beat-line {
     font-size    : var(--sp-fs-68);
@@ -2351,10 +2353,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height  : 1.35;
     word-break   : break-word;
 }
-/* 其余头部字段固定尺寸，不参与收缩——保证收缩只发生在类型字段上 */
+/* 徽章、停顿标记和按钮固定；时间/类型允许收缩，避免窄面板把右侧按钮挤出视口。 */
 .sp-beat-head > .sp-seq-badge,
-.sp-beat-head > .sp-beat-type,
-.sp-beat-head > .sp-beat-time,
 .sp-beat-head > .sp-line-stall-tag { flex-shrink: 0; }
 .sp-beat-title {
     font-size    : var(--sp-fs-95);
@@ -2412,6 +2412,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex           : 1;
     min-height     : 0;
     overflow-y     : auto;
+    overflow-x     : clip;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
 }
@@ -3553,7 +3554,8 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 线 / 冷知识的单条删除 × —— 放在 head 行内，紧挨其他操作并排、保持同尺寸。
    不用 absolute，避免跟常驻显示的注入按钮重叠、互相遮挡点击（楼内尤甚）。 */
 .sp-line-del-one,
-.sp-lines-dashed-delete {
+.sp-lines-dashed-delete,
+.sp-beat-delete {
     width          : var(--sp-btn-22);
     height         : var(--sp-btn-22);
     padding        : 0;
@@ -3572,9 +3574,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 /* 面板：跟注入按钮一样，hover 卡片才浮现 */
 .sp-beat:hover .sp-line-del-one,
-.sp-beat:hover .sp-lines-dashed-delete { opacity: 1; }
+.sp-beat:hover .sp-lines-dashed-delete,
+.sp-beat:hover .sp-beat-delete { opacity: 1; }
 .sp-line-del-one:hover,
-.sp-lines-dashed-delete:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
+.sp-lines-dashed-delete:hover,
+.sp-beat-delete:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); }
 /* 楼内：移动端无 hover，默认淡显（对齐注入按钮的 0.55 逻辑） */
 .sp-inline-line .sp-line-del-one { opacity: 0.55; color: inherit; }
 .sp-inline-line:hover .sp-line-del-one,

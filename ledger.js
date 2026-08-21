@@ -67,8 +67,21 @@ function persist() {
     // 同步快照走 diff patch（无变化 no-op），当场写出、切档取消不掉。老版 ST 无此 API 时兜底防抖。
     const ctx = getContext?.();
     if (!ctx) return;
-    if (ctx.saveMetadata) ctx.saveMetadata();
-    else ctx.saveMetadataDebounced?.();
+    const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
+    // 旧同步 API 不改变签名；若宿主返回 Promise，吞掉其异步 reject，避免制造未处理 Promise。
+    result?.catch?.(() => {});
+}
+
+// 批量路径专用：等待官方 saveMetadata 返回的 Promise（若有）。ST 内部吞掉的磁盘错误不在此边界可观测。
+function persistAwaitable() {
+    const ctx = getContext?.();
+    if (!ctx) return Promise.resolve();
+    try {
+        const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
+        return result && typeof result.then === 'function' ? result : Promise.resolve(result);
+    } catch (error) {
+        return Promise.reject(error);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -78,8 +91,10 @@ function persist() {
 // 锚 → { 楼层, 历日期 }。楼层非有限数留 null；历日期原样透传（{month,day} 或字符串，与历同源）。
 function normalizeAnchor(a) {
     if (!a || typeof a !== 'object') return { 楼层: null, 历日期: null };
+    const rawFloor = a.楼层;
+    const floor = rawFloor === null || rawFloor === undefined || typeof rawFloor === 'boolean' || String(rawFloor).trim() === '' ? null : Number(rawFloor);
     return {
-        楼层  : Number.isFinite(+a.楼层) ? +a.楼层 : null,
+        楼层  : Number.isFinite(floor) ? floor : null,
         历日期: a.历日期 ?? null,
     };
 }
@@ -135,6 +150,26 @@ export function addEntry(obj) {
     m.entries.push(entry);
     persist();
     return entry;
+}
+
+// 批量原子入库：先在内存准备完整条目，再一次持久化；持久化异常回滚本次内存变更。
+// 保留 addEntry 旧 API，供既有单条写入路径继续使用。
+export async function addEntriesAtomic(items) {
+    const m = ledger(true);
+    if (!m) return [];
+    const list = Array.isArray(items) ? items : [];
+    const oldLen = m.entries.length;
+    const oldSeq = m.seq;
+    try {
+        const prepared = list.map(obj => normalizeEntry(obj, `L${++m.seq}`));
+        m.entries.push(...prepared);
+        await persistAwaitable();
+        return prepared;
+    } catch (error) {
+        m.entries.length = oldLen;
+        m.seq = oldSeq;
+        throw error;
+    }
 }
 
 // 局部更新（判定车刷现状/现状锚，或用户内联编辑）。只改传入的键。返回是否命中。

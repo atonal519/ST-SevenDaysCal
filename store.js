@@ -102,6 +102,15 @@ function persist() {
     else ctx.saveMetadataDebounced?.();   // 兜底：老版本 ST 无 saveMetadata
 }
 
+// 清理等破坏性动作使用可等待版本：ST 旧版可能只返回 undefined；若返回 Promise，
+// 调用方必须等待其完成后才能刷新 UI。ST 内部吞掉的磁盘错误仍无法从插件侧观测。
+async function persistAsync() {
+    const ctx = getContext?.();
+    if (!ctx) return;
+    const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
+    if (result && typeof result.then === 'function') await result;
+}
+
 // sp-store 顶层 key 是否已存在（不含内容判断，也不实例化）。
 export function hasStore() {
     const cm = getContext?.()?.chatMetadata;
@@ -271,6 +280,7 @@ export function storeTotalBytes() {
 
 // 清掉某 kind 的所有 scope 子键（我/TA 视角全清）。返回删除条数。
 export function clearKind(kind) {
+    if (!KINDS.includes(kind)) return 0;
     const s = store();
     if (!s) return 0;
     let n = 0;
@@ -279,6 +289,38 @@ export function clearKind(kind) {
     }
     if (n) persist();
     return n;
+}
+
+// 精确删除一个 sp-store.data 子键；不按前缀扩展，供高风险 UI 清理使用。
+export async function clearDataKeyAsync(dataKey) {
+    if (typeof dataKey !== 'string' || !dataKey) return false;
+    const s = store();
+    if (!s || !(dataKey in s.data)) return false;
+    const previous = s.data[dataKey];
+    delete s.data[dataKey];
+    try {
+        await persistAsync();
+        return true;
+    } catch (error) {
+        if (!(dataKey in s.data)) s.data[dataKey] = previous;
+        throw error;
+    }
+}
+
+export async function clearKindAsync(kind) {
+    if (!KINDS.includes(kind)) return 0;
+    const s = store();
+    if (!s) return 0;
+    const removed = Object.entries(s.data).filter(([sk]) => sk === kind || sk.startsWith(kind + '-'));
+    if (!removed.length) return 0;
+    for (const [sk] of removed) delete s.data[sk];
+    try {
+        await persistAsync();
+        return removed.length;
+    } catch (error) {
+        for (const [sk, value] of removed) if (!(sk in s.data)) s.data[sk] = value;
+        throw error;
+    }
 }
 
 // 某个构画自有顶层 key（sp-store / sp-memory / sp-theater）当前占用字节。
@@ -297,6 +339,21 @@ export function clearOwnKey(key) {
     delete cm[key];
     persist();
     return true;
+}
+
+export async function clearOwnKeyAsync(key) {
+    if (!OWN_KEYS.includes(key)) return false;
+    const cm = getContext?.()?.chatMetadata;
+    if (!cm || cm[key] == null) return false;
+    const previous = cm[key];
+    delete cm[key];
+    try {
+        await persistAsync();
+        return true;
+    } catch (error) {
+        if (!(key in cm)) cm[key] = previous;
+        throw error;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

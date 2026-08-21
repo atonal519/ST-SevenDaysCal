@@ -25,6 +25,27 @@ export function emptyContentMessage(finishReason = '') {
     return `模型没有返回正文${tail}。若使用 GLM 等推理模型，多是思维链占满了输出预算；可换非推理模型、或稍后重试。`;
 }
 
+export function truncatedContentMessage() {
+    return '模型输出达到上限，未保存部分结果；请提高输出上限或缩短提示词后重试。';
+}
+
+function normalizedFinishReason(value) {
+    return String(value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
+export function responseFinishReason(data) {
+    const choice = data?.choices?.[0];
+    const candidates = data?.candidates?.[0];
+    const reasons = [choice?.finish_reason, choice?.native_finish_reason, data?.finish_reason,
+        data?.stop_reason, candidates?.finishReason, candidates?.finish_reason]
+        .map(normalizedFinishReason).filter(Boolean);
+    return reasons.find(isTruncationFinishReason) || reasons[0] || '';
+}
+
+export function isTruncationFinishReason(value) {
+    return ['length', 'max_tokens', 'max_token', 'max_tokens_limit'].includes(normalizedFinishReason(value));
+}
+
 // 占位空回：代理常以 <none>/none 之类占位符顶替空正文（GLM 等推理模型正文为空时多见）。这类回复是真值、
 // 会被 extractCompletion 当正文咽下去 → 下游解析无内容、静默空转（判定看似"卡住却不报错"）。统一在此判成空，
 // 让成功路径也抛错、触发失败 toast。精确匹配去空白全文、不用 includes，免误杀正文里恰好提到 <none> 的正常回复。
@@ -36,6 +57,9 @@ export function isPlaceholderContent(s) {
 // 从非流式响应里提取正文：优先 content，空则兜底 reasoning_content，仍空则抛可读错误。
 export function extractCompletion(data) {
     const choice = data?.choices?.[0];
+    if (isTruncationFinishReason(responseFinishReason(data))) {
+        throw new Error(truncatedContentMessage());
+    }
     const msg = choice?.message;
     let content = msg?.content ?? choice?.text ?? data?.content ?? '';
     if (typeof content !== 'string') content = String(content ?? '');
@@ -44,7 +68,7 @@ export function extractCompletion(data) {
     // 正文为空：兜底取推理内容（至少有东西可渲染，而非白屏/报错）
     const reasoning = msg?.reasoning_content ?? msg?.reasoning ?? '';
     if (typeof reasoning === 'string' && reasoning.trim()) return reasoning.trim();
-    throw new Error(emptyContentMessage(choice?.finish_reason || ''));
+    throw new Error(emptyContentMessage(responseFinishReason(data)));
 }
 
 export function mapApiError(status, raw) {
@@ -76,31 +100,46 @@ export async function readSseContent(resp) {
     const reader = resp.body?.getReader();
     if (!reader) {
         const data = await resp.json().catch(() => null);
-        return data ? (data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.content ?? '') : '';
+        if (!data) throw new Error(emptyContentMessage());
+        return extractCompletion(data);
     }
     const decoder = new TextDecoder();
-    let buf = '', out = '';
+    let buf = '', out = '', finishReason = '', eventData = [];
+    const handleEvent = () => {
+        if (!eventData.length) return;
+        const payload = eventData.join('\n').trim();
+        eventData = [];
+        if (!payload || payload === '[DONE]') return;
+        let json;
+        try { json = JSON.parse(payload); }
+        catch { throw new Error('流式响应包含损坏的数据事件，未保存部分结果，请重试'); }
+        if (json?.error) throw new Error(json.error.message || '返回错误');
+        const choice = json?.choices?.[0];
+        const reason = responseFinishReason(json);
+        if (reason) finishReason = reason;
+        const delta = choice?.delta?.content ?? choice?.message?.content ?? choice?.text;
+        if (typeof delta === 'string') out += delta;
+    };
+    const handleLine = (line) => {
+        const t = String(line || '').replace(/\r$/, '');
+        if (!t) { handleEvent(); return; }
+        if (t.startsWith(':')) return; // SSE 注释/心跳
+        if (t.startsWith('data:')) eventData.push(t.slice(5).replace(/^\s/, ''));
+    };
     for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+            buf += decoder.decode();
+            if (buf) handleLine(buf);
+            handleEvent();
+            break;
+        }
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
-        for (const line of lines) {
-            const t = line.trim();
-            if (!t || !t.startsWith('data:')) continue;
-            const payload = t.slice(5).trim();
-            if (payload === '[DONE]') continue;
-            try {
-                const json = JSON.parse(payload);
-                if (json?.error) throw new Error(json.error.message || '返回错误');
-                const delta = json?.choices?.[0]?.delta?.content ?? json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text;
-                if (typeof delta === 'string') out += delta;
-            } catch (e) {
-                if (e instanceof Error && e.message !== 'Unexpected end of JSON input') { /* 单行解析失败忽略：可能是心跳/注释 */ }
-            }
-        }
+        for (const line of lines) handleLine(line);
     }
+    if (isTruncationFinishReason(finishReason)) throw new Error(truncatedContentMessage());
     return out.trim();
 }
 

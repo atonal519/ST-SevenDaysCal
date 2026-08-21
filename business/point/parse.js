@@ -2,19 +2,85 @@
 // 从 index.js 机械搬移。全部为 <calendar_widget>「七天条」的 文本↔对象 互转与读写辅助，
 // 无 DOM / store / 历法(axis) 依赖。渲染层（renderSchedule 等）见 ./render.js，生成 prompt 见 ./prompt.js。
 
-// 点 Event 行 → 逐行文本（供提示词 / 编辑冲突检测等读取用）
+export function parsePointEventRecord(text) {
+    const parts = String(text || '').replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
+    if (parts.length < 4) return null;
+    const tail = parts.slice(5);
+    const hasPin = tail.length > 0 && /^(true|false)$/i.test(tail[tail.length - 1]);
+    return {
+        type: (parts[0] || 'user').toLowerCase(), title: parts[1] || '', desc: parts[2] || '', time: parts[3] || '',
+        location: parts[4] || '', npcAction: tail.slice(0, hasPin ? -1 : undefined).join('|'),
+        pin: hasPin && tail[tail.length - 1].toLowerCase() === 'true',
+    };
+}
+
+function bufferedPointEventLines(inner) {
+    return pointEventBlocksFromInner(inner).map(block => block.map(line => line.trim()).filter(Boolean).join(' '));
+}
+
+function pointEventBlocksFromInner(inner) {
+    const out = [];
+    let buffer = [];
+    const flush = () => { if (buffer.length) out.push(buffer); buffer = []; };
+    for (const rawLine of String(inner || '').split('\n')) {
+        const line = rawLine.trim();
+        if (/^Event\s*:/i.test(line)) { flush(); buffer = [rawLine]; continue; }
+        if (/^(?:Day\s*:?\s*\d+|第[一二三四五六七\d]+天|Future\s*:|未来\s*:|<\/(?:calendar|schedule)_widget>)/i.test(line)) { flush(); continue; }
+        if (buffer.length) buffer.push(rawLine);
+    }
+    flush();
+    return out;
+}
+
+// 从间的 schedule_widget body 提取第一条完整 Event（含所有续行）。
+export function firstPointEventBlock(raw) {
+    const src = String(raw || '');
+    const m = src.match(/<schedule_widget[^>]*>([\s\S]*?)<\/schedule_widget>/i);
+    const inner = m ? m[1] : src;
+    const block = pointEventBlocksFromInner(inner)[0];
+    if (!block) return null;
+    const text = block.join('\n').trim();
+    return parsePointEventRecord(text) ? text : null;
+}
+
+// 用与解析器完全相同的 Event 边界替换整块，避免旧续行残留。
+export function replacePointEventBlock(raw, idx0, newEventText) {
+    const src = String(raw || '');
+    const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
+    const inner = m ? m[1] : src;
+    const lines = inner.split('\n');
+    let blocks = [], current = null;
+    const flush = end => { if (current) { current.end = end; blocks.push(current); current = null; } };
+    lines.forEach((line, index) => {
+        const t = line.trim();
+        if (/^Event\s*:/i.test(t)) { flush(index); current = { start: index, end: index + 1 }; return; }
+        if (/^(?:Day\s*:?\s*\d+|第[一二三四五六七\d]+天|Future\s*:|未来\s*:|<\/(?:calendar|schedule)_widget>)/i.test(t)) { flush(index); return; }
+        if (current) current.end = index + 1;
+    });
+    flush(lines.length);
+    const block = blocks[idx0];
+    if (!block) return null;
+    const indent = (lines[block.start].match(/^\s*/) || [''])[0];
+    const replacement = String(newEventText || '').split('\n').map((line, i) => i ? line : indent + line.trim());
+    lines.splice(block.start, block.end - block.start, ...replacement);
+    const newInner = lines.join('\n');
+    return m ? src.replace(m[0], m[0].replace(m[1], newInner)) : newInner;
+}
+
+// 点 Event 行 → 逻辑记录文本（供提示词 / 编辑冲突等读取，兼容字段折行）
 export function pointEventLines(raw) {
     const src = String(raw || '');
     const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const inner = (m ? m[1] : src).replace(/<!--[\s\S]*?-->/g, '');
-    return inner.split('\n').map(l => l.trim()).filter(l => /^Event\s*:/i.test(l));
+    return bufferedPointEventLines(inner);
 }
 
 // 点 → 编号列表（编辑冲突检测 / 提示词辅助）
 export function numberedPointList(raw) {
     const TYPE_LABEL = { user: '用户线', char: '角色线', main: '明线', hidden: '暗线', bond: '红线' };
     return pointEventLines(raw).map((l, i) => {
-        const [type, title, desc, time, location, dynamic] = l.replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
+        const event = parsePointEventRecord(l) || {};
+        const { type, title, desc, time, location, npcAction: dynamic } = event;
         const bits = [`#${i + 1}`, `【${TYPE_LABEL[(type || '').toLowerCase()] || type || '?'}】`, title || '(未命名)'];
         if (time)     bits.push(`｜时间:${time}`);
         if (location) bits.push(`｜地点:${location}`);
@@ -35,38 +101,73 @@ export function parseCalendar(raw) {
     const dateMatch = content.match(/^StartDate:\s*(\d{4}-\d{2}-\d{2})/m);
     let startDate = null;
     if (dateMatch) {
-        const d = new Date(dateMatch[1]);
-        if (!isNaN(d)) startDate = d;
+        const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateMatch[1]);
+        const d = new Date(0);
+        d.setHours(0, 0, 0, 0);
+        if (parts) d.setFullYear(+parts[1], +parts[2] - 1, +parts[3]);
+        if (parts && d.getFullYear() === +parts[1] && d.getMonth() === +parts[2] - 1 && d.getDate() === +parts[3]) startDate = d;
     }
 
-    const days = []; let cur = null; let inFuture = false; let future = null;
+    const days = []; let cur = null; let inFuture = false; let future = null; let eventBuffer = '';
+    const chineseDay = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7 };
+    const flushEvent = () => {
+        if (!eventBuffer || !cur) { eventBuffer = ''; return; }
+        const ev = parsePointEventRecord(eventBuffer);
+        if (ev) cur.events.push(ev);
+        eventBuffer = '';
+    };
     for (const line of content.split('\n')) {
         const t = line.trim();
         if (!t) continue;
-        if (/^Day\s*:?\s*\d+/i.test(t) || /^第[一二三四五六七\d]+天/.test(t)) {
+        const dayHeader = /^(?:Day\s*:?\s*(\d+)|第([一二三四五六七\d]+)天)/i.exec(t);
+        if (dayHeader) {
+            flushEvent();
             if (cur && !inFuture) days.push(cur);
             // 日头可带天气：Day: N|天气|温度（旧数据无管道段 → 天气/温度为空，退化为旧行为）
             const dayParts = t.split('|').slice(1).map(s => s.trim());
-            cur = { events: [], weather: dayParts[0] || '', temp: dayParts[1] || '' };
+            const dayNumber = Number(dayHeader[1] || chineseDay[dayHeader[2]] || dayHeader[2]);
+            cur = { dayNumber: Number.isFinite(dayNumber) ? dayNumber : null, events: [], weather: dayParts[0] || '', temp: dayParts[1] || '' };
             inFuture = false; continue;
         }
         if (/^Future\s*:/i.test(t) || /^未来\s*:/i.test(t)) {
+            flushEvent();
             if (cur && !inFuture) days.push(cur);
             future = { events: [] }; cur = future; inFuture = true; continue;
         }
         if (/^Event\s*:/i.test(t)) {
+            flushEvent();
             if (!cur) cur = { events: [] };
-            const parts = t.replace(/^Event\s*:\s*/i, '').split('|');
-            if (parts.length >= 4) cur.events.push({
-                type: (parts[0]||'user').trim().toLowerCase(), title: (parts[1]||'').trim(),
-                desc: (parts[2]||'').trim(), time: (parts[3]||'').trim(),
-                location: (parts[4]||'').trim(), npcAction: (parts[5]||'').trim(),
-                pin: (parts[6]||'').trim().toLowerCase() === 'true',   // F5：pin 存 raw 第7段（AI 只出前6段→false），机制对齐线
-            });
+            eventBuffer = t;
+            continue;
         }
+        if (eventBuffer) eventBuffer += ` ${t}`;
     }
+    flushEvent();
     if (cur && !inFuture) days.push(cur);
-    return { days: days.filter(d => d.events.length > 0), future, startDate };
+    return { days: days.filter(d => d.events.length > 0), allDays: days, future, startDate };
+}
+
+// 生成响应写入前的结构闸门：只接受闭合的完整 Day 1–3 及至少 5 条 Future 事件。
+// 这是原始模型响应的硬门禁；锁定回并不能替模型补足缺失的 Future。
+export function validateGeneratedCalendar(raw) {
+    const text = String(raw || '');
+    const parsed = parseCalendar(text);
+    const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));
+    const counts = new Map(coreDays.map(day => [day.dayNumber, (coreDays.filter(x => x.dayNumber === day.dayNumber).length)]));
+    const dayMarkers = [1, 2, 3].every(n => counts.get(n) === 1)
+        && coreDays.map(day => day.dayNumber).join(',') === '1,2,3'
+        && coreDays.every(day => day.events.length > 0);
+    const hasClosing = /<\/calendar_widget\s*>/i.test(text);
+    const hasFuture = /(?:^|\n)\s*(?:Future\s*:|未来\s*:)/im.test(text);
+    const validFutureEvents = parsed.future?.events?.filter(ev => ev && ev.title).length || 0;
+    return {
+        ok: hasClosing && dayMarkers && parsed.days.length >= 3 && hasFuture && validFutureEvents >= 5,
+        dayMarkers,
+        dayCount: parsed.days.length,
+        hasClosing,
+        hasFuture,
+        futureCount: validFutureEvents,
+    };
 }
 
 // ─── 点·锁定（F5，机制对齐「线」）──────────────────────────────────────────────
@@ -100,7 +201,8 @@ export function serializeCalendar(days, future, startDate) {
         // 天气随日头走回 raw：Day: N|天气|温度。缺则退回纯 Day: N（旧行为），mergePinnedPoints 才不会丢天气。
         const w  = String(d.weather || '').trim();
         const tp = String(d.temp || '').trim();
-        out.push((w || tp) ? `Day: ${i + 1}|${w}|${tp}` : `Day: ${i + 1}`);
+        const dayNumber = Number.isInteger(d.dayNumber) ? d.dayNumber : i + 1;
+        out.push((w || tp) ? `Day: ${dayNumber}|${w}|${tp}` : `Day: ${dayNumber}`);
         for (const ev of (d.events || [])) out.push(pointEventToRawLine(ev));
     });
     if (future && Array.isArray(future.events) && future.events.length) {

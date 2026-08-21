@@ -88,6 +88,8 @@ export async function postChatCompletion({ cfg, messages, maxTokens, temperature
         const key = String(p).trim();
         if (key && !PROTECTED_BODY_KEYS.has(key)) delete body[key];
     }
+    // 调试上下文明确记录是否因剔除参数而没有发送输出上限；不改写用户配置。
+    _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages, outputLimit: body.max_tokens ?? null, outputLimitOmitted: !Object.hasOwn(body, 'max_tokens') });
 
     // 全生命周期超时：内部 AbortController 同时受外部 signal 与定时器控制，
     // 覆盖建连 + 非流式 JSON 读取 + 流式 SSE 读取。超时转成明确报错而非静默卡死。

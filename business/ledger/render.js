@@ -259,6 +259,7 @@ export function renderLedgerSheet() {
     const s = getSettings();
     const iv = env.getLedgerCaptureInterval();
     const busy = env.isCapturingLedger();
+    const progress = env.getLedgerCaptureProgress?.();
     const judging = env.isJudgingLedger();
     const on = s.ledgerCaptureEnabled;   // 【bug 修复】原为裸未定义 `on`；正源＝自动标注开关设置
     const ctrl = `<div class="sp-ledger-ctrl">
@@ -268,7 +269,7 @@ export function renderLedgerSheet() {
             <input type="number" class="sp-input sp-interval-input sp-ledger-interval" min="1" max="30" value="${iv}">
             <span>楼自动标注</span>
         </label>
-        <button class="sp-mini-btn sp-ledger-pill sp-ledger-capture-now" title="立即标注一次" ${busy ? 'disabled' : ''}>${busy ? '标注中…' : '标注'}</button>
+        <button class="sp-mini-btn sp-ledger-pill sp-ledger-capture-now" title="${busy ? '中止当前标注' : '立即标注一次'}">${busy ? (progress ? `中止（${progress.done}/${progress.total} 批）` : '中止标注') : '标注'}</button>
         <button class="sp-mini-btn sp-ledger-pill sp-ledger-judge-now" title="立即判定一次（更新现状 / 了结）" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button>
     </div>`;
     const entries = ledger.listEntries();

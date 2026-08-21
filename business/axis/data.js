@@ -109,6 +109,30 @@ function weekdayAdjacent(text) {
     return null;
 }
 
+const _DATE_WEEKDAY_RE = /(?:(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?|(?:第\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?)\s*[\s·.,，、｜|/／~〜—\-]{0,3}(?:(?:星期|週|周|礼拜|禮拜)\s*([一二三四五六日天])|\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b)/i;
+
+function validRealDate(year, month, day) {
+    if (![year, month, day].every(Number.isInteger) || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const d = new Date(0);
+    d.setHours(0, 0, 0, 0);
+    d.setFullYear(year, month - 1, day);
+    return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day ? d : null;
+}
+
+function weekdayAdjacentDate(text, validateRealYear = true) {
+    const m = _DATE_WEEKDAY_RE.exec(String(text || ''));
+    if (!m) return null;
+    const year = m[1] == null ? null : +m[1];
+    const month = +(m[1] == null ? m[4] : m[2]);
+    const day = +(m[1] == null ? m[5] : m[3]);
+    const wd = m[6] != null
+        ? { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 }[m[6]]
+        : ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(m[7].toLowerCase());
+    const date = year == null || !validateRealYear ? null : validRealDate(year, month, day);
+    if (year != null && validateRealYear && !date) return null;
+    return { year, month, day, wd, date };
+}
+
 function calRealWeekdayRef(timeStr, cal = loadCalDesc()) {
     if (cal !== DEFAULT_CAL) return null;                                     // 自定义历法：现实公历周几无意义
     const m = /^(\d+)-(\d+)-(\d+)$/.exec(extractDayFromTime(timeStr) || '');  // 纯阿拉伯 YYYY-M-D，排除 day-N / cn-
@@ -116,9 +140,17 @@ function calRealWeekdayRef(timeStr, cal = loadCalDesc()) {
     const refDoy = almDayOfYear(+m[2], +m[3], cal);
     const tok = weekdayAdjacent(timeStr);            // 时间串里紧贴日期写死的周几：剧情自洽 > 真实公历，压过 getDay()
     if (tok != null) return { refDoy, refWd: tok };
-    const d = new Date(+m[1], +m[2] - 1, +m[3]);
-    if (isNaN(d)) return null;
+    const d = validRealDate(+m[1], +m[2], +m[3]);
+    if (!d) return null;
     return { refDoy, refWd: d.getDay() };
+}
+
+// 只读取日期旁明确写出的周几；不做 getDay 推算，供星期优先级第一阶段使用。
+function calExplicitWeekdayRef(timeStr, cal = loadCalDesc()) {
+    const pair = weekdayAdjacentDate(timeStr, cal === DEFAULT_CAL);
+    if (!pair) return null;
+    const md = almValidMonthDay({ month: pair.month, day: pair.day }, cal);
+    return md ? { refDoy: almDayOfYear(md.month, md.day, cal), refWd: pair.wd } : null;
 }
 
 function almMonthDayFromDoy(doy, cal = loadCalDesc()) {
@@ -341,7 +373,7 @@ function sortCalendarTemplatesForCurrent(list, currentTemplateId) {
 
 // Phase 2b-3: 独立的数据/注入层函数（扫聊天取最近日期；无跨域污染源）
 // 从最新楼往回扫、命中即返回 → 取到的是「最近一处」写明的日期，贴合「现在」；扫描上限兜住超长聊天。
-function almDateFromChat() {
+function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
     const msgs = getContext().chat || [];
     let scanned = 0;
     for (let i = msgs.length - 1; i >= 0 && scanned < ALM_CHAT_SCAN_LIMIT; i--) {
@@ -349,14 +381,23 @@ function almDateFromChat() {
         if (!msg || msg.is_user || !msg.mes) continue;
         scanned++;
         const raw = String(msg.mes);
+        if (explicitWeekdayOnly) {
+            const pair = weekdayAdjacentDate(raw, cal === DEFAULT_CAL);
+            if (!pair) continue;
+            const md = almValidMonthDay({ month: pair.month, day: pair.day }, cal);
+            if (!md) continue;
+            return { month: md.month, day: md.day, date: cal === DEFAULT_CAL ? pair.date : null, wd: pair.wd };
+        }
         const key = extractDayFromTime(raw);
         const md  = monthDayFromDayKey(key);
         if (!md) continue;
         let date = null;
         const ymd = /^(\d+)-(\d+)-(\d+)$/.exec(String(key));  // 纯阿拉伯 → 带真实年，可取现实周几；排除 cn-
-        if (ymd) { const d = new Date(+ymd[1], +ymd[2] - 1, +ymd[3]); if (!isNaN(d)) date = d; }
+        if (ymd && cal === DEFAULT_CAL) date = validRealDate(+ymd[1], +ymd[2], +ymd[3]);
+        if (ymd && cal === DEFAULT_CAL && !date) continue; // 默认历法严格拒绝 Date 自动归一化结果
         // 同楼里紧贴日期的「状态栏周几」token：供上层压过真实 getDay()（写死的剧情周几 > 公历）。缺则 null，退回 getDay。
         const wd = weekdayAdjacent(raw);
+        if (explicitWeekdayOnly && wd == null) continue;
         return { month: md.month, day: md.day, date, wd };
     }
     return null;
@@ -380,6 +421,9 @@ export {
     parseWeekdayToken,
     _WEEKDAY_ADJ_RE,
     weekdayAdjacent,
+    weekdayAdjacentDate,
+    validRealDate,
+    calExplicitWeekdayRef,
     calRealWeekdayRef,
     almMonthDayFromDoy,
     almEndMonthDay,

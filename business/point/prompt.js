@@ -24,7 +24,7 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
 
 ${subject} 和 ${companion} 都有各自独立的生活，事件可以涉及任意 NPC 和第三方，不必每条都围绕两人互动。
 ${relationHint}
-Day 1-3 每天生成 1 到 3 个事件；Future 块生成 5 到 10 个事件，时间跨度不限。
+输出顺序必须严格为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>，中间不得省略任何块；Day 1-3 每天生成 1 到 3 个事件，Future 块必须生成 5 到 10 个事件，时间跨度不限。预算紧张时缩短说明文字，也不得省略 Future 或结束标签。
 
 【天气说明】
 每个 Day 的日头请附带当天天气与温度，格式 Day: N|天气|温度（如 Day: 1|晴|3℃）。
@@ -54,6 +54,10 @@ Day: 3|天气|温度
 Event: type|title|description|time|location|线头动态
 Event: type|title|description|time|location|线头动态
 Future:
+Event: type|title|description|time|location|线头动态
+Event: type|title|description|time|location|线头动态
+Event: type|title|description|time|location|线头动态
+Event: type|title|description|time|location|线头动态
 Event: type|title|description|time|location|线头动态
 </calendar_widget>
 

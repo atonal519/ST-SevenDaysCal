@@ -1,7 +1,7 @@
 import { getContext, extension_settings } from '../../../extensions.js';
 import { selected_world_info, world_info } from '../../../world-info.js';
 import { equalsIgnoreCaseAndAccents, getCharaFilename } from '../../../utils.js';
-import { eventSource, event_types, substituteParams, saveSettingsDebounced, saveSettings as stSaveSettings } from '../../../../script.js';
+import { eventSource, event_types, substituteParams, saveSettingsDebounced, saveSettings as stSaveSettings, system_message_types } from '../../../../script.js';
 import {
     buildCreativeChatSystemPrompt,
     buildSpaceChatSystemPrompt,
@@ -52,6 +52,8 @@ import {
     parseWeekdayToken,
     _WEEKDAY_ADJ_RE,
     weekdayAdjacent,
+    validRealDate,
+    calExplicitWeekdayRef,
     calRealWeekdayRef,
     almMonthDayFromDoy,
     almEndMonthDay,
@@ -112,12 +114,12 @@ const TERMINAL_STAGES = new Set(['已消散', '已完成', '已失败']);
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
 import { pointState } from './business/point/state.js';
-import { parseCalendar, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate, serializeCalendar } from './business/point/parse.js';
+import { parseCalendar, validateGeneratedCalendar, parsePointEventRecord, firstPointEventBlock, replacePointEventBlock, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate, serializeCalendar } from './business/point/parse.js';
 import { buildPrompt } from './business/point/prompt.js';
 import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
 // ledger 检索前置选择器（纯逻辑三件套）已抽出到 business/ledger/select.js；到期/距今口径经 bindLedgerSelect 注入。
 import { bindLedgerSelect, scoreLedgerEntry, isLedgerSalient, selectLedgerForInject } from './business/ledger/select.js';
-import { mergeRecallTags, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
+import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
     bindLedgerRender,
@@ -173,7 +175,7 @@ bindAxisAnchor({
     getLinesCacheKey,
     parseLines,
     TERMINAL_STAGES,
-    getCacheKey,
+    getCacheKey: () => getCacheKey('user', ''),
 });
 
 // ledger 暗账页渲染注入：render.js 的行/编辑/批量需本文件宿主的 shadow 查询/提示/确认/主楼同步/
@@ -186,6 +188,7 @@ bindLedgerRender({
     syncLatestAlmanacBlock,
     renderAlmanacPanel: (...args) => renderAlmanacPanel(...args),
     getLedgerCaptureInterval,
+    getLedgerCaptureProgress,
     isCapturingLedger: () => isCapturingLedger,
     isJudgingLedger: () => isJudgingLedger,
 });
@@ -687,14 +690,19 @@ jQuery(async () => {
         almanacJudgeAbort?.abort();
         almanacJudgeAbort = null;
         // 插件总关：迁移照做（幂等·防老用户数据漂移），其余全屏隐藏/后台相关一律不跑。
+        // 即使插件当前关闭，切 chat 也必须先失效两路聊天任务，避免旧任务继续占用忙碌状态。
+        outlineChatAbortController?.abort();
+        outlineChatAbortController = null;
+        isOutlineChatting = false;
+        spaceChatAbortController?.abort();
+        spaceChatAbortController = null;
+        isSpaceChatting = false;
         if (!pluginEnabled()) return;
         currentView  = 'user';
         charViewName = null;
         outlineMode  = false;
         cachedOutline = null;
         outlineChatHistory = [];
-        outlineChatAbortController?.abort();
-        outlineChatAbortController = null;
         linesMode    = false;
         cachedLines  = null;
         _linesSheet  = 'events';
@@ -731,8 +739,6 @@ jQuery(async () => {
         _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
         spaceMode = false;
         spaceChatHistory = [];
-        spaceChatAbortController?.abort();
-        spaceChatAbortController = null;
         theaterMode = false;
         isGeneratingTheater = false;
         theaterCurrentPiece = null;
@@ -1194,6 +1200,10 @@ function _abortAllBackground() {
     isGeneratingTheater = axisState.isGeneratingAlmanac = false;
     isJudgingOutline = isJudgingDate = false;
     isCapturingLedger = isJudgingLedger = false;
+    isOutlineChatting = false;
+    isSpaceChatting = false;
+    if (outlineMode) renderCreativeChatHistory();
+    if (spaceMode) renderSpaceChatHistory();
 }
 
 // 插件总开关落地。关：藏悬浮球、清所有楼内块与锚点入口（由 refreshInlineWindow/scanAnchorButtons 内部闸兜底）、
@@ -1269,7 +1279,7 @@ function detectInGameDayChange(messageId, excludeCurrent = false) {
 // 只读、无副作用：任何时候调都安全。
 function captureSnapshot() {
     let point = '', line = '', almanac = [], anchorMD = null;
-    try { point = readCacheRaw(getCacheKey()) || ''; } catch { /* 空 */ }
+    try { point = readCacheRaw(getCacheKey('user', '')) || ''; } catch { /* 空 */ }
     try {
         const saved = readStore(getLinesCacheKey());
         line = saved?.raw || '';
@@ -1414,9 +1424,10 @@ function _buildLedgerBlockHtml(poolArg = null, readOnly = false) {
 
     const cal = loadCalDesc();
     // 打捞/更新：照主面板改文字胶囊（图标看不懂）——复用 .sp-mini-btn.sp-ledger-pill，CSS 里另有覆盖免被 summary 22px 方钮规则压扁。
+    const judging = isJudgingLedger;
     const actions = readOnly ? '' : `<span class="sp-inline-summary-actions">
             <button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-capture" title="打捞新标注">标注</button>
-            <button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-judge" title="按时间更新现状">更新</button>
+            <button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-judge" title="按时间更新现状" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button>
         </span>`;
     const rows = items.map(it => {
         const tcls = ledgerTypeClass(it.类型);   // 行挂类型类 → --ledger-c 级联给类型胶囊上色（持续状态/约定/周期各一色）
@@ -1634,13 +1645,13 @@ function syncLatestAlmanacBlock(expectedChatId = null) {
 // ─── 点·楼内日程条（只读，反映当前视角的点，无生成）──────────────────────────────
 // 与线块/历条平行、共存于最新 AI 楼。收起态是扁扁的「点 · N件待办」条，点整条展开是「日程条」：
 // 每个 Day 一格（周X + 日期 + 天气图标 + 待办数），Future 另起一格；点某格就地展开当天事件（标题+时间）。
-// 纯读当前视角存的点 raw（getCacheKey），不请求 API、不受 linesEnabled 影响，只受 scheduleInlineEnabled 控制。
+// 纯读楼内 canonical 点 raw（schedule-user），不请求 API、不受 linesEnabled 影响，只受 scheduleInlineEnabled 控制。
 // 外壳/标题条走线的 .sp-inline-* 类，与线块/历条一致；只有条内格子用独立的 .sp-sch-* 类。
-// rawArg：null=读当前视角活缓存（最新楼，现状行为不变）；字符串=用快照里的点 raw（历史楼）。
+// rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
 // readOnly：true=历史楼，drawer 去掉注入/删除/锁定按钮（在旧楼改点语义矛盾）。
 function _buildScheduleBlockHtml(rawArg = null, readOnly = false) {
     if (getSettings().scheduleInlineEnabled === false) return '';
-    const raw = rawArg != null ? rawArg : readCacheRaw(getCacheKey());
+    const raw = rawArg != null ? rawArg : readCacheRaw(getCacheKey('user', ''));
     if (!raw) return '';   // 当前视角还没生成点 → 不打扰聊天
     const { days, future, startDate } = parseCalendar(raw);
     const hasFuture = future && future.events.length > 0;
@@ -1675,10 +1686,10 @@ function _buildScheduleBlockHtml(rawArg = null, readOnly = false) {
 
 // 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
 // 每次都重读 raw（点 raw 会被重算/锁定改写），按天筛事件；空 → 「这天没有安排」。
-// dayKey='0'|'1'|…|'future'。rawArg=null 读活缓存（最新楼）；字符串=快照 raw（历史楼）。
+// dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
 // readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
 function _scheduleStripDayHtml(dayKey, rawArg = null, readOnly = false) {
-    const { days, future, startDate } = parseCalendar(rawArg != null ? rawArg : readCacheRaw(getCacheKey()));
+    const { days, future, startDate } = parseCalendar(rawArg != null ? rawArg : readCacheRaw(getCacheKey('user', '')));
     let evs = [], headLabel = '', dateLabel = '', wx = '', tp = '';
     if (dayKey === 'future') {
         evs = future?.events || [];
@@ -1792,21 +1803,25 @@ function _hasDateData(snap) {
     try { pinned = !!getDateAnchor(charStableKey(getContext())); } catch { pinned = false; }
     if (pinned) return true;
     try { if (loadAlmanac().length) return true; } catch { /* 忽略 */ }
-    try { if (readCacheRaw(getCacheKey())) return true; } catch { /* 忽略 */ }
+    try { if (readCacheRaw(getCacheKey('user', ''))) return true; } catch { /* 忽略 */ }
     return false;
 }
 
 // 今头（masthead）：大日期块。月/日 + 周几为主体；天气取点当天格；纪年名(era)由日历描述符驱动，
 // 有则点亮、无则不撑（公历默认无 era）。anchor 缺则退活锚点。
-function _dashMastheadHtml(snap) {
-    const anchor = _dashAnchor(snap);
+function _dashMastheadHtml(snap, floorClock = null) {
+    let anchor = _dashAnchor(snap);
+    if (storyClockEnabled() && floorClock) {
+        const floorDate = parseJudgedDate(floorClock.end) || parseJudgedDate(floorClock.start);
+        if (floorDate) anchor = floorDate;
+    }
     const cal = loadCalDesc();
     let wd = '';
     try { wd = ALM_WEEKDAYS[almWeekdayFor(anchor.month, anchor.day, null, cal)]; } catch { wd = ''; }
     // 天气：从点当天格（days[0].weather）拿；拿不到留空。历史楼用快照点 raw。
     let wxHtml = '';
     try {
-        const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey());
+        const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
         if (raw) {
             const wx = String(parseCalendar(raw).days?.[0]?.weather || '').trim();
             if (wx) wxHtml = `<span class="sp-dash-today-wx">${weatherGlyph(wx)}</span>`;
@@ -1842,17 +1857,20 @@ function parseStampDate(stamp) {
         month = +m[1]; day = +m[2];
     }
     if (!month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null;   // 非数字日期 → 原样抬
+    if (year != null && !validRealDate(year, month, day)) return null;                  // 严格拒绝 Date 自动归一化日期
     if ((m = s.match(/(\d{1,2})\s*[:：]\s*(\d{2})/)))   time = `${+m[1]}:${m[2]}`;
     else if ((m = s.match(/(\d{1,2})\s*[时點点]/)))     time = `${+m[1]}时`;
     return { year, month, day, time };
 }
 // 组窄条「今 …」那截：{ todayHtml(含 .sp-dash-sum-today 壳), timeHtml(时刻尾巴，贴天气后) }。
-function storyClockHeadParts(isLatest, a, anchorWd) {
+function storyClockHeadParts(isLatest, a, anchorWd, floorClock = null) {
     const today = (inner, tip) => `<span class="sp-dash-sum-today"${tip ? ` title="${tip}"` : ''}>${inner}</span>`;
     const fallback = { todayHtml: today(`今 ${a.month}月${a.day}日${anchorWd ? ' ' + anchorWd : ''}`), timeHtml: '' };
-    if (!isLatest || !storyClockEnabled()) return fallback;
-    let clk = null;
-    try { clk = latestStoryClock(); } catch { clk = null; }
+    if (!storyClockEnabled()) return fallback;
+    let clk = floorClock;
+    if (isLatest) {
+        try { clk = latestStoryClock(); } catch { clk = null; }
+    }
     const stamp = clk && (clk.end || clk.start);
     if (!stamp) return fallback;
     const tip = '时间戳·主楼 AI 每楼隐形打点读回';
@@ -1860,15 +1878,17 @@ function storyClockHeadParts(isLatest, a, anchorWd) {
     if (!p) return { todayHtml: today(`今 ${escapeHtml(stamp)}`, tip), timeHtml: '' };   // 古风/无法解析 → 原样抬
     let swd = '';
     try {
-        swd = (p.year && loadCalDesc() === DEFAULT_CAL)
-            ? (ALM_WEEKDAYS[new Date(p.year, p.month - 1, p.day).getDay()] || '')
+        const explicit = calExplicitWeekdayRef(stamp, loadCalDesc());
+        const explicitToken = explicit?.refWd;
+        swd = explicitToken != null
+            ? (ALM_WEEKDAYS[explicitToken] || '')
             : (ALM_WEEKDAYS[almWeekdayFor(p.month, p.day)] || '');
     } catch { swd = ''; }
     const ymd = `${p.year ? p.year + '年' : ''}${p.month}月${p.day}日`;
     const timeHtml = p.time ? `<span class="sp-dash-sum-time">${escapeHtml(p.time)}</span>` : '';
     return { todayHtml: today(`今 ${ymd}${swd ? ' ' + swd : ''}`, tip), timeHtml };
 }
-function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false) {
+function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null) {
     let head = '';
     if (hasDate) {
         const a = _dashAnchor(snap);
@@ -1877,13 +1897,13 @@ function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, is
         // 天气：从点当天格（days[0].weather）拿，与大头 masthead 同源；拿不到就不显。历史楼用快照点 raw。
         let wxHtml = '';
         try {
-            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey());
+            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
             if (raw) {
                 const wx = String(parseCalendar(raw).days?.[0]?.weather || '').trim();
                 if (wx) wxHtml = `<span class="sp-dash-sum-wx">${weatherGlyph(wx)}</span>`;
             }
         } catch { /* 天气拿不到就不显 */ }
-        const parts = storyClockHeadParts(isLatest, a, wd);
+        const parts = storyClockHeadParts(isLatest, a, wd, floorClock);
         head = `${parts.todayHtml}${wxHtml}${parts.timeHtml}`;
     }
     const chips = [];
@@ -1894,7 +1914,7 @@ function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, is
     if (schOn) {
         let n = 0;
         try {
-            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey());
+            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
             const { days, future } = parseCalendar(raw || '');
             n = (days || []).reduce((s, d) => s + (d.events?.length || 0), 0) + (future?.events?.length || 0);
         } catch { n = 0; }
@@ -1921,7 +1941,7 @@ function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, is
 // 面板内点/线各自是 <details> 可折叠；历区顶行（今头+即将到来）+ 满宽六格条构成一组。
 // 「今 M/D 周X ☀」在折叠条里恒显（只要有日期数据，与三个显示开关无关）；三区全关但有日期
 // → 退成纯日期扁条（不可展开）。isLatest=true：最新楼、全功能；false：历史楼、只读。
-function _buildInlineBoxHtml(snap, isLatest) {
+function _buildInlineBoxHtml(snap, isLatest, floorClock = null) {
     const readOnly = !isLatest;
     // 历区返回结构 {summary,upHtml,stripHtml}|null；点/线返回内层字符串或 ''。各自门控开关/空态。
     const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null);
@@ -1948,11 +1968,11 @@ function _buildInlineBoxHtml(snap, isLatest) {
         // 历整块：满宽 summary 头（点它折叠整个历单元）+ [方形今头 + 即将到来清单] 行 + 满宽六格条。
         // summary 提到顶行上方通栏铺满（原来缩在右列、今头上方左侧留空白）；今头与清单/六格条一起
         // 挂在 details 内，随历折叠一并收起——原生 <details> 折叠即隐藏，不再需要 :has() 联动隐藏六格条。
-        const dashTop  = `<div class="sp-dash-top">${_dashMastheadHtml(snap)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
+        const dashTop  = `<div class="sp-dash-top">${_dashMastheadHtml(snap, floorClock)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
         const stripRow = alm.stripHtml ? `<div class="sp-alm-strip-region">${alm.stripHtml}</div>` : '';
         top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}</details>`;
     } else if (hasDateRegion) {
-        top = `<div class="sp-dash-top sp-dash-top-noalm">${_dashMastheadHtml(snap)}</div>`;
+        top = `<div class="sp-dash-top sp-dash-top-noalm">${_dashMastheadHtml(snap, floorClock)}</div>`;
     }
     const schRegion   = region('sp-schedule-inline', 'schedule', schInner);
     const linesRegion = region('sp-lines-inline', 'lines', linesInner);
@@ -1962,12 +1982,12 @@ function _buildInlineBoxHtml(snap, isLatest) {
     const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
     // 面板体为空但有日期数据（三区都关，只剩日期）→ 纯日期扁条：不可折叠，只显今头缩写。
     if (!body) {
-        const flatBar = _dashSummaryHtml(snap, true, false, false, false, true, isLatest);
+        const flatBar = _dashSummaryHtml(snap, true, false, false, false, true, isLatest, floorClock);
         const cls = 'sp-inline-box sp-dash sp-dash-flat' + (readOnly ? ' sp-inline-box-ro' : '');
         return `<div class="${cls}">${flatBar}</div>`;
     }
 
-    const summary = _dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest);
+    const summary = _dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock);
     const cls = 'sp-inline-box sp-dash' + (readOnly ? ' sp-inline-box-ro' : '');
     // 默认折叠成一小条（不带 open）：只显摘要「今 M/D 周X ☀ · 历N 点N 线N」，点开才展开完整面板。
     return `<details class="${cls}">${summary}<div class="sp-dash-body">${body}</div></details>`;
@@ -2099,7 +2119,8 @@ function mountInlineBox(el, isLatest) {
         snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
         if (!snap) { unmountInlineBox(el); return; }   // 历史楼无快照（老楼 / 用户楼无召回）→ 不显框
     }
-    const html = isUser ? _buildUserRecallBoxHtml(snap, isLatest) : _buildInlineBoxHtml(snap, isLatest);
+    const floorClock = !isLatest && !isUser ? parseStoryClock(getContext()?.chat?.[Number(el.getAttribute('mesid'))]?.mes || '') : null;
+    const html = isUser ? _buildUserRecallBoxHtml(snap, isLatest) : _buildInlineBoxHtml(snap, isLatest, floorClock);
     const existing = msgEl.querySelector(':scope > ' + INLINE_BOX_SELECTOR);
     if (!html) { if (existing) existing.remove(); return; }   // 全空 → 不挂
     if (existing && existing.dataset.sig === _boxSig(html, isLatest)) return;   // 幂等：签名没变不重建
@@ -2557,7 +2578,7 @@ function parseJudgedDate(ans) {
             const nm = String(cal.months[i].name || '').trim();
             if (!nm) continue;
             const nmEsc = nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const mm = s.match(new RegExp(nmEsc + '\\s*(初[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]|[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]+|\\d{1,2})\\s*日?'));
+            const mm = s.match(new RegExp(nmEsc + '\\s*(?:第\\s*)?(初[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]|[零〇一二两兩三四五六七八九十廿卅壹贰貳叁參叄肆伍陆陸柒捌玖拾]+|\\d{1,2})\\s*日?'));
             if (mm) {
                 const da = /^\d+$/.test(mm[1]) ? +mm[1] : (mm[1].startsWith('初') ? _cnToNumber(mm[1].slice(1)) : _cnToNumber(mm[1]));
                 const md = almValidMonthDay({ month: i + 1, day: da }, cal);
@@ -2658,11 +2679,22 @@ function splitCnList(v) {
 }
 // 事由归一化（JS 侧兜底去重键）：去空白。中文无大小写，够用。
 function normGist(s) { return String(s || '').replace(/\s+/g, ''); }
-// 最新 AI 楼下标（无 AI 楼 → 末楼下标兜底）。
+// 最近剧情 assistant 楼下标；generic/comment/help 等非剧情系统楼不算，找不到返回 -1。
 function latestAiFloorId() {
     const chat = getContext().chat || [];
-    for (let i = chat.length - 1; i >= 0; i--) if (!chat[i].is_user) return i;
-    return chat.length - 1;
+    for (let i = chat.length - 1; i >= 0; i--) if (ledgerNarrativeMessage(chat[i])) return i;
+    return -1;
+}
+// 读取指定（或当前最新）AI 楼的 SDC 日期；纯读取，不写 dateAnchor/ledger。
+// 戳优先取 end（当前时间），缺失或无法判定时退取 start；调用方负责最终 almTodayAnchor 兜底。
+function ledgerFloorDateContext(floor = null) {
+    const chat = getContext().chat || [];
+    const floorId = Number.isInteger(floor) ? floor : latestAiFloorId();
+    const message = floorId >= 0 ? chat[floorId] : null;
+    if (!message || !ledgerNarrativeMessage(message)) return { floor: null, date: null };
+    const clock = parseStoryClock(message.mes || '');
+    const date = parseJudgedDate(clock.end) || parseJudgedDate(clock.start);
+    return { floor: floorId, date: date || null };
 }
 // 现有活跃条目摘要（喂进提示词供 AI 去重）。
 function listActiveLedgerBrief() {
@@ -2684,14 +2716,139 @@ const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变�
 - 周期：规律反复发生的事（月经、发薪、值班），带大致周期天数。
 【主语永远是「人」】每条都登记在某个人物身上——记 TA 的状态，或 TA 牵扯的约定/周期。不要给物品单独立条（如「桌上有把枪」「仓库存着粮」不记）；但物品作用到人身上的状态要记（如「A 中了毒、尚未解」「B 戴着诅咒项链、受其束缚」）。`;
 
-const LEDGER_FIELD_SPEC = `- 每个事件一行，用全角竖线「｜」分隔 7 个字段，顺序固定：
-  事由｜类型｜牵扯｜标签｜现状｜到期｜周期
+const LEDGER_FIELD_SPEC = `- 每个事件一行，用全角竖线「｜」分隔 8 个字段，顺序固定：
+ 事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚
   · 类型：持续状态 / 约定待办 / 周期（只能三选一，原样写这三个词之一）
   · 牵扯：涉及的人物，多个用顿号「、」分隔；没有就留空
   · 标签：检索关键词，多个用「、」分隔（如：伤、左手、身体）
   · 现状：此刻状态一句话（如「新伤口，仍在流血」）
   · 到期：只有这件事有一个「你会特意关心的具体未来日子」才填——约定的赴约日、或周期里你想知道「下次哪天」的（月经、发薪、值班）。纯背景例行、天天都在做、不用盯某天的（每日洗漱更衣、每天喂马、日常晨练）到期留空。填时写大致哪天（如「第3月20日」，本世界观自定义历法请按其月名/月序），说不清也留空
-  · 周期：仅周期类填天数（如 30）；其它类型留空`;
+  · 周期：仅周期类填天数（如 30）；其它类型留空
+  · 来源锚：只能填正文前的可信 FxxS/FxxE 令牌；角色卡/世界书既定机制填 SET；没有把握时留空`;
+
+let ledgerCaptureProgress = null; // { done, total }；仅用于首次来源溯源进度显示
+let ledgerCaptureProgressOwner = null;
+
+function ledgerSourceFloors(limit = null) {
+    return ledgerAiFloorRecords(limit).flatMap(item => item.sources);
+}
+
+// ST 的 is_system 只表示渲染/来源标记，不等于“没有剧情内容”。官方 system_message_types 中
+// narrator/assistant_message 可承载叙事；help/welcome/generic/comment 等是 UI/帮助消息，应排除。
+// extra.type 缺失的 hidden assistant 保留，避免把旧聊天的普通 AI 楼误判成系统 UI。
+const LEDGER_NON_NARRATIVE_TYPES = new Set([
+    system_message_types?.HELP, system_message_types?.WELCOME, system_message_types?.EMPTY,
+    system_message_types?.GENERIC, system_message_types?.COMMENT, system_message_types?.SLASH_COMMANDS,
+    system_message_types?.FORMATTING, system_message_types?.HOTKEYS, system_message_types?.MACROS,
+    system_message_types?.WELCOME_PROMPT, system_message_types?.ASSISTANT_NOTE,
+].filter(Boolean).map(type => String(type).toLowerCase()));
+
+function ledgerNarrativeMessage(msg) {
+    if (!msg || msg.is_user || !String(msg.mes || '').trim()) return false;
+    const type = String(msg.extra?.type || '').trim().toLowerCase();
+    if (type && LEDGER_NON_NARRATIVE_TYPES.has(type)) return false;
+    if (msg.extra?.uses_system_ui === true && type !== String(system_message_types?.NARRATOR || '').toLowerCase()) return false;
+    return true;
+}
+
+function ledgerAiFloorRecords(limit = null) {
+    const chat = getContext().chat || [];
+    const floors = [];
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!ledgerNarrativeMessage(msg)) continue;
+        const clock = parseStoryClock(msg.mes);
+        const parts = [];
+        if (clock.start && parseJudgedDate(clock.start)) parts.push({ side: 'S', stamp: clock.start, date: parseJudgedDate(clock.start) });
+        if (clock.end && parseJudgedDate(clock.end)) parts.push({ side: 'E', stamp: clock.end, date: parseJudgedDate(clock.end) });
+        const sourceParts = parts.map(part => ({
+            token: `F${i}${part.side}`,
+            floor: i,
+            date: part.date,
+            stamp: part.stamp,
+            signature: String(msg.mes),
+        }));
+        floors.push({
+            floor: i,
+            signature: String(msg.mes),
+            identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') },
+            content: memory.stripTags(String(msg.mes), { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }).trim(),
+            sources: sourceParts,
+        });
+    }
+    const selected = limit == null ? floors : floors.slice(-Math.max(0, limit));
+    return selected.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, content: item.content })) }));
+}
+
+function ledgerSourceMap(sources) {
+    return new Map((sources || []).map(source => [String(source.token), source]));
+}
+
+function ledgerSourceAnchor(token, sourceMap) {
+    const key = String(token || '').trim();
+    if (key === 'SET') return { 楼层: null, 历日期: null };
+    const source = sourceMap?.get(key);
+    if (!source) return null;
+    const chat = getContext().chat || [];
+    const raw = chat[source.floor]?.mes || '';
+    const clock = parseStoryClock(raw);
+    const stamp = source.token.endsWith('S') ? clock.start : clock.end;
+    const date = stamp ? parseJudgedDate(stamp) : null;
+    if (!date) return null;
+    return { 楼层: source.floor, 历日期: date };
+}
+
+function ledgerSourcesStable(sources, chatId) {
+    if (getContext().chatId !== chatId) return false;
+    const chat = getContext().chat || [];
+    return (sources || []).every(source => {
+        const msg = chat[source.floor];
+        return ledgerNarrativeMessage(msg) && String(msg.mes || '') === source.signature;
+    });
+}
+
+function ledgerRecordsStable(records, chatId) {
+    if (getContext().chatId !== chatId) return false;
+    const chat = getContext().chat || [];
+    return (records || []).every(record => {
+        const msg = chat[record.floor];
+        if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false;
+        const identity = record.identity || {};
+        if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false;
+        if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false;
+        return (record.sources || []).every(source => {
+            const token = String(source.token || '');
+            const side = token.endsWith('S') ? 'S' : token.endsWith('E') ? 'E' : '';
+            if (!side || source.signature !== record.signature) return false;
+            const clock = parseStoryClock(String(msg.mes || ''));
+            const stamp = side === 'S' ? clock.start : clock.end;
+            const date = stamp ? parseJudgedDate(stamp) : null;
+            return !!date && date.month === source.date.month && date.day === source.date.day;
+        });
+    });
+}
+
+function ledgerLegacyAnchor(sourceList) {
+    const dates = new Map();
+    for (const source of sourceList || []) {
+        const key = `${source.date.month}/${source.date.day}`;
+        dates.set(key, source.date);
+    }
+    if (dates.size !== 1) return { 楼层: null, 历日期: null };
+    return { 楼层: null, 历日期: [...dates.values()][0] };
+}
+
+function setLedgerCaptureProgress(done, total, owner = null) {
+    if (owner && ledgerCaptureProgressOwner && ledgerCaptureProgressOwner !== owner) return;
+    if (total > 0) ledgerCaptureProgressOwner = owner;
+    else if (!owner || ledgerCaptureProgressOwner === owner) ledgerCaptureProgressOwner = null;
+    ledgerCaptureProgress = total > 0 ? { done, total } : null;
+    if (axisState.almanacMode) renderAlmanacPanel();
+}
+
+function getLedgerCaptureProgress() {
+    return ledgerCaptureProgress;
+}
 
 function buildLedgerCapturePrompt() {
     const closed = listClosedLedgerBrief();
@@ -2739,6 +2896,11 @@ ${LEDGER_FIELD_SPEC}
 不要解释，不要输出表头，不要输出多余文字。`;
 }
 
+function buildLedgerProvenancePrompt(candidates, batchNo, batchTotal) {
+    const list = (candidates || []).map(item => `- ${item._candidateId}｜${item.事由}（${item.类型}）${item.标签?.length ? `｜标签：${item.标签.join('、')}` : ''}`).join('\n');
+    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚。候选ID 必须原样抄写；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据就不要输出。不要输出 SET，不要解释。`;
+}
+
 // 解析标注回答 → 松散条目数组（起始锚由 runLedgerCaptureStep 补钉）。认全角竖线分隔行，其余行忽略。
 function parseLedgerCapture(raw) {
     const s = String(raw || '').trim();
@@ -2747,24 +2909,47 @@ function parseLedgerCapture(raw) {
     for (const line of s.split('\n')) {
         const t = line.trim();
         if (!t || !t.includes('｜')) continue;                 // 只认带全角竖线的登记行（跳过表头/寒暄）
-        if (/^事由\s*｜/.test(t)) continue;                     // AI 若误输出表头，跳过
+        if (/^(?:事由|候选ID)\s*｜/.test(t)) continue;           // AI 若误输出表头，跳过
         const cols = t.split('｜').map(x => x.trim());
-        const 事由 = cols[0];
+        const provenance = cols.length >= 9;
+        const candidateId = provenance ? cols[0] : '';
+        const offset = provenance ? 1 : 0;
+        const 事由 = cols[offset];
         if (!事由) continue;
         const entry = {
             事由,
-            类型: ledger.TYPES.includes(cols[1]) ? cols[1] : '持续状态',
-            牵扯: splitCnList(cols[2]),
-            标签: splitCnList(cols[3]),
-            现状: cols[4] || '',
+            类型: ledger.TYPES.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态',
+            牵扯: splitCnList(cols[offset + 2]),
+            标签: splitCnList(cols[offset + 3]),
+            现状: cols[offset + 4] || '',
         };
-        const cyc = parseInt(cols[6], 10);
+        const cyc = parseInt(cols[offset + 6], 10);
         if (Number.isFinite(cyc) && cyc > 0) entry.周期长度 = cyc;
-        const due = parseJudgedDate(cols[5] || '');            // 复用日期解析（认「第M月D日」/月名式）；相对日「三天后」认不出即留空
+        const due = parseJudgedDate(cols[offset + 5] || '');            // 复用日期解析（认「第M月D日」/月名式）；相对日「三天后」认不出即留空
         if (due) entry.到期锚 = { 历日期: due };
+        if (provenance) {
+            entry._candidateId = candidateId;
+            entry._sourceToken = cols[8] || '';
+        } else if (cols.length >= 8) entry._sourceToken = cols[7] || '';
         out.push(entry);
     }
     return out;
+}
+
+function ledgerSourceBatches(sources, size = LEDGER_CAPTURE_FLOORS) {
+    const floors = Array.isArray(sources) ? sources : [];
+    const batches = [];
+    for (let i = 0; i < floors.length; i += size) batches.push(floors.slice(i, i + size));
+    return batches;
+}
+
+function resolveLedgerStartAnchor(item, sourceMap, legacySources) {
+    const token = String(item?._sourceToken || '').trim();
+    if (token === 'SET') return { 楼层: null, 历日期: null };
+    const trusted = ledgerSourceAnchor(token, sourceMap);
+    if (trusted) return trusted;
+    if (!token) return ledgerLegacyAnchor(legacySources);
+    return { 楼层: null, 历日期: null };
 }
 
 // 标注一次：抄 runJudgeDateStep 的 abort/chatId/重入守卫。manual=true 时（历面板手动点）无论通知档位都反馈结果。
@@ -2780,32 +2965,108 @@ async function runLedgerCaptureStep(manual = false, travelContext = null) {
     const myCtrl = new AbortController(); ledgerCaptureAbort = myCtrl;
     const removeAbortBridge = bridgeAbortSignal(travelContext?.signal, myCtrl);
     isCapturingLedger = true;
-    const done = () => { isCapturingLedger = false; if (ledgerCaptureAbort === myCtrl) ledgerCaptureAbort = null; };
+    const done = () => {
+        if (ledgerCaptureAbort !== myCtrl) return false;
+        isCapturingLedger = false;
+        ledgerCaptureAbort = null;
+        setLedgerCaptureProgress(0, 0, myCtrl);
+        return true;
+    };
     try {
         const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
         // 账上全空 = 本卡首次建账：这一趟连角色卡/世界书里的既定机制（周期硬规则、死线、长期状态）一并扫入，
         // 而非只捞对话正文里的新事件。零额外 API——角色卡/世界书本就在 buildMessages 的 system 里，只是换一段指令。
         const isFirst = ledger.listEntries({ includeClosed: true }).length === 0;
         const prompt = appendTravelPromptContext(isFirst ? buildLedgerFirstScanPrompt() : buildLedgerCapturePrompt(), travelContext);
-        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, LEDGER_CAPTURE_FLOORS, { ...(travelContext || {}), noAlmanac: true });
+        const targetDate = almValidMonthDay(travelContext?.targetDate, loadCalDesc());
+        const captureContext = ledgerFloorDateContext();
+        const captureFloor = captureContext.floor;
+        const captureDate = targetDate || captureContext.date || almTodayAnchor();
+        const recentRecords = ledgerAiFloorRecords(LEDGER_CAPTURE_FLOORS);
+        const recentSources = recentRecords.flatMap(record => record.sources);
+        const recentSourceMap = ledgerSourceMap(recentSources);
+        const allRecords = isFirst ? ledgerAiFloorRecords() : null;
+        const sourceFloorCount = allRecords ? allRecords.length : 0;
+        const aiFloorCount = isFirst ? sourceFloorCount : 0;
+        const needsHistoricalProvenance = isFirst && aiFloorCount > LEDGER_CAPTURE_FLOORS && sourceFloorCount > LEDGER_CAPTURE_FLOORS;
+        const provenanceBatches = needsHistoricalProvenance ? ledgerSourceBatches(allRecords) : [];
+        if (needsHistoricalProvenance) {
+            if (!manual) {
+                done();
+                showToast(`历史较长（${aiFloorCount} 个 AI 楼），自动捕获不会静默启动多批溯源；请点「立即标注」并确认。`);
+                return { status: 'needs-confirmation' };
+            }
+            const ok = await spConfirm({
+                title: '确认完整溯源刻度',
+                body: `当前 ledger 为空，共 ${aiFloorCount} 个 AI 楼。将先提取清单，再按每批最多 ${LEDGER_CAPTURE_FLOORS} 个 AI 回复溯源，最多调用 ${1 + provenanceBatches.length} 次（1 次清单 + ${provenanceBatches.length} 批）。找到全部来源后会提前结束；过程会增加 API 消耗和等待时间，可随时中止；确认后统一落库。`,
+                note: '取消不会发起请求，也不会写入任何刻度。',
+                confirmText: '开始溯源',
+                cancelText: '取消',
+            });
+            if (!ok) { done(); return { status: 'cancelled' }; }
+            if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
+        }
+        const captureOpts = { ...(travelContext || {}), noAlmanac: true };
+        if (recentRecords.length) captureOpts.ledgerSourceFloors = recentRecords;
+        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, LEDGER_CAPTURE_FLOORS, captureOpts);
         if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted) return { status: 'cancelled' };
         if (getContext().chatId !== chatIdSnap) { done(); return { status: 'cancelled' }; }
-        done();
         if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        const picked = parseLedgerCapture(raw);
+        let picked = parseLedgerCapture(raw);
         if (!picked.length) { if (manual) showToast('未发现可登记的新事件'); return { status: 'unchanged' }; }
-        const floor = latestAiFloorId();
-        const today = travelContext?.targetDate || almTodayAnchor();
+        picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
+        let sourceList = recentSources;
+        let sourceMap = recentSourceMap;
+        let recordsForCommit = recentRecords;
+        if (needsHistoricalProvenance) {
+            sourceList = allRecords.flatMap(record => record.sources);
+            sourceMap = ledgerSourceMap(sourceList);
+            recordsForCommit = allRecords;
+            const candidates = picked.filter(item => String(item._sourceToken || '').trim() !== 'SET');
+            for (const candidate of candidates) candidate._sourceToken = ''; // 长历史必须从最早批次重新锁定，不能把首轮最近窗口当最早来源
+            const batches = provenanceBatches;
+            setLedgerCaptureProgress(0, batches.length, myCtrl);
+            for (let i = 0; i < batches.length; i++) {
+                if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
+                const unresolved = candidates.filter(item => !String(item._sourceToken || '').trim());
+                if (!unresolved.length) break;
+                const batch = batches[i];
+                const batchResult = await callCustomApi(ctx, buildLedgerProvenancePrompt(unresolved, i + 1, batches.length), cfg, userName, charName, myCtrl.signal, 0, { ...(travelContext || {}), noAlmanac: true, ledgerSourceFloors: batch });
+                if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
+                const found = parseLedgerCapture(batchResult);
+                const batchMap = ledgerSourceMap(batch.flatMap(record => record.sources));
+                const hits = [];
+                for (const item of found) {
+                    const candidate = candidates.find(x => x._candidateId === item._candidateId && !String(x._sourceToken || '').trim());
+                    if (!candidate) continue;
+                    const token = String(item._sourceToken || '').trim();
+                    if (ledgerSourceAnchor(token, batchMap)) hits.push({ candidate, token, source: batchMap.get(token) });
+                }
+                hits.sort((a, b) => a.source.floor - b.source.floor || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
+                for (const hit of hits) {
+                    if (!String(hit.candidate._sourceToken || '').trim()) hit.candidate._sourceToken = hit.token;
+                }
+                setLedgerCaptureProgress(i + 1, batches.length, myCtrl);
+            }
+        }
         const seen = new Set(ledger.listEntries({ includeClosed: true }).map(e => normGist(e.事由)));
-        const added = [];
+        const plans = [];
         for (const p of picked) {
             const g = normGist(p.事由);
             if (!g || seen.has(g)) continue;                               // JS 侧兜底去重（同名事由）
             seen.add(g);
-            p.起始锚 = { 楼层: floor, 历日期: today };                     // 底账·钉死
-            p.现状锚 = { 楼层: floor, 历日期: today };                     // 入库即以起始为现状锚（判定车后续刷）
-            const e = ledger.addEntry(p);
-            if (e) added.push(e);
+            const startAnchor = resolveLedgerStartAnchor(p, sourceMap, sourceList);
+            plans.push({ ...p, 起始锚: startAnchor, 现状锚: { 楼层: captureFloor, 历日期: captureDate } });
+        }
+        if (!plans.length) { if (manual) showToast('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
+        if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap || !ledgerRecordsStable(recordsForCommit, chatIdSnap)) {
+            showToast('原始剧情楼在溯源期间发生变化，已取消本轮刻度落库', null, true);
+            return { status: 'cancelled' };
+        }
+        const added = await ledger.addEntriesAtomic(plans.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; return clean; }));
+        if (ledgerCaptureAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) {
+            done();
+            return { status: 'cancelled', stale: true };
         }
         if (!added.length) { if (manual) showToast('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
         // 通知：手动必反馈；自动仅 full 档弹（照三档静音约定）。
@@ -2815,9 +3076,11 @@ async function runLedgerCaptureStep(manual = false, travelContext = null) {
         refreshLedgerInjection();   // 新条目入账 → 重算注入集（关/空时内部自清）
         refreshInlineWindow(true);  // 标注池变了 → 刷楼内框（最新 AI 楼读活账重挂标注池）
         if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+        setLedgerCaptureProgress(0, 0, myCtrl);
+        done();
         return { status: 'updated' };
     } catch (err) {
-        if (ledgerCaptureAbort !== myCtrl) return { status: 'cancelled' };
+        if (ledgerCaptureAbort !== myCtrl) return { status: 'cancelled', stale: true };
         done();
         if (err?.name === 'AbortError' || travelContext?.signal?.aborted) return { status: 'cancelled' };
         if (err?.spDisabled) return { status: 'skipped' };
@@ -2825,6 +3088,8 @@ async function runLedgerCaptureStep(manual = false, travelContext = null) {
         showToast('刻度标注失败，请检查 API 或网络', null, true);
         return { status: 'failed', error: err };
     } finally {
+        setLedgerCaptureProgress(0, 0, myCtrl);
+        if (ledgerCaptureAbort === myCtrl) done();
         removeAbortBridge();
     }
 }
@@ -2835,17 +3100,17 @@ async function runLedgerCaptureStep(manual = false, travelContext = null) {
 const LEDGER_JUDGE_FLOORS = 4;   // 判定读最近几楼正文（比标注窄，够看「刚发生了什么」即可）
 
 // 距今天数：从起始锚(历日期)到今天，环形不涉年（<1 年场景足够）。缺锚/非法 → null。
-function ledgerDaysSince(entry) {
+function ledgerDaysSince(entry, today = almTodayAnchor()) {
     const a = entry?.起始锚?.历日期;
     if (!a || !Number.isFinite(+a.month) || !Number.isFinite(+a.day)) return null;
-    const t = almTodayAnchor();
+    const t = today;
     return almDaysUntil(t.month, t.day, a);
 }
 // 到期口径：{天数, 过期}。无到期锚 → null；今天到期 → {天数:0}；已过 → {过期:true}。环形取短弧判过期。
-function ledgerDueInfo(entry) {
+function ledgerDueInfo(entry, today = almTodayAnchor()) {
     const d = entry?.到期锚?.历日期;
     if (!d || !Number.isFinite(+d.month) || !Number.isFinite(+d.day)) return null;
-    const t = almTodayAnchor();
+    const t = today;
     const to = almDaysUntil(d.month, d.day, t);          // 今天→到期
     const since = almDaysUntil(t.month, t.day, d);       // 到期→今天
     if (to === 0) return { 天数: 0, 过期: false };
@@ -2856,10 +3121,10 @@ function listJudgeableLedger() {
     return ledger.listEntries().filter(e => e.锁 !== '用户锁');
 }
 // 一行摘要（喂进判定提示词）。天数由 CODE 算好塞进去，AI 据此下结论、不自己算日期。
-function fmtLedgerForJudge(e) {
-    const since = ledgerDaysSince(e);
+function fmtLedgerForJudge(e, today = almTodayAnchor()) {
+    const since = ledgerDaysSince(e, today);
     const sinceStr = since == null ? '起始不明' : (since === 0 ? '今天登记' : `距登记 ${since} 天`);
-    const du = ledgerDueInfo(e);
+    const du = ledgerDueInfo(e, today);
     const dueStr = !du ? '' : (du.天数 === 0 ? '·今天到期' : (du.过期 ? `·已过期 ${du.天数} 天` : `·还有 ${du.天数} 天到期`));
     const cyc = e.周期长度 ? `·周期 ${e.周期长度} 天` : '';
     const who = e.牵扯?.length ? `·涉及 ${e.牵扯.join('、')}` : '';
@@ -2881,7 +3146,7 @@ function _recentLedgerSceneText(nFloors = LEDGER_JUDGE_FLOORS) {
     const parts = [];
     for (let i = chat.length - 1; i >= 0 && parts.length < nFloors; i--) {
         const m = chat[i];
-        if (!m || m.is_user || m.is_system) continue;   // 只读 AI 楼，跳隐藏行
+        if (!ledgerNarrativeMessage(m)) continue;   // system 标志不改变剧情 assistant 资格；已知 UI/help 类型由统一 helper 排除
         const raw = String(m.mes || '');
         if (!raw.trim()) continue;
         const cleaned = memory.stripTags(raw, stripOpts).trim();
@@ -2945,8 +3210,8 @@ function refreshLedgerInjection() {
 }
 
 
-function buildLedgerJudgePrompt() {
-    const lines = listJudgeableLedger().map(fmtLedgerForJudge).join('\n');
+function buildLedgerJudgePrompt(today = almTodayAnchor()) {
+    const lines = listJudgeableLedger().map(e => fmtLedgerForJudge(e, today)).join('\n');
     return `请暂停角色扮演，作为剧情连续性助手，只做一件事：根据下面【已登记事件】各自「距今过了多少天」和最近正文，判断哪些事件的状态**该随时间变化了**，只输出需要更新的那几条。
 
 【已登记事件】（方括号是编号，天数已由系统算好，你不必自己算日期）
@@ -2979,31 +3244,51 @@ function normalizeJudgeAction(raw) {
     return '维持';
 }
 
-// 解析判定回答 → 改动数组。认全角竖线行；编号剥方括号；动作走 normalizeJudgeAction 宽松归一。
+// 解析判定回答 → 三态结果：none（明确无变化）、changes（至少一条合法变化）、invalid（空/损坏/字段不合约）。
+// 同时兼容全角/半角竖线；代码围栏只作包装剥除，内部仍严格要求 4 列。
 function parseLedgerJudge(raw) {
-    const s = String(raw || '').trim();
-    if (!s || /^无[。.！!]?$/.test(s)) return [];
+    const s = String(raw ?? '').trim()
+        .replace(/^```[^\n]*\n?/i, '')
+        .replace(/\n?```\s*$/i, '').trim();
+    const noneText = s.replace(/[。.!！！？?]+$/u, '').trim();
+    const explicitNone = new Set([
+        '无', '无需更新', '无须更新', '无需变更', '无须变更',
+        '本轮无需更新', '没有需要更新的事件',
+    ]);
+    if (explicitNone.has(noneText)) return { status: 'none', changes: [] };
+    if (!s) return { status: 'invalid', changes: [] };
     const out = [];
+    let invalid = false;
     for (const line of s.split('\n')) {
         const t = line.trim();
-        if (!t || !t.includes('｜')) continue;
-        if (/^编号\s*｜/.test(t)) continue;                    // AI 若误输出表头，跳过
-        const cols = t.split('｜').map(x => x.trim());
-        const id = cols[0].replace(/[\[\]【】]/g, '').trim();
-        if (!id) continue;
-        const 动作 = normalizeJudgeAction(cols[2]);
+        if (!t) continue;
+        if (/^编号\s*[｜|]/.test(t)) continue;                 // AI 若误输出表头，跳过
+        if (!/[｜|]/.test(t)) { invalid = true; continue; }
+        const cols = t.split(/[｜|]/).map(x => x.trim());
+        if (cols.length !== 4) { invalid = true; continue; }
+        const id = cols[0].replace(/[\[\]【】]/g, '').trim().toUpperCase();
+        const actionText = cols[2];
+        if (!/^L\d+$/i.test(id) || !cols[1] || !actionText || !/(?:维持|滚|周期|顺延|续期|了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复|已了)/.test(actionText)) {
+            invalid = true; continue;
+        }
+        const 动作 = normalizeJudgeAction(actionText);
         const chg = { id, 现状: cols[1] || '', 动作 };
         const due = parseJudgedDate(cols[3] || '');
         if (due) chg.到期 = due;
         out.push(chg);
     }
-    return out;
+    // 严格整批：任何一行损坏/解释文本都会使整份响应失效，不能部分落库。
+    if (invalid || !out.length) return { status: 'invalid', changes: [] };
+    return { status: 'changes', changes: out };
 }
 
 // 判定一次：抄 runLedgerCaptureStep 的 abort/chatId/重入守卫。manual=true（手动点）无论通知档位都反馈结果。
 // fire-and-forget，失败静默（自动车）/弹错（手动）。无活跃条目直接跳过、不空烧 API。
 async function runLedgerJudgeStep(manual = false, travelContext = null) {
-    if (isJudgingLedger) return { status: 'skipped' };
+    if (isJudgingLedger) {
+        if (manual) showToast('已有刻度更新正在进行，请稍候');
+        return { status: 'busy' };
+    }
     const ctx = getContext();
     const charKey = charStableKey(ctx);
     if (!charKey) { if (manual) showToast('当前没有角色卡，无法判定', null, true); return { status: 'skipped' }; }
@@ -3014,19 +3299,33 @@ async function runLedgerJudgeStep(manual = false, travelContext = null) {
     const myCtrl = new AbortController(); ledgerJudgeAbort = myCtrl;
     const removeAbortBridge = bridgeAbortSignal(travelContext?.signal, myCtrl);
     isJudgingLedger = true;
-    const done = () => { isJudgingLedger = false; if (ledgerJudgeAbort === myCtrl) ledgerJudgeAbort = null; };
+    const done = () => {
+        if (ledgerJudgeAbort !== myCtrl) return false;
+        isJudgingLedger = false;
+        ledgerJudgeAbort = null;
+        if (getContext().chatId === chatIdSnap) {
+            if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+            refreshInlineWindow(true);
+        }
+        return true;
+    };
+    if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+    refreshInlineWindow(true);
     try {
         const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-        const raw = await callCustomApi(ctx, appendTravelPromptContext(buildLedgerJudgePrompt(), travelContext), cfg, userName, charName, myCtrl.signal, LEDGER_JUDGE_FLOORS, { ...(travelContext || {}), noAlmanac: true });
+        const targetDate = almValidMonthDay(travelContext?.targetDate, loadCalDesc());
+        const judgeContext = ledgerFloorDateContext();
+        const judgeFloor = judgeContext.floor;
+        const judgeDate = targetDate || judgeContext.date || almTodayAnchor();
+        const raw = await callCustomApi(ctx, appendTravelPromptContext(buildLedgerJudgePrompt(judgeDate), travelContext), cfg, userName, charName, myCtrl.signal, LEDGER_JUDGE_FLOORS, { ...(travelContext || {}), noAlmanac: true });
         if (ledgerJudgeAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted) return { status: 'cancelled' };
         if (getContext().chatId !== chatIdSnap) { done(); return { status: 'cancelled' }; }
-        done();
         if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        const changes = parseLedgerJudge(raw);
-        if (!changes.length) { if (manual) showToast('本轮没有事件需要更新'); return { status: 'unchanged' }; }
+        const parsed = parseLedgerJudge(raw);
+        if (parsed.status === 'none') { done(); if (manual) showToast('本轮无需更新刻度'); return { status: 'unchanged' }; }
+        if (parsed.status === 'invalid') { done(); if (manual) showToast('刻度判定格式无法识别', null, true); return { status: 'invalid' }; }
+        const changes = parsed.changes;
         const cal = loadCalDesc();
-        const floor = latestAiFloorId();
-        const today = travelContext?.targetDate || almTodayAnchor();
         const applied = [];
         for (const c of changes) {
             if (myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap || ledgerJudgeAbort !== myCtrl) return { status: 'cancelled' };
@@ -3036,7 +3335,7 @@ async function runLedgerJudgeStep(manual = false, travelContext = null) {
             // 退场/翻篇规则几乎必然误判它「该了结」；静音语义正是「留着、只是别提」。若只吞 closeEntry、仍套 patch，
             // 现状会被每轮改写成退场话术。维持/滚周期不受此限（后台照常跟进）。
             if (e.静音 === true && c.动作 === '了结') continue;
-            const patch = { 现状锚: { 楼层: floor, 历日期: today } };       // 现状锚每次刷到今天（起始锚永不动）
+            const patch = { 现状锚: { 楼层: judgeFloor, 历日期: judgeDate } }; // 现状锚每次刷到今天（起始锚永不动）
             if (c.现状) patch.现状 = c.现状;
             if (c.动作 === '滚周期' && e.周期长度 > 0 && e.到期锚?.历日期) {
                 const base = e.到期锚.历日期;                               // 保相位：从上次到期顺延一个周期
@@ -3049,14 +3348,16 @@ async function runLedgerJudgeStep(manual = false, travelContext = null) {
             if (c.动作 === '了结') ledger.closeEntry(e.id);                  // 静音条已在上方跳过，此处到不了
             applied.push(e.事由);
         }
-        if (!applied.length) { if (manual) showToast('没有需要更新的事件'); return { status: 'unchanged' }; }
-        // 通知：手动必反馈；自动仅 full 档弹（照三档静音约定）。
-        if (manual || getSettings().notifyMode === 'full') {
+        if (ledgerJudgeAbort !== myCtrl || myCtrl.signal.aborted || travelContext?.signal?.aborted || getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
+        if (!applied.length) { done(); if (manual) showToast('本轮变化均无效或受保护，刻度未更新'); return { status: 'unchanged' }; }
+        // 手动终态唯一反馈；自动判定保持静默。
+        if (manual) {
             showToast(`刻度刷新 ${applied.length} 条：${applied.join('、')} · 请注意查看`);
         }
         refreshLedgerInjection();   // 现状/了结变了 → 重算注入集（关/空时内部自清）
         refreshInlineWindow(true);  // 标注池现状变了 → 刷楼内框（最新 AI 楼读活账重挂标注池）
         if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+        done();
         return { status: 'updated' };
     } catch (err) {
         if (ledgerJudgeAbort !== myCtrl) return { status: 'cancelled' };
@@ -3064,9 +3365,10 @@ async function runLedgerJudgeStep(manual = false, travelContext = null) {
         if (err?.name === 'AbortError' || travelContext?.signal?.aborted) return { status: 'cancelled' };
         if (err?.spDisabled) return { status: 'skipped' };
         if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' };
-        showToast('刻度判定失败，请检查 API 或网络', null, true);
+        if (manual) showToast('刻度判定失败，请检查 API 或网络', null, true);
         return { status: 'failed', error: err };
     } finally {
+        if (ledgerJudgeAbort === myCtrl) done();
         removeAbortBridge();
     }
 }
@@ -3146,7 +3448,16 @@ async function syncPointToToday(auto = false, travelContext = null) {
         if (pointState.isGenerating) return { status: 'cancelled' };    // 期间前台手动生成插了队 → 让前台赢
         if (getContext().chatId !== chatIdSnap) return { status: 'cancelled' }; // 已切 chat → 丢弃
         const today = travelContext?.targetDate || almTodayAnchor();
+        const freshCheck = validateGeneratedCalendar(fresh);
+        if (!freshCheck.ok) {
+            showToast('点同步返回不完整（需要闭合的 Day 1–3 及至少 5 条 Future 事件），旧点数据未改变，请重试', null, true);
+            return { status: 'failed', error: new Error('返回不完整') };
+        }
         const merged = forceStartDate(mergePinnedPoints(raw, fresh), today.month, today.day);
+        if (!validateGeneratedCalendar(merged).ok) {
+            showToast('点同步结果结构不完整，旧点数据未改变，请重试', null, true);
+            return { status: 'failed', error: new Error('同步结果不完整') };
+        }
         writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
         syncLatestScheduleBlock();                           // 楼内点条即时刷到新日期
         // 修 pointState.cachedSchedule 陈旧：只要同步的视角 == 当前视角就刷缓存——哪怕此刻停在历面板，
@@ -4601,14 +4912,16 @@ function injectModal() {
         const day = $(this).attr('data-day');
         const idx = Number($(this).attr('data-ev'));
         if (!Number.isInteger(idx)) return;
-        triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx);
+        const view = currentView;
+        const charName = view === 'char' ? charViewName : '';
+        triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx, { view, charName });
     });
     $('#chat').on('click', '.sp-sch-del-one', function (e) {
         e.stopPropagation();
         const day = $(this).attr('data-day');
         const idx = Number($(this).attr('data-ev'));
         if (!Number.isInteger(idx)) return;
-        triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx);
+        triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx, { view: 'user', charName: '' });
     });
 
     // 楼内「标注池」框（AI 楼）：summary 的打捞/更新 + 每条锁定/归档了结。钮在 <summary>/行内，需 stopPropagation 免折叠。
@@ -4619,7 +4932,6 @@ function injectModal() {
     });
     $('#chat').on('click', '.sp-inline-ledger-judge', function (e) {
         e.stopPropagation();
-        if (isJudgingLedger) { showToast('正在更新中…'); return; }
         runLedgerJudgeStep(true);     // 手动判定：无活跃条目/无改动时自带 toast
     });
     $('#chat').on('click', '.sp-inline-ledger-lock', function (e) {
@@ -4983,15 +5295,13 @@ function injectModal() {
         ledgerCaptureCounter = 0;
     });
     $almanac.on('click', '.sp-ledger-capture-now', function () {
-        if (isCapturingLedger) return;
+        if (isCapturingLedger) { ledgerCaptureAbort?.abort(); showToast('已请求中止刻度标注'); return; }
         const p = runLedgerCaptureStep(true);   // 同步内设 isCapturingLedger=true（守卫通过时）
         renderAlmanacPanel();                    // 立刻渲染成 busy 态（spinner + 禁用）
         p.then(() => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); });
     });
     $almanac.on('click', '.sp-ledger-judge-now', function () {
-        if (isJudgingLedger) return;
         const p = runLedgerJudgeStep(true);      // manual=true：无活跃条目/无改动时给 toast
-        renderAlmanacPanel();                    // 立刻渲染成 busy 态（spinner + 禁用）
         p.then(() => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); });
     });
     // 暗历行操作：编辑 / 锁·解锁 / 了结（软删·可捞回）。id 从行容器取。
@@ -5822,11 +6132,15 @@ function injectModal() {
         .on('blur',  () => { const r = $in('#sp-cfg-key').val().trim() || $in('#sp-cfg-key').data('real') || ''; if (r) $in('#sp-cfg-key').data('real', r).val(maskKey(r)); });
 
     $in('#sp-body').on('click', '.sp-tab', function () {
-        const idx   = parseInt($(this).data('day'));
-        const total = parseInt($in('.sp-days-track').data('total')) || 4;
+        const rawDay = String($(this).attr('data-day') || '').trim().toLowerCase();
+        const $track = $(this).closest('#sp-body').find('.sp-days-track').first();
+        const total = Number($track.attr('data-total'));
+        if (!Number.isInteger(total) || total < 1) return;
+        const idx = rawDay === 'future' ? total - 1 : Number(rawDay);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= total) return;
         $inAll('.sp-tab').removeClass('sp-tab-active');
         $(this).addClass('sp-tab-active');
-        $inAll('.sp-days-track').css('transform', `translateX(-${idx * 100 / total}%)`);
+        $track.css('transform', `translateX(-${idx * 100 / total}%)`);
     });
 
     // Desktop drag: content header acts as the handle (like a title bar).
@@ -5923,21 +6237,9 @@ function setView(view, charName) {
     // `view==='char' && charName` 双重门，user 视角 charViewName 再有值也拼不进 char 子键。
     // 真正该清 charViewName 的只有换聊天(CHAT_CHANGED)/主动重选角色(onRegenClick)。
     if (view === 'char' && charName) charViewName = charName;
-    refreshLinesInjection();   // 视角切换 → 活跃线集合变了，重设潜伏注入跟随当前视角
-    refreshOutlineInjection(); // 视角切换 → 大纲/游标随视角变，重设注入（loadCached 已带高亮）
     $inAll('.sp-view-btn').removeClass('sp-view-active');
     $inAll(`.sp-view-btn[data-view="${view}"]`).addClass('sp-view-active');
     pointState.cachedSchedule = loadCachedForCurrentChat();
-    cachedOutline  = loadCachedOutlineForCurrentChat();
-    outlineChatHistory = [];
-    if (outlineMode) {
-        loadCreativeChatHistory();
-        updateCreativeChatModeUI();
-        renderCreativeChatHistory();
-    } else {
-        $in('#sp-chat-msgs').empty();
-    }
-    if (outlineMode && cachedOutline) setOutlineBody(cachedOutline);
 }
 
 function switchToCharView() {
@@ -6259,11 +6561,11 @@ async function memoryPreCheckConfirm() {
         return true;
     }
     if (getSettings().useDatabase) {
-        const text = await getDatabaseMemText({ query: '' }).catch(() => '');
-        if (text) return true;
+        const result = await getDatabaseMemResult({ query: '' }).catch(error => ({ status: 'worldbook-read-failed', text: '', error }));
+        if (result.text) return true;
         return spConfirm({
             title: '数据库记忆为空',
-            body: '当前角色主世界书中没有识别到数据库纪要。继续生成将不注入数据库历史。',
+            body: `${databaseDiagnostic(result)}。继续生成将不注入数据库历史。`,
             confirmText: '继续生成',
             cancelText: '取消',
         });
@@ -6438,12 +6740,19 @@ async function runGenerate(travelContext = null) {
         }
         const raw = await generate(ctx, userName, charName, viewSnap, myCtrl.signal, pinnedEvents, travelContext);
         if (pointState.scheduleAbortController !== myCtrl) return;   // 生成途中被中止/取代：丢弃本次结果
+        const completeness = validateGeneratedCalendar(raw);
+        if (!completeness.ok) {
+            const err = new Error('返回不完整（需要闭合的 Day 1–3 及至少 5 条 Future 事件），旧点数据未改变，请重试');
+            err.pointIncomplete = true;
+            throw err;
+        }
         // F5：合并锁定，机制对齐 mergePinnedLines(oldRaw, aiRaw)
         let merged = prevRaw ? mergePinnedPoints(prevRaw, raw) : raw;
         // 点恒跟随今天：手动生成也把 StartDate 钉到「今天」，与轴同日（今天由戳/手动钉/兜底经 almTodayAnchor 单一咽喉给出）。
         // 不钉的话 AI 常不产 StartDate → 点只显 1/2/3/未来相对天、无日期，正是用户困惑的「没日期」态。
         const t = almTodayAnchor();
         merged = forceStartDate(merged, t.month, t.day);
+        if (!validateGeneratedCalendar(merged).ok) throw new Error('生成结果结构不完整，旧点数据未改变，请重试');
         const html   = renderSchedule(merged, subject, viewSnap);
 
         writeStore(cacheKey, { raw: merged, userName: subject, ts: Date.now() });
@@ -6553,6 +6862,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     }
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned), travelContext);
     const apiOpts = travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {});
+    apiOpts.pointView = perspective;
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 10, apiOpts);
 }
 
@@ -7068,22 +7378,43 @@ function getDatabasePrimaryWorldbookName(ctx = getContext()) {
 }
 
 async function getDatabaseMemText(opts = {}) {
+    const result = await getDatabaseMemResult(opts);
+    return result.text;
+}
+
+async function getDatabaseMemResult(opts = {}) {
     const th = globalThis.TavernHelper;
+    if (!th || typeof th.getWorldbook !== 'function') return { status: 'api-unavailable', text: '', entries: 0, matched: 0, usable: 0, selected: 0 };
     const name = getDatabasePrimaryWorldbookName();
-    if (!th || typeof th.getWorldbook !== 'function' || !name) return '';
+    if (!name) return { status: 'worldbook-unavailable', text: '', entries: 0, matched: 0, usable: 0, selected: 0 };
     let entries;
-    try { entries = await th.getWorldbook(name); } catch { return ''; }
-    if (!Array.isArray(entries)) return '';
-    const memories = entries.filter(entry => {
-        const comment = String(entry?.comment || '').trim();
-        return /^TavernDB-ACU-CustomExport-纪要-\d+$/i.test(comment)
-            || /^(?:总结条目|小总结条目)(?:[\s_#-]*\d+)?(?:\s.*)?$/i.test(comment);
-    }).map((entry, index) => ({
+    try { entries = await th.getWorldbook(name); } catch (error) { return { status: 'worldbook-read-failed', text: '', entries: 0, matched: 0, usable: 0, selected: 0, error }; }
+    if (!Array.isArray(entries)) return { status: 'invalid-response', text: '', entries: 0, matched: 0, usable: 0, selected: 0 };
+    const matchedEntries = entries.filter(isDatabaseMemoEntry);
+    if (!matchedEntries.length) return { status: 'no-match', text: '', entries: entries.length, matched: 0, usable: 0, selected: 0 };
+    const memories = matchedEntries.map((entry, index) => ({
         text: String(entry?.content || '').trim(),
         tags: mergeRecallTags(entry),
         batch: index, slice: 0, time: '',
-    })).filter(item => item.text);
-    return selectAnimaSlices(memories, buildAnimaRecallQuery(opts.query), getAnimaRecallCount()).map(item => item.text).join('\n\n');
+    }));
+    const nonEmpty = memories.filter(item => item.text);
+    if (!nonEmpty.length) return { status: 'empty-content', text: '', entries: entries.length, matched: matchedEntries.length, usable: 0, selected: 0 };
+    const selected = selectAnimaSlices(nonEmpty, buildAnimaRecallQuery(opts.query), getAnimaRecallCount());
+    const text = selected.map(item => item.text).join('\n\n');
+    return { status: text ? 'ready' : 'empty-content', text, entries: entries.length, matched: matchedEntries.length, usable: nonEmpty.length, selected: selected.length };
+}
+
+function databaseDiagnostic(result) {
+    const labels = {
+        'api-unavailable': '检测不到 TavernHelper 世界书读取接口',
+        'worldbook-unavailable': '未取得角色主世界书',
+        'worldbook-read-failed': '主世界书读取失败',
+        'invalid-response': '世界书返回结构异常',
+        'no-match': '主世界书中没有匹配到数据库纪要',
+        'empty-content': `匹配到数据库纪要，但正文为空（匹配 ${result?.matched || 0} 条，可用 ${result?.usable || 0} 条）`,
+        ready: `数据库记忆已就绪（匹配 ${result?.matched || 0} 条，可用 ${result?.usable || 0} 条，本次注入 ${result?.selected || 0} 条）`,
+    };
+    return labels[result?.status] || '数据库读取状态未知';
 }
 
 // Memory-source dispatcher. Priority: Anima → 柏宝书 → built-in L0/L1 store. The
@@ -7223,8 +7554,9 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10,
     // Story memory (Plan C: objective memory + view tag)
     const rawMemText = await getMemText({ full: opts.fullMemory, query: prompt });
     const memText = opts.reroll ? stripRerollModuleArtifacts(rawMemText) : rawMemText;
+    const memPerspective = opts.pointView === 'char' ? charName : opts.pointView === 'user' ? userName : null;
     const memBlock = memText
-        ? `【故事记忆库】以下由本插件在对话过程中自动生成的客观摘要，反映从最早到近期的关键事件与伏笔。请**优先信任记忆库描述**，即使它与角色卡/世界书中较早的描述冲突（因为记忆库记录了事件后的最新状态）。以 ${currentView === 'char' ? charName : userName} 的视角优先关注对其有意义的信息。\n\n${memText}`
+        ? `【故事记忆库】以下由本插件在对话过程中自动生成的客观摘要，反映从最早到近期的关键事件与伏笔。请**优先信任记忆库描述**，即使它与角色卡/世界书中较早的描述冲突（因为记忆库记录了事件后的最新状态）。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
         : '';
 
     // 历（本世界观重要日期）：历自己不进主楼，只在这里作为数据源反哺点/线/大纲。
@@ -7277,17 +7609,23 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10,
             content: substituteParams(opts.reroll ? stripRerollModuleArtifacts(memory.stripTags(m.mes ?? '', stripOpts)) : memory.stripTags(m.mes ?? '', stripOpts)),
         }));
     }
+    if (Array.isArray(opts.ledgerSourceFloors)) {
+        history = opts.ledgerSourceFloors.map(source => ({
+            role: 'assistant',
+            content: `【刻度可信来源｜楼层 ${source.floor}｜${source.sources?.length ? source.sources.map(x => `${x.token}=${x.stamp}`).join('、') : '无合法 SDC 令牌，仅供识别正文'}】\n${source.content || ''}`,
+        }));
+    }
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
 }
 
 // ─── Outline cache helpers ────────────────────────────────────────────────────
 
 function getOutlineCacheKey(view, charName) {
-    return keyDesc('outline', view, charName);
+    return keyDesc('outline', 'user', '');
 }
 
 function getCreativeChatHistoryKey(view, charName) {
-    return keyDesc('creative-chat', view, charName);
+    return keyDesc('creative-chat', 'user', '');
 }
 
 function loadCreativeChatHistory(view, charName) {
@@ -7532,19 +7870,7 @@ let _spaceWidgetSeq = 0;
 
 // idx0 从 0 起。就地替换 calendar_widget 内第 idx0 个 Event: 行（保留其 Day/Future 归属与缩进），找不到返回 null。
 function replaceNthEventLine(raw, idx0, newEventLine) {
-    const src = String(raw || '');
-    const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-    const inner = m ? m[1] : src;
-    let n = -1, done = false;
-    const newInner = inner.split('\n').map(line => {
-        if (/^\s*Event\s*:/i.test(line) && ++n === idx0) {
-            done = true;
-            return line.match(/^\s*/)[0] + newEventLine.trim();
-        }
-        return line;
-    }).join('\n');
-    if (!done) return null;
-    return m ? src.replace(m[0], `<calendar_widget>${newInner}</calendar_widget>`) : newInner;
+    return replacePointEventBlock(raw, idx0, newEventLine);
 }
 
 // idx0 从 0 起。就地替换 storylines_widget 内第 idx0 条线块（Line: 及其后的 Desc/Next），找不到返回 null。
@@ -7572,11 +7898,12 @@ function replaceNthLineBlock(raw, idx0, newBlock) {
 // 无 edit 序号：追加到 Future（用户不用操心归到哪天，去"未来"列看）。
 // 有 edit="N"：就地替换现有第 N 条 Event。
 function applyScheduleWidget(body, $btn, editIdx = null) {
-    // Extract the Event line
-    const eventLine = body.split('\n').map(l => l.trim()).find(l => /^Event\s*:/i.test(l));
-    if (!eventLine) { showToast('卡片格式不完整，无法应用', null, true); return; }
-    // Use current view's cache key (respects user vs char view + charViewName)
-    const key = getCacheKey();
+    // 提取完整 Event 块（含续行），并与点 parser 共享字段校验，避免只取首行造成半条点。
+    const eventLine = firstPointEventBlock(body);
+    const event = eventLine ? parsePointEventRecord(eventLine) : null;
+    if (!event || !event.title || !event.time) { showToast('卡片格式不完整（Event 至少需要标题和时间），无法应用', null, true); return; }
+    // “间”应用到点属于聊天级 canonical user；不把当前点 TA 视角写成 schedule-char。
+    const key = getCacheKey('user', '');
     if (!key) { showToast('当前 chat 没有可写入的待办缓存', null, true); return; }
     let raw = '';
     const saved = readStore(key);
@@ -7610,15 +7937,13 @@ function applyScheduleWidget(body, $btn, editIdx = null) {
             raw = `<calendar_widget>\n${raw}\nFuture:\n${eventLine}\n</calendar_widget>`;
         }
     }
-    const subject = currentView === 'char' ? (charViewName || getContext().name2 || '角色') : (getContext().name1 || '用户');
+    const subject = getContext().name1 || '用户';
     writeStore(key, { raw, userName: subject, ts: Date.now() });
-    // Update cached rendered HTML for schedule view. Only setBody() if the
-    // schedule view is what user is currently looking at — don't stomp on
-    // outline/lines/space views.
-    const rendered = renderSchedule(raw, subject, currentView);
-    pointState.cachedSchedule = rendered;
-    if (!outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible')) {
-        setBody(rendered);
+    // canonical 写入照常完成；只有当前确实是点 user 视角时才更新点面板缓存/UI，避免 char 点被覆盖。
+    if (currentView === 'user') {
+        const rendered = renderSchedule(raw, subject, 'user');
+        pointState.cachedSchedule = rendered;
+        if (!outlineMode && !linesMode && !spaceMode && $(`#${MODAL_ID}`).is(':visible')) setBody(rendered);
     }
     syncLatestScheduleBlock();   // 楼内点条即时刷（对齐 applyLineWidget → syncLatestInlineBlock）
     $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到点·未来列'}`);
@@ -7792,7 +8117,7 @@ function startInlineEdit($msg, idx) {
 async function buildOutlineChatMessages(userMsg) {
     const ctx      = getContext();
     const userName = ctx.name1 || '用户';
-    const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
+    const charName = ctx.name2 || '角色';
     let outlineCtx = '';
     const savedOutline = readStore(getOutlineCacheKey());
     if (savedOutline?.raw) outlineCtx = savedOutline.raw;
@@ -7831,7 +8156,8 @@ async function sendOutlineChat(userMsg) {
     saveCreativeChatHistory();
     isOutlineChatting = true;
     const chatIdSnap = getContext().chatId;
-    outlineChatAbortController = new AbortController();
+    const myCtrl = new AbortController();
+    outlineChatAbortController = myCtrl;
     const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').html('<span class="sp-typing"><i></i><i></i><i></i></span>').appendTo($in('#sp-chat-msgs'));
     const el = inEl('#sp-chat-msgs');
     if (el) el.scrollTop = el.scrollHeight;
@@ -7843,9 +8169,9 @@ async function sendOutlineChat(userMsg) {
             messages: await buildOutlineChatMessages(userMsg),
             maxTokens: 30000,
             temperature: GEN_TEMPERATURE,
-            signal: outlineChatAbortController.signal,
+            signal: myCtrl.signal,
         });
-        if (getContext().chatId !== chatIdSnap) { $dots.remove(); return; }
+        if (outlineChatAbortController !== myCtrl || myCtrl.signal.aborted || getContext().chatId !== chatIdSnap) return;
         outlineChatHistory.push({ role: 'assistant', content: reply });
         saveCreativeChatHistory();
         $dots.remove();
@@ -7867,11 +8193,14 @@ async function sendOutlineChat(userMsg) {
             if (el2) el2.scrollTop = el2.scrollHeight;
         }
     } catch (err) {
+        if (outlineChatAbortController === myCtrl && getContext().chatId === chatIdSnap && err?.name !== 'AbortError') appendChatMsg('system', `发送失败：${err.message}`);
+    } finally {
         $dots.remove();
-        if (err?.name !== 'AbortError') appendChatMsg('system', `发送失败：${err.message}`);
+        if (outlineChatAbortController === myCtrl) {
+            outlineChatAbortController = null;
+            isOutlineChatting = false;
+        }
     }
-    outlineChatAbortController = null;
-    isOutlineChatting = false;
 }
 
 // ─── Space chat (间：off-scenario OOC) ───────────────────────────────────────
@@ -7880,7 +8209,7 @@ async function sendOutlineChat(userMsg) {
 // <outline_widget> extraction.
 
 function getSpaceChatHistoryKey(view, charName) {
-    return keyDesc('space-chat', view, charName);
+    return keyDesc('space-chat', 'user', '');
 }
 
 function loadSpaceChatHistory(view, charName) {
@@ -8116,13 +8445,13 @@ function stripWidgetsForApi(history) {
 async function buildSpaceChatMessages(userMsg) {
     const ctx      = getContext();
     const userName = ctx.name1 || '用户';
-    const charName = currentView === 'char' ? (charViewName || ctx.name2 || '角色') : (ctx.name2 || '角色');
+    const charName = ctx.name2 || '角色';
     let outlineCtx = '';
     const savedOutline = readStore(getOutlineCacheKey());
     if (savedOutline?.raw) outlineCtx = savedOutline.raw;
     // 命中关键词才注入编号版现有点/线，供"改第 N 条"定位；平时不注入省 token
     const msg = String(userMsg || '');
-    const pointList = EDIT_POINT_KEYWORDS.some(w => msg.includes(w)) ? numberedPointList(readCacheRaw(getCacheKey())) : '';
+    const pointList = EDIT_POINT_KEYWORDS.some(w => msg.includes(w)) ? numberedPointList(readCacheRaw(getCacheKey('user', ''))) : '';
     const lineList  = EDIT_LINE_KEYWORDS.some(w => msg.includes(w))  ? numberedLineList(readCacheRaw(getLinesCacheKey())) : '';
     // 命中刻度词才喂活跃刻度（问状态/伤情/约定/周期时才带，省 token）；命中排障/答疑词才喂功能FAQ+开关实况
     const ledgerList = LEDGER_READ_KEYWORDS.some(w => msg.includes(w)) ? numberedLedgerList() : '';
@@ -8166,7 +8495,8 @@ async function sendSpaceChat(userMsg) {
     saveSpaceChatHistory();
     isSpaceChatting = true;
     const chatIdSnap = getContext().chatId;
-    spaceChatAbortController = new AbortController();
+    const myCtrl = new AbortController();
+    spaceChatAbortController = myCtrl;
     const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').html('<span class="sp-typing"><i></i><i></i><i></i></span>').appendTo($in('#sp-space-msgs'));
     const el = inEl('#sp-space-msgs');
     if (el) el.scrollTop = el.scrollHeight;
@@ -8178,19 +8508,22 @@ async function sendSpaceChat(userMsg) {
             messages: await buildSpaceChatMessages(userMsg),
             maxTokens: 30000,
             temperature: GEN_TEMPERATURE,
-            signal: spaceChatAbortController.signal,
+            signal: myCtrl.signal,
         });
-        if (getContext().chatId !== chatIdSnap) { $dots.remove(); return; }
+        if (spaceChatAbortController !== myCtrl || myCtrl.signal.aborted || getContext().chatId !== chatIdSnap) return;
         spaceChatHistory.push({ role: 'assistant', content: reply });
         saveSpaceChatHistory();
         $dots.remove();
         appendSpaceChatMsg('ai', reply, spaceChatHistory.length - 1);
     } catch (err) {
+        if (spaceChatAbortController === myCtrl && getContext().chatId === chatIdSnap && err?.name !== 'AbortError') appendSpaceChatMsg('system', `发送失败：${err.message}`);
+    } finally {
         $dots.remove();
-        if (err?.name !== 'AbortError') appendSpaceChatMsg('system', `发送失败：${err.message}`);
+        if (spaceChatAbortController === myCtrl) {
+            spaceChatAbortController = null;
+            isSpaceChatting = false;
+        }
     }
-    spaceChatAbortController = null;
-    isSpaceChatting = false;
 }
 
 
@@ -8468,20 +8801,18 @@ async function triggerGenerateOutline() {
 }
 
 async function runGenerateOutline(apiOpts = {}) {
-    const viewSnap = currentView;
-    const charSnap = charViewName;
     const chatIdSnap = getContext().chatId;
     const myCtrl = outlineAbortController = new AbortController();
     try {
         const ctx      = getContext();
         const userName = ctx.name1 || '用户';
-        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const charName = ctx.name2 || '角色';
         const cfg = loadCfg();
         if (!cfg.url || !cfg.key) {
             if (!settingsOpen) toggleSettings();
             throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
         }
-        const prompt   = buildOutlinePrompt(userName, charName, viewSnap);
+        const prompt   = buildOutlinePrompt(userName, charName, 'user');
         const raw      = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 10, apiOpts);
 
         if (outlineAbortController !== myCtrl) return;
@@ -8492,7 +8823,7 @@ async function runGenerateOutline(apiOpts = {}) {
         }
 
         // 新生成大纲 → 游标归 1，先落库带 cursor 再刷注入/渲染。
-        writeStore(getOutlineCacheKey(viewSnap, charSnap), { raw, ts: Date.now(), cursor: 1 });
+        writeStore(getOutlineCacheKey(), { raw, ts: Date.now(), cursor: 1 });
         refreshOutlineInjection();
         const html     = renderOutline(raw, 1);
         isGeneratingOutline = false;
@@ -8704,7 +9035,7 @@ function renderOutline(raw, cursor = 0) {
 // ─── Storylines (事件线) ─────────────────────────────────────────────────────
 
 function getLinesCacheKey(view, charName) {
-    return keyDesc('lines', view, charName);
+    return keyDesc('lines', 'user', '');
 }
 
 // ── 线·swipe 临时层（localStorage）─────────────────────────────────────────
@@ -9255,13 +9586,28 @@ const STORAGE_KIND_LABELS = {
     'creative-chat': '面讨论',
     'space-chat'   : '间（局外）',
     'dashed'       : '虚线·冷知识',
-    'almanac'      : '轴（日历）',
+    'almanac'      : '轴·日历条目（节日/生日/纪念日）',
 };
 const STORAGE_OWNKEY_LABELS = {
     'sp-memory' : '记忆',
     'sp-theater': '棱永久层',
-    'sp-ledger' : '刻度',
+    'sp-ledger' : '轴·刻度（状态/约定/周期）',
 };
+const STORAGE_CLEAR_TARGETS = Object.freeze({
+    almanac: Object.freeze({ scope: 'kind', kind: 'almanac', label: '轴·日历条目（节日/生日/纪念日）' }),
+    ledger: Object.freeze({ scope: 'ownkey', key: 'sp-ledger', label: '轴·刻度（状态/约定/周期）' }),
+});
+
+function storageChatIdentity() {
+    const ctx = getContext();
+    const chatId = String(ctx?.chatId || '');
+    return chatId ? { chatId, metadata: ctx.chatMetadata } : null;
+}
+
+function storageChatStillCurrent(identity) {
+    const now = storageChatIdentity();
+    return !!identity && !!now && identity.chatId === now.chatId && identity.metadata === now.metadata;
+}
 
 function storageRow(label, bytesText, btnHtml = '', extraClass = '') {
     return `<div class="sp-storage-row ${extraClass}">
@@ -9290,7 +9636,9 @@ async function renderStorageUsage() {
             rows.push(storageRow(
                 STORAGE_KIND_LABELS[kind] || kind,
                 fmt(b),
-                `<button class="sp-storage-del sp-mini-btn" data-scope="kind" data-kind="${kind}">清除</button>`,
+                kind === STORAGE_CLEAR_TARGETS.almanac.kind
+                    ? `<button class="sp-storage-del sp-mini-btn" data-scope="datakey" data-key="almanac-user">清除</button>`
+                    : `<button class="sp-storage-del sp-mini-btn" data-scope="kind" data-kind="${kind}">清除</button>`,
             ));
         }
         for (const key of ['sp-memory', 'sp-theater', 'sp-ledger']) {
@@ -9341,20 +9689,117 @@ async function renderStorageUsage() {
     }
 }
 
+function invalidateLedgerTasksForStoreClear() {
+    ledgerCaptureAbort?.abort(); ledgerCaptureAbort = null;
+    ledgerJudgeAbort?.abort(); ledgerJudgeAbort = null;
+    isCapturingLedger = false; isJudgingLedger = false;
+    ledgerCaptureProgress = null; ledgerCaptureProgressOwner = null;
+    resetLedgerRenderState();
+}
+
+function refreshLedgerAfterStoreClear() {
+    refreshLedgerInjection();
+    refreshInlineWindow(true);
+    if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+}
+
+function invalidateAlmanacTasksForStoreClear() {
+    axisState.almanacAbortController?.abort();
+    axisState.almanacAbortController = null;
+    axisState.isGeneratingAlmanac = false;
+    axisState._almanacEditor = null;
+    axisState._almanacManager = null;
+    axisState._almanacCalDay = null;
+    axisState._almanacCalMonth = null;
+    axisState._almTodayEditing = false;
+}
+
+function refreshAlmanacAfterStoreClear() {
+    syncLatestAlmanacBlock();
+    if (axisState.almanacMode) renderAlmanacPanel();
+}
+
+function invalidateKindTasksForStoreClear(kind) {
+    if (kind === 'schedule') {
+        pointState.scheduleAbortController?.abort(); pointState.scheduleAbortController = null;
+        _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;
+        pointState.isGenerating = false;
+    } else if (kind === 'outline') {
+        outlineAbortController?.abort(); outlineAbortController = null;
+        outlineJudgeAbort?.abort(); outlineJudgeAbort = null;
+        isGeneratingOutline = false; isJudgingOutline = false;
+    } else if (kind === 'lines') {
+        linesAbortController?.abort(); linesAbortController = null;
+        isGeneratingLines = false;
+    } else if (kind === 'space-chat') {
+        spaceChatAbortController?.abort(); spaceChatAbortController = null;
+        isSpaceChatting = false;
+    } else if (kind === 'creative-chat') {
+        outlineChatAbortController?.abort(); outlineChatAbortController = null;
+        isOutlineChatting = false;
+    } else if (kind === 'dashed') {
+        dashedAbortController?.abort(); dashedAbortController = null;
+        isGeneratingDashed = false;
+    }
+}
+
 // 清完某 kind 数据后，若对应视图正开着就重渲染成空态；点视图另清内存缓存。
 function refreshEditorsAfterStoreClear(kind) {
     if (kind === 'schedule') {
         pointState.cachedSchedule = null;
         setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
+        syncLatestScheduleBlock();
     }
-    if (kind === 'outline' && outlineMode) setOutlineBody(renderEmptyOutlineState());
-    if (kind === 'lines') { cachedLines = null; if (linesMode) setLinesBody(renderEmptyLinesState()); }
+    if (kind === 'outline') { if (outlineMode) setOutlineBody(renderEmptyOutlineState()); refreshOutlineInjection(); syncLatestInlineBlock(); }
+    if (kind === 'lines') { cachedLines = null; if (linesMode) setLinesBody(renderEmptyLinesState()); refreshLinesInjection(); syncLatestInlineBlock(); }
     if (kind === 'dashed') {
         _dashedPanelError = '';
         if (linesMode) refreshLinesPanel();
         syncLatestInlineBlock();
     }
     if (kind === 'space-chat' && spaceMode) $in('#sp-space-msgs').empty();
+    if (kind === 'creative-chat') {
+        outlineChatHistory.length = 0;
+        if (outlineMode) renderCreativeChatHistory();
+    }
+    if (kind === 'space-chat') {
+        spaceChatHistory.length = 0;
+        _spaceWidgetStore.clear();
+        if (spaceMode) renderSpaceChatHistory();
+    }
+}
+
+// 保存失败回滚后从当前 store 重新读取真实数据；与成功清理的空态刷新严格分开。
+function refreshEditorsFromCurrentStore(kind) {
+    if (kind === 'schedule') {
+        const key = getCacheKey(currentView, charViewName);
+        const saved = readStore(key);
+        const subject = currentView === 'char' ? (charViewName || getContext().name2 || '角色') : (getContext().name1 || '用户');
+        pointState.cachedSchedule = saved?.raw ? renderSchedule(saved.raw, saved.userName || subject, currentView) : null;
+        if (!outlineMode && !linesMode && !spaceMode && !theaterMode && !anchorMode && $(`#${MODAL_ID}`).is(':visible')) {
+            setBody(pointState.cachedSchedule || `<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
+        }
+        syncLatestScheduleBlock();
+    } else if (kind === 'outline') {
+        const saved = readStore(getOutlineCacheKey());
+        cachedOutline = saved?.raw ? renderOutline(saved.raw, getOutlineCursor()) : null;
+        if (outlineMode) setOutlineBody(cachedOutline || renderEmptyOutlineState());
+        refreshOutlineInjection();
+    } else if (kind === 'lines') {
+        cachedLines = null;
+        if (linesMode) refreshLinesPanel();
+        refreshLinesInjection();
+    } else if (kind === 'creative-chat') {
+        loadCreativeChatHistory();
+        if (outlineMode) renderCreativeChatHistory();
+    } else if (kind === 'space-chat') {
+        loadSpaceChatHistory();
+        if (spaceMode) renderSpaceChatHistory();
+    } else if (kind === 'dashed') {
+        _dashedPanelError = '';
+        if (linesMode) refreshLinesPanel();
+        syncLatestInlineBlock();
+    }
 }
 // ANCHOR_STORAGE_HANDLERS
 
@@ -9364,23 +9809,82 @@ function bindStorageHandlers() {
 
     const $body = $in('#sp-storage-body');
 
+    // 日历条目必须按精确 dataKey 删除，不能调用按 kind 前缀的清理。
+    $body.on('click', '.sp-storage-del[data-scope="datakey"]', async function () {
+        const identity = storageChatIdentity();
+        if (!identity) return;
+        if (!await spConfirm({
+            title: `清除${STORAGE_CLEAR_TARGETS.almanac.label}`,
+            body: '仅删除本聊天的节日、生日、纪念日和自定义日期条目；不会删除刻度、自定义历法、剧情今天或模板。\n此操作不可恢复。',
+        })) return;
+        if (!storageChatStillCurrent(identity)) return;
+        invalidateAlmanacTasksForStoreClear();
+        try {
+            const ok = await store.clearDataKeyAsync('almanac-user');
+            if (!storageChatStillCurrent(identity)) return;
+            refreshAlmanacAfterStoreClear();
+            renderStorageUsage();
+            showToast(ok ? '已清除轴·日历条目' : '轴·日历条目本就为空');
+        } catch (error) {
+            if (storageChatStillCurrent(identity)) { refreshAlmanacAfterStoreClear(); showToast('清除轴·日历条目失败：' + (error?.message || '保存失败'), null, true); }
+        }
+    });
+
     // ① 本聊天 chat_metadata —— 按 kind 清（点线面间讨论）
     $body.on('click', '.sp-storage-del[data-scope="kind"]', async function () {
         const kind = $(this).attr('data-kind');
+        if (kind === STORAGE_CLEAR_TARGETS.almanac.kind) return;
         const label = STORAGE_KIND_LABELS[kind] || kind;
-        if (!await spConfirm({ title: `清除${label}`, body: `确定清除本聊天的「${label}」数据吗？我方 / TA 方视角都会一并清掉，不可恢复。` })) return;
-        const n = store.clearKind(kind);
-        refreshEditorsAfterStoreClear(kind);
-        renderStorageUsage();
-        showToast(n ? `已清除${label}` : `${label}本就为空`);
+        if (!store.KINDS.includes(kind)) return;
+        const identity = storageChatIdentity();
+        if (!identity) return;
+        const detail = kind === STORAGE_CLEAR_TARGETS.almanac.kind
+            ? '仅删除本聊天的节日、生日、纪念日和自定义日期条目；不会删除刻度、自定义历法、剧情今天或模板。'
+            : `确定清除本聊天的「${label}」数据吗？我方 / TA 方视角都会一并清掉。`;
+        if (!await spConfirm({ title: `清除${label}`, body: `${detail}\n此操作不可恢复。` })) return;
+        if (!storageChatStillCurrent(identity)) return;
+        invalidateKindTasksForStoreClear(kind);
+        try {
+            const n = await store.clearKindAsync(kind);
+            if (!storageChatStillCurrent(identity)) return;
+            refreshEditorsAfterStoreClear(kind);
+            renderStorageUsage();
+            showToast(n ? `已清除${label}` : `${label}本就为空`);
+        } catch (error) {
+            if (storageChatStillCurrent(identity)) {
+                refreshEditorsFromCurrentStore(kind);
+                showToast(`清除${label}失败：` + (error?.message || '保存失败'), null, true);
+            }
+        }
     });
 
     // ① 本聊天 —— 清整个 own key（记忆 / 棱永久）
     $body.on('click', '.sp-storage-del[data-scope="ownkey"]', async function () {
         const key = $(this).attr('data-key');
         const label = STORAGE_OWNKEY_LABELS[key] || key;
-        if (!await spConfirm({ title: `清空${label}`, body: `确定清空本聊天的「${label}」全部数据吗？不可恢复。` })) return;
+        if (!store.OWN_KEYS.includes(key)) return;
+        const identity = storageChatIdentity();
+        if (!identity) return;
+        const detail = key === STORAGE_CLEAR_TARGETS.ledger.key
+            ? '仅删除本聊天活跃/已了结刻度（状态、约定、周期）；不会删除日历条目、自定义历法、剧情今天或模板。'
+            : `确定清空本聊天的「${label}」全部数据吗？`;
+        if (!await spConfirm({ title: `清空${label}`, body: `${detail}\n此操作不可恢复。` })) return;
+        if (!storageChatStillCurrent(identity)) return;
+        if (key === STORAGE_CLEAR_TARGETS.ledger.key) {
+            invalidateLedgerTasksForStoreClear();
+            try {
+                const ok = await store.clearOwnKeyAsync(key);
+                if (!storageChatStillCurrent(identity)) return;
+                refreshLedgerAfterStoreClear();
+                renderStorageUsage();
+                showToast(ok ? `已清空${label}` : `${label}本就为空`);
+            } catch (error) {
+                if (storageChatStillCurrent(identity)) { refreshLedgerAfterStoreClear(); showToast(`清空${label}失败：` + (error?.message || '保存失败'), null, true); }
+            }
+            return;
+        }
         const ok = store.clearOwnKey(key);
+        if (!storageChatStillCurrent(identity)) return;
         if (key === 'sp-memory') { refreshMemoryStatus?.(); }
         if (key === 'sp-theater' && theaterMode) { theaterCurrentPiece = null; renderTheaterPanel(); }
         renderStorageUsage();
@@ -9838,8 +10342,6 @@ function _buildDashedSubsectionHtml() {
 }
 
 async function runGenerateLines(silent = false, swipeCtx = null, travelContext = null) {
-    const viewSnap = currentView;
-    const charSnap = charViewName;
     const chatIdSnap = getContext().chatId;
     const myCtrl = linesAbortController = new AbortController();
     const travelAbort = travelContext?.signal;
@@ -9848,13 +10350,13 @@ async function runGenerateLines(silent = false, swipeCtx = null, travelContext =
     try {
         const ctx      = getContext();
         const userName = ctx.name1 || '用户';
-        const charName = viewSnap === 'char' ? (charSnap || ctx.name2 || '角色') : (ctx.name2 || '角色');
+        const charName = ctx.name2 || '角色';
         const cfg = loadCfg();
         if (!cfg.url || !cfg.key) {
             if (!silent && !settingsOpen) toggleSettings();
             throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
         }
-        const cacheKey = getLinesCacheKey(viewSnap, charSnap);
+        const cacheKey = getLinesCacheKey();
         // previousRaw = 推进基线。swipe 重算时用楼层 pre-commit 基线 B0（swipeCtx.baselineRaw），
         // 保证每份 swipe 都从「本楼生成前」的状态推进，不叠加到别的 swipe 的推进上；
         // 常规新楼/手动重生成则从 store 当前活跃集推进。
@@ -9865,7 +10367,7 @@ async function runGenerateLines(silent = false, swipeCtx = null, travelContext =
             const savedLines = readStore(cacheKey);
             if (savedLines?.raw) previousRaw = swipeCtx?.forceReroll ? linesToRaw(parseLines(savedLines.raw).filter(line => line.pin)) : savedLines.raw;
         }
-        const prompt = appendTravelPromptContext(buildLinesPrompt(userName, charName, viewSnap, previousRaw, getScale(charStableKey(ctx))), travelContext);
+        const prompt = appendTravelPromptContext(buildLinesPrompt(userName, charName, 'user', previousRaw, getScale(charStableKey(ctx))), travelContext);
         const apiOpts = { ...(travelContext || {}) };
         if (swipeCtx?.forceReroll || swipeCtx?.reroll) Object.assign(apiOpts, { reroll: true, module: 'lines' });
         const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 10, apiOpts);
@@ -9884,7 +10386,7 @@ async function runGenerateLines(silent = false, swipeCtx = null, travelContext =
         // 线·swipe 临时层：记本楼基线 B0 + 各 swipe 的线，供来回 swipe 复用/发消息时固定清理。
         if (swipeCtx && swipeCtx.mesId != null) {
             const rec = _readSwipeLines(chatIdSnap, swipeCtx.mesId)
-                || { baseline: previousRaw, swipes: {}, view: viewSnap, charName: charSnap };
+                || { baseline: previousRaw, swipes: {}, view: 'user', charName: '' };
             if (rec.baseline == null) rec.baseline = previousRaw;
             rec.swipes[String(swipeCtx.swipeId ?? 0)] = merged;
             _writeSwipeLines(chatIdSnap, swipeCtx.mesId, rec);
@@ -10924,6 +11426,7 @@ async function runGenerateAlmanac() {
         const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 4, { fullMemory: true });
         if (axisState.almanacAbortController !== myCtrl) return;
         if (getContext().chatId !== chatIdSnap) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return; }
+        if (!validateAlmanacResponse(raw)) throw new Error('返回不完整（缺少 almanac_widget 结束标签），旧轴数据未改变，请重试');
         const aiItems = parseAlmanacWidget(raw);
         if (!aiItems.length) throw new Error('没有解析到有效日期，请重试');
         saveAlmanacItems(mergeAlmanac(loadAlmanac(), aiItems));
@@ -10943,6 +11446,12 @@ async function runGenerateAlmanac() {
         }
     }
 }
+
+// 历法全量生成与增量补录共用同一闭合门禁；句号或可解析到一部分 Item 都不能代替结束标签。
+function validateAlmanacResponse(raw) {
+    return /<almanac_widget\b[^>]*>[\s\S]*<\/almanac_widget\s*>/i.test(String(raw || ''));
+}
+
 function buildAlmanacPrompt(userName, charName) {
     const cal = loadCalDesc();
     const monthCount = calMonthCount(cal);
@@ -11092,6 +11601,7 @@ async function runSupplementAnniversary() {
         const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 4, { fullMemory: true });
         if (axisState.almanacAbortController !== myCtrl) return;
         if (getContext().chatId !== chatIdSnap) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return; }
+        if (!validateAlmanacResponse(raw)) throw new Error('补录返回不完整（缺少 almanac_widget 结束标签），旧历数据未改变，请重试');
         const aiItems = parseAlmanacWidget(raw);
         // 纯追加去重（照 applyAlmanacWidget）：重新取一次现表避开生成期间被别处改，
         // 逐条按 almDedupKey 去重、命中的补录项 pin=true 防日后整历重算冲掉，绝不 mergeAlmanac。
@@ -11406,12 +11916,13 @@ function renderMemorySection() {
         $in('#sp-mem-internal').hide();
         $in('#sp-mem-bbb-status, #sp-mem-anima-status').hide();
         $in('#sp-mem-database-status').show().html('<i class="fa-solid fa-circle-info"></i> 正在读取数据库纪要…');
-        getDatabaseMemText().then(text => {
+        getDatabaseMemResult().then(result => {
             if (!getSettings().useDatabase) return;
-            $in('#sp-mem-database-status').html(text
-                ? `<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> 数据库记忆已就绪（读到 ${text.split(/\n\n/).length} 条纪要）`
-                : '<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 未识别到数据库纪要');
-        }).catch(() => $in('#sp-mem-database-status').text('数据库读取失败'));
+            const ok = result.status === 'ready';
+            $in('#sp-mem-database-status').html(ok
+                ? `<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> ${escapeHtml(databaseDiagnostic(result))}`
+                : `<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> ${escapeHtml(databaseDiagnostic(result))}`);
+        }).catch(() => $in('#sp-mem-database-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 数据库读取失败'));
         return;
     }
     $in('#sp-mem-internal').show();
@@ -12647,8 +13158,11 @@ function triggerTogglePointPin(dayKey, evIdx) {
 
 // 删除单个点（楼内抽屉专用，对齐线的 triggerDeleteOneLine）：确认 → 从解析结果里 splice
 // 掉该事件 → 重序列化写回 raw → 原地重渲染 + 刷楼内条。pin 活在 raw 里，删除即连带清掉。
-async function triggerDeletePointEvent(dayKey, evIdx) {
-    const key = getCacheKey();
+async function triggerDeletePointEvent(dayKey, evIdx, target = {}) {
+    // 目标在调用前冻结：确认弹窗等待期间切 tab 不得漂移到另一套点数据。
+    const view = target.view === 'char' ? 'char' : 'user';
+    const charName = view === 'char' ? String(target.charName || '').trim() : '';
+    const key = getCacheKey(view, charName);
     const saved = readStore(key);
     const raw = saved?.raw || '';
     if (!raw) { showToast('待办已失效，请刷新面板', null, true); return; }
@@ -12668,10 +13182,13 @@ async function triggerDeletePointEvent(dayKey, evIdx) {
     arr.splice(evIdx, 1);
     const newRaw = serializeCalendar(parsed.days, parsed.future, parsed.startDate);
     writeStore(key, { raw: newRaw, userName: saved.userName || '用户', ts: Date.now() });
-    const html = renderSchedule(newRaw, saved.userName || '用户', currentView);
-    pointState.cachedSchedule = html;
-    setBody(html);
-    restorePointActiveDay(dayKey);
+    const stillOnTarget = currentView === view && (view !== 'char' || charViewName === charName);
+    if (stillOnTarget) {
+        const html = renderSchedule(newRaw, saved.userName || '用户', view);
+        pointState.cachedSchedule = html;
+        setBody(html);
+        restorePointActiveDay(dayKey);
+    }
     syncLatestScheduleBlock();
     showToast('已删除这个点');
 }
