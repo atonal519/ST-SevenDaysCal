@@ -5377,6 +5377,21 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap            : 10px;
     margin-top     : 16px;
 }
+.sp-alm-editor-actions > button {
+    min-height   : 30px;
+    margin       : 0;
+    padding      : 5px 12px;
+    border-radius: 8px;
+    font-size    : var(--sp-fs-72);
+    line-height  : 1.2;
+}
+.sp-alm-editor-actions > .sp-alm-editor-cancel {
+    background: transparent;
+    border: 1px solid var(--sp-divider);
+}
+.sp-alm-editor-actions > .sp-alm-editor-save {
+    border-radius: 8px;
+}
 
 /* ── 历法管理：沿用现有设置列表的中性表面语言 ── */
 .sp-alm-manager-hint { padding: 8px 14px 4px; font-size: var(--sp-fs-75); color: var(--sp-subtle); }
@@ -5908,3 +5923,5 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     outline: 2px solid var(--sp-primary);
     outline-offset: -2px;
 }
+.sp-alm-time-travel,
+.sp-alm-time-travel-stop { white-space: nowrap; }

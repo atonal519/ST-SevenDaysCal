@@ -1,4 +1,9 @@
 // 点任务控制器的宿主边界：owner/lifecycle 由宿主提供，模块只负责统一清理与中止。
+export function splitAbortController(controller) {
+    if (!controller || typeof controller.abort !== 'function' || !controller.signal || typeof controller.signal.addEventListener !== 'function') throw new TypeError('需要原生 AbortController');
+    return { controller, signal: controller.signal };
+}
+
 export function createPointController(env) {
     function cleanupManualOwner(owner) {
         const lifecycle = env.evaluate({ manager: env.owners, owner, chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), pluginEnabled: env.enabled() });
@@ -24,7 +29,8 @@ export function createPointController(env) {
     async function runGenerate(travelContext = null, owner = null) {
         const view = owner?.view ?? env.view(); const char = owner?.charName ?? env.char();
         if (!owner) owner = env.owners.create('point-manual', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), view, charName: char });
-        const signal = env.state.scheduleAbortController = owner.controller; env.abortAuto?.();
+        const { controller, signal } = splitAbortController(owner.controller);
+        env.state.scheduleAbortController = controller; env.abortAuto?.();
         try {
             const ctx = env.context(); const user = ctx.name1 || '用户'; const character = view === 'char' ? (char || ctx.name2 || '角色') : (ctx.name2 || '角色'); const subject = view === 'char' ? character : user;
             const key = env.key(view, char); const previous = env.read(key)?.raw || ''; const pinned = [];
@@ -53,7 +59,7 @@ export function createPointController(env) {
         if (env.syncing()) { if (allowPending) env.owners.setPending('point-auto', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), targetDate: travelContext?.targetDate }); return { status: 'skipped' }; }
         if (env.state.isGenerating) { if (!auto) env.toast('点正在生成，稍候再同步', null, true); return { status: 'skipped' }; }
         const view = env.view(), char = env.char(), key = env.key(view, char), saved = key && env.read(key), previous = saved?.raw || ''; if (!key || !previous) return { status: 'skipped' };
-        env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); const signal = env.setAuto(owner.controller); env.setSyncing(true);
+        env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); const { controller, signal } = splitAbortController(env.setAuto(owner.controller)); env.setSyncing(true);
         try {
             const ctx = env.context(), cfg = env.config(); if (!cfg.url || !cfg.key) { env.toast('未配置主 API，无法同步点', null, true); return { status: 'failed', error: new Error('未配置主 API') }; }
             const user = ctx.name1 || '用户', character = view === 'char' ? (char || ctx.name2 || '角色') : (ctx.name2 || '角色'), subject = view === 'char' ? character : user, parsed = env.parse(previous, env.calendar()), pinned = [];

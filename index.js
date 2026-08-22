@@ -157,6 +157,11 @@ import { mergePinned as mergeCanonicalPinned, deleteLine as deleteCanonicalLine,
 import { buildLinesPrompt as buildCanonicalLinesPrompt } from './business/lines/prompt.js';
 import { linesViewModel } from './business/lines/render.js';
 import { decideLinesCommit } from './business/lines/generation.js';
+import { createLinesGenerationController } from './business/lines/controller.js';
+import { createLinesInjectionController } from './business/lines/injection.js';
+import { inlineState } from './business/lines/inline.js';
+import { createLinesActions } from './business/lines/actions.js';
+import { classifyRenderedFloor, createAdvanceStrategy, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './business/lines/strategy.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
@@ -1291,7 +1296,6 @@ jQuery(async () => {
         // 单调递增闸：mid 递增 = 真·新楼层；同 mid 重渲染 = swipe/刷新/历史回渲。
         // counter++ 与自动推进只在真·新楼层做（修掉 swipe/重渲染误触 counter 的老 bug）；
         // 但内联块要在**每次**渲染时补回最新楼——重渲染会清掉旧 DOM，不补则硬刷后主楼线块消失。
-        const isNewFloor = Number.isFinite(mid) && mid > _lastSeenMaxMesId;
         // 重 roll 判定（type/latch 两路 + 内容签名兜底）：
         //   ① type==='swipe'：滑到末尾生成新 swipe，未降级、直接认。
         //   ② type==='regenerate' / wasPendingReroll：重生成按钮🔄 的理想信号，但**实测不可靠**——
@@ -1304,7 +1308,9 @@ jQuery(async () => {
         const _curText = String(getContext().chat?.[mid]?.mes ?? '');
         const contentChanged = (mid === _lastSeenMaxMesId && _floorTextSig[mid] !== undefined && _curSig !== _floorTextSig[mid] && _curText.trim() !== '');
         _floorTextSig[mid] = _curSig;   // 记本次签名，供下条 CMR 比对
-        const isReroll = (type === 'regenerate' || type === 'swipe' || wasPendingReroll || contentChanged);
+        const floorDecision = classifyRenderedFloor({ messageId: mid, lastSeen: _lastSeenMaxMesId, type, pendingReroll: wasPendingReroll, contentChanged, pendingSwipe: _pendingSwipeGen?.mesId === mid });
+        const isNewFloor = floorDecision.isNewFloor;
+        const isReroll = floorDecision.isReroll;
         let shouldAdvance = false;
         if (isNewFloor) {
             _lastSeenMaxMesId = mid;
@@ -1318,7 +1324,9 @@ jQuery(async () => {
                 // 先自增后比较：interval=1 时每个新楼都推进。原来"先比较(>=)、末尾再 ++"，counter 从 0 起，
                 // 首个新楼 0>=1 不成立 → 第一楼不推进、整体相位晚一拍（切 chat / 删线归零后每次重犯），
                 // 表现为"这一楼和上一楼线相同"。对齐「面·大纲判定」的 ++counter 写法即可。
-                if (++linesAiMsgCounter >= interval) { linesAiMsgCounter = 0; shouldAdvance = true; }
+                const advance = createAdvanceStrategy({ mode: 'turns', interval, counter: linesAiMsgCounter });
+                linesAiMsgCounter = advance.counter;
+                shouldAdvance = advance.shouldAdvance;
             }
             // mode === 'manual': never auto-advance, only inline block append
         } else if (isReroll || (_pendingSwipeGen && _pendingSwipeGen.mesId === mid)) {
@@ -1365,7 +1373,8 @@ jQuery(async () => {
         syncLatestScheduleBlock();   // 点·日程条：swipe 后一并重挂（点本身不随 swipe 变，纯补块）
         if (getSettings().linesEnabled === false) return;
         const mid = Number(mesId);
-        if (info?.pendingGeneration) { _pendingSwipeGen = { mesId: mid }; return; }
+        const swipeDecision = chooseSwipeLayer({ pendingGeneration: !!info?.pendingGeneration, swipeId: Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0), stored: _readSwipeLines(getContext().chatId, mid), baseline: '' });
+        if (swipeDecision.action === 'wait') { _pendingSwipeGen = { mesId: mid }; return; }
         _floorTextSig[mid] = _floorSig(mid);   // 盖章：滑到已生成 swipe 由本处处理，别让随后 CMR 的内容签名把它误判成重roll
         _applyStoredSwipeLines(mid, Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0));
     };
@@ -1382,7 +1391,8 @@ jQuery(async () => {
         if (getSettings().linesEnabled === false) return;
         const mid = Number(mesId);
         if (!Number.isFinite(mid)) return;
-        _floorTextSig[mid] = _floorSig(mid);    // 盖章：对齐到编辑后正文，别让随后 CMR 把这次编辑误判成重roll
+        const edited = markEditedFloor({ messageId: mid, signature: _floorSig(mid) });
+        if (edited) _floorTextSig[edited.messageId] = edited.signature;    // 盖章：对齐到编辑后正文，别让随后 CMR 把这次编辑误判成重roll
     };
     eventSource.on(event_types.MESSAGE_EDITED, _stListeners.edited);
     // 线·固定：用户发出下一条消息 → 上一 AI 楼层定稿，清掉它的 swipe 临时层（store 已是当前 swipe 的线）。
@@ -1392,10 +1402,8 @@ jQuery(async () => {
         if (getSettings().linesEnabled === false) return;
         const chat = getContext().chat;
         if (!Array.isArray(chat)) return;
-        const upto = Number.isFinite(Number(insertAt)) ? Number(insertAt) : chat.length;
-        for (let i = Math.min(upto, chat.length) - 1; i >= 0; i--) {
-            if (!chat[i]?.is_user) { _clearSwipeLines(getContext().chatId, i); break; }
-        }
+        const floor = floorToFinalize({ chat, insertAt });
+        if (floor != null) _clearSwipeLines(getContext().chatId, floor);
     };
     eventSource.on(event_types.MESSAGE_SENT, _stListeners.sent);
     // 生成态闸（防楼内块流式频闪）：ST 流式每 token 重写末楼 .mes_text 会冲掉线块/七天条，observer 若在流式间隙补块就「补→被冲→再补」肉眼频闪。
@@ -1688,11 +1696,9 @@ function detectInGameDayChange(messageId, excludeCurrent = false) {
     try { md = almTodayAnchor(); } catch { return false; }
     if (!md || !Number.isFinite(+md.month) || !Number.isFinite(+md.day)) return false;
     const day = `${+md.month}-${+md.day}`;
-    if (day !== _lastDetectedDay) {
-        _lastDetectedDay = day;
-        return true;
-    }
-    return false;
+    const decision = createAdvanceStrategy({ mode: 'days', dayAnchor: day, previousDay: _lastDetectedDay });
+    _lastDetectedDay = day;
+    return decision.shouldAdvance;
 }
 
 // ─── 楼内渲染框·快照桥 ────────────────────────────────────────────────────
@@ -1729,8 +1735,9 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
             return saved?.raw || '';
         } catch { return ''; }
     })();
-    const lines = raw ? parseLines(raw) : [];
-    const dashedSub = readOnly ? '' : _buildDashedSubsectionHtml();   // 虚线冷知识折进同一个块的 body（合并成一个楼内窗口）；历史楼不并
+    const view = inlineState(raw, { readOnly });
+    const lines = view.lines;
+    const dashedSub = !view.readOnly && view.dashed.enabled ? _buildDashedSubsectionHtml() : '';   // 虚线冷知识折进同一个块的 body
     if (lines.length) {
         const linesHtml = lines.map((l, i) => {
             const levelNum = parseInt(l.level, 10);
@@ -1741,10 +1748,10 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
             ).join('');
             // Per-line inject button — parallels the one in the outer panel (renderLines)。历史楼只读：整组动作按钮不挂。
             let actions = '';
-            if (!readOnly) {
+            if (view.hasActions && view.lineActions.length) {
                 const injectParts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
                 if (l.desc) injectParts.push(l.desc);
-                if (l.next) injectParts.push(prefixNext(l.next, l.stall));
+                if (l.nextText) injectParts.push(l.nextText);
                 actions = `<span class="sp-beat-actions">
                         ${makeInjectBtn(injectParts.join('\n'))}
                         <button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button>
@@ -1767,15 +1774,15 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
                 </div>` : ''}
             </div>`;
         }).join('');
-        const advanceBtn = readOnly ? '' : `<span class="sp-inline-summary-actions">
+        const advanceBtn = view.hasActions && view.summaryActions.length ? `<span class="sp-inline-summary-actions">
             <button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button>
         </span>`;
-        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${lines.length} 条活跃</span>${advanceBtn}</summary><div class="sp-inline-body">${linesHtml}${dashedSub}</div>`;
+        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${view.count} 条活跃</span>${advanceBtn}</summary><div class="sp-inline-body" data-lines-inject-text="${escapeAttr(view.injectText)}">${linesHtml}${dashedSub}</div>`;
     }
     // 无活跃线：线块「暂无」；若虚线有内容仍给一个 body 承载它（合并后虚线寄居在线块里）。
-    const emptySummary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count sp-inline-empty">暂无</span></summary>`;
-    return dashedSub ? `${emptySummary}<div class="sp-inline-body">${dashedSub}</div>` : emptySummary;
+    const emptySummary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count sp-inline-empty">${escapeHtml(view.empty ? (view.emptyState?.title || '暂无') : '')}</span></summary>`;
+    return dashedSub ? `${emptySummary}<div class="sp-inline-body" data-lines-inject-text="${escapeAttr(view.injectText)}">${dashedSub}</div>` : emptySummary;
 }
 
 // 楼内「标注池」框（AI 楼，镜像线块 _buildLinesBlockHtml）：显示当前实际打捞到的暗历条目。
@@ -2444,6 +2451,7 @@ function syncLatestScheduleBlock(expectedChatId = null) {
 // 改 AI 行为且增加 token。刷新时机跟内联块同步（见 sync/backfill + 开关 handler）。
 const LINES_INJECT_KEY   = 'sp_lines_latent';
 const LINES_INJECT_DEPTH = 4;
+let linesInjectionController = null;
 function buildLinesInjectionText(lines) {
     const items = lines.map(l => {
         const parts = [`- ${l.name}（${l.type || '线'}·${l.stage}${l.stall ? '·停滞' : ''}）`];
@@ -2461,22 +2469,13 @@ function buildLinesInjectionText(lines) {
 
 // 重设潜伏注入。读当前视角活跃线；关闭或无活跃线时清空。幂等，可随处多调。
 function refreshLinesInjection() {
-    const ctx = getContext();
-    if (typeof ctx.setExtensionPrompt !== 'function') return;
-    const clear = () => ctx.setExtensionPrompt(LINES_INJECT_KEY, '');
-    const s = getSettings();
-    if (!injectEnabled()) { clear(); return; }   // 注入总闸（含插件总关）→ 一律不注入
-    if (s.linesEnabled === false || s.linesInject !== true) { clear(); return; }
-    let lines = [];
-    try {
-        const saved = readStore(getLinesCacheKey());
-        lines = saved?.raw ? parseLines(saved.raw) : [];
-    } catch { lines = []; }
-    const active = lines.filter(l => l.name && !TERMINAL_STAGES.has(l.stage));
-    if (!active.length) { clear(); return; }
-    const pt = ctx.constants?.promptTypes?.IN_CHAT ?? 1;   // IN_CHAT
-    const pr = ctx.constants?.promptRoles?.SYSTEM  ?? 0;   // SYSTEM
-    ctx.setExtensionPrompt(LINES_INJECT_KEY, buildLinesInjectionText(active), pt, LINES_INJECT_DEPTH, false, pr);
+    if (!linesInjectionController) linesInjectionController = createLinesInjectionController({
+        context: () => getContext(), settings: getSettings, enabled: injectEnabled,
+        readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+        promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {},
+        clean: cleanText,
+    });
+    return linesInjectionController.refresh();
 }
 
 // ─── 面·大纲自动注入（游标沿节点前进，隐形喂主楼 AI）──────────────────────────────
@@ -4124,20 +4123,20 @@ function injectModal() {
     // 双绑拆分：面板行在 shadow 内走 $in；楼内行在 light DOM #chat 保持原查询。
     $linesWrap.on('click', '.sp-refresh-lines, .sp-inline-refresh-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        triggerGenerateLines();
+        getLinesActions().reroll();
     });
     $('#chat').on('click', '.sp-refresh-lines, .sp-inline-refresh-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        triggerGenerateLines();
+        getLinesActions().reroll();
     });
     // Advance lines — button appears in both panel toolbar and inline block
     $linesWrap.on('click', '.sp-advance-lines, .sp-inline-advance-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        triggerAdvanceLines();
+        getLinesActions().advance();
     });
     $('#chat').on('click', '.sp-advance-lines, .sp-inline-advance-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        triggerAdvanceLines();
+        getLinesActions().advance();
     });
     // 楼层刷新仍直接广泛取材两条，不打开面板的主题选择弹窗。
     $('#chat').on('click', '.sp-inline-refresh-dashed', function (e) {
@@ -4148,23 +4147,23 @@ function injectModal() {
     $linesWrap.on('click', '.sp-line-del-one', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) triggerDeleteOneLine(idx);
+        if (Number.isInteger(idx)) getLinesActions().delete(idx);
     });
     $('#chat').on('click', '.sp-line-del-one', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) triggerDeleteOneLine(idx);
+        if (Number.isInteger(idx)) getLinesActions().delete(idx);
     });
     // Per-line lock/unlock toggle (panel only — inline block shows a read-only marker).
     $linesWrap.on('click', '.sp-line-pin-toggle', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) triggerToggleLinePin(idx);
+        if (Number.isInteger(idx)) getLinesActions().pin(idx);
     });
     $('#chat').on('click', '.sp-line-pin-toggle', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) triggerToggleLinePin(idx);
+        if (Number.isInteger(idx)) getLinesActions().pin(idx);
     });
     // Per-point lock/unlock toggle (schedule panel only; pin 存 raw、机制对齐线，无楼内块)。
     $in('#sp-body').on('click', '.sp-point-pin-toggle', function (e) {
@@ -4553,6 +4552,33 @@ function injectModal() {
     $almanac.on('click', '.sp-alm-add-day', function () {
         openAlmanacEditor(null, { month: almCalMonth() + 1, day: parseInt($(this).attr('data-day'), 10) || 1 });
     });
+    // 轴工具栏：宽版按钮与窄版抽屉共享同一动作分发，避免重构后只剩静态按钮。
+    const dispatchAlmanacAction = action => {
+        if (action === 'add-almanac') return openAlmanacEditor();
+        if (action === 'generate-almanac') return triggerGenerateAlmanac();
+        if (action === 'supplement-anniversary') return triggerSupplementAnniversary();
+        if (action === 'manage-calendar') return openCalendarManager();
+        return undefined;
+    };
+    const toggleAlmanacActionMenu = element => {
+        const menu = $(element).closest('.sp-action-menu').get(0);
+        if (!menu) return;
+        const open = !$(menu).hasClass('sp-action-menu-open');
+        closeActionMenus(open ? menu : null);
+        $(menu).toggleClass('sp-action-menu-open', open)
+            .find('.sp-action-menu-list').attr('hidden', !open)
+            .end().find('.sp-action-menu-toggle').attr('aria-expanded', String(open));
+    };
+    $almanac.off('click.spAxisToolbar', '.sp-alm-add, .sp-alm-gen, .sp-alm-supplement, .sp-alm-manage, .sp-action-menu-toggle, .sp-action-menu-item')
+        .on('click.spAxisToolbar', '.sp-alm-add, .sp-alm-gen, .sp-alm-supplement, .sp-alm-manage, .sp-action-menu-toggle, .sp-action-menu-item', function (event) {
+            event.preventDefault();
+            const $button = $(this);
+            if ($button.hasClass('sp-action-menu-toggle')) return toggleAlmanacActionMenu(this);
+            const action = $button.attr('data-action') || ($button.hasClass('sp-alm-add') ? 'add-almanac' : $button.hasClass('sp-alm-gen') ? 'generate-almanac' : $button.hasClass('sp-alm-supplement') ? 'supplement-anniversary' : 'manage-calendar');
+            const result = dispatchAlmanacAction(action);
+            if (result?.then) result.finally(() => closeActionMenus());
+            else closeActionMenus();
+        });
     // 上下联动：点日历详情里某条 → 高亮它在网格覆盖的那天/那几天，再点一下取消（就地改 class，不重渲）
     $almanac.on('click', '.sp-alm-cal-detail .sp-alm-item', function (e) {
         if ($(e.target).closest('button').length) return;   // 不劫持锁/编辑/删除按钮
@@ -8748,24 +8774,13 @@ function renderEmptyLinesState() {
 }
 
 async function triggerGenerateLines() {
-    if (isGeneratingLines) return;
-    if (!await memoryPreCheckConfirm()) return;
-    // Manual refresh: keep committed raw until a complete valid response is ready.
-    // the previous raw. Auto-advance path (CHARACTER_MESSAGE_RENDERED) calls
-    // runGenerateLines(true) directly and preserves previousRaw for continuity.
-    isGeneratingLines = true;
-    runGenerateLines(false, { reroll: true });
+    return getLinesActions().reroll();
 }
 
 // Advance = generate based on existing raw (preserves previousRaw for continuity).
 // Called from manual-advance buttons on inline block + panel toolbar.
 async function triggerAdvanceLines() {
-    if (isGeneratingLines) return;
-    if (!await memoryPreCheckConfirm()) return;
-    // NOTE: no cache clear — runGenerateLines will read previousRaw and pass it
-    // to the LLM as the "existing storylines to continue" context.
-    isGeneratingLines = true;
-    runGenerateLines(!linesMode /* silent if panel not open */);
+    return getLinesActions().advance();
 }
 
 // Remove one storyline by index (as parsed by parseLines). Works on the raw text
@@ -8798,63 +8813,8 @@ function deleteOneLineFromRaw(raw, idx) {
 }
 
 // Delete just ONE line by index; the other lines stay applied.
-async function triggerDeleteOneLine(idx) {
-    if (isGeneratingLines) return;
-    const key = getLinesCacheKey();
-    if (!key) return;
-    const saved = readStore(key);
-    const raw = saved?.raw || '';
-    if (!raw) return;
-    const target = parseLines(raw)[idx];
-    if (!target) { showToast('这条线已不存在，请刷新面板', null, true); return; }
-    const ok = await spConfirm({
-        title: '删除这条线',
-        body : `将删除「${target.name || '未命名'}」这一条，其它事件线保留。此操作不可撤销。`,
-        confirmText: '删除',
-        cancelText : '取消',
-    });
-    if (!ok) return;
-    const newRaw = deleteOneLineFromRaw(raw, idx);
-    if (newRaw == null) { showToast('删除失败：条目错位，请刷新后重试', null, true); return; }
-    if (newRaw === '') {
-        // that was the last line — clear the cache like a full delete
-        removeStore(key);
-        cachedLines = null;
-        linesAiMsgCounter = 0;
-        if (linesMode) setLinesBody(renderEmptyLinesState());
-        syncLatestInlineBlock();
-        showToast('已删除，事件线已清空');
-        return;
-    }
-    writeStore(key, { ...saved, raw: newRaw, ts: Date.now() });
-    const html = renderLines(newRaw);
-    cachedLines = html;
-    if (linesMode) setLinesBody(html);
-    syncLatestInlineBlock();
-    showToast('已删除这条线');
-}
-
-// 锁定 / 解锁单条线（面板按钮，内联块只读不出现这个按钮）。
-function triggerToggleLinePin(idx) {
-    const key = getLinesCacheKey();
-    if (!key) return;
-    const saved = readStore(key);
-    const raw = saved?.raw || '';
-    if (!raw) return;
-    const parsed = parseLines(raw);
-    const target = parsed[idx];
-    if (!target) { showToast('这条线已不存在，请刷新面板', null, true); return; }
-    const mutation = toggleCanonicalPin(raw, idx);
-    if (!mutation.ok) { showToast('这条线已不存在，请刷新面板', null, true); return; }
-    const newRaw = mutation.raw;
-    writeStore(key, { raw: newRaw, ts: Date.now() });
-    const html = renderLines(newRaw);
-    cachedLines = html;
-    if (linesMode) setLinesBody(html);
-    syncLatestInlineBlock();
-    showToast(mutation.model[idx]?.pin ? '已锁定这条线' : '已解锁这条线');
-}
-
+async function triggerDeleteOneLine(idx) { return getLinesActions().delete(idx); }
+function triggerToggleLinePin(idx) { return getLinesActions().pin(idx); }
 // ─── 虚线·冷知识（聊天级历史集合；纯展示、绝不注入）────────────────────────────
 // 新格式只保留 items 单一真源；旧 raw/recent 仅在读取时兼容，下一次真实写操作再懒迁移。
 const DASHED_TOPIC_CONFIG = Object.freeze([
@@ -9153,104 +9113,67 @@ function _buildDashedSubsectionHtml() {
         + inner + '</div>';
 }
 
-async function runGenerateLines(silent = false, swipeCtx = null, travelContext = null) {
-    const chatIdSnap = getContext().chatId;
-    const owner = linesTaskOwners.create('lines-generation', { chatId: chatIdSnap, chatRevision: linesTaskOwners.currentChatRevision(), intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
-    const myCtrl = linesAbortController = owner.controller;
-    const travelAbort = travelContext?.signal;
-    const abortFromTravel = () => myCtrl.abort();
-    travelAbort?.addEventListener('abort', abortFromTravel, { once: true });
-    try {
-        const ctx      = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const cfg = loadCfg();
-        if (!cfg.url || !cfg.key) {
-            if (!silent && !settingsOpen) toggleSettings();
-            throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
-        }
-        const cacheKey = getLinesCacheKey();
-        // previousRaw = 推进基线。swipe 重算时用楼层 pre-commit 基线 B0（swipeCtx.baselineRaw），
-        // 保证每份 swipe 都从「本楼生成前」的状态推进，不叠加到别的 swipe 的推进上；
-        // 常规新楼/手动重生成则从 store 当前活跃集推进。
-        let previousRaw = '';
-        if (swipeCtx && typeof swipeCtx.baselineRaw === 'string') {
-            previousRaw = swipeCtx.forceReroll ? linesToRaw(parseLines(swipeCtx.baselineRaw).filter(line => line.pin)) : swipeCtx.baselineRaw;
-        } else {
-            const savedLines = readStore(cacheKey);
-            if (savedLines?.raw) previousRaw = (swipeCtx?.forceReroll || swipeCtx?.reroll) ? linesToRaw(parseLines(savedLines.raw).filter(line => line.pin)) : savedLines.raw;
-            owner.baselineTs = Number(savedLines?.ts) || null;
-        }
-        owner.baselineRaw = previousRaw;
-        const prompt = appendTravelPromptContext(buildLinesPrompt(userName, charName, 'user', previousRaw, getScale(charStableKey(ctx))), travelContext);
-        const apiOpts = { ...(travelContext || {}) };
-        if (swipeCtx?.forceReroll || swipeCtx?.reroll) Object.assign(apiOpts, { reroll: true, module: 'lines' });
-        const raw    = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 10, apiOpts);
+let linesGenerationController = null;
+let linesActions = null;
 
-        if (linesAbortController !== myCtrl || !linesTaskOwners.isCurrent(owner, { chatId: chatIdSnap })) return { status: 'cancelled' };
-        // Chat may have switched while we were awaiting; do not touch cache or UI in that case
-        if (getContext().chatId !== chatIdSnap) {
+function getLinesActions() {
+    if (!linesActions) linesActions = createLinesActions({
+        isBusy: () => isGeneratingLines,
+        readSaved: () => readStore(getLinesCacheKey()),
+        readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+        write: value => writeStore(getLinesCacheKey(), value), remove: () => removeStore(getLinesCacheKey()),
+        confirm: spConfirm, toast: (message, error) => showToast(message, null, error),
+        render: renderLines, setCached: html => { cachedLines = html; },
+        refreshPanel: () => { if (linesMode) refreshLinesPanel(); }, refreshInline: syncLatestInlineBlock,
+        resetCounter: () => { linesAiMsgCounter = 0; },
+        runGenerate: runGenerateLines, precheck: memoryPreCheckConfirm, silent: () => !linesMode,
+    });
+    return linesActions;
+}
+
+function getLinesGenerationController() {
+    if (linesGenerationController) return linesGenerationController;
+    linesGenerationController = createLinesGenerationController({
+        owners: linesTaskOwners,
+        onStart: owner => { linesAbortController = owner.controller; isGeneratingLines = true; },
+        chatId: () => getContext().chatId,
+        loadConfig: loadCfg,
+        missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
+        readSaved: () => readStore(getLinesCacheKey()) || {},
+        buildPrompt: (previousRaw, travelContext) => appendTravelPromptContext(
+            buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext()))),
+            travelContext,
+        ),
+        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, 10, options),
+        commit: (raw, { silent, owner, swipeCtx, travelContext, commitBaseline }) => {
+            const cacheKey = getLinesCacheKey();
+            const html = renderLines(raw);
+            writeStore(cacheKey, { raw, ts: Date.now() });
+            if (swipeCtx?.mesId != null) {
+                const rec = _readSwipeLines(getContext().chatId, swipeCtx.mesId) || { baseline: swipeCtx.baselineRaw ?? commitBaseline.raw ?? '', swipes: {}, view: 'user', charName: '' };
+                if (rec.baseline == null) rec.baseline = swipeCtx.baselineRaw ?? commitBaseline.raw ?? '';
+                rec.swipes[String(swipeCtx.swipeId ?? 0)] = raw;
+                _writeSwipeLines(getContext().chatId, swipeCtx.mesId, rec);
+            }
             isGeneratingLines = false;
             linesAbortController = null;
-            return { status: 'cancelled' };
-        }
-
-        const checked = validateLinesResponse(raw);
-        if (!checked.ok) throw new Error(`线输出无效：${checked.reason}`);
-        const latestBeforeCommit = readStore(cacheKey);
-        const expectedRaw = swipeCtx?.forceReroll || swipeCtx?.reroll ? linesToRaw(parseLines(latestBeforeCommit?.raw || '').filter(line => line.pin)) : (latestBeforeCommit?.raw || '');
-        const decision = decideLinesCommit({ ownerCurrent: linesTaskOwners.isCurrent(owner, { chatId: chatIdSnap }), validation: checked, baseline: { raw: owner.baselineRaw, ts: owner.baselineTs }, latest: { raw: expectedRaw, ts: latestBeforeCommit?.ts } });
-        if (!decision.ok) return { status: 'cancelled', reason: decision.reason };
-        const mergeResult = mergePinnedLines(previousRaw, checked.raw);
-        if (!mergeResult?.ok) return { status: 'cancelled', reason: mergeResult?.reason || 'capacity-exceeded' };
-        const merged = mergeResult.raw;
-        const html   = renderLines(merged);
-        writeStore(cacheKey, { raw: merged, ts: Date.now() });
-        // 线·swipe 临时层：记本楼基线 B0 + 各 swipe 的线，供来回 swipe 复用/发消息时固定清理。
-        if (swipeCtx && swipeCtx.mesId != null) {
-            const rec = _readSwipeLines(chatIdSnap, swipeCtx.mesId)
-                || { baseline: previousRaw, swipes: {}, view: 'user', charName: '' };
-            if (rec.baseline == null) rec.baseline = previousRaw;
-            rec.swipes[String(swipeCtx.swipeId ?? 0)] = merged;
-            _writeSwipeLines(chatIdSnap, swipeCtx.mesId, rec);
-        }
-        isGeneratingLines = false;
-        linesAbortController = null;
-        cachedLines = html;
-        // Panel body
-        if (linesMode) { setLinesBody(html); if (!silent && getSettings().notifyMode !== 'off') showToast('线已生成'); }
-        // Sync the inline block on the latest AI message — panel & inline share
-        // the same cache; without this the message-level block shows stale data
-        // until page reload.
-        syncLatestInlineBlock(chatIdSnap);
-        // 虚线·冷知识：跟线同触发（覆盖自动轮次/手动重生成/推进——都汇流到这）。
-        // fire-and-forget：不 await、不阻塞线 UI；虚线自带 try/catch 与独立 abort。
-        if (getSettings().dashedEnabled === true) runGenerateDashed();
-        if (!linesMode && !silent) showToast('线已生成，点击查看', () => {
-            if (!linesMode) $in('.sp-view-btn[data-view="lines"]').trigger('click');
-            showPanel();
-        });
-        return { status: 'updated', targetDate: travelContext?.targetDate };
-    } catch (err) {
-        if (linesAbortController !== myCtrl) return { status: 'cancelled' };
-        isGeneratingLines = false;
-        linesAbortController = null;
-        if (err.name === 'AbortError') {
-            return { status: 'cancelled' };
-        }
-        // 报错弹窗：线生成失败要让用户看见——即便后台自动推进（silent）也弹（isError 不受 notifyMode 静默）。
-        // 面板可见时错落面板；后台/自动、或面板已关 → 走 toast，不清掉可能正开着的面板。成功路径仍按 silent 静默。
-        // ⚠ 必须判面板可见而非只判 linesMode：closePanel 只 display:none、不重置视角标志，关面板后 linesMode
-        //   仍为真，漏可见性判断就会把错误写进看不见的面板、不弹 toast（用户「关面板后生成失败无告警」的根因）。
-        if (getContext().chatId === chatIdSnap) {
-            showToast('线生成失败，请重试', null, true);
-        }
-        return { status: 'failed', error: err };
-    } finally {
-        cleanupLinesOwner(owner, chatIdSnap);
-        travelAbort?.removeEventListener('abort', abortFromTravel);
-    }
+            cachedLines = html;
+            if (linesMode) { setLinesBody(html); if (!silent && getSettings().notifyMode !== 'off') showToast('线已生成'); }
+            syncLatestInlineBlock(getContext().chatId);
+            if (getSettings().dashedEnabled === true) runGenerateDashed();
+            if (!linesMode && !silent) showToast('线已生成，点击查看', () => { if (!linesMode) $in('.sp-view-btn[data-view="lines"]').trigger('click'); showPanel(); });
+            return travelContext;
+        },
+        fail: () => { if (getContext().chatId) showToast('线生成失败，请重试', null, true); },
+        cleanup: (owner, chatId) => cleanupLinesOwner(owner, chatId),
+    });
+    return linesGenerationController;
 }
+
+async function runGenerateLines(silent = false, swipeCtx = null, travelContext = null) {
+    return getLinesGenerationController().run(silent, swipeCtx, travelContext);
+}
+
 
 function cleanupLinesOwner(owner, chatId) {
     if (!linesTaskOwners.isOwner(owner, { chatId })) return false;
@@ -9263,205 +9186,20 @@ function cleanupLinesOwner(owner, chatId) {
 
 function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto') {
     return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale);
-    /* legacy prompt retained below temporarily for source compatibility */
-    const subject = perspective === 'char' ? charName : userName;
-
-    // ─── Scale-specific guidance ──────────────────────────────────────────
-    const SCALE_BLOCKS = {
-        macro: `
-【叙事尺度：宏观】
-本卡属于大世界叙事——武侠 / 仙侠 / 朝廷 / 战争 / 修真 / 异世界冒险 / 末世 等。
-- 事件主体应是**势力 / 组织 / 集团 / 朝廷 / 大人物**，可以有天下大势、势力博弈、阴谋、江湖恩怨等
-- 冲突类事件线的"发酵/逼近/已爆发"按字面意义使用（暴力冲突、战事、追杀、政变等）
-- 事件影响范围：城 / 国 / 区域 / 天下
-- 允许出现宏观的伏笔（远方战报、朝堂密信、势力异动、江湖传闻等）`,
-        meso : `
-【叙事尺度：中观】
-本卡属于社群/组织尺度——都市职场 / 家族 / 商界 / 帮派 / 学派 / 公会 / 探案 / 悬疑 等。
-- 事件主体应是**具体人物 + 中小组织**（公司、家族、社群、帮派、学派、班组）
-- 冲突类事件线用"发酵/逼近/已爆发"表达组织内博弈、职场斗争、家族矛盾、商业竞争、悬案调查升温等
-- 事件影响范围：家族 / 公司 / 社区 / 学校 / 城市局部
-- 伏笔多是具体人物的暗中动机、组织内部立场、未公开的交易、可疑线索等
-- **避免**天下 / 战争 / 朝堂尺度的事件；也**避免**单纯的两人情感变化（那是微观）`,
-        micro: `
-【叙事尺度：微观】
-本卡属于日常/亲密关系尺度——校园 / 恋爱 / 同居 / 师生 / 治愈 / 慢生活 等。
-- 事件主体是**具体的几个人**（${subject}、身边的密友 / 家人 / 同学 / 同事）
-- **禁止**出现"势力"、"组织行动"、"阴谋"、"朝堂"、"战事"、"帮派"这类宏观概念
-- **禁止**出现暴力冲突、追杀、系统性对抗、宏大危机
-- 冲突类事件线的"萌芽/发酵/逼近/已爆发"应理解为**心结生长 / 关系张力 / 摊牌前夕 / 情感爆发**——只涉及具体人之间的情绪与关系动态
-- 推进类事件线适合表达：暗恋进展 / 考试筹备 / 兼职计划 / 学业目标 / 习惯养成 / 秘密准备的礼物 等
-- 允许的伏笔类型：
-  * 某人未说出口的话 / 一个欲言又止的瞬间
-  * 一段关系里的隐性张力
-  * 未处理的心结、旧账、误会
-  * 生活里的小变化（新习惯、新去处、新的联系人）
-  * 家庭或学校/职场里悬着的具体事项
-- 事件影响范围：个人 + 密友圈`,
-    };
-
-    const AUTO_HEADER = `
-【叙事尺度：自动判断】
-在推演前先根据角色卡描述、场景设定、最近对话内容判断当前故事的尺度：
-- **宏观**：涉及天下 / 朝堂 / 势力 / 江湖 / 战事 / 修真等——用宏大叙事对应类型的事件
-- **中观**：涉及组织 / 公司 / 家族 / 学派 / 帮派——用中等叙事，具体人物 + 小组织
-- **微观**：校园 / 恋爱 / 日常 / 亲密关系——只有具体的人和情感，禁止势力/阴谋/暴力冲突这类宏观概念
-判断后严格按对应尺度选择事件类型，不要跨越尺度举例。`;
-
-    const scaleBlock = SCALE_BLOCKS[scale] || AUTO_HEADER;
-
-    return `请暂停角色扮演，以编剧顾问身份根据以上剧情，追踪当前故事中正在发生的"事件线"。
-【重要】所有输出必须使用中文（人名、地名可保留原文）。
-【人称】以旁观者的第三人称视角撰写，直呼角色名字，不要扮演角色，严禁使用"我""我们"等第一人称。
-${scaleBlock}
-
-事件线是独立于 ${subject} 直接行动之外、需要跨轮次持续追踪的主事项。每条属于两类之一：
-- 冲突类 (conflict)：萌芽 → 发酵 → 逼近 → 已爆发（或已消散）
-- 推进类 (progress)：筹备 → 执行 → 关键 → 已完成（或已失败）
-
-【推进属性 agency（必填）】
-- player：事件推进依赖 ${subject} 主动行动（如：${subject} 答应的委托、结下的关系、承接的事项）
-- world：事件在世界 / 他人 / 环境层面自行演化，${subject} 不动它也会推进（具体举例请对齐上方"叙事尺度"块的类型）
-
-【非 UC 支线·额外放行 1-2 条】
-主线仍围绕 ${subject}，但世界不该只绕着 ${subject} 转。**允许**在主线之外，额外追踪 **1-2 条主体不是 ${subject}** 的支线——让重要配角 / NPC 拥有自己的、与 ${subject} 暂时未必有交集的小线索，世界才有呼吸感。四条约束务必守住：
-- **只放开"主体"，绝不放开"尺度"**：非 UC 支线必须严格落在上方判定的**同一叙事尺度**里，写该尺度该有的那类事。微观日常就写配角自己的微观小事（同桌最近总借故早退、常去那家店的店员在偷偷攒钱想辞职、班主任这阵子心事重重似有难处），**严禁**借非 UC 之名引入上方尺度块明令禁止的概念（微观里绝不许突然冒出势力 / 战事 / 大案 / 阴谋这类跨尺度乱入）。这些非 UC 支线**同样要有可延续的小钩子**（动机 / 悬念 / 未了的心事），不是一次性的日常小动作——后者仍按下方"禁止创建事件线"规则剔除。
-- **限重要角色、且必须确有其人**：主体只从剧情 / 【故事记忆库】/ 世界书 / 角色卡里**真实存在**的重要配角 / NPC 中取，别为凑数捏造新路人（沿用上方"串味杂质"判据）。
-- **限量 1-2 条**，计入下方总数上限；agency 归 world（不依赖 ${subject} 行动）。宁缺毋滥，没有合适的就一条都不写。
-- **标题只写线索本身、别贴分类标签**：名称字段照常写这条线索的具体名字（如「同桌的早退」「店员攒钱辞职」「班主任的心事」），**严禁**在名称里加「暗线」「非 UC」「支线」这类分类字样当前缀——一条线是不是非 UC，只由 agency=world 体现，绝不写进标题。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【每次推演的核心任务——按此顺序执行】
-1. **主动挖掘新伏笔**：先通读最近剧情，找出可能被忽略的新事件苗头、埋伏笔、NPC 台词里的暗示、场景细节、次要角色的立场变化等，评估是否有值得新建的事件线。
-2. **归并判断**：如果新苗头跟已有事件线是同一件事的延伸，就更新已有的（见下方归并规则）；如果是独立主线，就新建。
-3. **更新已有事件线**：根据最新剧情推进 / 停滞 / 终结已有事件线。
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-【新建 vs 归并——判断标准】
-优先考虑新建的情况：
-- 剧情里出现了新的独立主体（新人物 / 新地点 / 新组织 / 新关系）且带有可延续的动机或目标
-- 已有对话/场景里埋下了新的伏笔（角色说漏嘴、异常动作、意味深长的暗示）
-- 出现新的外部信号（环境变化、消息、传闻、他方行动，或人物新表态）
-- 一个次要角色首次表现出立场或计划
-
-归并到已有事件线的情况：
-- 新内容明显是已有事件的下一个阶段或子步骤
-- 主体、目标、动机跟已有事件线完全一致，只是执行细节变化
-
-**判断原则**：宁可新建后再合并，也不要因为"沾点边"就都塞进老事件线。归并只在"确定是同一件事"时使用；判断不清就新建。
-
-【禁止创建事件线的情况——严格但只针对以下几类】
-- 已经完成/胜负已定/无需继续追踪的事情
-- 单次的场景动作、日常互动、当前场景内即可收束的普通事项
-- 纯情绪、气氛、内心想法（未表达出来的）
-- 把同一主事项的多个执行步骤拆成多条
-
-【推进节奏约束】
-- 单次推进通常只前进一个阶段；非明确剧情信号不跨越多个阶段。
-- 避免同一次推演中多条事件线同时进入高烈度（已爆发 / 关键）。
-- 已有事件线剧情中没有明显进展信号时，使用 stall=true 保持原 stage，desc 写明停滞原因——不要为了显得有变化就臆造推进。
-- 冲突类尤其克制：只有出现明确激化迹象才从"萌芽"进入"发酵"。
-
-【终局判定】
-- "已爆发" / "已消散" / "已完成" / "已失败" 为终局，进入后不得回退。
-- stall 不是终局；只要仍有恢复可能就用 stall=true，不要标终局。
-- 已终结且已过多轮的事件线可以不再输出。
-
-【当前已追踪的事件线】
-${previousRaw ? previousRaw : '（无，这是第一次生成。请从当前剧情中提炼 2-4 条事件线；初次生成时冲突类等级不宜超过 2）'}
-
-**注意**：即使已有事件线不少，也请再通读一遍最近剧情，主动寻找是否有新苗头。理想状态下每次推演都能有 1-2 条新增或有实质进展的事件线，剧情才有活力。总数不超过 6 条；已终结或不再重要的老事件直接不输出即可。
-
-【串味杂质·主动剔除】
-- 若【当前已追踪的事件线】里某条线的核心人物 / 事件，在以上剧情、【故事记忆库】、世界书及角色卡设定中**完全找不到任何依据**（既不是本卡的角色 / 地点 / 势力，也从未在剧情或记忆里出现过），判定为串味杂质——**本轮直接不再输出该条**，不要沿用、也不要改写延续它。
-- 判断从严：只针对"整条线的主体明显不属于本故事世界"的情况。一条线只是近期没进展、暂时没被提及、或你一时想不起出处，都**不算**杂质，照常用 stall=true 保留。
-
-【输出格式（严格遵守，三行都必须输出）】
-<storylines_widget>
-Line: 名称|类型(冲突/推进)|阶段|等级(1-4)|时间锚点(如"今天上午"/"三天后"，禁用"第N轮")|agency(player/world)|stall(true/false)
-Desc: 描述当前状态、关键背景、涉及的人物势力及其立场（60-100字，写现在的样子，不要写"接下来会…"）
-Next: **必须输出，不得省略**。一句话给出前瞻信号（20-40字），**直接写内容本身、不要加"下一步："/"恢复条件："之类的标签前缀（面板会自动加）**。stall=true 时写恢复推进的触发条件；stall=false 时写最可能的下一动作、下一阶段的催化事件、或即将出现的关键分岔。
-（每条事件线重复上面三行）
-</storylines_widget>
-
-【输出前自查】逐条确认每条事件线都齐 Line / Desc / Next 三行——尤其 Next 绝不能省，缺了补上再输出。`;
 }
 
 // ─── Storylines parse / render ────────────────────────────────────────────────
 
-function parseLines(raw) {
-    return parseCanonicalLines(raw);
-    /* legacy implementation retained below temporarily for source compatibility */
-    const m = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
-    const content = m ? m[1] : raw;  // fallback: parse raw directly if no widget tag
-    const lines = []; let cur = null;
-    for (const rawLine of content.split('\n')) {
-        const t = rawLine.trim();
-        if (!t) continue;
-        if (/^Line\s*:/i.test(t)) {
-            if (cur) lines.push(cur);
-            const parts = t.replace(/^Line\s*:\s*/i, '').split('|');
-            const agencyRaw = (parts[5] || '').trim().toLowerCase();
-            const stallRaw  = (parts[6] || '').trim().toLowerCase();
-            const pinRaw    = (parts[7] || '').trim().toLowerCase();
-            cur = {
-                name  : (parts[0] || '').trim(),
-                type  : (parts[1] || '').trim(),
-                stage : (parts[2] || '').trim(),
-                level : (parts[3] || '').trim(),
-                when  : (parts[4] || '').trim(),
-                // Backward-compat migration: missing agency → 'world', missing stall/pin → false
-                agency: agencyRaw === 'player' ? 'player' : 'world',
-                stall : stallRaw === 'true' || stallRaw === '1' || stallRaw === 'yes',
-                pin   : pinRaw === 'true' || pinRaw === '1' || pinRaw === 'yes',
-                desc  : '',
-                next  : '',
-            };
-        } else if (/^Desc\s*:/i.test(t) && cur) {
-            cur.desc = t.replace(/^Desc\s*:\s*/i, '').trim();
-        } else if (/^Next\s*:/i.test(t) && cur) {
-            cur.next = t.replace(/^Next\s*:\s*/i, '').trim();
-        }
-    }
-    if (cur) lines.push(cur);
-    return lines;
-}
 
+// 线解析统一委托给 business/lines/schema.js。
+function parseLines(raw) { return parseCanonicalLines(raw); }
 // parseLines 的逆：把线对象数组序列化回 <storylines_widget> raw。
 // 字段与 parseLines 严格对称：Line: name|type|stage|level|when|agency|stall|pin
-function linesToRaw(lines) {
-    return serializeLines(lines);
-    /* legacy implementation retained below temporarily for source compatibility */
-    const blocks = (Array.isArray(lines) ? lines : []).map((l) => {
-        const cells = [
-            l.name || '', l.type || '', l.stage || '', l.level || '', l.when || '',
-            l.agency === 'player' ? 'player' : 'world',
-            l.stall ? 'true' : 'false',
-            l.pin ? 'true' : 'false',
-        ];
-        const rows = [`Line: ${cells.join('|')}`];
-        if (l.desc) rows.push(`Desc: ${l.desc}`);
-        if (l.next) rows.push(`Next: ${l.next}`);
-        return rows.join('\n');
-    });
-    return `<storylines_widget>\n${blocks.join('\n\n')}\n</storylines_widget>`;
-}
 
+function linesToRaw(lines) { return serializeLines(lines); }
 // 锁定保护：把 oldRaw 里 pin 的线并进 AI 新输出。无锁定线时原样返回（零副作用）。
-function mergePinnedLines(oldRaw, aiRaw) {
-    return mergeCanonicalPinned(oldRaw, aiRaw);
-    /* legacy implementation retained below temporarily for source compatibility */
-    const oldPinned = parseLines(oldRaw).filter(l => l.pin);
-    if (!oldPinned.length) return aiRaw;
-    const newLines = parseLines(aiRaw);
-    for (const p of oldPinned) {
-        const hit = newLines.find(n => n.name && n.name === p.name);
-        if (hit) hit.pin = true;       // AI 保留 → 采纳其推进，重新标 pin
-        else newLines.push({ ...p });   // AI 删了 → 原样并回（保命）
-    }
-    return linesToRaw(newLines);
-}
 
+function mergePinnedLines(oldRaw, aiRaw) { return mergeCanonicalPinned(oldRaw, aiRaw).raw; }
 const STAGE_COLORS = {
     萌芽: '#d6b85a', 发酵: '#d98a3d', 逼近: '#cf5f3f', 已爆发: '#b93f3f', 已消散: '#888888',
     筹备: '#7de9d9', 执行: '#58e8b3', 关键: '#2a8a5d', 已完成: '#1b5e3b', 已失败: '#888888',

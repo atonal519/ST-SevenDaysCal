@@ -1,5 +1,7 @@
 import { parseLines, serializeLines } from './schema.js';
 
+export function prepareLinesInspirationContext(context = {}) { return context; }
+
 function trackedLinesForPrompt(previousRaw) {
     if (!previousRaw) return '（无，基于当前剧情新建 1-4 条）';
     const tracked = parseLines(previousRaw);
@@ -9,6 +11,8 @@ function trackedLinesForPrompt(previousRaw) {
 }
 
 export function buildLinesPrompt(userName = '用户', charName = '角色', perspective = 'user', previousRaw = '', scale = 'auto') {
+    const promptContext = prepareLinesInspirationContext({ userName, charName, perspective, previousRaw, scale });
+    ({ userName, charName, perspective, previousRaw, scale } = promptContext);
     const subject = perspective === 'char' ? charName : userName;
     return `请根据当前剧情与记忆提炼平行事件线，叙事主体为${subject}。这是结构化输出，不要输出解释、前言或代码块外文字。\n
 【推进尺度】${scale === 'macro' ? '关注势力、世界与长期局势。' : scale === 'micro' ? '关注人物当下行动、关系与短期催化。' : '兼顾人物、事件与世界局势，保持可推进的粒度。'}\n
