@@ -5,15 +5,24 @@ export function splitAbortController(controller) {
 }
 
 export function createPointController(env) {
+    let activeManualOwner = null;
+    const sameOwnerIdentity = (owner, view, char) => env.chatId() === owner.chatId && env.view() === view && (view !== 'char' || env.char() === char);
+    function restoreManualOwner(owner) {
+        if (!owner || env.chatId() !== owner.chatId || env.view() !== owner.view || (owner.view === 'char' && env.char() !== owner.charName)) return false;
+        if (owner.previousCachedSchedule) { env.state.cachedSchedule = owner.previousCachedSchedule; if (env.panelVisible()) env.setBody(owner.previousCachedSchedule); }
+        else { env.state.cachedSchedule = null; if (env.panelVisible()) env.showEmpty?.(); }
+        return true;
+    }
     function cleanupManualOwner(owner) {
         const lifecycle = env.evaluate({ manager: env.owners, owner, chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), pluginEnabled: env.enabled() });
         if (!lifecycle.canCleanup) return false;
-        if (env.state.scheduleAbortController === null || env.state.scheduleAbortController === owner.controller) env.state.scheduleAbortController = null;
-        env.state.isGenerating = false; env.setButton(null); env.owners.finish(owner); return true;
+        const isCurrent = env.state.scheduleAbortController === owner.controller;
+        if (isCurrent || !env.state.isGenerating) { if (isCurrent) env.state.scheduleAbortController = null; env.state.isGenerating = false; env.setButton(null); }
+        if (activeManualOwner === owner) activeManualOwner = null; env.owners.finish(owner); return true;
     }
     function abort() {
         if (!env.state.isGenerating) return false;
-        env.state.scheduleAbortController?.abort(); env.state.scheduleAbortController = null; env.state.isGenerating = false; env.setButton(null); env.showEmpty?.(); return true;
+        const owner = activeManualOwner; env.state.scheduleAbortController?.abort(); env.state.scheduleAbortController = null; env.state.isGenerating = false; env.setButton(null); restoreManualOwner(owner); return true;
     }
     async function triggerGenerate() {
         if (env.state.isGenerating) return;
@@ -22,13 +31,17 @@ export function createPointController(env) {
         const owner = env.owners.create('point-manual', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), view, charName: char });
         if (!await env.precheck()) { cleanupManualOwner(owner); return; }
         if (!env.evaluate({ manager: env.owners, owner, chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), pluginEnabled: env.enabled() }).canCommit) { cleanupManualOwner(owner); return; }
-        env.state.cachedSchedule = null; env.state.isGenerating = true; env.setButton('generating');
+        owner.previousCachedSchedule = env.state.cachedSchedule; owner.previousView = view; owner.previousChar = char; activeManualOwner = owner; env.state.cachedSchedule = null; env.state.isGenerating = true; env.setButton('generating');
         if (!env.panelVisible()) env.showPanel(); env.setBody(env.loading('正在规划', 'sp-abort-generate'));
         void runGenerate(null, owner);
     }
     async function runGenerate(travelContext = null, owner = null) {
         const view = owner?.view ?? env.view(); const char = owner?.charName ?? env.char();
-        if (!owner) owner = env.owners.create('point-manual', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), view, charName: char });
+        if (!owner) {
+            owner = env.owners.create('point-manual', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), view, charName: char });
+            owner.previousCachedSchedule = env.state.cachedSchedule; owner.previousView = view; owner.previousChar = char; activeManualOwner = owner;
+            if (!env.state.isGenerating) { env.state.cachedSchedule = null; env.state.isGenerating = true; env.setButton('generating'); if (env.panelVisible()) env.setBody(env.loading('正在规划', 'sp-abort-generate')); }
+        }
         const { controller, signal } = splitAbortController(owner.controller);
         env.state.scheduleAbortController = controller; env.abortAuto?.();
         try {
@@ -40,7 +53,7 @@ export function createPointController(env) {
             if (!env.validate(raw, env.calendar()).ok) { const error = new Error('返回不完整（需要闭合的 Day 1–3 及至少 5 条 Future 事件），旧点数据未改变，请重试'); error.pointIncomplete = true; throw error; }
             let merged = previous ? env.mergePinned(previous, raw, env.calendar()) : raw; const today = env.today(); merged = env.forceStart(merged, today.month, today.day, env.calendar());
             if (!env.validate(merged, env.calendar()).ok) throw new Error('生成结果结构不完整，旧点数据未改变，请重试');
-            const html = env.render(merged, subject, view, env.calendar()); if (!env.canCommit(owner, travelContext)) return { status: 'cancelled' };
+            const html = env.render(merged, subject, view, env.calendar()); if (!env.canCommit(owner, travelContext) || !sameOwnerIdentity(owner, view, char)) return { status: 'cancelled' };
             env.write(key, { raw: merged, userName: subject, ts: Date.now() }); env.sync(); if (!env.canCommit(owner, travelContext)) return;
             env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton('done'); if (view === 'char') env.setChar(char);
             const same = env.view() === view && (view !== 'char' || env.char() === char);
@@ -48,10 +61,11 @@ export function createPointController(env) {
             else env.toast('点已生成，点击查看', () => { if (!env.canCallback(owner)) return; env.setView(view, char); env.setCached(html); env.showPanel(); env.setBody(html); });
             setTimeout(() => { if (env.canCallback(owner)) env.setButton(null); }, 6000); env.owners.finish(owner);
         } catch (error) {
-            if (!env.canCommit(owner, travelContext)) return; env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton(null);
-            if (error?.name === 'AbortError') { if (env.panelVisible() && env.view() === view) env.showEmpty(); return; }
-            const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${env.escape(error.message || '未知错误')}</p></div>`;
-            if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true);
+            const sameOwnerView = sameOwnerIdentity(owner, view, char); const isCurrent = env.state.scheduleAbortController === owner.controller; if (!isCurrent) return; env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton(null); if (!env.canCommit(owner, travelContext) || !sameOwnerView) return;
+            if (error?.name === 'AbortError') { restoreManualOwner(owner); return; }
+            const restored = restoreManualOwner(owner);
+            if (restored && owner.previousCachedSchedule) env.toast('点生成失败，已保留原存档', null, true);
+            else { const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${env.escape(error.message || '未知错误')}</p></div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true); }
         } finally { cleanupManualOwner(owner); }
     }
     async function syncPointToToday(auto = false, travelContext = null) {

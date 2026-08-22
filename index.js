@@ -149,7 +149,7 @@ import { createLedgerActions } from './business/ledger/actions.js';
 import { bindLedgerEvents, createLedgerDeletedHandler } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
 import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
-import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
+import { mergeRecallTags, isDatabaseMemoEntry, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 import { createTaskOwnerManager } from './runtime/task-owner.js';
 import { evaluateTaskLifecycle } from './runtime/task-orchestration.js';
 import { parseLines as parseCanonicalLines, serializeLines, validateLinesResponse, TERMINAL_LINE_STAGES } from './business/lines/schema.js';
@@ -161,6 +161,7 @@ import { createLinesGenerationController } from './business/lines/controller.js'
 import { createLinesInjectionController } from './business/lines/injection.js';
 import { inlineState } from './business/lines/inline.js';
 import { createLinesActions } from './business/lines/actions.js';
+import { createDashedModule } from './business/lines/dashed.js';
 import { classifyRenderedFloor, createAdvanceStrategy, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './business/lines/strategy.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
@@ -955,9 +956,19 @@ let _floorTextSig       = {};     // mesId → 楼主文本签名；「同 mesId
 let _pendingReroll      = false;  // 🔄重生成握手
 let _rerollExcludedAssistant = null;
 let _stStreamUntil      = 0;      // 流式输出活跃截止时间戳：Date.now()<此值 = ST 正流式重写末楼 .mes_text，此间 observer 不塞楼内块（防频闪）。基于「最近一个流式 token 的时间」自动续期、到点自愈，绝不会像布尔闸那样卡死（ENDED 事件在 quiet 生成里不保证触发）
-let isGeneratingDashed  = false;   // 虚线·冷知识生成中
-let dashedAbortController = null;  // 虚线独立 abort，跟线互不干扰
-let _dashedPanelError   = '';      // 冷知识页近端错误；切 chat / 下次生成时清空
+let dashedModule = null;
+function getDashedModule() {
+    if (!dashedModule) dashedModule = createDashedModule({
+        keyDesc, readStore, writeStore, removeStore, getSettings,
+        context: getContext, chatId: () => getContext().chatId, loadConfig: loadCfg,
+        callApi: (...args) => callCustomApi(...args), filterRerollItems, dialog: customDialog,
+        uuid: () => globalThis.crypto?.randomUUID?.(), now: () => Date.now(), random: () => Math.random(),
+        toast: (message, error) => showToast(message, null, error),
+        escapeHtml, escapeAttr, refreshPanel: () => { if (linesMode) refreshLinesPanel(); },
+        refreshInline: syncLatestInlineBlock,
+    });
+    return dashedModule;
+}
 let spaceMode           = false;
 let spaceChatHistory    = [];
 let isSpaceChatting     = false;
@@ -1126,6 +1137,7 @@ jQuery(async () => {
         spaceChatAbortController?.abort();
         spaceChatAbortController = null;
         isSpaceChatting = false;
+        getDashedModule().abort();
         if (!pluginEnabled()) return;
         currentView  = 'user';
         charViewName = null;
@@ -1136,7 +1148,7 @@ jQuery(async () => {
         cachedLines  = null;
         _linesSheet  = 'events';
         linesAiMsgCounter = 0;
-        _dashedPanelError = '';
+        getDashedModule().resetError();
         // 线·swipe：切 chat 复位单调闸到当前末楼（历史楼不误判为新楼），清待重算标记 + 所有临时层。
         _lastSeenMaxMesId = (getContext().chat?.length ?? 0) - 1;
         _pendingSwipeGen = null;
@@ -1615,18 +1627,19 @@ jQuery(async () => {
 function _abortAllBackground() {
     linesTaskOwners.invalidate('lines-generation');
     for (const c of [
-        linesAbortController, dashedAbortController, spaceChatAbortController,
+        linesAbortController, spaceChatAbortController,
         pointState.scheduleAbortController, outlineAbortController, theaterAbortController,
         axisState.almanacAbortController, outlineChatAbortController,
         outlineJudgeAbort, dateDetectionController.abortController, _autoRegenSchedAbort,
         ledgerCaptureController.abortController, ledgerJudgeController.abortController,
     ]) { try { c?.abort(); } catch {} }
-    linesAbortController = dashedAbortController = spaceChatAbortController = null;
+    getDashedModule().abort();
+    linesAbortController = spaceChatAbortController = null;
     pointState.scheduleAbortController = outlineAbortController = theaterAbortController = null;
     axisState.almanacAbortController = outlineChatAbortController = null;
     outlineJudgeAbort = _autoRegenSchedAbort = null;
     ledgerJudgeController.reset();
-    isGeneratingOutline = isGeneratingLines = isGeneratingDashed = false;
+    isGeneratingOutline = isGeneratingLines = false;
     isGeneratingTheater = axisState.isGeneratingAlmanac = false;
     isJudgingOutline = false;
     ledgerCaptureController.reset();
@@ -1737,7 +1750,7 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
     })();
     const view = inlineState(raw, { readOnly });
     const lines = view.lines;
-    const dashedSub = !view.readOnly && view.dashed.enabled ? _buildDashedSubsectionHtml() : '';   // 虚线冷知识折进同一个块的 body
+    const dashedSub = !view.readOnly && view.dashed.enabled ? getDashedModule().inlineHtml() : '';   // 虚线冷知识折进同一个块的 body
     if (lines.length) {
         const linesHtml = lines.map((l, i) => {
             const levelNum = parseInt(l.level, 10);
@@ -1777,7 +1790,7 @@ function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
         const advanceBtn = view.hasActions && view.summaryActions.length ? `<span class="sp-inline-summary-actions">
             <button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button>
-        </span>`;
+        </span>` : '';
         return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${view.count} 条活跃</span>${advanceBtn}</summary><div class="sp-inline-body" data-lines-inject-text="${escapeAttr(view.injectText)}">${linesHtml}${dashedSub}</div>`;
     }
     // 无活跃线：线块「暂无」；若虚线有内容仍给一个 body 承载它（合并后虚线寄居在线块里）。
@@ -3670,7 +3683,7 @@ function injectModal() {
                                     <div class="sp-mode-opt sp-mode-opt-sub" style="margin-top:6px">
                                         <input type="checkbox" id="sp-dashed-cleanup-enabled" ${getSettings().dashedCleanupEnabled !== false ? 'checked' : ''}>
                                         <label for="sp-dashed-cleanup-enabled">只保留最近</label>
-                                        <input id="sp-dashed-keep-count" class="sp-input sp-interval-input" type="number" min="2" step="1" value="${escapeAttr(String(getDashedKeepCount()))}" ${getSettings().dashedCleanupEnabled !== false ? '' : 'disabled'} aria-label="保留最近多少条未锁冷知识">
+                                        <input id="sp-dashed-keep-count" class="sp-input sp-interval-input" type="number" min="2" step="1" value="${escapeAttr(String(getDashedModule().normalizeKeepCount(getSettings().dashedKeepCount)))}" ${getSettings().dashedCleanupEnabled !== false ? '' : 'disabled'} aria-label="保留最近多少条未锁冷知识">
                                         <span>条未锁冷知识</span>
                                     </div>
                                     <p class="sp-cfg-hint" style="margin-top:2px">修改后会对当前聊天立刻生效，其他聊天会在下次冷知识更新时按规则清理。锁定的冷知识不会被自动清除。</p>
@@ -4065,9 +4078,9 @@ function injectModal() {
         _linesSheet = sheet;
         refreshLinesPanel();
     });
-    $linesWrap.on('click', '.sp-lines-dashed-add', openDashedGeneratorDialog);
-    $linesWrap.on('click', '.sp-lines-dashed-lock', function () { triggerToggleDashedLock($(this).attr('data-id')); });
-    $linesWrap.on('click', '.sp-lines-dashed-delete', function () { triggerDeleteDashedItem($(this).attr('data-id')); });
+    $linesWrap.on('click', '.sp-lines-dashed-add', () => getDashedModule().openDialog());
+    $linesWrap.on('click', '.sp-lines-dashed-lock', function () { getDashedModule().toggle($(this).attr('data-id')); });
+    $linesWrap.on('click', '.sp-lines-dashed-delete', function () { getDashedModule().remove($(this).attr('data-id')); });
     $in('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
     // 点视图头部 📌：固定/取消固定当前 char（只在 char 视角出现）。名字取按钮 data-name，兜底 charViewName。
     $in('#sp-body').on('click', '.sp-point-pin-char', function () {
@@ -4141,7 +4154,7 @@ function injectModal() {
     // 楼层刷新仍直接广泛取材两条，不打开面板的主题选择弹窗。
     $('#chat').on('click', '.sp-inline-refresh-dashed', function (e) {
         e.stopPropagation();
-        runGenerateDashed({ reroll: true });
+        getDashedModule().run({ reroll: true });
     });
     // Per-line delete (× on each line card, panel + inline). No full-clear button anymore.
     $linesWrap.on('click', '.sp-line-del-one', function (e) {
@@ -5029,14 +5042,14 @@ function injectModal() {
         getSettings().dashedCleanupEnabled = this.checked;
         $in('#sp-dashed-keep-count').prop('disabled', !this.checked);
         saveSettingsDebounced();
-        if (this.checked) applyDashedCleanupToCurrent(true);
+        if (this.checked) getDashedModule().cleanup(true);
     });
     $in('#sp-dashed-keep-count').on('change', function () {
-        const count = normalizeDashedKeepCount(this.value);
+        const count = getDashedModule().normalizeKeepCount(this.value);
         getSettings().dashedKeepCount = count;
         this.value = String(count);
         saveSettingsDebounced();
-        if (getSettings().dashedCleanupEnabled !== false) applyDashedCleanupToCurrent(true);
+        if (getSettings().dashedCleanupEnabled !== false) getDashedModule().cleanup(true);
     });
     // 大纲自动注入（面）开关：on → 按当前大纲+游标立即注入；off → 清空扩展 prompt（游标留 chat_metadata，再开即续）
     $in('#sp-outline-inject').on('change', function () {
@@ -5297,12 +5310,7 @@ function confirmCharView() {
     if (pointState.cachedSchedule) {
         setBody(pointState.cachedSchedule);
     } else {
-        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
-        if (!pointState.isGenerating) {
-            pointState.isGenerating = true;
-            setExtBtnState('generating');
-            runGenerate();
-        }
+        triggerGenerate();
     }
 }
 
@@ -5741,7 +5749,7 @@ function abortLinesGen() {
     linesAbortController?.abort();
     linesAbortController = null;
     isGeneratingLines = false;
-    setLinesBody(`<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>已中止</p></div>`);
+    if (linesMode && _linesSheet === 'events') refreshLinesPanel();
 }
 function abortTheaterGen() {
     if (!isGeneratingTheater) return;
@@ -8408,7 +8416,7 @@ function _anchorFsGestureEnd() {
 
 function setLinesBody(eventsHtml) {
     $in('#sp-lines-toolbar').html(linesToolbarHtml());
-    $in('#sp-lines-list').html(_linesSheet === 'dashed' ? renderDashedPanel() : eventsHtml);
+    $in('#sp-lines-list').html(_linesSheet === 'dashed' ? getDashedModule().panelHtml() : eventsHtml);
 }
 
 function refreshLinesPanel() {
@@ -8585,8 +8593,7 @@ function invalidateKindTasksForStoreClear(kind) {
         outlineChatAbortController?.abort(); outlineChatAbortController = null;
         isOutlineChatting = false;
     } else if (kind === 'dashed') {
-        dashedAbortController?.abort(); dashedAbortController = null;
-        isGeneratingDashed = false;
+        getDashedModule().abort();
     }
 }
 
@@ -8600,7 +8607,7 @@ function refreshEditorsAfterStoreClear(kind) {
     if (kind === 'outline') { if (outlineMode) setOutlineBody(renderEmptyOutlineState()); refreshOutlineInjection(); syncLatestInlineBlock(); }
     if (kind === 'lines') { cachedLines = null; if (linesMode) setLinesBody(renderEmptyLinesState()); refreshLinesInjection(); syncLatestInlineBlock(); }
     if (kind === 'dashed') {
-        _dashedPanelError = '';
+        getDashedModule().resetError();
         if (linesMode) refreshLinesPanel();
         syncLatestInlineBlock();
     }
@@ -8643,7 +8650,7 @@ function refreshEditorsFromCurrentStore(kind) {
         loadSpaceChatHistory();
         if (spaceMode) renderSpaceChatHistory();
     } else if (kind === 'dashed') {
-        _dashedPanelError = '';
+        getDashedModule().resetError();
         if (linesMode) refreshLinesPanel();
         syncLatestInlineBlock();
     }
@@ -8815,304 +8822,6 @@ function deleteOneLineFromRaw(raw, idx) {
 // Delete just ONE line by index; the other lines stay applied.
 async function triggerDeleteOneLine(idx) { return getLinesActions().delete(idx); }
 function triggerToggleLinePin(idx) { return getLinesActions().pin(idx); }
-// ─── 虚线·冷知识（聊天级历史集合；纯展示、绝不注入）────────────────────────────
-// 新格式只保留 items 单一真源；旧 raw/recent 仅在读取时兼容，下一次真实写操作再懒迁移。
-const DASHED_TOPIC_CONFIG = Object.freeze([
-    Object.freeze({ value: 'user',     label: 'user',     prompt: name => `${name} 本人` }),
-    Object.freeze({ value: 'char',     label: 'char',     prompt: name => `${name} 本人` }),
-    Object.freeze({ value: 'world',    label: '世界观',   prompt: () => '世界观设定' }),
-    Object.freeze({ value: 'history',  label: '历史传说', prompt: () => '历史与传说' }),
-    Object.freeze({ value: 'factions', label: '势力组织', prompt: () => '势力与组织' }),
-    Object.freeze({ value: 'places',   label: '地点风物', prompt: () => '地点与风物' }),
-    Object.freeze({ value: 'items',    label: '物品特性', prompt: () => '物品或造物的隐藏特性' }),
-    Object.freeze({ value: 'rules',    label: '规则因果', prompt: () => '未被明说的规则或因果' }),
-    Object.freeze({ value: 'customs',  label: '习俗禁忌', prompt: () => '习俗与禁忌' }),
-]);
-const DASHED_AVOID_COUNT = 12;
-
-function getDashedCacheKey() { return keyDesc('dashed', 'user', ''); }
-function normalizeDashedKeepCount(value) {
-    const count = Math.floor(Number(value));
-    return Number.isFinite(count) && count >= 2 ? Math.min(count, Number.MAX_SAFE_INTEGER) : 15;
-}
-function getDashedKeepCount() { return normalizeDashedKeepCount(getSettings().dashedKeepCount); }
-
-// 原始返回 → 文本数组。只剥真正的列表序号，不误伤「3000年前」等正文数字。
-function _dashedItemsFromRaw(raw) {
-    return String(raw || '').split('\n')
-        .map(s => s.replace(/^[\s\-*·•]+/, '').replace(/^\d{1,2}[.、．)）]\s*/, '').trim())
-        .filter(Boolean);
-}
-
-function _dashedLegacyId(text, index) {
-    let hash = 2166136261;
-    for (const ch of String(text || '')) { hash ^= ch.charCodeAt(0); hash = Math.imul(hash, 16777619); }
-    return `dashed-legacy-${index}-${(hash >>> 0).toString(36)}`;
-}
-function _newDashedId(now, index) {
-    const uuid = globalThis.crypto?.randomUUID?.();
-    return uuid ? `dashed-${uuid}` : `dashed-${now.toString(36)}-${index}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-// 兼容旧 `{raw,recent,ts}`：raw 最新，随后 recent；按正文去重且只在内存归一化。
-function normalizeDashedStore(saved) {
-    if (!saved || typeof saved !== 'object') return [];
-    const ts = Number(saved.ts) || 0;
-    if (Array.isArray(saved.items)) {
-        const seen = new Set();
-        return saved.items.map((item, index) => ({
-            id: String(item?.id || _dashedLegacyId(item?.text, index)),
-            text: String(item?.text || '').trim(),
-            createdAt: Number(item?.createdAt) || ts,
-            locked: item?.locked === true,
-        })).filter(item => {
-            if (!item.text || seen.has(item.text)) return false;
-            seen.add(item.text);
-            return true;
-        });
-    }
-    const texts = [..._dashedItemsFromRaw(saved.raw), ...(Array.isArray(saved.recent) ? saved.recent : [])];
-    const seen = new Set();
-    return texts.map(text => String(text || '').trim()).filter(text => {
-        if (!text || seen.has(text)) return false;
-        seen.add(text);
-        return true;
-    })
-        .map((text, index) => ({ id: _dashedLegacyId(text, index), text, createdAt: ts, locked: false }));
-}
-
-function readDashedItems() { return normalizeDashedStore(readStore(getDashedCacheKey())); }
-function parseDashedItems(limit = Infinity) { return readDashedItems().slice(0, limit).map(item => item.text); }
-
-// 锁定项完全独立于保留数量；只从最新到最旧计数未锁条目，超出部分才进入自动清理。
-function pruneDashedItems(items, keepCount, enabled = true) {
-    if (!enabled) return { items: [...(items || [])], removed: [] };
-    const limit = normalizeDashedKeepCount(keepCount);
-    let unlockedCount = 0;
-    const kept = [];
-    const removed = [];
-    for (const item of items || []) {
-        if (item?.locked === true || unlockedCount < limit) {
-            kept.push(item);
-            if (item?.locked !== true) unlockedCount += 1;
-        } else removed.push(item);
-    }
-    return { items: kept, removed };
-}
-
-// 冷知识唯一写入咽喉：所有真实修改都在这里统一执行保留策略并落盘。
-function commitDashedItems(items, ts = Date.now()) {
-    const result = pruneDashedItems(items, getDashedKeepCount(), getSettings().dashedCleanupEnabled !== false);
-    if (result.items.length) writeStore(getDashedCacheKey(), { items: result.items, ts });
-    else removeStore(getDashedCacheKey());
-    return result;
-}
-
-function applyDashedCleanupToCurrent(notify = false) {
-    if (getSettings().dashedCleanupEnabled === false) return 0;
-    const current = readDashedItems();
-    const preview = pruneDashedItems(current, getDashedKeepCount(), true);
-    if (!preview.removed.length) return 0;
-    commitDashedItems(current);
-    if (linesMode) refreshLinesPanel();
-    syncLatestInlineBlock();
-    if (notify && getSettings().notifyMode !== 'off') showToast(`已清理 ${preview.removed.length} 条较旧冷知识`);
-    return preview.removed.length;
-}
-
-function mergeDashedItems(newTexts, currentItems, createdAt = Date.now()) {
-    const freshSeen = new Set();
-    const fresh = (newTexts || []).map(text => String(text || '').trim()).filter(text => {
-        if (!text || freshSeen.has(text)) return false;
-        freshSeen.add(text);
-        return true;
-    });
-    const added = fresh.filter(text => !(currentItems || []).some(item => item.text === text))
-        .map((text, index) => ({ id: _newDashedId(createdAt, index), text, createdAt, locked: false }));
-    const merged = [...added];
-    const seen = new Set(added.map(item => item.text));
-    for (const item of currentItems || []) {
-        if (!item?.text || seen.has(item.text)) continue;
-        seen.add(item.text); merged.push(item);
-    }
-    return { added, items: merged };
-}
-
-function dashedTargetCount(topicCount) { return Math.max(2, Math.floor(Number(topicCount) || 0)); }
-function pickRandomDashedTopics(entries = DASHED_TOPIC_CONFIG, random = Math.random) {
-    const pool = [...entries];
-    for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(random() * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    return pool.slice(0, 2).map(item => item.value);
-}
-
-function dashedTopicText(value, userName, charName, customValue = '') {
-    if (value === 'custom') return String(customValue || '').trim();
-    const item = DASHED_TOPIC_CONFIG.find(entry => entry.value === value);
-    if (!item) return '';
-    const name = value === 'user' ? userName : value === 'char' ? charName : '';
-    return item.prompt(name);
-}
-
-function buildDashedPrompt(userName, charName, avoidItems = [], options = {}) {
-    const topics = (options.topics || []).map(String).filter(Boolean);
-    const count = dashedTargetCount(options.count || topics.length || 2);
-    const broad = `取材面要开阔——世界观设定、历史与传说、势力/组织、地点/风物、物品/造物的隐藏特性、未被明说的规则或因果、习俗与禁忌都可以写；${userName} 和 ${charName} 只是世界里的成员之一，可以偶尔涉及，但不要每条都围着他们转。`;
-    let focus = broad;
-    if (topics.length === 1) focus = `本次只围绕「${topics[0]}」取材，写出 ${count} 条角度不同、互不重复的冷知识。`;
-    else if (topics.length > 1) focus = `本次依次围绕以下 ${topics.length} 个主题取材，每个主题恰好写一条，顺序保持一致：\n${topics.map((topic, i) => `${i + 1}. ${topic}`).join('\n')}`;
-    let prompt = `请暂停角色扮演，跳出正文叙事，以设定考据者的身份回答。这是设定考据、不是续写正文：不要输出任何剧情场景、对话、动作或第一/第二人称叙述，不要推进故事，也不要复述记忆库/世界书里已发生的事件经过。
-请无视上文里的状态栏、数值面板、表格等格式化内容，绝对不要复述或模仿它们。
-完全遵循当前世界的设定与世界观。${focus}
-优先挖容易被忽略、却让世界更立体的角落；每条都要展开讲清来龙去脉、背景和细节，不要只丢一句结论，绝对禁止 OOC 和脱离当前背景。
-直接从第一条写起，不要开场白或旁白。恰好写 ${count} 条，每行一条，每条 50 到 100 个汉字，纯中文叙述，不要序号、状态栏或任何格式符号。`;
-    const avoid = (avoidItems || []).map(text => String(text || '').trim()).filter(Boolean);
-    if (avoid.length) prompt += `\n【以下内容最近已经讲过，务必避开；换全新的素材，改写同一件事也不允许】：\n${avoid.map(text => `- ${text}`).join('\n')}`;
-    return prompt.replace(/\{\{user\}\}/g, userName).replace(/\{\{char\}\}/g, charName);
-}
-
-// 所有入口共用保存咽喉。完成请求后重读最新 items，避免飞行期间的删除被旧快照复活。
-async function runGenerateDashed(options = {}) {
-    if (isGeneratingDashed) return;
-    const manual = options.manual === true;
-    const reroll = manual || options.reroll === true;
-    const selectedTopicValues = Array.isArray(options.topics) && options.topics.length
-        ? options.topics
-        : pickRandomDashedTopics();
-    const targetCount = dashedTargetCount(options.count || selectedTopicValues.length || 2);
-    const chatIdSnap = getContext().chatId;
-    const myCtrl = dashedAbortController = new AbortController();
-    isGeneratingDashed = true;
-    _dashedPanelError = '';
-    if (linesMode) refreshLinesPanel();
-    syncLatestInlineBlock();
-    try {
-        const ctx = getContext();
-        const userName = ctx.name1 || '用户';
-        const charName = ctx.name2 || '角色';
-        const cfg = loadCfg();
-        if (!cfg.url || !cfg.key) throw new Error('未配置自定义 API');
-        const topics = selectedTopicValues.map(value => dashedTopicText(value, userName, charName, options.customValue)).filter(Boolean);
-        const avoidRecent = reroll ? [] : parseDashedItems(DASHED_AVOID_COUNT);
-        const prompt = buildDashedPrompt(userName, charName, avoidRecent, { topics, count: targetCount });
-        // 不喂最近对话，只靠人设、世界书、记忆库等 system 背景发散。
-        const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 0, reroll ? { reroll: true, module: 'dashed' } : {});
-        if (dashedAbortController !== myCtrl) return;
-        if (getContext().chatId !== chatIdSnap) { isGeneratingDashed = false; dashedAbortController = null; return; }
-        const returned = _dashedItemsFromRaw(raw).slice(0, targetCount);
-        if (!returned.length) throw new Error('模型没有返回可用的冷知识');
-        const now = Date.now();
-        const currentItems = filterRerollItems(readDashedItems(), reroll);
-        const merged = mergeDashedItems(returned, currentItems, now);
-        const committed = merged.added.length ? commitDashedItems(merged.items, now) : { items: merged.items, removed: [] };
-        const keptIds = new Set(committed.items.map(item => item.id));
-        const addedCount = merged.added.filter(item => keptIds.has(item.id)).length;
-        isGeneratingDashed = false;
-        dashedAbortController = null;
-        if (manual && getSettings().notifyMode !== 'off') {
-            const suffix = addedCount < targetCount ? `（期望 ${targetCount} 条，实际有效新增 ${addedCount} 条）` : '';
-            showToast(addedCount ? `已新增 ${addedCount} 条冷知识${suffix}` : '本次内容与已有冷知识重复，没有新增');
-        }
-        if (linesMode) refreshLinesPanel();
-        syncLatestInlineBlock();
-    } catch (err) {
-        if (dashedAbortController !== myCtrl) return;
-        isGeneratingDashed = false;
-        dashedAbortController = null;
-        if (err?.name === 'AbortError' || getContext().chatId !== chatIdSnap) return;
-        _dashedPanelError = `生成失败：${err?.message || '未知错误'}`;
-        if (linesMode) refreshLinesPanel();
-        if (manual) showToast('冷知识生成失败，请检查 API 或网络', null, true);
-    }
-}
-
-async function openDashedGeneratorDialog() {
-    if (isGeneratingDashed) return;
-    const ctx = getContext();
-    const chatIdSnap = ctx.chatId;
-    const userName = ctx.name1 || '用户';
-    const charName = ctx.name2 || '角色';
-    const choices = [
-        { value: 'random', label: '随机抽取两个主题', exclusive: true },
-        ...DASHED_TOPIC_CONFIG.map(item => ({ value: item.value, label: item.value === 'user' ? userName : item.value === 'char' ? charName : item.label })),
-        { value: 'custom', label: '自定义' },
-    ];
-    const result = await customDialog.selectMany({
-        title: '新增冷知识',
-        body: '选择想了解的主题。选择几个主题就生成几条，最少生成两条。',
-        choices,
-        initialValues: ['random'],
-        custom: { value: 'custom', placeholder: '填写想了解的冷知识方向…', maxLength: 200 },
-        confirmText: '生成',
-        validate: value => {
-            if (!value.values.length) return '请至少选择一个主题';
-            if (value.values.includes('custom') && !value.customValue) return '请填写自定义主题';
-            const count = value.values.includes('random') ? 2 : dashedTargetCount(value.values.length);
-            return getSettings().dashedCleanupEnabled !== false && count > getDashedKeepCount()
-                ? `当前只保留最近 ${getDashedKeepCount()} 条未锁冷知识，请减少主题或调高保留数量`
-                : '';
-        },
-    });
-    if (!result || getContext().chatId !== chatIdSnap) return;
-    let topics = result.values;
-    if (topics.includes('random')) topics = pickRandomDashedTopics();
-    runGenerateDashed({ manual: true, topics, customValue: result.customValue, count: dashedTargetCount(topics.length) });
-}
-
-async function triggerDeleteDashedItem(id) {
-    const target = readDashedItems().find(item => item.id === id);
-    if (!target) { showToast('这条冷知识已不存在', null, true); if (linesMode) refreshLinesPanel(); return; }
-    const chatIdSnap = getContext().chatId;
-    const ok = await customDialog.confirm({ title: '删除冷知识', body: '确认删除这条冷知识吗？', confirmText: '删除', cancelText: '取消' });
-    if (!ok || getContext().chatId !== chatIdSnap) return;
-    const latest = readDashedItems();
-    if (!latest.some(item => item.id === id)) { if (linesMode) refreshLinesPanel(); return; }
-    const items = latest.filter(item => item.id !== id);
-    commitDashedItems(items);
-    if (linesMode) refreshLinesPanel();
-    syncLatestInlineBlock();
-}
-
-function triggerToggleDashedLock(id) {
-    const latest = readDashedItems();
-    const target = latest.find(item => item.id === id);
-    if (!target) { showToast('这条冷知识已不存在', null, true); if (linesMode) refreshLinesPanel(); return; }
-    const wasLocked = target.locked === true;
-    const next = latest.map(item => item.id === id ? { ...item, locked: !wasLocked } : item);
-    const committed = commitDashedItems(next);
-    const targetKept = committed.items.some(item => item.id === id);
-    if (linesMode) refreshLinesPanel();
-    syncLatestInlineBlock();
-    if (wasLocked && !targetKept) showToast('已解锁，并按保留规则清理这条较旧冷知识');
-    else if (committed.removed.length) showToast(`${wasLocked ? '已解锁' : '已锁定'}；同时清理 ${committed.removed.length} 条较旧冷知识`);
-    else showToast(wasLocked ? '已解锁这条冷知识' : '已锁定这条冷知识');
-}
-
-// ─── 虚线楼内子块（折进 .sp-lines-inline 的 body，与线合并成一个楼内窗口）──────────
-// 返回一段子块 HTML（非独立 <details>），由 _buildLinesBlockHtml 嵌进线块 body 里。
-// 只读展示、绝不写进 message.mes、绝不 setExtensionPrompt。关或无内容 → 返回 ''（不占位）。
-// 靠虚线上边框 + 「世界观补充」小字点明性质，不打功能名字招牌。
-function _buildDashedSubsectionHtml() {
-    if (getSettings().dashedEnabled !== true) return '';
-    const items = parseDashedItems(2);
-    // 开启即渲染外壳（含刷新键），哪怕暂无条目——供首次从楼内块直接生成。
-    let inner;
-    if (isGeneratingDashed) {
-        inner = '<div class="sp-dashed-inline-empty"><i class="fa-solid fa-spinner fa-spin"></i> 正在翻找冷知识…</div>';
-    } else if (items.length) {
-        inner = `<ul class="sp-dashed-list">${items.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`;
-    } else {
-        inner = '<div class="sp-dashed-inline-empty">线生成 / 推进时会顺手抽一条冷知识</div>';
-    }
-    // 刷新键坐在「世界观补充」这行右侧、冷知识区内部——不与线键混（用户要求，防误会）。
-    const btn = `<button class="sp-inline-refresh-dashed${isGeneratingDashed ? ' sp-refresh-busy' : ''}" title="换一条冷知识"><i class="fa-solid fa-rotate-right"></i></button>`;
-    return '<div class="sp-dashed-inline-sub">'
-        + `<div class="sp-dashed-inline-hint"><span>世界观补充</span>${btn}</div>`
-        + inner + '</div>';
-}
-
 let linesGenerationController = null;
 let linesActions = null;
 
@@ -9135,7 +8844,7 @@ function getLinesGenerationController() {
     if (linesGenerationController) return linesGenerationController;
     linesGenerationController = createLinesGenerationController({
         owners: linesTaskOwners,
-        onStart: owner => { linesAbortController = owner.controller; isGeneratingLines = true; },
+        onStart: owner => { linesAbortController = owner.controller; isGeneratingLines = true; if (linesMode && _linesSheet === 'events') refreshLinesPanel(); },
         chatId: () => getContext().chatId,
         loadConfig: loadCfg,
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
@@ -9160,7 +8869,7 @@ function getLinesGenerationController() {
             cachedLines = html;
             if (linesMode) { setLinesBody(html); if (!silent && getSettings().notifyMode !== 'off') showToast('线已生成'); }
             syncLatestInlineBlock(getContext().chatId);
-            if (getSettings().dashedEnabled === true) runGenerateDashed();
+            if (getSettings().dashedEnabled === true) getDashedModule().run();
             if (!linesMode && !silent) showToast('线已生成，点击查看', () => { if (!linesMode) $in('.sp-view-btn[data-view="lines"]').trigger('click'); showPanel(); });
             return travelContext;
         },
@@ -9210,42 +8919,7 @@ const STAGE_COLORS = {
 const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
 
 function linesToolbarHtml() {
-    const onEvents = _linesSheet === 'events';
-    const lineBusy = isGeneratingLines ? ' sp-refresh-busy' : '';
-    const dashedBusy = isGeneratingDashed ? ' sp-refresh-busy' : '';
-    return `<div class="sp-lines-toolbar-inner">
-        <div class="sp-lines-sheet-toggle">
-            <button type="button" class="sp-lines-sheet-btn${onEvents ? ' sp-lines-sheet-active' : ''}" data-sheet="events">平行事件</button>
-            <button type="button" class="sp-lines-sheet-btn${onEvents ? '' : ' sp-lines-sheet-active'}" data-sheet="dashed">冷知识</button>
-        </div>
-        <div class="sp-lines-tools">
-            ${onEvents ? `
-                <button class="sp-panel-refresh sp-refresh-lines${lineBusy}" title="重新生成线" aria-label="重新生成线"${isGeneratingLines ? ' disabled' : ''}><i class="fa-solid fa-rotate-right"></i></button>
-                <button class="sp-panel-refresh sp-advance-lines${lineBusy}" title="推进事件线（在已有线基础上继续推演）" aria-label="推进事件线"${isGeneratingLines ? ' disabled' : ''}><i class="fa-solid fa-forward"></i></button>
-            ` : `<button class="sp-panel-refresh sp-lines-dashed-add${dashedBusy}" title="新增冷知识" aria-label="新增冷知识"${isGeneratingDashed ? ' disabled' : ''}><i class="fa-solid fa-plus"></i></button>`}
-        </div>
-    </div>`;
-}
-
-function renderDashedPanel() {
-    const items = readDashedItems();
-    const status = isGeneratingDashed
-        ? '<div class="sp-lines-dashed-status"><i class="fa-solid fa-spinner fa-spin"></i> 正在翻找冷知识…</div>'
-        : _dashedPanelError ? `<div class="sp-lines-dashed-error"><i class="fa-solid fa-circle-exclamation"></i> ${escapeHtml(_dashedPanelError)}</div>` : '';
-    if (!items.length) {
-        return `${status}<div class="sp-empty sp-lines-dashed-empty"><i class="fa-solid fa-lightbulb"></i><p>还没有冷知识，可以点击右上角新增</p></div>`;
-    }
-    const rows = items.map((item, index) => `<div class="sp-beat sp-lines-dashed-item${item.locked ? ' sp-lines-dashed-pinned' : ''}" data-id="${escapeAttr(item.id)}">
-        <div class="sp-beat-head">
-            <span class="sp-seq-badge">#${index + 1}</span>
-            <span class="sp-beat-actions">
-                <button type="button" class="sp-lines-dashed-lock" data-id="${escapeAttr(item.id)}" title="${item.locked ? '取消锁定这条冷知识' : '锁定这条冷知识'}" aria-label="${item.locked ? '取消锁定这条冷知识' : '锁定这条冷知识'}"><i class="fa-solid ${item.locked ? 'fa-lock' : 'fa-lock-open'}"></i></button>
-                <button type="button" class="sp-lines-dashed-delete" data-id="${escapeAttr(item.id)}" title="删除这条冷知识" aria-label="删除这条冷知识"><i class="fa-solid fa-xmark"></i></button>
-            </span>
-        </div>
-        <div class="sp-beat-scene">${escapeHtml(item.text)}</div>
-    </div>`).join('');
-    return `${status}<div class="sp-lines-dashed-list">${rows}</div>`;
+    return getDashedModule().toolbarHtml({ onEvents: _linesSheet === 'events', lineBusy: isGeneratingLines ? ' sp-refresh-busy' : '', isGeneratingLines });
 }
 
 function renderLines(raw) {
