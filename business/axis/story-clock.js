@@ -35,7 +35,10 @@ function parseStoryClockMetaValue(raw) {
     const structuredTime = /(?:^|[|｜])\s*time\s*=\s*([^|｜]+)/i.exec(value)?.[1]?.trim();
     const date = parseStoryDate(structuredDate || value); const weekdayIndex = parseStoryWeekday(structuredWeekday || value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
-    const legacyTime = structuredTime ? null : value.split(/[|｜,，\s]+/).filter(part => part && !/(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(part) && !/[年月日\d\-\/]/.test(part)).join(' ').trim();
+    const numericClock = /(?:^|[|｜,，\s])(\d{1,2}:\d{2}(?::\d{2})?)(?=$|[|｜,，\s])/.exec(value)?.[1] || null;
+    const numericParts = numericClock?.split(':').map(Number);
+    const numericTime = numericClock && numericParts && numericParts[0] >= 0 && numericParts[0] <= 23 && numericParts[1] >= 0 && numericParts[1] <= 59 && (numericParts.length < 3 || (numericParts[2] >= 0 && numericParts[2] <= 59)) ? numericClock : null;
+    const legacyTime = structuredTime ? null : numericClock ? numericTime : value.split(/[|｜,，\s]+/).filter(part => part && !/(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(part) && !/[年月日\d\-\/]/.test(part)).join(' ').trim();
     const time = structuredTime || legacyTime || null;
     return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
