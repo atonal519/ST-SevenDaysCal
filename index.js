@@ -149,7 +149,7 @@ import { createLedgerActions } from './business/ledger/actions.js';
 import { bindLedgerEvents, createLedgerDeletedHandler } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
 import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
-import { mergeRecallTags, isDatabaseMemoEntry, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
+import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 import { createTaskOwnerManager } from './runtime/task-owner.js';
 import { evaluateTaskLifecycle } from './runtime/task-orchestration.js';
 import { parseLines as parseCanonicalLines, serializeLines, validateLinesResponse, TERMINAL_LINE_STAGES } from './business/lines/schema.js';
