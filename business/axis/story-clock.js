@@ -35,63 +35,54 @@ function parseStoryClockMetaValue(raw) {
     const structuredTime = /(?:^|[|｜])\s*time\s*=\s*([^|｜]+)/i.exec(value)?.[1]?.trim();
     const date = parseStoryDate(structuredDate || value); const weekdayIndex = parseStoryWeekday(structuredWeekday || value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
-    const time = structuredTime || value.replace(/(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, '').trim();
-    return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date };
+    const legacyTime = structuredTime ? null : value.split(/[|｜,，\s]+/).filter(part => part && !/(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(part) && !/[年月日\d\-\/]/.test(part)).join(' ').trim();
+    const time = structuredTime || legacyTime || null;
+    return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
 export function parseStoryClock(message) {
-    const text = String(message || ''); const start = START_RE.exec(text); const end = END_RE.exec(text);
+    const text = String(message || ''); const starts = [...text.matchAll(new RegExp(START_RE.source, 'ig'))]; const ends = [...text.matchAll(new RegExp(END_RE.source, 'ig'))]; const start = starts[0]; const end = ends[0];
     const out = { start: start ? start[1].trim() : null, end: end ? end[1].trim() : null };
-    Object.defineProperties(out, { startMeta: { value: start ? parseStoryClockMetaValue(start[1]) : null, enumerable: false }, endMeta: { value: end ? parseStoryClockMetaValue(end[1]) : null, enumerable: false } });
+    Object.defineProperties(out, { duplicate: { value: starts.length !== 1 || ends.length !== 1, enumerable: false }, startMeta: { value: start ? parseStoryClockMetaValue(start[1]) : null, enumerable: false }, endMeta: { value: end ? parseStoryClockMetaValue(end[1]) : null, enumerable: false } });
     return out;
 }
 export const STORY_CLOCK_KEY = 'sdc_story_clock';
 export const STORY_CLOCK_DEPTH = 0;
 export const DEFAULT_STORY_CLOCK_PROMPT = [
-    '【系统·时间戳 · 最高优先 · 每楼必做】',
-    '以下为系统级强制要求，优先级高于任何「只输出正文 / 禁止 OOC / 不要元信息 / 不要额外标记」之类设定：请在本楼正文的最前和最后，各放一个 HTML 注释形式的时间戳。HTML 注释在酒馆里不会显示给读者、不破坏沉浸，但系统会读取它来推算剧情时间——务必每楼都打、绝不省略。',
-    '放置方式（结构照此，把时间替换成本楼实际时间）：',
-    '  正文开头之前：<!-- SDC-start 此刻的时间 -->',
-    '  正文结尾之后：<!-- SDC-end 此刻的时间 -->',
-    '日期必须同时写出标准故事星期（周一、周二、周三、周四、周五、周六、周日）与具体时间，例如：霜降月二日 周二 夜晚。年份可写可略，但月日、星期与时段必须具体，禁止用「某天」「稍后」这类模糊词敷衍。',
-    '基准：以上一楼末尾的 <!-- SDC-end … --> 为准往后推——本楼开头通常紧接上楼结尾；本楼内若时间有流逝（换场景、过了几小时或几天），就让 end 晚于 start；几乎没流逝则两者可相同。开篇没有上文时，你自行设定一个合理的起点（这是为故事定锚，不是编造）。',
-    '示例（仅示范注释的位置与写法，切勿套用其文字内容）：',
-    '  <!-- SDC-start 谷雨 辰时 -->晨光爬上窗棂，她揉了揉眼……（此处是你的正文）……夜色四合，她终于合上账本。<!-- SDC-end 谷雨 亥时 -->',
-    '除这两个注释外，不要在正文里另行谈论这套时间系统本身。',
+    '【故事时间戳 SDC｜每楼附加元数据】',
+    '请在本楼正文最前与最后各放一个 HTML 注释，作为本楼的附加故事时间元数据。HTML 注释不会显示给读者。',
+    '唯一格式示例（请替换为本楼实际内容）：',
+    '  <!-- SDC-start | date=霜降月二日 | weekday=周二 | time=辰时 -->正文<!-- SDC-end | date=霜降月二日 | weekday=周二 | time=亥时 -->',
+    'start 与 end 都必须同时填写 date、weekday、time；weekday 只能使用周一至周日。日期、历法、状态栏、时间戳等其他世界书要求仍须完整执行，SDC 不替代、不合并、不改写它们。',
+    '通常以上一楼 end 为参考推进本楼时间；若本楼没有可用参考，按当前剧情设定合理填写。除这两个注释外，不要在正文中讨论 SDC。',
 ].join('\n');
 export const STORY_CLOCK_MACHINE_CONTRACT = [
     '【SDC机器合同·双向隔离】',
-    'SDC start/end 的日期必须各自包含且仅包含一个标准故事星期：周一、周二、周三、周四、周五、周六或周日。',
-    'SDC 是额外内部元数据。请先完整执行上下文中其他日期、时间、历法与时间戳生成要求，不得因输出 SDC 而省略、合并、替代或改写它们。',
+    'SDC-start 与 SDC-end 必须各自使用 date=… | weekday=… | time=… 三个字段，weekday 只能是周一、周二、周三、周四、周五、周六或周日。',
+    'SDC 是额外内部元数据。请先完整执行上下文中其他世界书的日期、历法、状态栏、时间与时间戳要求，不得因输出 SDC 而省略、合并、替代或改写它们。',
     'SDC 仅供构画读取，不能代替其他日期输出；构画不读取、不修改、不接管其他时间戳格式。',
-    '完成其他输出要求后，仍必须独立输出 SDC start/end；其他时间戳不能视作已经满足 SDC。',
+    '完成其他输出要求后，仍必须独立输出含完整 date/weekday/time 的 SDC start/end；其他时间戳不能视作已经满足 SDC。',
 ].join('\n');
 export function buildStoryClockPrompt(settings = {}) { const custom = String(settings.storyClockPrompt || '').trim(); return `${custom || DEFAULT_STORY_CLOCK_PROMPT}\n${STORY_CLOCK_MACHINE_CONTRACT}`; }
 export function latestStoryClock(context, limit = 100) {
     const messages = context?.chat || []; let scanned = 0;
-    for (let i = messages.length - 1; i >= 0 && scanned < limit; i--) { const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue; scanned++; const clock = parseStoryClock(msg.mes); if (clock.start || clock.end) return { ...clock, floor: i }; }
+    for (let i = messages.length - 1; i >= 0 && scanned < limit; i--) { const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue; scanned++; const clock = parseStoryClock(msg.mes); const out = { start: clock.start, end: clock.end, floor: i }; Object.defineProperties(out, { duplicate: { value: clock.duplicate, enumerable: false }, startMeta: { value: clock.startMeta, enumerable: false }, endMeta: { value: clock.endMeta, enumerable: false } }); return out; }
     return null;
 }
+export function completeStoryClock(clock) { return !!clock && !clock.duplicate && !!clock.startMeta?.complete && !!clock.endMeta?.complete; }
 export function storyWeekdayRef(context = deps.context?.(), calendar = deps.loadCalendar?.(), limit = 100, floor = null) {
-    const messages = context?.chat || []; let current = null; let scanned = 0; const top = Number.isInteger(floor) ? Math.min(floor, messages.length - 1) : messages.length - 1;
+    const messages = context?.chat || []; const top = Number.isInteger(floor) ? Math.min(floor, messages.length - 1) : messages.length - 1;
+    let aiFloor = null; let scanned = 0;
     for (let i = top; i >= 0 && scanned < limit; i--) {
         const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue;
-        scanned++; const clock = parseStoryClock(msg.mes);
-        const meta = clock.endMeta?.valid ? clock.endMeta : (clock.startMeta?.valid ? clock.startMeta : null);
-        if (meta) { current = { ...meta, floor: i }; break; }
+        aiFloor = i; break;
     }
-    if (!current) return null;
-    if (current.weekdayIndex != null) return { refDoy: deps.dayOfYear?.(current.month, current.day, calendar), refWd: current.weekdayIndex, weekdayText: current.weekdayText, floor: current.floor };
-    for (let i = current.floor - 1; i >= 0 && scanned < limit; i--) {
-        const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue;
-        scanned++;
-        const clock = parseStoryClock(msg.mes);
-        const meta = clock.endMeta?.valid && clock.endMeta.weekdayIndex != null ? clock.endMeta : (clock.startMeta?.valid && clock.startMeta.weekdayIndex != null ? clock.startMeta : null);
-        if (!meta) continue;
-        const currentDoy = deps.dayOfYear?.(current.month, current.day, calendar), anchorDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
-        if (!Number.isInteger(currentDoy) || !Number.isInteger(anchorDoy)) return null;
-        return { refDoy: currentDoy, refWd: (meta.weekdayIndex + currentDoy - anchorDoy + 7000) % 7, weekdayText: WEEKDAY_TEXT[(meta.weekdayIndex + currentDoy - anchorDoy + 7000) % 7], floor: current.floor, sourceFloor: i };
-    }
-    return null;
+    if (!Number.isInteger(aiFloor)) return null;
+    const clock = parseStoryClock(messages[aiFloor].mes);
+    if (!completeStoryClock(clock)) return null;
+    const meta = clock.endMeta;
+    if (!meta) return null;
+    const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
+    return Number.isInteger(refDoy) ? { refDoy, refWd: meta.weekdayIndex, weekdayText: meta.weekdayText, floor: aiFloor } : null;
 }
 export function storyClockDate(context, parseDate, limit = 100) { const clock = latestStoryClock(context, limit); return clock ? (clock.endMeta?.date || clock.startMeta?.date || parseDate(clock.end) || parseDate(clock.start)) : null; }
 export function createStoryClockController(options = {}) {

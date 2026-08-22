@@ -20,7 +20,7 @@ import {
     DEFAULT_CAL, loadCalDesc, calYearLen, almDayOfYear, almClampInt, almItemCoversDoy,
     almValidMonthDay, almDateFromChat,
 } from './data.js';
-import { storyWeekdayRef } from './story-clock.js';
+import { storyWeekdayRef, latestStoryClock } from './story-clock.js';
 
 let env = null;
 // env: { getDateAnchor, charStableKey, getLinesCacheKey, parseLines, TERMINAL_STAGES, getCacheKey }
@@ -92,7 +92,20 @@ export function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
 
 // 取「参照日→周几」锚：先扫所有来源的显式星期，再允许真实公历推算。返回 {refDoy, refWd}。
 export function almWeekdayRef(cal = loadCalDesc()) {
-    return storyWeekdayRef(getContext(), cal, 100) || null;
+    const automatic = storyWeekdayRef(getContext(), cal, 100);
+    const manual = env.getStoryCalibration?.();
+    if (manual && automatic && Number.isInteger(manual.floor) && automatic.floor === manual.floor) {
+        const refMonth = manual.refMonth ?? manual.month; const refDay = manual.refDay ?? manual.day;
+        return { refDoy: almDayOfYear(refMonth, refDay, cal), refWd: manual.weekday, weekdayText: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][manual.weekday], floor: automatic.floor, source: 'manual' };
+    }
+    if (automatic) return automatic;
+    if (!manual || !Number.isInteger(manual.weekday) || !Number.isInteger(manual.month) || !Number.isInteger(manual.day)) return null;
+    const manualDoy = almDayOfYear(manual.refMonth ?? manual.month, manual.refDay ?? manual.day, cal);
+    const currentClock = latestStoryClock(getContext(), 100);
+    const currentMeta = currentClock?.endMeta?.valid ? currentClock.endMeta : (currentClock?.startMeta?.valid ? currentClock.startMeta : null);
+    const currentDoy = currentMeta ? almDayOfYear(currentMeta.month, currentMeta.day, cal) : almDayOfYear(manual.month, manual.day, cal);
+    const refWd = (manual.weekday + currentDoy - manualDoy + 7000) % 7;
+    return Number.isInteger(currentDoy) && Number.isInteger(manualDoy) ? { refDoy: currentDoy, refWd, weekdayText: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][refWd], source: 'manual' } : null;
 }
 
 // 某月日的周几（0..6），纯日序偏移，不涉年。ref 可复用（较重，整轮渲染算一次传进来）。

@@ -53,8 +53,6 @@ import {
     _WEEKDAY_ADJ_RE,
     weekdayAdjacent,
     validRealDate,
-    calExplicitWeekdayRef,
-    calRealWeekdayRef,
     almMonthDayFromDoy,
     almEndMonthDay,
     almItemCoversDoy,
@@ -114,7 +112,7 @@ import { createAxisGenerationController } from './business/axis/generation.js';
 import { createAxisTransactionController } from './business/axis/transaction.js';
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
 import { createAxisDateContext } from './business/axis/date-context.js';
-import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, DEFAULT_STORY_CLOCK_PROMPT, STORY_CLOCK_KEY, createStoryClockController } from './business/axis/story-clock.js';
+import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, DEFAULT_STORY_CLOCK_PROMPT, STORY_CLOCK_KEY, createStoryClockController } from './business/axis/story-clock.js';
 import { createWeekdayConsumerContext, weekdayContextForPoint } from './business/axis/weekday-coordinator.js';
 import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
 import { createDateDetectionController } from './business/axis/date-detection.js';
@@ -210,6 +208,10 @@ const chatAnchorRepository = createChatAnchorRepository({
         return value ? { ...value, identity: `${key}:${value.month}/${value.day}` } : null;
     },
 });
+function latestStoryOwnerIdentity() {
+    const context = getContext(); const clock = latestStoryClockPure(context, ALM_CHAT_SCAN_LIMIT); const floor = Number.isInteger(clock?.floor) ? clock.floor : null; const message = floor == null ? null : context?.chat?.[floor];
+    return { chatId: context?.chatId || null, floor, swipe: message?.swipe_id ?? message?.mes_id ?? null };
+}
 const axisDateActions = createAxisDateActions({
     repository: chatAnchorRepository,
     charKey: () => charStableKey(getContext()),
@@ -220,6 +222,10 @@ const axisDateActions = createAxisDateActions({
     monthCount: calMonthCount,
     monthDays: calMonthDays,
     pending: () => chatAnchorRepository.pending(),
+    weekday: (month, day, ref, cal) => almWeekdayFor(month, day, ref, cal),
+    floor: () => latestStoryOwnerIdentity().floor,
+    chatId: () => latestStoryOwnerIdentity().chatId,
+    swipe: () => latestStoryOwnerIdentity().swipe,
     confirm: spConfirm,
     aftermath: () => runAnchorAftermath(),
     toast: showToast,
@@ -462,6 +468,7 @@ const ledgerActions = createLedgerActions({
 // （日期锚点/角色键/线缓存键+解析/点缓存键/终态集），经 bindAxisAnchor 注入以避免反向依赖循环引用。
 bindAxisAnchor({
     getDateAnchor,
+    getStoryCalibration: () => getStoryCalibration(charStableKey(getContext())),
     charStableKey,
     getLinesCacheKey,
     parseLines,
@@ -662,6 +669,10 @@ const dateDetectionController = createDateDetectionController({
     config: loadUtilityCfg,
     storyEnabled: storyClockEnabled,
     storyDate: storyClockDate,
+    storyClock: () => latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT),
+    completeStoryClock: clock => completeStoryClockPure(clock),
+    identity: latestStoryOwnerIdentity,
+    getCalibration: () => getStoryCalibration(charStableKey(getContext())),
     prompt: () => buildDateJudgePromptPure(getCalDescInjectText()),
     callApi: callCustomApi,
     parse: parseJudgedDatePure,
@@ -3615,7 +3626,7 @@ function injectModal() {
                                         <input type="checkbox" id="sp-storyclock-enabled" ${getSettings().storyClockEnabled !== false ? 'checked' : ''}>
                                         <span>启用时间戳</span>
                                     </label>
-                                    <p class="sp-cfg-hint" style="margin-top:2px">给整个故事一个<b>跟着剧情走的时间源</b>：向主楼 AI 注入一段指令，让它在<b>每楼正文首尾各打一个隐形时间戳</b>（HTML 注释，聊天里看不到），并写出标准故事星期（周一至周日）。构画读回 SDC，把它作为全局唯一星期锚；点三天与轴月历只按故事月日相对顺推，缺星期时显示“星期未记录”，不回退现实年份或 StartDate。<br><span style="opacity:.75">注：SDC 是额外元数据，不替代或接管上下文中的其他日期、时间和时间戳格式；会给每楼多加一小段系统提示词（占少量 token）。</span></p>
+                                    <p class="sp-cfg-hint" style="margin-top:2px">给整个故事一个<b>跟着剧情走的时间源</b>：向主楼 AI 注入一段指令，让它在<b>每楼正文首尾各打一个隐形时间戳</b>（HTML 注释，聊天里看不到），并写出标准故事星期（周一至周日）。构画只认当前楼完整 SDC；点三天与轴月历只按故事月日相对顺推，缺星期时显示“星期未记录”，不回退现实年份或旧楼。唯一星期 fallback 是用户在“校准故事时间”里亲自设置的人工锚；后续楼 start/end 双侧完整有效 SDC 会自动接管，恢复自动会立即重判当前楼。<br><span style="opacity:.75">注：SDC 是额外元数据，不替代或接管上下文中的其他日期、时间和时间戳格式；会给每楼多加一小段系统提示词（占少量 token）。</span></p>
                                     <p class="sp-cfg-hint" style="margin-top:4px; opacity:.75">另：所有刷新判定都挂钩时间戳；不开启时，遇到楼尾的额外变量计算（如 MVU）可能<b>重复调用 API</b>。</p>
                                     <hr class="sp-mem-divider">
                                     <label class="sp-cfg-group" style="margin-top:10px">强制注入提示词（可二改）</label>
@@ -4539,17 +4550,18 @@ function injectModal() {
     $almanac.on('click', '.sp-alm-today-save', async function () {
         const mo = parseInt($in('#sp-alm-today-month').val(), 10);
         const da = parseInt($in('#sp-alm-today-day').val(), 10);
-        const result = await axisDateActions.saveManual(mo, da, { storyClock: storyClockEnabled() });
-        if (!result.ok) { if (result.reason === 'story-clock') { axisState._almTodayEditing = false; renderAlmanacPanel(); } return; }
+        const weekday = parseInt($in('#sp-alm-today-weekday').val(), 10);
+        const result = await axisDateActions.saveManual(mo, da, { storyClock: true, weekday });
+        if (!result.ok) return;
         axisState._almTodayEditing = false;
     });
     $almanac.on('click', '.sp-alm-today-clear', function () {
-        if (storyClockEnabled()) return;   // 戳开时无「恢复自动」概念（今天恒由戳钉）；防陈旧 DOM 误触
         const key = charStableKey(getContext());
         if (!key) return;
         const cleared = axisDateActions.clearAnchor(key);   // 清锚 → 恢复自动确认
         if (!cleared.ok) { showToast('日期清除失败，请重试', null, true); return; }
         runAnchorAftermath();
+        relandStoryClockAnchor();
         showToast('已清除手动日期，恢复自动确认');
     });
     // 月历：翻月 / 选日（再点已选=取消回全月）/ 看全月 / 加到某天
@@ -5899,13 +5911,33 @@ function getDateAnchor(charKey) {
     if (local && (local.status === 'unresolved' || local.status === 'pending')) return null;
     if (local) {
         const cal = loadCalDesc();
+        if (local.calibration) {
+            if (!local.calibration || !Number.isInteger(local.calibration.weekday)) return null;
+            const current = latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT);
+            // 半残 SDC 只能作为人工校准的日期相位，不能提前停用校准；
+            // 只有当前 AI 楼的 start/end 两侧都完整且无重复歧义时才允许接管。
+            if (completeStoryClockPure(current)) {
+                const calibrationFloor = local.calibration?.floor;
+                if (!Number.isInteger(calibrationFloor) || current.floor !== calibrationFloor) return null;
+            }
+        }
         return local.month >= 1 && local.month <= calMonthCount(cal) && local.day >= 1 && local.day <= calMonthDays(cal, local.month) ? { month: local.month, day: local.day } : null;
     }
     return null;
 }
 
-function setDateAnchor(charKey, month, day, source = 'explicit') {
-    return axisDateActions.saveAnchor(charKey, month, day, source);
+function getStoryCalibration(charKey) {
+    if (!charKey) return null;
+    const local = chatAnchorRepository.get();
+    if (!local?.calibration) return null;
+    const cal = loadCalDesc();
+    if (local.month < 1 || local.month > calMonthCount(cal) || local.day < 1 || local.day > calMonthDays(cal, local.month)) return null;
+    if (!Number.isInteger(local.calibration.weekday) || local.calibration.weekday < 0 || local.calibration.weekday > 6) return null;
+    return { month: local.month, day: local.day, refMonth: local.calibration.refMonth ?? local.month, refDay: local.calibration.refDay ?? local.day, weekday: local.calibration.weekday, floor: local.calibration.floor, sourceFloor: local.calibration.sourceFloor, swipe: local.calibration.swipe };
+}
+
+function setDateAnchor(charKey, month, day, source = 'explicit', options = {}) {
+    return axisDateActions.saveAnchor(charKey, month, day, source, options);
 }
 
 // ─── Per-character narrative scale ──────────────────────────────────────────
@@ -7258,6 +7290,7 @@ const SPACE_HELP_FACTS = `【构画·功能与设置速查（你据此回答用�
 · 总开关（设置最顶部）：①「启用构画」——关了整个插件如同未安装。②「允许潜伏注入主楼 AI（线/面/刻度）」——这是**注入总闸**，它关着的话，就算线/面/刻度各自的注入开关开了也不会注入。用户说"我开了注入怎么没用"先让他确认这个总闸。
 · 【谁能后台注入主楼 AI（关键事实，别答错）】只有**三家**能潜伏注入主楼 AI：线、面（大纲）、刻度（暗历）。**「点/日程」不能后台自动注入主楼 AI**——它是只读展示（面板卡片 + 楼内日程条），只能手动生成/刷新，没有"注入开关"。同理「轴/历」本身也不注入正文（历只在楼内挂只读日程块）。用户问"点能不能后台自动注入/自动喂给 AI"，答案是**不能**，别顺着说可以；他要的效果得靠线/面/刻度承载。
 · 时间戳（设置→模块设置→时间戳）：「启用时间戳」，让主楼 AI 每楼打隐形时间戳作时间源，默认开。
+· 故事星期：只认当前 AI 楼 start/end 双侧完整 SDC；缺失或半残时显示“星期未记录”。唯一 fallback 是用户亲自设置的“校准故事时间”人工锚；后续完整有效 SDC 自动接管，点击“恢复自动”会立即重判当前楼。
 · 轴（设置→模块设置→轴）：含「读不到戳时用 API 兜底判定日期」「点·后台自动跟随今天」「（刻度）潜伏注入主楼 AI」等。
 · 轴·生成节日 vs 补录纪念日（都在轴面板右上角工具区，手机端收在 ⋮ 菜单里）：「**生成节日**」按世界观**重铺一整年**——会先参照世界书/角色卡判断故事所在地域文化再铺对应节日（别默认套中华节庆，美国背景就别硬塞中秋），已锁定条与你手动加的会保留、未锁的旧 AI 条被替换。「**补录纪念日**」只**增补**剧情里新浮现的重大里程碑纪念日（上限约 3 条、宁缺毋滥、可能一条都不补），**纯追加、不动任何现有条、也不重铺整历**，补录的条目会自动锁定防日后重铺被冲。两者别混：想加新纪念日又不想动现有历，用「补录纪念日」。目前补录**只有手动触发**，暂无后台自动补录。
 · 线（设置→模块设置→线）：「启用平行事件（线）」「潜伏注入主楼 AI」「虚线·冷知识」「推进策略（回合/时间/手动）+ 间隔」。线以 UC（用户核心角色）为主轴，也会额外放行 1-2 条**非 UC 的配角/NPC 支线**（重要配角自己的小线索，须同一世界观、同一叙事尺度，不会跨尺度乱入）。
@@ -9016,13 +9049,14 @@ const axisUi = createAxisUi({
     monthName: (cal, month) => calMonthName(cal, month),
     monthCount: cal => calMonthCount(cal),
     anchor: key => getDateAnchor(key),
+    storyCalibration: () => getStoryCalibration(charStableKey(getContext())),
     editing: () => axisState._almTodayEditing,
 });
 const actionMenuHtml = axisUi.actionMenuHtml;
 const almTodayBarHtml = axisUi.todayBarHtml;
 const storyClockBarHtml = axisUi.storyClockBarHtml;
 function almNudgeToday(delta) {
-    axisDateActions.nudgeToday(delta, { storyClock: storyClockEnabled() });
+    axisDateActions.nudgeToday(delta, { storyClock: true });
 }
 function currentCharacterCards() { return calendarCards(getContext(), charStableKey); }
 

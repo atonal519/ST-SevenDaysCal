@@ -1,42 +1,51 @@
 // 轴日期动作：保存/清除锚点以及“今天 ±1”的宿主无关业务流程。
 export function createAxisDateActions(env = {}) {
-    const saveAnchor = (key, month, day, source = 'explicit') => {
+    const saveAnchor = (key, month, day, source = 'explicit', options = {}) => {
         if (!key) return { ok: false, reason: 'missing-character' };
         if (month == null) return env.repository?.clear?.() || { ok: false, reason: 'missing-repository' };
-        return env.repository?.set?.(month, day, source) || { ok: false, reason: 'missing-repository' };
+        const result = Object.keys(options || {}).length ? env.repository?.set?.(month, day, source, options) : env.repository?.set?.(month, day, source);
+        return result || { ok: false, reason: 'missing-repository' };
     };
     const clearAnchor = (key) => {
         if (!key) return { ok: false, reason: 'missing-character' };
         return env.repository?.clear?.(key) || { ok: false, reason: 'missing-repository' };
     };
     const nudgeToday = (delta, { storyClock = false } = {}) => {
-        if (storyClock) return { ok: false, reason: 'story-clock' };
         const key = env.charKey?.();
         if (!key) { env.toast?.('当前没有角色卡，无法钉日期', null, true); return { ok: false, reason: 'missing-character' }; }
         const calendar = env.calendar?.();
+        const ownerIdentity = { chatId: env.chatId?.(), floor: env.floor?.(), swipe: env.swipe?.() };
         const today = env.today?.();
         const target = env.monthDayFromDoy?.((env.dayOfYear?.(today?.month, today?.day, calendar) || 0) + Number(delta || 0), calendar);
         if (!target) { env.toast?.('日期保存失败，请重试', null, true); return { ok: false, reason: 'invalid-target' }; }
-        const stored = saveAnchor(key, target.month, target.day);
+        const weekday = env.weekday?.(today.month, today.day, null, calendar);
+        if (storyClock && !Number.isInteger(weekday)) { env.toast?.('当前没有可用故事星期，请先校准', null, true); return { ok: false, reason: 'weekday' }; }
+        const stored = saveAnchor(key, target.month, target.day, storyClock ? 'calibration' : 'explicit', storyClock ? { refMonth: target.month, refDay: target.day, weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe } : {});
         if (!stored.ok) { env.toast?.('日期保存失败，请重试', null, true); return stored; }
         env.aftermath?.();
         return { ok: true, date: target };
     };
-    const saveManual = async (month, day, { storyClock = false } = {}) => {
-        if (storyClock) return { ok: false, reason: 'story-clock' };
+    const saveManual = async (month, day, { storyClock = false, weekday = null } = {}) => {
         const key = env.charKey?.(); if (!key) { env.toast?.('当前没有角色卡，无法钉日期', null, true); return { ok: false, reason: 'missing-character' }; }
+        const ownerIdentity = { chatId: env.chatId?.(), floor: env.floor?.(), swipe: env.swipe?.() };
         const calendar = env.calendar?.(), count = env.monthCount?.(calendar);
         if (!(month >= 1 && month <= count)) { env.toast?.(`请填 1-${count} 月`, null, true); return { ok: false, reason: 'month' }; }
         const max = env.monthDays?.(calendar, month);
         if (!(day >= 1 && day <= max)) { env.toast?.(`${month} 月只有 1-${max} 日`, null, true); return { ok: false, reason: 'day' }; }
+        if (storyClock && (!Number.isInteger(+weekday) || +weekday < 0 || +weekday > 6)) { env.toast?.('请选择故事星期', null, true); return { ok: false, reason: 'weekday' }; }
         let stored;
         if (env.pending?.()) {
             const confirmed = await env.confirm?.({ title: '发现旧版日期锚点', body: '是否将旧版全局日期仅认领到当前聊天？', confirmText: '认领', cancelText: '取消' });
             if (!confirmed) { env.toast?.('已取消认领，未写入日期', null, true); return { ok: false, reason: 'cancelled' }; }
-            stored = env.repository?.claim?.(month, day);
-        } else stored = saveAnchor(key, month, day);
+            const now = { chatId: env.chatId?.(), floor: env.floor?.(), swipe: env.swipe?.() };
+            if (now.chatId !== ownerIdentity.chatId || now.floor !== ownerIdentity.floor || String(now.swipe ?? '') !== String(ownerIdentity.swipe ?? '')) return { ok: false, reason: 'stale-confirm' };
+            stored = storyClock ? (env.repository?.claimCalibration?.(month, day, { refMonth: month, refDay: day, weekday: +weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe }) || { ok: false, reason: 'missing-repository' }) : env.repository?.claim?.(month, day);
+        } else {
+            if (env.chatId?.() !== ownerIdentity.chatId || env.floor?.() !== ownerIdentity.floor || String(env.swipe?.() ?? '') !== String(ownerIdentity.swipe ?? '')) return { ok: false, reason: 'stale-confirm' };
+            stored = storyClock ? (env.repository?.set?.(month, day, 'calibration', { refMonth: month, refDay: day, weekday: +weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe }) || { ok: false, reason: 'missing-repository' }) : saveAnchor(key, month, day);
+        }
         if (!stored?.ok) { env.toast?.('日期保存失败，请重试', null, true); return stored || { ok: false, reason: 'save' }; }
-        env.aftermath?.(); env.toast?.(`已把今天钉为 ${month}月${day}日`); return { ok: true, date: { month, day } };
+        env.aftermath?.(); env.toast?.(storyClock ? `已校准故事时间为 ${month}月${day}日` : `已把今天钉为 ${month}月${day}日`); return { ok: true, date: { month, day } };
     };
     return { saveAnchor, clearAnchor, saveManual, nudgeToday };
 }

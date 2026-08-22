@@ -7,12 +7,16 @@ const clone = value => value == null ? value : JSON.parse(JSON.stringify(value))
 
 export function makeChatAnchor(chatId, month, day, source = 'explicit') {
     if (!String(chatId || '').trim() || !Number.isInteger(+month) || !Number.isInteger(+day)) return null;
-    return { schemaVersion: DATE_ANCHOR_SCHEMA, chatId: String(chatId), month: +month, day: +day, source: source === 'auto' || source === 'detected' ? source : 'explicit' };
+    return { schemaVersion: DATE_ANCHOR_SCHEMA, chatId: String(chatId), month: +month, day: +day, source: source === 'auto' || source === 'detected' || source === 'calibration' ? source : 'explicit' };
 }
 export function normalizeChatAnchor(value, chatId) {
     if (!value || value.schemaVersion !== DATE_ANCHOR_SCHEMA || String(value.chatId) !== String(chatId || '')) return null;
     const a = value.anchor && typeof value.anchor === 'object' ? value.anchor : value;
-    return Number.isInteger(+a.month) && Number.isInteger(+a.day) ? { month: +a.month, day: +a.day, source: a.source || value.source || 'unknown' } : null;
+    if (!Number.isInteger(+a.month) || !Number.isInteger(+a.day)) return null;
+    const calibration = a.calibration && typeof a.calibration === 'object' && Number.isInteger(+a.calibration.weekday)
+        ? { refMonth: a.calibration.refMonth != null && Number.isInteger(+a.calibration.refMonth) ? +a.calibration.refMonth : +a.month, refDay: a.calibration.refDay != null && Number.isInteger(+a.calibration.refDay) ? +a.calibration.refDay : +a.day, weekday: +a.calibration.weekday, floor: a.calibration.floor != null && Number.isInteger(+a.calibration.floor) ? +a.calibration.floor : null, sourceFloor: a.calibration.sourceFloor != null && Number.isInteger(+a.calibration.sourceFloor) ? +a.calibration.sourceFloor : null, swipe: a.calibration.swipe == null ? null : String(a.calibration.swipe) }
+        : null;
+    return { month: +a.month, day: +a.day, source: a.source || value.source || 'unknown', ...(calibration ? { calibration } : {}) };
 }
 export function unresolvedLegacyAnchor(identity = null) { return { status: 'unresolved', reason: 'legacy-global-anchor-needs-explicit-claim', identity }; }
 
@@ -29,7 +33,7 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         return { status: 'pending', identity, month: +v.month, day: +v.day, source: 'legacy' };
     };
     const persist = record => { try { return write?.(record) === true; } catch { return false; } };
-    const set = (month, day, source = 'explicit') => { const a = makeChatAnchor(id(), month, day, source); if (!a) return { ok: false, reason: 'invalid-anchor' }; return persist({ schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a }) ? { ok: true, anchor: a } : { ok: false, reason: 'write-failed' }; };
+    const set = (month, day, source = 'explicit', options = {}) => { const a = makeChatAnchor(id(), month, day, source); if (!a) return { ok: false, reason: 'invalid-anchor' }; const calibration = options.calibration || (source === 'calibration' ? options : null); if (calibration && Number.isInteger(+calibration.weekday)) a.calibration = { refMonth: calibration.refMonth != null && Number.isInteger(+calibration.refMonth) ? +calibration.refMonth : +month, refDay: calibration.refDay != null && Number.isInteger(+calibration.refDay) ? +calibration.refDay : +day, weekday: +calibration.weekday, floor: calibration.floor != null && Number.isInteger(+calibration.floor) ? +calibration.floor : null, sourceFloor: calibration.sourceFloor != null && Number.isInteger(+calibration.sourceFloor) ? +calibration.sourceFloor : null, swipe: calibration.swipe == null ? null : String(calibration.swipe) }; return persist({ schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a }) ? { ok: true, anchor: a } : { ok: false, reason: 'write-failed' }; };
     const clear = () => { if (!id()) return { ok: false, reason: 'missing-chat' }; return persist({ schemaVersion: DATE_ANCHOR_SCHEMA, state: 'auto', chatId: id(), anchor: null }) ? { ok: true, tombstone: true } : { ok: false, reason: 'write-failed' }; };
     const claim = (month, day, options = {}) => {
         const p = legacyPending(); if (!p) return { ok: false, reason: 'no-pending-legacy' };
@@ -39,7 +43,15 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         if (!persist(record)) return { ok: false, reason: 'write-failed' };
         return { ok: true, anchor: a, claimed: true, identity: p.identity, marker: record.claimMarker, memoryUpdated: true, durability: 'unconfirmed' };
     };
-    return { get: () => local() || legacyPending() || null, pending: legacyPending, set, auto: (m, d) => set(m, d, 'auto'), clear, claim, cancel: () => ({ ok: true, wrote: false }) };
+    const claimCalibration = (month, day, options = {}) => {
+        const p = legacyPending(); if (!p) return { ok: false, reason: 'no-pending-legacy' };
+        const a = makeChatAnchor(id(), month ?? p.month, day ?? p.day, 'calibration');
+        if (!a || !Number.isInteger(+options.weekday)) return { ok: false, reason: 'invalid-calibration' };
+        a.calibration = { refMonth: options.refMonth != null && Number.isInteger(+options.refMonth) ? +options.refMonth : +a.month, refDay: options.refDay != null && Number.isInteger(+options.refDay) ? +options.refDay : +a.day, weekday: +options.weekday, floor: options.floor != null && Number.isInteger(+options.floor) ? +options.floor : null, sourceFloor: options.sourceFloor != null && Number.isInteger(+options.sourceFloor) ? +options.sourceFloor : null, swipe: options.swipe == null ? null : String(options.swipe) };
+        const before = localRecord(); const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
+        return persist(record) ? { ok: true, anchor: a, claimed: true, identity: p.identity, marker: record.claimMarker } : { ok: false, reason: 'write-failed' };
+    };
+    return { get: () => local() || legacyPending() || null, pending: legacyPending, set, auto: (m, d) => set(m, d, 'auto'), clear, claim, claimCalibration, cancel: () => ({ ok: true, wrote: false }) };
 }
 
 export function isValidCalendarDescriptor(c) {

@@ -31,6 +31,7 @@ export function renderAxisCalendar(env) {
         .map(w => `<div class="sp-alm-weekhead-cell">${w}</div>`).join('');
     const weekdayOfFirst = almWeekdayFor(month1, 1, wkRef, cal);
     const lead = weekdayOfFirst == null ? 0 : (weekdayOfFirst + 6) % 7;
+    const unknownWeekdayHint = wkRef == null ? '<div class="sp-alm-weekday-unknown">星期未记录：按日期顺序排列</div>' : '';
     const leadCells = Array.from({ length: lead }, () => '<div class="sp-alm-cell-empty"></div>').join('');
     const travelState = axisState.timeTravelState;
     const travelTarget = travelState?.selectedTargetDate;
@@ -60,5 +61,5 @@ export function renderAxisCalendar(env) {
             ? `<button class="sp-alm-time-travel sp-mini-btn" data-day="${selected}">跳到这天</button>`
             : '');
     const rows = detailItems.length ? `<div class="sp-alm-list">${detailItems.map(it => env.almRowHtml(it, ctx)).join('')}</div>` : `<div class="sp-alm-cal-empty">${selected != null ? '这天没有日期' : '本月暂无日期'}</div>`;
-    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div><div class="sp-alm-weekhead">${head}</div><div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${travelControl}${rows}</div></div>`;
+    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div><div class="sp-alm-weekhead">${head}</div>${unknownWeekdayHint}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${travelControl}${rows}</div></div>`;
 }

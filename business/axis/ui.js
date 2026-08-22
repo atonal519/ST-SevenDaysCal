@@ -20,18 +20,19 @@ export function createAxisUi(env = {}) {
         return `<div class="sp-action-menu" data-menu-id="${env.escapeAttr(menuId)}"><button type="button" class="sp-icon-btn sp-action-menu-toggle" title="更多操作" aria-label="更多操作" aria-expanded="false"><i class="fa-solid fa-ellipsis-vertical"></i></button><div class="sp-action-menu-list" hidden>${rows}</div></div>`;
     };
     const todayBarHtml = () => {
-        if (env.storyClockEnabled?.()) return '';
         const key = env.charKey?.(), cal = env.calendar?.(), today = env.today?.();
         const wdIndex = env.weekday?.(today.month, today.day, null, cal);
         const wd = wdIndex == null ? '星期未记录' : env.weekdays?.[wdIndex];
         if (!key) return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.monthName(cal, today.month)}${today.day}日·${wd}</span><span class="sp-alm-today-hint">无角色卡，无法钉</span></div>`;
         if (env.editing?.()) {
             const maxDim = Math.max(...cal.months.map(month => month.days));
-            return `<div class="sp-alm-today sp-alm-today-editing"><span class="sp-alm-today-lbl">今天</span><input id="sp-alm-today-month" class="sp-input sp-alm-today-input" type="number" min="1" max="${env.monthCount(cal)}" placeholder="月" value="${today.month}"><span class="sp-alm-today-lbl">月</span><input id="sp-alm-today-day" class="sp-input sp-alm-today-input" type="number" min="1" max="${maxDim}" placeholder="日" value="${today.day}"><span class="sp-alm-today-lbl">日</span><span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-save" title="确定"><i class="fa-solid fa-check"></i></button><button class="sp-icon-btn sp-alm-today-cancel" title="取消"><i class="fa-solid fa-xmark"></i></button></span></div>`;
+            const selected = env.storyCalibration?.()?.weekday;
+            const weekdays = (env.weekdays || []).map((label, index) => `<option value="${index}" ${index === selected ? 'selected' : ''}>${label}</option>`).join('');
+            return `<div class="sp-alm-today sp-alm-today-editing"><span class="sp-alm-today-lbl">校准故事时间</span><input id="sp-alm-today-month" class="sp-input sp-alm-today-input" type="number" min="1" max="${env.monthCount(cal)}" placeholder="月" value="${today.month}"><span class="sp-alm-today-lbl">月</span><input id="sp-alm-today-day" class="sp-input sp-alm-today-input" type="number" min="1" max="${maxDim}" placeholder="日" value="${today.day}"><span class="sp-alm-today-lbl">日</span><select id="sp-alm-today-weekday" class="sp-input sp-alm-today-weekday">${weekdays}</select><span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-save" title="保存校准"><i class="fa-solid fa-check"></i></button><button class="sp-icon-btn sp-alm-today-cancel" title="取消"><i class="fa-solid fa-xmark"></i></button></span></div>`;
         }
-        const pinned = env.anchor?.(key), pinTag = pinned ? '<span class="sp-alm-today-pin" title="已手动钉住，压过自动确认"><i class="fa-solid fa-thumbtack"></i></span>' : '';
-        const autoBtn = pinned ? '<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动确认"><i class="fa-solid fa-rotate"></i></button>' : '';
-        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.monthName(cal, today.month)}${today.day}日·${wd}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）"><i class="fa-solid fa-chevron-left"></i></button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）"><i class="fa-solid fa-chevron-right"></i></button><button class="sp-icon-btn sp-alm-today-edit" title="改日期"><i class="fa-solid fa-pen"></i></button>${autoBtn}</span></div>`;
+        const pinned = env.anchor?.(key), calibration = env.storyCalibration?.(), pinTag = calibration ? '<span class="sp-alm-today-pin" title="人工故事时间校准"><i class="fa-solid fa-compass"></i></span>' : pinned ? '<span class="sp-alm-today-pin" title="兼容旧版日期锚点"><i class="fa-solid fa-thumbtack"></i></span>' : '';
+        const autoBtn = pinned || calibration ? '<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动"><i class="fa-solid fa-rotate"></i></button>' : '';
+        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.monthName(cal, today.month)}${today.day}日·${wd}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）"><i class="fa-solid fa-chevron-left"></i></button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）"><i class="fa-solid fa-chevron-right"></i></button><button class="sp-icon-btn sp-alm-today-edit" title="校准故事时间"><i class="fa-solid fa-pen"></i></button>${autoBtn}</span></div>`;
     };
     const storyClockBarHtml = () => {
         if (!env.storyClockEnabled?.()) return '';
