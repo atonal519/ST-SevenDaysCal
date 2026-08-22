@@ -78,8 +78,8 @@ function persist() {
 }
 
 // 批量路径专用：等待官方 saveMetadata 返回的 Promise（若有）。ST 内部吞掉的磁盘错误不在此边界可观测。
-function persistAwaitable() {
-    const ctx = getContext?.();
+function persistAwaitable(boundContext = null) {
+    const ctx = boundContext || getContext?.();
     if (!ctx) return Promise.resolve();
     try {
         const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
@@ -213,14 +213,44 @@ export async function addEntriesAtomic(items) {
     }
 }
 
-export async function reconcileEntriesAtomic(sources, chatLength) {
-    const m = ledger(true); if (!m) return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 } };
-    const result = await reconcileStateAtomicCore(m, sources, chatLength, persistAwaitable, normalizeEntry);
+export async function reconcileEntriesAtomic(sources, chatLength, owner = null, runtime = null) {
+    const m = runtime?.state || ledger(true); if (!m) return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 } };
+    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || (bound => persistAwaitable(bound));
+    const guard = () => !owner || (readContext?.()?.chatId === owner.chatId && (owner.guard ? owner.guard() : true));
+    const save = async (check, options = {}) => { if (!options.compensate && !check?.()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' }); return persist(ctx, options); };
+    const result = await reconcileStateAtomicCore(m, sources, chatLength, save, normalizeEntry, guard);
     return result;
 }
 
 export async function reconcileStateAtomic(state, sources, chatLength, save) {
     return reconcileStateAtomicCore(state, sources, chatLength, save, normalizeEntry);
+}
+
+// 判定车专用：把一轮多条现状/到期/了结修改合并到副本后只保存一次。
+// 任意保存失败都恢复原条目，避免出现半轮成功。
+export async function applyJudgePatchesAtomic(patches = [], owner = null, runtime = null) {
+    const m = runtime?.state || ledger(true); if (!m) return { ok: false, reason: 'no-ledger', applied: [] };
+    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || (bound => persistAwaitable(bound));
+    const guard = () => !owner || (readContext?.()?.chatId === owner.chatId && (owner.guard ? owner.guard() : true));
+    if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
+    const before = cloneState(m.entries); const applied = [];
+    try {
+        for (const change of Array.isArray(patches) ? patches : []) {
+            const entry = m.entries.find(item => item.id === change?.id);
+            if (!entry) throw Object.assign(new Error('unknown-ledger-id'), { code: 'unknown-ledger-id' });
+            Object.assign(entry, change.patch || {});
+            if (change.close) entry.状态 = '已了结';
+            applied.push(entry.事由);
+        }
+        if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
+        await persist(ctx);
+        if (!guard()) {
+            m.entries = before;
+            try { await persist(ctx, { compensate: true }); } catch (rollbackError) { rollbackError.phase = 'rollback-save-failed'; throw rollbackError; }
+            throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
+        }
+        return { ok: true, applied };
+    } catch (error) { m.entries = before; error.phase ||= 'judge-save-failed'; throw error; }
 }
 
 // 测试/宿主注入 seam：复用本 repository 的 normalize 与原子事务，不依赖 ST runtime。

@@ -1,7 +1,8 @@
+import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 export const JUDGE_FLOORS = 4;
 
-function buildJudgePrompt(env, today) {
-    const lines = (env.listJudgeable?.() || []).map(e => env.fmtLedger?.(e, today)).join('\n');
+function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
+    const lines = entries.map(e => env.fmtLedger?.(e, today)).join('\n');
     return `请暂停角色扮演，作为剧情连续性助手，只做一件事：根据下面【已登记事件】各自「距今过了多少天」和最近正文，判断哪些事件的状态**该随时间变化了**，只输出需要更新的那几条。
 
 【已登记事件】（方括号是编号，天数已由系统算好，你不必自己算日期）
@@ -27,44 +28,56 @@ export function createLedgerJudgeController(options = {}) {
     const env = options;
     let busy = false;
     let abortController = null;
-    const current = (ctrl, chatId, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && env.context().chatId === chatId;
-    const finish = (ctrl, chatId) => {
+    const ownerOf = () => {
+        return ledgerOwnerIdentity(env.context?.() || {});
+    };
+    const sameOwner = sameLedgerOwner;
+    const current = (ctrl, owner, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && sameOwner(owner, ownerOf());
+    const finish = (ctrl, owner) => {
         if (abortController !== ctrl) return false;
         busy = false; abortController = null;
-        if (env.context().chatId === chatId) { env.render?.(); env.refreshInline?.(true); }
+        if (sameOwner(owner, ownerOf())) { env.render?.(); env.refreshInline?.(true); }
         return true;
     };
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
         const ctx = env.context();
+        const owner = env.identity?.() || ownerOf(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
         let reconcile = null;
-        try { reconcile = await env.reconcile?.(); } catch (error) { return { status: 'failed', reason: 'reconcile-failed', reconcile: null, applied: [], error }; }
-        if (reconcile?.error) return { status: 'failed', reason: 'reconcile-failed', reconcile, applied: [], error: reconcile.error };
-        const summary = reconcile?.summary || {};
-        const suffix = summary.cleaned || summary.remapped || summary.lockedMissing ? `（已清理${summary.cleaned || 0}条、重映射${summary.remapped || 0}条、保留锁定来源缺失${summary.lockedMissing || 0}条）` : '';
-        if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
-        if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
-        if (!(env.listJudgeable?.() || []).length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
-        const cfg = env.config?.();
-        if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), reconcile, applied: [] };
-        const chatId = ctx.chatId; const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         env.render?.(); env.refreshInline?.(true);
         try {
+            try { reconcile = await env.reconcile?.(owner); } catch (error) { error.phase ||= 'source-scan-failed'; return { status: 'failed', reason: error.phase, reconcile: null, applied: [], error }; }
+            if (reconcile?.error) {
+                if ((reconcile.phase || reconcile.error.phase) === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error: reconcile.error };
+                if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
+                return { status: 'failed', reason: reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error };
+            }
+            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+            const summary = reconcile?.summary || {};
+            if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
+            if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
+            const judgeable = (env.listJudgeable?.() || []).filter(entry => entry?.来源状态 !== '待确认' && entry?.来源状态 !== '来源已删除');
+            if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
+            const cfg = env.config?.();
+            if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), reconcile, applied: [] };
             const target = env.validDate?.(travel?.targetDate, env.calendar?.());
             const floorContext = env.floorContext?.();
             const floor = floorContext?.floor ?? null;
             const date = target || floorContext?.date || env.today?.();
-            const raw = await env.callApi(ctx, env.appendTravel?.(buildJudgePrompt(env, date), travel) || buildJudgePrompt(env, date), cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true });
-            if (!current(ctrl, chatId, travel)) return { status: 'cancelled', reason: 'stale', reconcile, applied: [] };
+            const judgePrompt = buildJudgePrompt(env, date, judgeable);
+            const raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true });
+            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
             if (parsed?.status === 'none') return { status: 'unchanged', reason: 'none', reconcile, applied: [] };
             if (parsed?.status === 'invalid') return { status: 'invalid', reason: 'format', reconcile, applied: [] };
             const cal = env.calendar?.(); const applied = [];
             for (const change of parsed?.changes || []) {
-                if (!current(ctrl, chatId, travel)) return { status: 'cancelled', reason: 'stale', reconcile, applied: [] };
+                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
                 const entry = env.getEntry?.(change.id);
-                if (!entry || entry.状态 === '已了结' || entry.锁 === '用户锁') continue;
+                if (!entry) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
+                if (entry.状态 === '已了结' || entry.锁 === '用户锁') continue;
+                if (entry.来源状态 === '待确认' || entry.来源状态 === '来源已删除') return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
                 if (entry.静音 === true && change.动作 === '了结') continue;
                 const patch = { 现状锚: { 楼层: floor, 历日期: date } };
                 if (change.现状) patch.现状 = change.现状;
@@ -72,21 +85,25 @@ export function createLedgerJudgeController(options = {}) {
                     const base = entry.到期锚.历日期;
                     patch.到期锚 = { 历日期: env.monthDayFromDoy?.(env.dayOfYear?.(base.month, base.day, cal) + entry.周期长度, cal) };
                 } else if (change.到期 && change.动作 !== '滚周期') patch.到期锚 = { 历日期: change.到期 };
-                env.update?.(entry.id, patch);
-                if (change.动作 === '了结') env.close?.(entry.id);
-                applied.push(entry.事由);
+                applied.push({ id: entry.id, patch, close: change.动作 === '了结',事由: entry.事由 });
             }
-            if (!current(ctrl, chatId, travel)) return { status: 'cancelled', reason: 'stale', reconcile, applied: [] };
+            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (!applied.length) return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
+            let saved = null;
+            if (env.applyAtomic) { try { saved = await env.applyAtomic(applied, owner); } catch (error) { error.phase ||= 'judge-save-failed'; throw error; } }
+            if (env.applyAtomic && !saved?.ok) return { status: 'failed', reason: 'judge-save-failed', reconcile, applied: [] };
+            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+            if (!env.applyAtomic) for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
             env.refreshInject?.(); env.refreshInline?.(true); env.render?.();
-            return { status: 'updated', applied, reconcile };
+            return { status: 'updated', applied: applied.map(change => change.事由), reconcile };
         } catch (error) {
             if (abortController !== ctrl) return { status: 'cancelled', reason: 'superseded', reconcile, applied: [], error };
-            if (error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
+            if (error?.phase === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error };
+            if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
             if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
-            if (env.context().chatId !== chatId) return { status: 'cancelled', reason: 'chat-changed', reconcile, applied: [], error };
-            return { status: 'failed', reason: error?.spDisabled ? 'spDisabled' : 'api-failed', error, reconcile, applied: [] };
-        } finally { finish(ctrl, chatId); removeBridge(); }
+            if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
+            return { status: 'failed', reason: error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, reconcile, applied: [] };
+        } finally { finish(ctrl, owner); removeBridge(); }
     };
     return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }

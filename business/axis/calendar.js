@@ -27,11 +27,9 @@ export function renderAxisCalendar(env) {
     const anchor = almTodayAnchor();
     const ctx = { cal, wkRef, todayDoy: almDayOfYear(anchor.month, anchor.day, cal) };
     const selected = axisState._almanacCalDay;
-    const head = ['一', '二', '三', '四', '五', '六', '日']
-        .map(w => `<div class="sp-alm-weekhead-cell">${w}</div>`).join('');
+    const head = wkRef == null ? '' : `<div class="sp-alm-weekhead">${['一', '二', '三', '四', '五', '六', '日'].map(w => `<div class="sp-alm-weekhead-cell">${w}</div>`).join('')}</div>`;
     const weekdayOfFirst = almWeekdayFor(month1, 1, wkRef, cal);
     const lead = weekdayOfFirst == null ? 0 : (weekdayOfFirst + 6) % 7;
-    const unknownWeekdayHint = wkRef == null ? '<div class="sp-alm-weekday-unknown">星期未记录：按日期顺序排列</div>' : '';
     const leadCells = Array.from({ length: lead }, () => '<div class="sp-alm-cell-empty"></div>').join('');
     const travelState = axisState.timeTravelState;
     const travelTarget = travelState?.selectedTargetDate;
@@ -50,7 +48,7 @@ export function renderAxisCalendar(env) {
         const selectedDoy = almDayOfYear(month1, selected, cal);
         detailItems = items.filter(it => almItemCoversDoy(it, selectedDoy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
         const selectedWd = almWeekdayFor(month1, selected, wkRef, cal);
-        detailHead = `<div class="sp-alm-cal-detail-head"><span>${calMonthName(cal, month1)}${selected}日 · ${selectedWd == null ? '星期未记录' : ALM_WEEKDAYS[selectedWd]}</span><span class="sp-alm-cal-detail-tools"><button class="sp-alm-add-day sp-mini-btn" data-day="${selected}">＋加到这天</button><button class="sp-alm-cal-clearsel sp-mini-btn">看全月</button></span></div>`;
+        detailHead = `<div class="sp-alm-cal-detail-head"><span>${calMonthName(cal, month1)}${selected}日${selectedWd == null ? '' : ` · ${ALM_WEEKDAYS[selectedWd]}`}</span><span class="sp-alm-cal-detail-tools"><button class="sp-alm-add-day sp-mini-btn" data-day="${selected}">＋加到这天</button><button class="sp-alm-cal-clearsel sp-mini-btn">看全月</button></span></div>`;
     } else {
         detailItems = items.filter(it => it.month === month1).sort((a, b) => a.day - b.day);
         detailHead = '<div class="sp-alm-cal-detail-head"><span>本月日期</span></div>';
@@ -61,5 +59,5 @@ export function renderAxisCalendar(env) {
             ? `<button class="sp-alm-time-travel sp-mini-btn" data-day="${selected}">跳到这天</button>`
             : '');
     const rows = detailItems.length ? `<div class="sp-alm-list">${detailItems.map(it => env.almRowHtml(it, ctx)).join('')}</div>` : `<div class="sp-alm-cal-empty">${selected != null ? '这天没有日期' : '本月暂无日期'}</div>`;
-    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div><div class="sp-alm-weekhead">${head}</div>${unknownWeekdayHint}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${travelControl}${rows}</div></div>`;
+    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div>${head}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${travelControl}${rows}</div></div>`;
 }

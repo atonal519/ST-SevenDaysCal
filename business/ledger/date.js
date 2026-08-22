@@ -21,7 +21,7 @@ export function ledgerDueInfo(entry, today = deps.today()) {
 }
 
 export function listJudgeableLedger() {
-    return deps.listEntries().filter(entry => entry.锁 !== '用户锁');
+    return deps.listEntries().filter(entry => entry.锁 !== '用户锁' && entry.来源状态 !== '待确认' && entry.来源状态 !== '来源已删除');
 }
 
 export function fmtLedgerForJudge(entry, today = deps.today()) {

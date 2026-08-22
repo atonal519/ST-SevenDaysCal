@@ -5,7 +5,7 @@ export function formatLedgerJudgeFeedback(result) {
     const text = {
         busy: '已有刻度更新正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法判定' : r.reason === 'no-entry' ? '暂无可判定的活跃事件' : r.reason === 'spDisabled' ? '刻度功能已停用' : '刻度更新已跳过',
-        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'reconcile-failed' ? '来源校对失败，未发起 API 请求' : '刻度判定失败，请检查 API 或网络',
+        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : ['reconcile-failed', 'source-scan-failed', 'source-state-invalid', 'source-save-failed'].includes(r.reason) ? '来源校对失败，未发起 API 请求' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，持久状态暂无法确认' : r.reason === 'judge-save-failed' ? '刻度保存失败，本轮未写入更新' : '刻度判定失败，请检查 API 或网络',
         invalid: '刻度判定格式无法识别',
         unchanged: r.reason === 'protected' ? '本轮变化均无效或受保护，刻度未更新' : '本轮无需更新刻度',
         updated: `刻度刷新 ${(r.applied || []).length} 条${r.applied?.length ? `：${r.applied.join('、')}` : ''} · 请注意查看`,

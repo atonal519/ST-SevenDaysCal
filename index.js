@@ -146,6 +146,7 @@ import { createLedgerSnapshotBridge } from './business/ledger/snapshot.js';
 import { createLedgerActions } from './business/ledger/actions.js';
 import { bindLedgerEvents, createLedgerDeletedHandler } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
+import { ledgerOwnerIdentity } from './business/ledger/owner.js';
 import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
 import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 import { createTaskOwnerManager } from './runtime/task-owner.js';
@@ -382,12 +383,14 @@ const ledgerCaptureController = createLedgerCaptureController({
     render: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); },
     setProgress: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
 });
-const reconcileLedgerSources = async () => {
-    try {
-        const records = ledgerAiFloorRecords();
-        const result = await ledger.reconcileEntriesAtomic(buildLedgerSources(records), getContext()?.chat?.length || 0);
-        return result;
-    } catch (error) { return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 }, error }; }
+const reconcileLedgerSources = async (owner = null) => {
+    const logSourceError = error => { try { console.error('[SP ledger source reconcile]', { name: error?.name, message: error?.message, stack: error?.stack }); } catch {} };
+    let records;
+    try { records = ledgerAiFloorRecords(); } catch (error) { error.phase = 'source-scan-failed'; logSourceError(error); return { changed: false, summary: {}, phase: error.phase, error }; }
+    let sources;
+    try { sources = buildLedgerSources(records); } catch (error) { error.phase = 'source-state-invalid'; logSourceError(error); return { changed: false, summary: {}, phase: error.phase, error }; }
+    try { return await ledger.reconcileEntriesAtomic(sources, getContext()?.chat?.length || 0, owner); }
+    catch (error) { logSourceError(error); return { changed: false, summary: {}, phase: error.phase || 'source-save-failed', error }; }
 };
 const runLedgerCaptureStep = (manual = false, travelContext = null) => ledgerCaptureController.run(manual, travelContext);
 const ledgerInjectionController = createLedgerInjectionController({
@@ -417,6 +420,8 @@ const ledgerJudgeController = createLedgerJudgeController({
     callApi: callCustomApi,
     parseJudge: parseLedgerJudgeSchema,
     getEntry: id => ledger.getEntry(id),
+    identity: () => ledgerOwnerIdentity(getContext() || {}),
+    applyAtomic: (patches, owner) => ledger.applyJudgePatchesAtomic(patches, owner),
     reconcile: reconcileLedgerSources,
     update: (id, patch) => ledger.updateEntry(id, patch),
     close: id => ledger.closeEntry(id),

@@ -4788,6 +4788,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-almanac-wrap { container-name: sp-almanac; container-type: inline-size; }
 .sp-alm-tools, .sp-alm-wide-tools { display: inline-flex; align-items: center; gap: 2px; }
 .sp-alm-narrow-tools { display: none; }
+.sp-alm-tools-placeholder { visibility: hidden; pointer-events: none; user-select: none; }
+.sp-alm-tools-placeholder .sp-icon-btn { visibility: hidden; pointer-events: none; }
+@container sp-almanac (max-width: 380px) {
+    .sp-alm-tools-placeholder .sp-alm-narrow-tools { display: inline-flex; gap: 2px; }
+    .sp-alm-tools-placeholder .sp-alm-narrow-tools .sp-icon-btn { width: 32px; height: 32px; }
+}
 
 /* 通用操作菜单：菜单项由静态配置生成；固定图标列保证不同图标后的文字严格对齐。 */
 .sp-action-menu { position: relative; }

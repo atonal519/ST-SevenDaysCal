@@ -8,7 +8,11 @@ export function renderAxisToolbar(actionMenuHtml) {
             <button class="sp-alm-sheet-btn${axisState._almanacSheet === 'calendar' ? ' sp-alm-sheet-active' : ''}" data-sheet="calendar">日历</button>
             <button class="sp-alm-sheet-btn${onLedger ? ' sp-alm-sheet-active' : ''}" data-sheet="ledger">刻度</button>
         </div>
-        ${onLedger ? '' : `<div class="sp-alm-tools">
+        ${onLedger ? `<div class="sp-alm-tools sp-alm-tools-placeholder" aria-hidden="true" inert>
+            <button class="sp-icon-btn" tabindex="-1" aria-hidden="true"><i class="fa-solid fa-plus"></i></button>
+            <div class="sp-alm-wide-tools"><button class="sp-icon-btn" tabindex="-1" aria-hidden="true"></button><button class="sp-icon-btn" tabindex="-1" aria-hidden="true"></button><button class="sp-icon-btn" tabindex="-1" aria-hidden="true"></button></div>
+            <div class="sp-alm-narrow-tools"><button class="sp-icon-btn" tabindex="-1" aria-hidden="true"></button></div>
+        </div>` : `<div class="sp-alm-tools">
             <button class="sp-icon-btn sp-alm-add" title="手动添加日期" aria-label="手动添加日期"><i class="fa-solid fa-plus"></i></button>
             <div class="sp-alm-wide-tools">
                 <button class="sp-icon-btn sp-alm-gen" title="生成节日（AI 按世界观铺满一整年）" aria-label="生成节日"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
