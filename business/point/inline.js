@@ -21,7 +21,7 @@ export function createPointInlineRenderer(env) {
         if (dayKey === 'future') { events = future?.events || []; headLabel = dateLabel = '未来'; }
         else {
             const index = Number(dayKey); const day = days[index]; events = day?.events || []; weather = String(day?.weather || '').trim(); temp = String(day?.temp || '').trim();
-            if (startDate) { const context = env.scheduleDayCtx(startDate, calendar, weekdayRefOverride); const value = env.scheduleDayLabel(index, startDate, context); headLabel = `${formatPointDate(value.month, value.day, context.cal) || '日期未知'} · ${value.wd == null ? '星期未记录' : env.weekdays[value.wd]}`; }
+            if (startDate) { const context = env.scheduleDayCtx(startDate, calendar, weekdayRefOverride); const value = env.scheduleDayLabel(index, startDate, context); const dateText = formatPointDate(value.month, value.day, context.cal); headLabel = dateText ? `${dateText} · ${value.wd == null ? '星期未记录' : env.weekdays[value.wd]}` : '日期未知'; }
             else headLabel = `第${index + 1}天`;
             dateLabel = headLabel; if (weather || temp) headLabel += ` · ${env.weatherGlyph(weather)}${weather}${temp ? ' ' + temp : ''}`;
         }

@@ -129,7 +129,8 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         let dateLabel = `第${di + 1}天`;
         if (startDate) {
             const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            dateLabel = `${formatPointDate(month, dd, ctx.cal) || '日期未知'} · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}`;
+            const dateText = formatPointDate(month, dd, ctx.cal);
+            dateLabel = dateText ? `${dateText} · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}` : '日期未知';
         }
         return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
     });
