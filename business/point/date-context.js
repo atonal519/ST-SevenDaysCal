@@ -1,4 +1,12 @@
 import { addCalendarDays, calendarDate, isGregorian, ordinalOf } from '../calendar/date.js';
+import { calMonthName } from '../axis/data.js';
+
+// 点域唯一的月/日显示口径：公历保留旧视觉，自定义历法使用 resolved calendar 的月份名。
+export function formatPointDate(month, day, calendar = null, compact = false) {
+    if (!Number.isInteger(month) || !Number.isInteger(day)) return null;
+    if (isGregorian(calendar)) return compact ? `${month}/${day}` : `${month}月${day}日`;
+    return `${calMonthName(calendar, month)}${day}日`;
+}
 
 export function asCalendarDate(value, calendar = null) {
     if (isGregorian(calendar) && value instanceof Date) return calendarDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
