@@ -1,6 +1,6 @@
 // ─── 点（日程）域 · 生成 prompt ───────────────────────────────────────────────
 // 从 index.js 机械搬移 buildPrompt：纯字符串拼装，无 DOM / store / 历法依赖。
-export function buildPrompt(userName, charName, perspective = 'user', pinned = null) {
+export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null) {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;
     const pins = Array.isArray(pinned) ? pinned.filter(e => e?.title?.trim()) : [];
@@ -13,6 +13,9 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
     const relationHint = perspective === 'char'
         ? ''
         : `\n【与 ${companion} 的潜在关联·软提示】\n${subject} 若是重要 NPC / 非主角人物，其日程可以适度体现与 ${companion} 的潜在关联——可以是复仇、陷害、交易、试探、监视、利用、牵制、误导、协作、冲突等多种走向，也可能只是间接波及。请根据剧情自然带出，不必每条事件都围绕 ${companion}，更不要默认写成爱情关系；${subject} 仍应有独立于 ${companion} 的生活与目标。\n`;
+    const startDateFormat = calendar && calendar.kind !== 'gregorian' && calendar.id !== 'default-gregorian'
+        ? 'MM-DD（自定义历法不填写年份）'
+        : 'YYYY-MM-DD';
     return `请暂停角色扮演，以旁观者视角根据以上剧情，为 ${subject} 生成日程。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 【人称】你是旁观者，不要扮演任何角色。所有文字（含 description 与线头动态）必须以第三人称叙述，直呼 ${subject} 的名字，严禁使用"我""我们"等第一人称，也不要用第二人称"你"。
@@ -24,7 +27,7 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
 
 ${subject} 和 ${companion} 都有各自独立的生活，事件可以涉及任意 NPC 和第三方，不必每条都围绕两人互动。
 ${relationHint}
-输出顺序必须严格为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>，中间不得省略任何块；Day 1-3 每天生成 1 到 3 个事件，Future 块必须生成 5 到 10 个事件，时间跨度不限。预算紧张时缩短说明文字，也不得省略 Future 或结束标签。
+输出顺序必须严格为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>，中间不得省略任何块；Day 1-3 每天建议生成 1 到 3 个事件，Future 建议生成若干条（数量随剧情证据浮动），但 Future 不能省略。不要为满足数量凑数；预算紧张时缩短说明文字，也不得省略 Future 或结束标签。
 
 【天气说明】
 每个 Day 的日头请附带当天天气与温度，格式 Day: N|天气|温度（如 Day: 1|晴|3℃）。
@@ -43,7 +46,7 @@ ${pinnedBlock}
 【输出格式（严格遵守，只输出以下结构）】
 <!-- 日程思考：（结合剧情推演安排，100字以上） -->
 <calendar_widget>
-StartDate: YYYY-MM-DD（可从剧情推断则填写，否则省略此行）
+StartDate: ${startDateFormat}（可从剧情推断则填写，否则省略此行）
 Day: 1|天气|温度
 Event: type|title|description|time|location|线头动态
 Event: type|title|description|time|location|线头动态

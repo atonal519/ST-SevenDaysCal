@@ -38,6 +38,16 @@ export function isTheaterGenerating() { return _generating; }
 // 中间若立刻再点生成，守卫会误报"正在生成中"。给个同步入口让 index.js 中止时立即清标志。
 export function resetTheaterGenerating() { _generating = false; }
 
+// 重新生成只能沿用当前 piece 真实记录的来源；不得读取用户后来点选但尚未用于
+// 生成的全局模板状态。返回值同时作为 index.js 的请求输入和来源快照，避免两套决策。
+export function resolveTheaterRegen(piece, fallbackInput = '') {
+    const input = String(piece?.request || piece?.templateSource?.input || fallbackInput || '').trim();
+    const source = piece?.templateSource?.input
+        ? { ...piece.templateSource, input: String(piece.templateSource.input).trim() }
+        : null;
+    return { input, templateSource: source };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  草稿层（localStorage，per-chat）
 // ═══════════════════════════════════════════════════════════════════════════
@@ -350,6 +360,12 @@ function sanitizeHtml(htmlRaw) {
     return div.innerHTML;
 }
 
+function safePlainTextHtml(raw) {
+    const text = String(raw || '');
+    const escaped = text.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    return `<div class="sp-theater-prose"><p>${escaped.replace(/\r?\n/g, '<br>')}</p></div>`;
+}
+
 // 生成一段小剧场。返回 { piece } 或抛错。piece 已自动落草稿。
 // onStage(stageText) 供 UI 更新 loading 文案（'写作' / '美化'）。
 export async function generate(userInput, { signal, onStage, templateSource = null } = {}) {
@@ -383,14 +399,16 @@ export async function generate(userInput, { signal, onStage, templateSource = nu
             console.warn('[SP theater] 美化 agent 失败，退回纯文本渲染:', err);
         }
         // 美化空/异常 → fallback：交给 index.js 的 renderAiMessageHtml（注入为兜底渲染器）
-        const html = String(htmlRaw || '').trim()
+        let html = String(htmlRaw || '').trim()
             ? sanitizeHtml(htmlRaw)
             : sanitizeHtml(_fallbackRender ? _fallbackRender(raw) : raw);
+        if (!String(html || '').trim() && String(raw || '').trim()) html = safePlainTextHtml(raw);
 
         const piece = {
             id   : (crypto?.randomUUID?.() || `t-${Date.now()}-${Math.floor(performance.now())}`),
             title: '',
             raw  : String(raw),
+            request: String(userInput).trim(),
             html,
             ts   : Date.now(),
             // 保存生成当刻实际输入；模板改名/删除或用户二次编辑后，回看仍准确。

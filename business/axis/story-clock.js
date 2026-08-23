@@ -12,11 +12,11 @@ function parseStoryWeekday(text) {
 }
 function parseStoryDate(text) {
     const s = String(text || '');
-    let m = s.match(/(?:^|\s)(\d{4})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(\d{1,2})(?:\s|$)/);
+    let m = s.match(/(?:^|[\s|｜,，])(\d{4})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
     if (m) return deps.validMonthDay({ month: +m[2], day: +m[3] }, deps.loadCalendar());
-    m = s.match(/(?:^|\s)(?:\d{4}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+    m = s.match(/(?:^|[\s|｜,，])(?:\d{4}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
     if (m) return deps.validMonthDay({ month: +m[1], day: +m[2] }, deps.loadCalendar());
-    m = s.match(/(?:^|\s)(\d{1,2})[-/](\d{1,2})(?:\s|$)/);
+    m = s.match(/(?:^|[\s|｜,，])(\d{1,2})[-/.](\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
     if (m) return deps.validMonthDay({ month: +m[1], day: +m[2] }, deps.loadCalendar());
     const cal = deps.loadCalendar();
     for (let i = 0; i < (cal?.months?.length || 0); i++) {
@@ -28,18 +28,62 @@ function parseStoryDate(text) {
     }
     return null;
 }
+function parseStoryTime(raw, { structured = false } = {}) {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+    const dateLike = /\d{1,4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}/;
+    const offsetOnly = /(?:UTC|GMT)?\s*[+-]\s*\d{1,2}\s*[:：]\s*\d{2}/i;
+    const weekdayToken = '(?:周|週|星期|礼拜|禮拜)[一二三四五六日天]|(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)';
+    const clockPattern = '(\\d{1,2})\\s*[:：]\\s*(\\d{2})(?:\\s*[:：]\\s*(\\d{2}))?';
+    const readClock = (match, label = null, offset = 0) => {
+        let hour = Number(match[1 + offset]); const minute = Number(match[2 + offset]); const second = match[3 + offset] == null ? null : Number(match[3 + offset]);
+        if (label) { if (hour < 1 || hour > 12) return null; const pm = label === '下午' || label === '中午'; hour = (hour % 12) + (pm ? 12 : 0); }
+        if (hour > 23 || minute > 59 || (second != null && second > 59)) return null;
+        return `${hour}:${String(minute).padStart(2, '0')}${second == null ? '' : `:${String(second).padStart(2, '0')}`}`;
+    };
+    const safeContext = (index, length) => {
+        const before = value.slice(0, index); const after = value.slice(index + length);
+        const left = before.trimEnd(); const right = after.trimStart();
+        const leftSafe = !before || /[\s|｜,，]$/.test(before) || new RegExp(`(?:${weekdayToken})$`, 'i').test(left);
+        const rightSafe = !after || /^[\s|｜,，]/.test(after) || new RegExp(`^(?:${weekdayToken})(?=$|[\s|｜,，])`, 'i').test(right);
+        return leftSafe && rightSafe;
+    };
+    if (structured) {
+        if (dateLike.test(value) || offsetOnly.test(value)) return null;
+        const meridiem = new RegExp(`^(上午|下午|凌晨|中午)\\s*${clockPattern}$`).exec(value);
+        if (meridiem) return safeContext(0, value.length) ? readClock(meridiem, meridiem[1], 1) : null;
+        const numeric = new RegExp(`^${clockPattern}$`).exec(value);
+        if (numeric) return readClock(numeric);
+        if (/[：:]\s*\d|\d{1,2}\s*时\s*\d|\d/.test(value)) return null;
+        return value;
+    }
+    const iso = new RegExp(`\\d{4}\\s*[-/.]\\s*\\d{1,2}\\s*[-/.]\\s*\\d{1,2}\\s*[Tt]\\s*${clockPattern}(?:\\s*[Zz]|\\s*[+-]\\s*\\d{1,2}\\s*[:：]\\s*\\d{2})?`).exec(value);
+    // ISO 的 Z/偏移属于完整日期时间的一部分；仅有 +08:00/UTC+08:00
+    // 仍由 offsetOnly 安全闸拒绝，避免把时区当成剧情时刻。
+    if (iso) return readClock(iso);
+    if (offsetOnly.test(value)) return null;
+    const meridiem = new RegExp(`(上午|下午|凌晨|中午)\\s*${clockPattern}`).exec(value);
+    if (meridiem) return safeContext(meridiem.index, meridiem[0].length) ? readClock(meridiem, meridiem[1], 1) : null;
+    const numericRe = new RegExp(clockPattern, 'g'); const numeric = numericRe.exec(value);
+    if (numeric) {
+        if (!safeContext(numeric.index, numeric[0].length)) return null;
+        return readClock(numeric);
+    }
+    if (dateLike.test(value) || /[：:]\s*\d|\d{1,2}\s*时\s*\d/.test(value)) return null;
+    return value.split(/[|｜,，\s]+/).filter(part => part && !WEEKDAY_ALIASES.test(part) && !/[年月日\d\-/.]/.test(part)).join(' ').trim() || null;
+}
 function parseStoryClockMetaValue(raw) {
     const value = String(raw || '').trim();
-    const structuredDate = /(?:^|[|｜])\s*date\s*=\s*([^|｜]+)/i.exec(value)?.[1]?.trim();
-    const structuredWeekday = /(?:^|[|｜])\s*weekday\s*=\s*([^|｜]+)/i.exec(value)?.[1]?.trim();
-    const structuredTime = /(?:^|[|｜])\s*time\s*=\s*([^|｜]+)/i.exec(value)?.[1]?.trim();
-    const date = parseStoryDate(structuredDate || value); const weekdayIndex = parseStoryWeekday(structuredWeekday || value);
+    const field = name => new RegExp(`(?:^|[|｜,，])\\s*(?:${name})\\s*=\\s*([^|｜,，]+)`, 'i').exec(value)?.[1]?.trim();
+    const structuredDate = field('date');
+    const structuredWeekday = field('weekday|星期');
+    const structuredTime = field('time');
+    const date = parseStoryDate(structuredDate || value);
+    const weekdayIndex = /^[一二三四五六日天]$/.test(String(structuredWeekday || '').trim())
+        ? ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 })[String(structuredWeekday).trim()]
+        : parseStoryWeekday(structuredWeekday || value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
-    const numericClock = /(?:^|[|｜,，\s])(\d{1,2}:\d{2}(?::\d{2})?)(?=$|[|｜,，\s])/.exec(value)?.[1] || null;
-    const numericParts = numericClock?.split(':').map(Number);
-    const numericTime = numericClock && numericParts && numericParts[0] >= 0 && numericParts[0] <= 23 && numericParts[1] >= 0 && numericParts[1] <= 59 && (numericParts.length < 3 || (numericParts[2] >= 0 && numericParts[2] <= 59)) ? numericClock : null;
-    const legacyTime = structuredTime ? null : numericClock ? numericTime : value.split(/[|｜,，\s]+/).filter(part => part && !/(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(part) && !/[年月日\d\-\/]/.test(part)).join(' ').trim();
-    const time = structuredTime || legacyTime || null;
+    const time = parseStoryTime(structuredTime || value, { structured: !!structuredTime });
     return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
 export function parseStoryClock(message) {

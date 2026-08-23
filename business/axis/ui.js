@@ -1,5 +1,17 @@
 import { calMonthCount, calMonthDays, calYearLen } from './data.js';
 
+// 纯显示格式化：轴面板只展示人类可读值，不把 date=/time= 等机器字段泄漏给用户。
+// 无法确认结构化值时回退到已转义 raw，保证旧存档仍可读且不会注入 HTML。
+export function formatStoryClockMeta(meta, escape = value => String(value ?? '')) {
+    const m = meta && typeof meta === 'object' ? meta : null;
+    if (!m?.valid) return escape(m?.raw || '');
+    const date = m.month != null && m.day != null ? `${m.month}月${m.day}日` : '';
+    const weekday = m.weekdayText || '';
+    const time = m.time || '';
+    const human = [date, weekday, time].filter(Boolean).join(' ');
+    return escape(human || m.raw || '');
+}
+
 export function calendarSummary(cal) { return `一年 ${calMonthCount(cal)} 个月、共 ${calYearLen(cal)} 天`; }
 export function calendarConflicts(items, cal) {
     return items.map(item => {
@@ -28,7 +40,7 @@ export function createAxisUi(env = {}) {
             const maxDim = Math.max(...cal.months.map(month => month.days));
             const selected = env.storyCalibration?.()?.weekday;
             const weekdays = (env.weekdays || []).map((label, index) => `<option value="${index}" ${index === selected ? 'selected' : ''}>${label}</option>`).join('');
-            return `<div class="sp-alm-today sp-alm-today-editing"><span class="sp-alm-today-lbl">校准故事时间</span><input id="sp-alm-today-month" class="sp-input sp-alm-today-input" type="number" min="1" max="${env.monthCount(cal)}" placeholder="月" value="${today.month}"><span class="sp-alm-today-lbl">月</span><input id="sp-alm-today-day" class="sp-input sp-alm-today-input" type="number" min="1" max="${maxDim}" placeholder="日" value="${today.day}"><span class="sp-alm-today-lbl">日</span><select id="sp-alm-today-weekday" class="sp-input sp-alm-today-weekday">${weekdays}</select><span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-save" title="保存校准"><i class="fa-solid fa-check"></i></button><button class="sp-icon-btn sp-alm-today-cancel" title="取消"><i class="fa-solid fa-xmark"></i></button></span></div>`;
+            return `<div class="sp-alm-today sp-alm-today-editing"><span class="sp-alm-today-lbl sp-alm-today-calibration-title">校准故事时间</span><input id="sp-alm-today-month" class="sp-input sp-alm-today-input" type="number" min="1" max="${env.monthCount(cal)}" placeholder="月" value="${today.month}"><span class="sp-alm-today-lbl">月</span><input id="sp-alm-today-day" class="sp-input sp-alm-today-input" type="number" min="1" max="${maxDim}" placeholder="日" value="${today.day}"><span class="sp-alm-today-lbl">日</span><select id="sp-alm-today-weekday" class="sp-input sp-alm-today-weekday">${weekdays}</select><span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-save" title="保存校准"><i class="fa-solid fa-check"></i></button><button class="sp-icon-btn sp-alm-today-cancel" title="取消"><i class="fa-solid fa-xmark"></i></button></span></div>`;
         }
         const pinned = env.anchor?.(key), calibration = env.storyCalibration?.(), pinTag = calibration ? '<span class="sp-alm-today-pin" title="人工故事时间校准"><i class="fa-solid fa-compass"></i></span>' : pinned ? '<span class="sp-alm-today-pin" title="兼容旧版日期锚点"><i class="fa-solid fa-thumbtack"></i></span>' : '';
         const autoBtn = pinned || calibration ? '<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动"><i class="fa-solid fa-rotate"></i></button>' : '';
@@ -39,8 +51,8 @@ export function createAxisUi(env = {}) {
         const clock = env.latestClock?.();
         let value;
         if (!clock || (!clock.start && !clock.end)) value = '<span class="sp-alm-clock-wait">等待主楼 AI 打点…（发几楼后自动出现）</span>';
-        else if (clock.start && clock.end && clock.start !== clock.end) value = `${env.escapeHtml(clock.start)} <span class="sp-alm-clock-arrow">→</span> ${env.escapeHtml(clock.end)}`;
-        else value = env.escapeHtml(clock.end || clock.start);
+        else if (clock.start && clock.end && clock.start !== clock.end) value = `${formatStoryClockMeta(clock.startMeta, env.escapeHtml)} <span class="sp-alm-clock-arrow">→</span> ${formatStoryClockMeta(clock.endMeta, env.escapeHtml)}`;
+        else value = formatStoryClockMeta(clock.endMeta || clock.startMeta, env.escapeHtml);
         return `<div class="sp-alm-clock" title="由主楼 AI 每楼打的隐形时间戳读回，精确到小时"><span class="sp-alm-clock-lbl"><i class="fa-regular fa-clock"></i>时间戳</span><span class="sp-alm-clock-val">${value}</span></div>`;
     };
     return { actionMenuHtml, todayBarHtml, storyClockBarHtml };

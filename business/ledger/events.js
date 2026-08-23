@@ -2,16 +2,17 @@ export function formatLedgerJudgeFeedback(result) {
     const r = result || { status: 'failed', reason: 'unknown' };
     const s = r.reconcile?.summary || {};
     const suffix = s.cleaned || s.remapped || s.lockedMissing ? `；校对：清理${s.cleaned || 0}、重映射${s.remapped || 0}、保留锁定缺失${s.lockedMissing || 0}` : '';
+    const pendingText = s.pending ? `；已保留 ${s.pending} 条待确认来源` : '';
     const text = {
         busy: '已有刻度更新正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法判定' : r.reason === 'no-entry' ? '暂无可判定的活跃事件' : r.reason === 'spDisabled' ? '刻度功能已停用' : '刻度更新已跳过',
-        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : ['reconcile-failed', 'source-scan-failed', 'source-state-invalid', 'source-save-failed'].includes(r.reason) ? '来源校对失败，未发起 API 请求' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，持久状态暂无法确认' : r.reason === 'judge-save-failed' ? '刻度保存失败，本轮未写入更新' : '刻度判定失败，请检查 API 或网络',
+        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'source-scan-failed' ? '来源扫描失败，未发起 API 请求' : r.reason === 'source-state-invalid' ? '来源状态无法确认，未发起 API 请求' : r.reason === 'source-stale-chat' ? '来源快照或聊天状态已变化，未发起 API 请求' : r.reason === 'source-save-failed' ? '来源校对保存失败，未发起 API 请求' : r.reason === 'metadata-capture-failed' ? '元数据快照无法恢复，未发起保存请求' : r.reason === 'invalid-operation' ? '存档操作校验失败，模型判定未开始' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'judge-state-invalid' ? '刷新保存后状态不一致，已撤销' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，未发起 API 请求' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，持久状态暂无法确认' : r.reason === 'judge-save-failed' ? '刻度保存失败，本轮未写入更新' : r.reason === 'capture-save-failed' ? '刻度标注保存失败，未写入更新' : '刻度判定失败，请检查 API 或网络',
         invalid: '刻度判定格式无法识别',
         unchanged: r.reason === 'protected' ? '本轮变化均无效或受保护，刻度未更新' : '本轮无需更新刻度',
-        updated: `刻度刷新 ${(r.applied || []).length} 条${r.applied?.length ? `：${r.applied.join('、')}` : ''} · 请注意查看`,
+        updated: `刻度刷新 ${(r.applied || []).length} 条${r.applied?.length ? `：${r.applied.join('、')}` : ''}${s.judgeable != null ? `；参与判定 ${s.judgeable} 条` : ''}${pendingText} · 请注意查看`,
         cancelled: '刻度更新已中止',
     }[r.status] || '刻度更新已结束';
-    return { message: `${text}${suffix}`, error: r.status === 'failed' || r.status === 'invalid' };
+    return { message: `${text}${suffix}${r.status === 'updated' ? '' : pendingText}`, error: r.status === 'failed' || r.status === 'invalid' };
 }
 
 export function createLedgerDeletedHandler({ cancel, reconcile, toast, refreshInject, refreshInline, refreshPanel } = {}) {

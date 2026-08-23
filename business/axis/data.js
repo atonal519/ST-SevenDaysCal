@@ -66,7 +66,10 @@ function monthDayFromDayKey(key, cal = loadCalDesc()) {
     if (!key) return null;
     let m;
     if ((m = String(key).match(/^(\d+)-(\d+)-(\d+)$/)) || (m = String(key).match(/^cn-(\d+)-(\d+)-(\d+)$/))) {
-        return almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
+        const md = almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
+        if (!md) return null;
+        const year = +m[1];
+        return year > 0 ? { ...md, year } : md;
     }
     return null;
 }
@@ -428,7 +431,7 @@ function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
             if (!pair) continue;
             const md = almValidMonthDay({ month: pair.month, day: pair.day }, cal);
             if (!md) continue;
-            return { month: md.month, day: md.day, date: cal === DEFAULT_CAL ? pair.date : null, wd: pair.wd };
+            return { month: md.month, day: md.day, ...(pair.year != null ? { year: pair.year } : {}), date: cal === DEFAULT_CAL ? pair.date : null, wd: pair.wd };
         }
         const key = extractDayFromTime(raw);
         const md  = monthDayFromDayKey(key);
@@ -440,7 +443,7 @@ function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
         // 同楼里紧贴日期的「状态栏周几」token：供上层压过真实 getDay()（写死的剧情周几 > 公历）。缺则 null，退回 getDay。
         const wd = weekdayAdjacent(raw);
         if (explicitWeekdayOnly && wd == null) continue;
-        return { month: md.month, day: md.day, date, wd };
+        return { month: md.month, day: md.day, ...(md.year != null ? { year: md.year } : {}), date, wd };
     }
     return null;
 }

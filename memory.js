@@ -18,6 +18,7 @@
 
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
+import { normalizeTagNames } from './utils/tag-names.js';
 
 const MEMORY_KEY = 'sp-memory';
 const SCHEMA_VERSION = 3;   // v3 = tag-stripped floor text (v2 summaries included thinking/widget noise; requires rebuild)
@@ -129,12 +130,11 @@ function persist() {
 //   extraTags → EXTRA strip list. Explicitly names tags that MUST be removed
 //               with their content. Redundant with default behavior but lets
 //               users document intent (e.g. write 'think,reasoning').
-function parseTagList(csv) {
-    return String(csv || '')
-        .split(',')
-        .map(s => s.trim().toLowerCase())
-        .filter(s => /^[\p{L}][\p{L}\p{N}_-]*$/u.test(s));
+export function normalizeTagList(csv) {
+    return normalizeTagNames(csv);
 }
+const parseTagList = normalizeTagList;
+const escapeTagName = name => String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function stripTags(raw, opts = {}) {
     if (!raw) return '';
@@ -148,7 +148,8 @@ export function stripTags(raw, opts = {}) {
     //    Restored (as bare inner text) at the end.
     const keepStash = [];
     for (const name of keep) {
-        const rx = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}\\s*>`, 'gi');
+        const safeName = escapeTagName(name);
+        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'gi');
         s = s.replace(rx, (_m, inner) => {
             keepStash.push(inner);
             return ` KEEP${keepStash.length - 1} `;
@@ -158,7 +159,8 @@ export function stripTags(raw, opts = {}) {
     //    the default pass but explicit for user clarity + future-proofs if we
     //    ever change the default).
     for (const name of extra) {
-        const rx = new RegExp(`<${name}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${name}\\s*>`, 'gi');
+        const safeName = escapeTagName(name);
+        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'gi');
         let prev;
         do { prev = s; s = s.replace(rx, ''); } while (s !== prev);
     }

@@ -9,6 +9,14 @@
 // index.js 造成循环依赖。行为与原 index.js 逐字节一致。
 
 let env = null;
+const GENERIC_SCENE_WORDS = new Set(['身体', '状态', '事情', '当前', '情况', '现在', '最近', '这个', '那个', '自己', '人物', '问题']);
+function sceneKeys(entry) {
+    return [...(entry?.标签 || []), ...(entry?.牵扯 || [])].map(String).filter(key => key.length >= 2 && !GENERIC_SCENE_WORDS.has(key));
+}
+function eventKeys(entry) {
+    const people = new Set((entry?.牵扯 || []).map(String));
+    return [...(entry?.标签 || [])].map(String).filter(key => key.length >= 2 && !GENERIC_SCENE_WORDS.has(key) && !people.has(key));
+}
 // env: { ledgerDaysSince(entry)->number|null, ledgerDueInfo(entry)->{天数,过期}|null }
 export function bindLedgerSelect(e) { env = e; }
 
@@ -32,7 +40,7 @@ export function scoreLedgerEntry(entry, sceneText, _today) {
     }
     if (entry.类型 === '周期') score += 1;           // 周期事项易被忽略，略抬
     if (sceneText) {
-        const keys = [...(entry.牵扯 || []), ...(entry.标签 || [])].filter(Boolean);
+        const keys = sceneKeys(entry);
         if (keys.some(k => sceneText.includes(k))) score += 6;   // 正文正谈到 → 场景命中
     }
     return score;
@@ -43,14 +51,12 @@ export function scoreLedgerEntry(entry, sceneText, _today) {
 // 判据：① 用户锁（手动在意·等于「始终纳入」）② 正文点到名（牵扯/标签命中近景）③ 有临近/过期死线（≤7 天或已过）④ 刚登记（≤2 天还热）。
 export function isLedgerSalient(entry, sceneText) {
     if (entry.锁 === '用户锁') return true;                       // 用户手动锁的 → 一定带（想常驻注入就锁它）
-    if (sceneText) {
-        const keys = [...(entry.牵扯 || []), ...(entry.标签 || [])].filter(Boolean);
-        if (keys.some(k => sceneText.includes(k))) return true;   // 正文正谈到 → 此刻最相关
-    }
+    const eventHit = !!sceneText && eventKeys(entry).some(k => sceneText.includes(k));
+    if (eventHit) return true;
     const du = env.ledgerDueInfo(entry);
-    if (du && (du.过期 || du.天数 <= 7)) return true;             // 临近/过期死线 → 该惦记
+    if (entry.类型 === '约定待办' || entry.类型 === '周期') return !!du && (du.过期 || du.天数 <= 7); // 远期约定不因刚登记召回
     const since = env.ledgerDaysSince(entry);
-    if (since != null && since >= 0 && since <= 2) return true;   // 刚登记还热
+    if (since != null && since >= 0 && since <= 2) return true;   // 持续状态刚登记还热
     return false;
 }
 

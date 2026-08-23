@@ -15,15 +15,18 @@ export function parseLedgerCapture(raw) {
         const t = line.trim();
         if (!t || !t.includes('｜') || /^(?:事由|候选ID)\s*｜/.test(t)) continue;
         const cols = t.split('｜').map(x => x.trim());
-        const provenance = cols.length >= 9;
-        const offset = provenance ? 1 : 0;
+        const candidateId = String(cols[0] || '').trim().toUpperCase();
+        const provenance = /^C\d+$/.test(candidateId);
+        const targetId = /^L\d+$/.test(candidateId) ? candidateId : null;
+        const offset = (provenance || targetId) ? 1 : 0;
         if (!cols[offset]) continue;
         const entry = { 事由: cols[offset], 类型: types.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态', 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: cols[offset + 4] || '' };
         const cycle = parseInt(cols[offset + 6], 10);
         if (Number.isFinite(cycle) && cycle > 0) entry.周期长度 = cycle;
         const due = parseDate(cols[offset + 5] || '');
         if (due) entry.到期锚 = { 历日期: due };
-        if (provenance) { entry._candidateId = cols[0]; entry._sourceToken = cols[8] || ''; }
+        if (provenance) { entry._candidateId = candidateId; entry._sourceToken = cols[8] || ''; }
+        else if (targetId) { entry._targetId = targetId; entry._sourceToken = cols[8] || ''; }
         else if (cols.length >= 8) entry._sourceToken = cols[7] || '';
         out.push(entry);
     }

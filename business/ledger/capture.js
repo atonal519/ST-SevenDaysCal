@@ -1,4 +1,5 @@
-import { ledgerSourceFingerprint } from './reconcile.js';
+import { ledgerSourceFingerprint, legacyLedgerSourceFingerprint } from './reconcile.js';
+import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 // 刻度捕获纯依赖：只负责正文楼层/来源窗口与稳定性，不执行 API 或落库。
 export const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
 - 持续状态：身体伤情 / 病症、怀孕、显著且会延续的情绪等——会随天数自然演变（如割伤→结痂→愈合）。
@@ -38,13 +39,18 @@ export function ledgerLatestAiFloorId() {
     for (let i = chat.length - 1; i >= 0; i--) if (ledgerNarrativeMessage(chat[i])) return i;
     return -1;
 }
+function sideClock(clock, side) {
+    const meta = side === 'S' ? clock?.startMeta : clock?.endMeta;
+    const stamp = side === 'S' ? clock?.start : clock?.end;
+    return { stamp, date: meta?.date || (stamp ? env.parseDate(stamp) : null) };
+}
 export function ledgerFloorDateContext(floor = null) {
     const chat = env.context().chat || [];
     const floorId = Number.isInteger(floor) ? floor : ledgerLatestAiFloorId();
     const message = floorId >= 0 ? chat[floorId] : null;
     if (!message || !ledgerNarrativeMessage(message)) return { floor: null, date: null };
     const clock = env.parseClock(message.mes || '');
-    const date = env.parseDate(clock.end) || env.parseDate(clock.start);
+    const date = sideClock(clock, 'E').date || sideClock(clock, 'S').date;
     return { floor: floorId, date: date || null };
 }
 export function ledgerAiFloorRecords(limit = null) {
@@ -52,9 +58,10 @@ export function ledgerAiFloorRecords(limit = null) {
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i]; if (!ledgerNarrativeMessage(msg)) continue;
         const clock = env.parseClock(msg.mes); const parts = [];
-        if (clock.start && env.parseDate(clock.start)) parts.push({ side: 'S', stamp: clock.start, date: env.parseDate(clock.start) });
-        if (clock.end && env.parseDate(clock.end)) parts.push({ side: 'E', stamp: clock.end, date: env.parseDate(clock.end) });
-    floors.push({ floor: i, signature: String(msg.mes), identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') }, content: env.stripTags(String(msg.mes), env.settings()).trim(), sources: parts.map(part => ({ token: `F${i}${part.side}`, floor: i, date: part.date, stamp: part.stamp, signature: String(msg.mes), fingerprint: ledgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes)) })) });
+        const start = sideClock(clock, 'S'), end = sideClock(clock, 'E');
+        if (start.date) parts.push({ side: 'S', stamp: start.stamp, date: start.date });
+        if (end.date) parts.push({ side: 'E', stamp: end.stamp, date: end.date });
+    floors.push({ floor: i, signature: String(msg.mes), identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') }, content: env.stripTags(String(msg.mes), env.settings()).trim(), sources: parts.map(part => ({ token: `F${i}${part.side}`, floor: i, date: part.date, stamp: part.stamp, signature: String(msg.mes), fingerprint: ledgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes), { floor: i, date: part.date }), legacyFingerprint: legacyLedgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes)) })) });
     }
     const selected = limit == null ? floors : floors.slice(-Math.max(0, limit));
     return selected.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, content: item.content })) }));
@@ -63,15 +70,57 @@ export const ledgerSourceFloors = (limit = null) => ledgerAiFloorRecords(limit).
 export function ledgerSourceMap(sources) { return new Map((sources || []).map(source => [String(source.token), source])); }
 export function ledgerSourceAnchor(token, sourceMap) {
     const key = String(token || '').trim(); if (key === 'SET') return { 楼层: null, 历日期: null }; const source = sourceMap?.get(key); if (!source) return null;
-    const raw = env.context().chat?.[source.floor]?.mes || ''; const clock = env.parseClock(raw); const stamp = source.token.endsWith('S') ? clock.start : clock.end; const date = stamp ? env.parseDate(stamp) : null; return date ? { 楼层: source.floor, 历日期: date } : null;
+    const raw = env.context().chat?.[source.floor]?.mes || ''; const clock = env.parseClock(raw); const date = sideClock(clock, source.token.endsWith('S') ? 'S' : 'E').date; return date ? { 楼层: source.floor, 历日期: date } : null;
 }
 export function ledgerSourcesStable(sources, chatId) { if (env.context().chatId !== chatId) return false; const chat = env.context().chat || []; return (sources || []).every(source => { const msg = chat[source.floor]; return ledgerNarrativeMessage(msg) && String(msg.mes || '') === source.signature; }); }
 export function ledgerRecordsStable(records, chatId) {
     if (env.context().chatId !== chatId) return false; const chat = env.context().chat || [];
-    return (records || []).every(record => { const msg = chat[record.floor]; if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false; const identity = record.identity || {}; if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false; if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false; return (record.sources || []).every(source => { const side = String(source.token || '').endsWith('S') ? 'S' : String(source.token || '').endsWith('E') ? 'E' : ''; if (!side || source.signature !== record.signature) return false; const clock = env.parseClock(String(msg.mes || '')); const stamp = side === 'S' ? clock.start : clock.end; const date = stamp ? env.parseDate(stamp) : null; return !!date && date.month === source.date.month && date.day === source.date.day; }); });
+    return (records || []).every(record => { const msg = chat[record.floor]; if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false; const identity = record.identity || {}; if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false; if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false; return (record.sources || []).every(source => { const side = String(source.token || '').endsWith('S') ? 'S' : String(source.token || '').endsWith('E') ? 'E' : ''; if (!side || source.signature !== record.signature) return false; const date = sideClock(env.parseClock(String(msg.mes || '')), side).date; return !!date && date.month === source.date.month && date.day === source.date.day; }); });
 }
 export function ledgerLegacyAnchor(sourceList) { const dates = new Map(); for (const source of sourceList || []) dates.set(`${source.date.month}/${source.date.day}`, source.date); return dates.size === 1 ? { 楼层: null, 历日期: [...dates.values()][0] } : { 楼层: null, 历日期: null }; }
 export function ledgerSourceBatches(sources, size = CAPTURE_FLOORS) { const list = Array.isArray(sources) ? sources : []; const batches = []; for (let i = 0; i < list.length; i += size) batches.push(list.slice(i, i + size)); return batches; }
+// 纯捕获计划器：只给活跃、未锁的真实 ID 生成受限 patch；重复候选折叠。
+export function planLedgerCapture({ entries = [], candidates = [], sourceMap = new Map(), captureFloor = null, captureDate = null, norm = value => String(value || '').replace(/\s+/g, '') } = {}) {
+    const validSource = e => !['来源已删除', '待确认'].includes(String(e?.来源状态 || ''));
+    const active = (entries || []).filter(e => e?.状态 !== '已了结' && e?.锁 !== '用户锁' && validSource(e));
+    const byId = new Map(active.filter(e => /^L\d+$/i.test(String(e.id || ''))).map(e => [String(e.id), e]));
+    const additions = [], patches = [], seen = new Set(), patched = new Set();
+    const trusted = token => { const t = String(token || '').trim(); const source = sourceMap?.get?.(t); return !!source && /^F\d+[SE]$/i.test(t) && source.date && source.signature; };
+    const eventWords = value => String(value || '').split(/[\s、，,;；/]+/).map(x => x.trim()).filter(x => x.length >= 2 && !['身体', '状态', '事情', '当前', '情况'].includes(x));
+    const similar = (old, item) => {
+        const a = old?.起始锚?.历日期, b = item?.起始锚?.历日期;
+        const sameDate = !!a && !!b && a.month === b.month && a.day === b.day;
+        const source = item?._sourceToken ? sourceMap?.get?.(item._sourceToken) : null;
+        const sameSource = !!source && Number(old?.起始锚?.楼层) === Number(source.floor);
+        const sameType = old?.类型 === item?.类型;
+        const people = union(old?.牵扯, item?.牵扯); const personOverlap = people.length < (old?.牵扯?.length || 0) + (item?.牵扯?.length || 0);
+        const words = eventWords(`${old?.事由} ${(old?.标签 || []).join(' ')}`); const incoming = eventWords(`${item?.事由} ${(item?.标签 || []).join(' ')}`);
+        return sameSource && sameDate && sameType && personOverlap && words.some(x => incoming.includes(x));
+    };
+    const union = (a, b) => [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].filter(Boolean))];
+    const patchFor = (old, item) => {
+        const patch = { 现状锚: { 楼层: captureFloor, 历日期: captureDate }, 牵扯: union(old?.牵扯, item?.牵扯), 标签: union(old?.标签, item?.标签) };
+        if (Object.prototype.hasOwnProperty.call(item, '现状') && String(item.现状 || '').trim()) patch.现状 = String(item.现状).trim();
+        if (Object.prototype.hasOwnProperty.call(item, '到期锚') && item.到期锚) patch.到期锚 = item.到期锚;
+        if (Object.prototype.hasOwnProperty.call(item, '周期长度') && Number.isFinite(+item.周期长度) && +item.周期长度 > 0) patch.周期长度 = +item.周期长度;
+        return patch;
+    };
+    for (const item of (Array.isArray(candidates) ? candidates : [])) {
+        const candidateId = String(item?._targetId || item?._candidateId || '').trim();
+        const target = /^L\d+$/i.test(candidateId) ? byId.get(candidateId) : null;
+        if (target && trusted(item._sourceToken) && !patched.has(target.id)) { patches.push({ id: target.id, patch: patchFor(target, item) }); patched.add(target.id); continue; }
+        const gist = norm(item?.事由); if (!gist || seen.has(gist)) continue;
+        const exact = trusted(item._sourceToken) ? active.find(e => norm(e.事由) === gist && !patched.has(e.id)) : null;
+        if (exact) { patches.push({ id: exact.id, patch: patchFor(exact, item) }); patched.add(exact.id); seen.add(gist); continue; }
+        const fuzzy = trusted(item._sourceToken) ? active.find(e => !patched.has(e.id) && similar(e, item)) : null;
+        if (fuzzy) { patches.push({ id: fuzzy.id, patch: patchFor(fuzzy, item) }); patched.add(fuzzy.id); seen.add(gist); continue; }
+        if ((entries || []).some(e => norm(e?.事由) === gist)) { seen.add(gist); continue; }
+        // active 已在上面优先 patch；这里仅防止已了结/锁定/异常来源池换措辞重建。
+        if (trusted(item._sourceToken) && (entries || []).some(e => !active.includes(e) && similar(e, item))) { seen.add(gist); continue; }
+        additions.push({ ...item, 现状锚: { 楼层: captureFloor, 历日期: captureDate } }); seen.add(gist);
+    }
+    return { additions, patches };
+}
 export function resolveLedgerStartAnchor(item, sourceMap, legacySources) {
     const token = String(item?._sourceToken || '').trim(); if (token === 'SET') return { 楼层: null, 历日期: null };
     const trusted = ledgerSourceAnchor(token, sourceMap); if (!trusted) return token ? { 楼层: null, 历日期: null } : ledgerLegacyAnchor(legacySources);
@@ -98,13 +147,13 @@ function buildCapturePrompt(first = false) {
 ${eventTypes}
 
 【规则】
-- 宁可多记：拿不准也记下，漏记的代价比多记大；既定机制哪怕暂时没触发也要记。
+- 只记稳定事由与最新现状：准备、过程、事后反应属于同一次因果事件，不要拆成多条；拿不准是否为独立事件时宁可合并，只有明确的新事件、独立长期后果、独立到期事项或下一次新事件才另建。既定机制仍需登记，但不要把普通背景日常扩成刻度。
 ${fieldSpec}
 - 若确实没有任何可登记的，只回一个字：无
 不要解释，不要输出表头，不要输出多余文字。`;
     const closed = env.listEntries?.({ includeClosed: true })?.filter(e => e.状态 === '已了结') || [];
     const active = env.listEntries?.() || [];
-    const activeText = active.length ? active.map(e => `- ${e.事由}${e.标签?.length ? `（${e.标签.join('、')}）` : ''}`).join('\n') : '（暂无，本次都是新登记）';
+    const activeText = active.length ? active.map(e => `- ${e.id}｜${e.事由}${e.标签?.length ? `（${e.标签.join('、')}）` : ''}`).join('\n') : '（暂无，本次都是新登记）';
     const closedText = closed.length ? `\n【已了结·别重新登记】\n下面这些已经完结、或被用户手动归档了。默认**一律别再登记**；只有正文里出现了**明确的新进展**（旧事重新启动、或又发生了一次全新的独立事件）才重新记，并在现状里点明「新」在哪：\n${closed.map(e => `- ${e.事由}${e.标签?.length ? `（${e.标签.join('、')}）` : ''}`).join('\n')}\n` : '';
     return `请暂停角色扮演，作为剧情分析助手，只做一件事：从以上最近的对话正文里，捞取「需要按时间追踪」的新事件，记入「刻度」。
 
@@ -114,15 +163,18 @@ ${eventTypes}
 ${activeText}${closedText}
 【规则】
 - 只登记上面对话里【新出现】的，或【虽同名但明显是另一次独立事件】的；已在刻度上的同一件事跳过。
+- 已在刻度上的条目如需更新，必须原样使用真实目标 ID（L1、L2…），并只回写现状、现状锚、人物/标签并集、明确到期/周期；新条目不得伪造 L ID。
+  · 新增条：8 字段「事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚」，不要加 ID。
+  · 更新条：9 字段「L目标ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚」，目标 ID 必须来自清单。
 - **同一件事只记一条**：判断「是不是同一件事」看的是**事情本身**，不是措辞——同一个人的同一桩事，哪怕换了说法、换了角度、详略不同，也算重复。这有两层：① 别登记与上面清单里已有的重复；② 你这一次别把一件事拆成两三条近义的分别登记。
-- 宁可多记，但「多记」指的是多记【确实是新的、不同的】事——拿不准是不是新事就记下；不是把同一件事重复记，也不是把已了结/已归档的翻出来重记。
+- 只记稳定事由与最新现状：准备、过程、事后反应属于同一次因果事件，不要拆成多条；拿不准是否为独立事件时合并到旧条，只有明确的新事件或独立到期事项才另建。不得把已了结/已归档的条目自动捞回。
 ${fieldSpec}
 - 若没有任何新事件可登记，只回一个字：无
 不要解释，不要输出表头，不要输出多余文字。`;
 }
 function buildProvenancePrompt(candidates, batchNo, batchTotal) {
     const list = (candidates || []).map(item => `- ${item._candidateId}｜${item.事由}（${item.类型}）${item.标签?.length ? `｜标签：${item.标签.join('、')}` : ''}`).join('\n');
-    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚。候选ID 必须原样抄写；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据就不要输出。不要输出 SET，不要解释。`;
+    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚。候选ID 必须原样抄写（只能是清单给出的 C1、C2…）；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据就不要输出。不要输出 SET，不要解释。`;
 }
 export function createLedgerCaptureController(options = {}) {
     env = { ...env, ...options };
@@ -139,11 +191,13 @@ export function createLedgerCaptureController(options = {}) {
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'skipped' };
         const ctx = env.context();
+        const fixedTarget = env.target?.();
         const charKey = env.charKey?.(ctx);
         if (!charKey) { if (manual) env.toast?.('当前没有角色卡，无法标注', null, true); return { status: 'skipped' }; }
         const cfg = env.config?.();
         if (!cfg?.url || !cfg?.key) { if (manual) env.toast?.('请先在设置中填写 API', null, true); return { status: 'failed', error: new Error('未配置 API') }; }
         const chatId = ctx.chatId;
+        const ownerSnapshot = ledgerOwnerIdentity(ctx);
         const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         try {
@@ -198,24 +252,28 @@ export function createLedgerCaptureController(options = {}) {
                     progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                 }
             }
-            const seen = new Set((env.listEntries?.({ includeClosed: true }) || []).map(e => env.normGist?.(e.事由) || String(e.事由 || '').replace(/\s+/g, '')));
-            const plans = [];
-            for (const item of picked) {
-                const gist = env.normGist?.(item.事由) || String(item.事由 || '').replace(/\s+/g, '');
-                if (!gist || seen.has(gist)) continue; seen.add(gist);
-                plans.push({ ...item, 起始锚: resolveLedgerStartAnchor(item, sourceMap, sourceList), 现状锚: { 楼层: captureFloor, 历日期: captureDate } });
-            }
-            if (!plans.length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
+            const entries = env.listEntries?.({ includeClosed: true }) || [];
+            const candidates = picked.map(item => ({ ...item, 起始锚: resolveLedgerStartAnchor(item, sourceMap, sourceList) }));
+            const capturePlan = planLedgerCapture({ entries, candidates, sourceMap, captureFloor, captureDate, norm: env.normGist || (value => String(value || '').replace(/\s+/g, '')) });
+            if (!capturePlan.additions.length && !capturePlan.patches.length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
             if (!isCurrent(ctrl, chatId, travel) || !ledgerRecordsStable(recordsForCommit, chatId)) { env.toast?.('原始剧情楼在溯源期间发生变化，已取消本轮刻度落库', null, true); return { status: 'cancelled' }; }
-            const added = await env.addAtomic?.(plans.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; return clean; }));
+            const cleanAdditions = capturePlan.additions.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; return clean; });
+            const owner = { chatId, target: fixedTarget, guard: () => isCurrent(ctrl, chatId, travel) && ledgerRecordsStable(recordsForCommit, chatId) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context())) };
+            const result = env.applyAtomic ? await env.applyAtomic({ additions: cleanAdditions, patches: capturePlan.patches }, owner) : { added: await env.addAtomic?.(cleanAdditions) || [], patched: [] };
+            const added = result?.added || [];
             if (!isCurrent(ctrl, chatId, travel)) return { status: 'cancelled', stale: true };
-            if (!added?.length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
-            if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度标注 ${added.length} 条：${added.map(e => e.事由).join('、')} · 请注意查看`);
+            if (!added.length && !(result?.patched || []).length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged' }; }
+            if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`);
             env.refresh?.(); env.refreshInline?.(true); env.render?.();
             return { status: 'updated' };
         } catch (err) {
+            if (err?.phase === 'rollback-save-failed') { env.toast?.('刻度保存后状态已过期，且回滚失败，请检查当前聊天数据', null, true); return { status: 'failed', error: err }; }
             if (abortController !== ctrl) return { status: 'cancelled', stale: true };
             if (err?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled' };
+            if (String(err?.phase || '').startsWith('capture-stale-chat')) return { status: 'cancelled', stale: true };
+            if (err?.phase === 'capture-state-invalid') { env.toast?.('标注保存后状态不一致，已撤销', null, true); return { status: 'failed', error: err }; }
+            if (err?.phase === 'persistence-not-committed') { env.toast?.('保存未提交，已恢复本地状态', null, true); return { status: 'failed', error: err }; }
+            if (err?.phase === 'persistence-unknown') { env.toast?.('刻度持久状态无法确认，已恢复本地状态', null, true); return { status: 'failed', error: err }; }
             if (err?.spDisabled) return { status: 'skipped' };
             if (env.context().chatId !== chatId) return { status: 'cancelled' };
             env.toast?.('刻度标注失败，请检查 API 或网络', null, true); return { status: 'failed', error: err };

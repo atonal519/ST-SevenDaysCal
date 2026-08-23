@@ -21,6 +21,7 @@ import {
     almValidMonthDay, almDateFromChat,
 } from './data.js';
 import { storyWeekdayRef, latestStoryClock } from './story-clock.js';
+import { daysBetweenCalendarDates } from './full-ordinal.js';
 
 let env = null;
 // env: { getDateAnchor, charStableKey, getLinesCacheKey, parseLines, TERMINAL_STAGES, getCacheKey }
@@ -69,7 +70,7 @@ export function almTodayAnchor() {
                 const { startDate } = parseCalendar(saved.raw, loadCalDesc());
                 if (startDate instanceof Date && !isNaN(startDate)) {
                     const md = almValidMonthDay({ month: startDate.getMonth() + 1, day: startDate.getDate() });
-                    if (md) return md;
+                    if (md) return { ...md, year: startDate.getFullYear() };
                 }
             }
         } catch { /* 往下走 */ }
@@ -77,7 +78,7 @@ export function almTodayAnchor() {
     // ⑤ 聊天正文里写明的绝对日期
     try {
         const hit = almDateFromChat();
-        if (hit) return { month: hit.month, day: hit.day };
+        if (hit) return hit;
     } catch { /* 往下走 */ }
     // ⑥ 全拿不到 → 1 月 1 日
     return { month: 1, day: 1 };
@@ -88,6 +89,12 @@ export function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
     const total = calYearLen(cal);
     const a = anchor || almTodayAnchor();
     return (almDayOfYear(month, day, cal) - almDayOfYear(a.month, a.day, cal) + total) % total;
+}
+
+// 完整纪年 ordinal：一次性事项的 year 已知时禁止使用上面的环形月日差。
+// 自定义历法每年长度由当前历法描述提供，月日序仍由 almDayOfYear 统一计算。
+export function almDaysBetweenFull(from, to, cal = loadCalDesc()) {
+    return daysBetweenCalendarDates(from, to, cal);
 }
 
 // 取「参照日→周几」锚：先扫所有来源的显式星期，再允许真实公历推算。返回 {refDoy, refWd}。

@@ -42,7 +42,7 @@ export function createLedgerJudgeController(options = {}) {
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
         const ctx = env.context();
-        const owner = env.identity?.() || ownerOf(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
+        const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
         let reconcile = null;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         env.render?.(); env.refreshInline?.(true);
@@ -51,13 +51,14 @@ export function createLedgerJudgeController(options = {}) {
             if (reconcile?.error) {
                 if ((reconcile.phase || reconcile.error.phase) === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error: reconcile.error };
                 if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
-                return { status: 'failed', reason: reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error };
+                return { status: 'failed', reason: reconcile.error.saveResult?.reason || reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult };
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const summary = reconcile?.summary || {};
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
             const judgeable = (env.listJudgeable?.() || []).filter(entry => entry?.来源状态 !== '待确认' && entry?.来源状态 !== '来源已删除');
+            if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
             if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
             const cfg = env.config?.();
             if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), reconcile, applied: [] };
@@ -102,7 +103,7 @@ export function createLedgerJudgeController(options = {}) {
             if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
             if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
             if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
-            return { status: 'failed', reason: error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, reconcile, applied: [] };
+            return { status: 'failed', reason: error?.saveResult?.reason || error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, saveResult: error?.saveResult, reconcile, applied: [] };
         } finally { finish(ctrl, owner); removeBridge(); }
     };
     return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };

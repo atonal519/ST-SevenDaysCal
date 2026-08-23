@@ -1,6 +1,7 @@
 import { getContext, extension_settings } from '../../../extensions.js';
 import { selected_world_info, world_info } from '../../../world-info.js';
 import { equalsIgnoreCaseAndAccents, getCharaFilename } from '../../../utils.js';
+import * as scriptCore from '../../../../script.js';
 import { eventSource, event_types, substituteParams, saveSettingsDebounced, saveSettings as stSaveSettings, system_message_types } from '../../../../script.js';
 import {
     buildCreativeChatSystemPrompt,
@@ -15,6 +16,7 @@ import * as anchor from './anchor.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
+import { createTargetMetadataSaver } from './runtime/target-metadata-save.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
 import { createAutomationGate } from './automation-gate.js';
@@ -33,6 +35,7 @@ import { weatherGlyph, weatherChipHtml, fmtAnchorTs, maskKey } from './utils/for
 import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, genPresetId, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, pluginEnabled, injectEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
+import { normalizeTagNames } from './utils/tag-names.js';
 import { axisState } from './business/axis/state.js';
 import {
     ALM_TYPES,
@@ -93,7 +96,7 @@ import {
 // 轴锚点/周几/距今/将至排序已抽出到 business/axis/anchor.js；index.js 内部跨域读取器经 bindAxisAnchor 注入。
 import {
     bindAxisAnchor,
-    almTodayAnchor, almDaysUntil, almWeekdayRef, almWeekdayFor, sortAlmanacUpcoming,
+    almTodayAnchor, almDaysUntil, almDaysBetweenFull, almWeekdayRef, almWeekdayFor, sortAlmanacUpcoming,
 } from './business/axis/anchor.js';
 // 历注入文本构造（纯函数，仅依赖 data.js/anchor.js）已抽出到 business/axis/inject.js。
 import { getAlmanacInjectText } from './business/axis/inject.js';
@@ -147,21 +150,18 @@ import { createLedgerActions } from './business/ledger/actions.js';
 import { bindLedgerEvents, createLedgerDeletedHandler } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
 import { ledgerOwnerIdentity } from './business/ledger/owner.js';
-import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
+import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerFloorDateContext, ledgerAiFloorRecords, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
 import { mergeRecallTags, isDatabaseMemoEntry, filterRerollItems, pickWithoutPrevious, shouldRunPendingPointFollowup, nonEmptyTemplates, snapshotTheaterSource } from './runtime/refactor-adapters.js';
 import { createTaskOwnerManager } from './runtime/task-owner.js';
 import { evaluateTaskLifecycle } from './runtime/task-orchestration.js';
-import { parseLines as parseCanonicalLines, serializeLines, validateLinesResponse, TERMINAL_LINE_STAGES } from './business/lines/schema.js';
-import { mergePinned as mergeCanonicalPinned, deleteLine as deleteCanonicalLine, togglePin as toggleCanonicalPin } from './business/lines/mutations.js';
+import { parseLines as parseCanonicalLines, TERMINAL_LINE_STAGES } from './business/lines/schema.js';
 import { buildLinesPrompt as buildCanonicalLinesPrompt } from './business/lines/prompt.js';
 import { linesViewModel } from './business/lines/render.js';
-import { decideLinesCommit } from './business/lines/generation.js';
-import { createLinesGenerationController } from './business/lines/controller.js';
-import { createLinesInjectionController } from './business/lines/injection.js';
 import { inlineState } from './business/lines/inline.js';
-import { createLinesActions } from './business/lines/actions.js';
-import { createDashedModule } from './business/lines/dashed.js';
-import { classifyRenderedFloor, createAdvanceStrategy, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './business/lines/strategy.js';
+import { createAdvanceStrategy } from './business/lines/strategy.js';
+import { createLinesFeature } from './business/lines/feature.js';
+import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
+import { createOutlineRepository } from './business/outline/repository.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
@@ -176,8 +176,28 @@ import {
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
 
+// Ledger 正式事务只走固定聊天目标的 integrity/commitState saver；初始化失败时保持不可用，禁止回退到吞错 saveMetadata。
+const ledgerMetadataSaverReady = createTargetMetadataSaver({ coreModule: scriptCore });
+ledger.bindLedgerMetadataPersistence({
+    async commit(ctx, options = {}) {
+        const saver = await ledgerMetadataSaverReady;
+        if (!saver?.supported) return { ok: false, reason: saver?.reason || 'metadata-saver-unavailable', commitState: 'not-dispatched' };
+        const current = ctx || getContext?.();
+        const target = options.target || scriptCore.resolveChatStateTarget();
+        const after = { ...(current?.chatMetadata || {}) };
+        if (current?.chatMetadata?.['sp-ledger']) after['sp-ledger'] = current.chatMetadata['sp-ledger'];
+        let captured = saver.capture(target, after); let saveReason = captured ? 'snapshot-current' : 'snapshot-empty';
+        if (!captured && typeof scriptCore.refreshChatWriteSnapshotsFromServer === 'function') {
+            try { await scriptCore.refreshChatWriteSnapshotsFromServer(target); captured = saver.capture(target, after); saveReason = captured ? 'snapshot-refreshed' : 'snapshot-refresh-empty'; }
+            catch { saveReason = 'snapshot-refresh-failed'; }
+        }
+        if (!captured) return { ok: false, reason: 'metadata-capture-failed', saveReason, dispatched: false, commitState: 'not-dispatched' };
+        const result = await saver.dispatch(captured, { isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
+        return { ...result, saveReason: result.saveReason || saveReason, dispatched: result.dispatched ?? false, confirm: () => saver.confirm?.(captured) };
+    },
+});
+
 const pointTaskOwners = createTaskOwnerManager();
-const linesTaskOwners = createTaskOwnerManager();
 
 // Shadow-DOM accessors are dependencies of the top-level DI wiring below.
 // Declare them before any bind/create call can evaluate the dependency.
@@ -348,8 +368,8 @@ const parseJudgedDate = parseJudgedDatePure;
 // ledger 选择器注入：select.js 的打分/门槛依赖到期/距今口径 ledgerDueInfo/ledgerDaysSince
 // （二者仍滞留本文件、且另经历法助手触达），经 bindLedgerSelect 注入以免反向依赖循环引用。
 bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
-const axisDateContext = createAxisDateContext({ today: almTodayAnchor, daysUntil: almDaysUntil, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor });
-bindLedgerDate({ today: axisDateContext.today, daysUntil: axisDateContext.daysUntil, listEntries: () => ledger.listEntries() });
+const axisDateContext = createAxisDateContext({ today: almTodayAnchor, daysUntil: almDaysUntil, daysUntilFull: almDaysBetweenFull, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor });
+bindLedgerDate({ today: () => axisDateContext.today(), daysUntil: axisDateContext.daysUntil, daysUntilFull: axisDateContext.daysUntilFull, listEntries: () => ledger.listEntries() });
 bindLedgerSchema({ parseJudgedDate, ledgerTypes: ledger.TYPES });
 bindLedgerCapture({
     context: getContext,
@@ -363,6 +383,7 @@ bindLedgerCapture({
 });
 const ledgerCaptureController = createLedgerCaptureController({
     context: getContext,
+    target: () => scriptCore.resolveChatStateTarget(),
     charKey: charStableKey,
     config: loadCfg,
     calendar: loadCalDesc,
@@ -374,6 +395,7 @@ const ledgerCaptureController = createLedgerCaptureController({
     listEntries: options => ledger.listEntries(options),
     normGist,
     addAtomic: ledger.addEntriesAtomic,
+    applyAtomic: (plan, owner) => ledger.applyCapturePlanAtomic(plan, owner),
     bridge: bridgeAbortSignal,
     confirm: spConfirm,
     toast: showToast,
@@ -384,13 +406,13 @@ const ledgerCaptureController = createLedgerCaptureController({
     setProgress: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
 });
 const reconcileLedgerSources = async (owner = null) => {
-    const logSourceError = error => { try { console.error('[SP ledger source reconcile]', { name: error?.name, message: error?.message, stack: error?.stack }); } catch {} };
+    const logSourceError = (error, counts = {}) => { try { const save = error?.saveResult; console.error('[SP ledger source reconcile]', { phase: error?.phase || 'source-state-invalid', cause: error?.code || error?.phase || 'unknown', reason: save?.reason || null, commitState: save?.commitState || null, saveReason: save?.saveReason || null, path: save?.path || null, httpStatus: save?.status || null, dispatched: save?.dispatched ?? null, counts: { cleaned: counts.cleaned || 0, remapped: counts.remapped || 0, pending: counts.pending || 0, lockedMissing: counts.lockedMissing || 0, kept: counts.kept || 0, deleted: counts.deleted || 0 } }); } catch {} };
     let records;
     try { records = ledgerAiFloorRecords(); } catch (error) { error.phase = 'source-scan-failed'; logSourceError(error); return { changed: false, summary: {}, phase: error.phase, error }; }
     let sources;
     try { sources = buildLedgerSources(records); } catch (error) { error.phase = 'source-state-invalid'; logSourceError(error); return { changed: false, summary: {}, phase: error.phase, error }; }
     try { return await ledger.reconcileEntriesAtomic(sources, getContext()?.chat?.length || 0, owner); }
-    catch (error) { logSourceError(error); return { changed: false, summary: {}, phase: error.phase || 'source-save-failed', error }; }
+    catch (error) { logSourceError(error, error.planSummary); return { changed: false, summary: error.planSummary || {}, phase: error.phase || 'source-save-failed', error }; }
 };
 const runLedgerCaptureStep = (manual = false, travelContext = null) => ledgerCaptureController.run(manual, travelContext);
 const ledgerInjectionController = createLedgerInjectionController({
@@ -408,6 +430,7 @@ const ledgerInjectionController = createLedgerInjectionController({
 const refreshLedgerInjection = () => ledgerInjectionController.refresh();
 const ledgerJudgeController = createLedgerJudgeController({
     context: getContext,
+    target: () => scriptCore.resolveChatStateTarget(),
     charKey: charStableKey,
     listJudgeable: () => listJudgeableLedger(),
     fmtLedger: fmtLedgerForJudge,
@@ -732,18 +755,18 @@ const timeTravel = createTimeTravelController({
     },
     onStepResult: ({ key, result, destinationDate }) => {
         if (!didStepComplete(result)) return;
-        if (key === AUTOMATION_MODULES.LINES) { if (getLinesMode() !== 'manual') linesAiMsgCounter = 0; }
+        if (key === AUTOMATION_MODULES.LINES) { if (getLinesMode() !== 'manual') linesFeature.resetCounter(); }
         if (key === AUTOMATION_MODULES.OUTLINE) outlineJudgeMsgCounter = 0;
         if (key === AUTOMATION_MODULES.LEDGER_CAPTURE) ledgerCaptureCounter = 0;
         if (key === AUTOMATION_MODULES.LEDGER_JUDGE) ledgerJudgeCounter = 0;
         if (key === AUTOMATION_MODULES.LINES && getLinesMode() === 'days') {
             const target = destinationDate;
-            if (target?.month != null && target?.day != null) _lastDetectedDay = `${+target.month}-${+target.day}`;
+            if (target?.month != null && target?.day != null) linesFeature.setLastDay(`${+target.month}-${+target.day}`);
         }
     },
     onSequenceEnd: ({ sessionId }) => releaseTimeTravelClaim(sessionId),
     steps: [
-        { key: AUTOMATION_MODULES.LINES, canRun: () => getSettings().linesEnabled !== false, run: async ({ messageId, destinationDate, promptAddon, signal }) => (await runGenerateLines(false, { mesId: Number(messageId), forceReroll: true }, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) || { status: 'updated' }) },
+        { key: AUTOMATION_MODULES.LINES, canRun: () => getSettings().linesEnabled !== false, run: async ({ messageId, destinationDate, promptAddon, signal }) => (await linesFeature.generation.run(false, { mesId: Number(messageId), forceReroll: true }, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) || { status: 'updated' }) },
         { key: AUTOMATION_MODULES.OUTLINE, canRun: () => { const saved = readStore(getOutlineCacheKey()); return !!(saved?.raw && parseOutline(saved.raw).length && getOutlineCursor() >= 1); }, run: ({ promptAddon, signal }) => runRelocateOutlineCursor(promptAddon, signal) },
         { key: AUTOMATION_MODULES.POINT, canRun: () => !!readStore(getCacheKey(currentView, charViewName))?.raw, run: ({ destinationDate, promptAddon, signal }) => syncPointToToday(false, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal, allowPendingFollowup: false }) },
         { key: AUTOMATION_MODULES.LEDGER_CAPTURE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
@@ -796,7 +819,7 @@ function cancelTimeTravel() {
     clearAutomationClaims();
     dateCoordinator.clear();
     dateDetectionController.abort();
-    outlineJudgeAbort?.abort();
+    abortOutlineJudge();
     _autoRegenSchedAbort?.abort();
     ledgerCaptureController.abort();
     ledgerJudgeController.abort();
@@ -845,7 +868,7 @@ const MODULE_INTROS = {
     almanac:
         _iLede('「轴」＝这个世界的历法＋节日日历，并内嵌「刻度（时间账）」。月历固定周一至周日七列；周几只认主楼 SDC 星期锚，缺锚时不虚构现实星期，日期仍按故事历法相对顺推。SDC 是主楼 AI 的额外元数据，不替代、不修改其他日期、时间或时间戳要求。') +
         _iSub('节日 · 历法') +
-        _iKey('fa-wand-magic-sparkles', '生成节日', 'AI 按世界观铺满一整年') +
+        _iKey('fa-wand-magic-sparkles', '生成节日', 'AI 按世界观逐月考虑，按素材生成') +
         _iKey('fa-heart-circle-plus', '补录纪念日', '只增补新里程碑，不重铺、不动现有日历') +
         _iKey('fa-plus',          '添加',     '手动录节日／生日／纪念日') +
         _iKey('fa-calendar-days', '历法管理', '定义月份、天数、纪年名') +
@@ -961,36 +984,81 @@ let cachedOutline       = null;
 let outlineChatHistory  = [];
 let isOutlineChatting   = false;
 let linesMode           = false;
-let isGeneratingLines   = false;
-let cachedLines         = null;
-let linesAbortController = null;
-let _linesSheet         = 'events';   // 线子视图：平行事件 | 冷知识；同 chat 保留，切 chat 复位
 // 线·swipe 重算：楼层单调递增闸（区分真·新楼层 vs swipe/历史重渲染），及"待重算 swipe"标记。
-let _lastSeenMaxMesId   = -1;
-let _pendingSwipeGen    = null;   // { mesId }：swipe 触发新生成，等对应 RENDERED 后从楼层基线 B0 重算
-let _floorTextSig       = {};     // mesId → 楼主文本签名；「同 mesId 内容变了」= 原楼重生成 = 重roll。版本无关，兜底「流式重roll的 CMR type=undefined、GENERATION_STARTED 不 latch」的实测坑
-let _pendingReroll      = false;  // 🔄重生成握手
-let _rerollExcludedAssistant = null;
-let _stStreamUntil      = 0;      // 流式输出活跃截止时间戳：Date.now()<此值 = ST 正流式重写末楼 .mes_text，此间 observer 不塞楼内块（防频闪）。基于「最近一个流式 token 的时间」自动续期、到点自愈，绝不会像布尔闸那样卡死（ENDED 事件在 quiet 生成里不保证触发）
-let dashedModule = null;
-function getDashedModule() {
-    if (!dashedModule) dashedModule = createDashedModule({
+const linesFeature = createLinesFeature({
+    jumpHint: () => SP_JUMP_HINT_LINES,
+    get stageColors() { return STAGE_COLORS; },
+    escapeHtml, escapeAttr, cleanText, makeInjectBtn,
+    cacheKey: () => getLinesCacheKey(), chatId: () => getContext().chatId,
+    writeStore, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+    restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
+    loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
+    refreshInlineWindow: refreshInlineWindow,
+    freezeSnapshot: freezeSnapshotToFloor,
+    isPanelActive: () => linesMode, notifyMode: () => getSettings().notifyMode,
+    toast: (message, error) => showToast(message, null, error),
+    pluginEnabled, getSettings, getMode: getLinesMode, getInterval: getLinesInterval,
+    floorSignature: _floorSig, messageText: mid => getContext().chat?.[mid]?.mes,
+    chat: () => getContext().chat, lastAssistant: () => snapshotLastAssistant(getContext().chat),
+    dayAnchor: () => { try { const md = almTodayAnchor(); return md && Number.isFinite(+md.month) && Number.isFinite(+md.day) ? `${+md.month}-${+md.day}` : null; } catch { return null; } },
+    dayAdvance: createAdvanceStrategy,
+    swipeEnv: {
+        loadConfig: loadCfg, chatId: () => getContext().chatId,
+        swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
+        key: () => getLinesCacheKey(), readCurrent: () => readStore(getLinesCacheKey())?.raw || '',
+        previousBaseline: _prevAiFloorLines,
+        writeStore, syncInline: syncLatestInlineBlock,
+        render: () => {},
+    },
+    widgetEnv: {
+        key: () => getLinesCacheKey(), read: key => readStore(key), write: (key, value) => writeStore(key, value),
+        fail: message => showToast(message, null, true), refresh: () => {},
+        button: ($btn, editIdx) => { if ($btn) $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到线'}`); showToast(editIdx != null ? `已替换线·第 ${editIdx} 条` : '已加到线'); },
+    },
+    readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+    empty: () => renderEmptyLinesState(),
+    loading: () => loadingHtml('正在推演线', 'sp-abort-lines'),
+    renderPanelDom: ({ toolbar, body }) => { $in('#sp-lines-toolbar').html(toolbar); $in('#sp-lines-list').html(body); },
+    injectionEnv: {
+        context: () => getContext(), settings: getSettings, enabled: injectEnabled,
+        readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+        promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
+    },
+    dashedEnv: {
         keyDesc, readStore, writeStore, removeStore, getSettings,
         context: getContext, chatId: () => getContext().chatId, loadConfig: loadCfg,
         callApi: (...args) => callCustomApi(...args), filterRerollItems, dialog: customDialog,
         uuid: () => globalThis.crypto?.randomUUID?.(), now: () => Date.now(), random: () => Math.random(),
-        toast: (message, error) => showToast(message, null, error),
-        escapeHtml, escapeAttr, refreshPanel: () => { if (linesMode) refreshLinesPanel(); },
-        refreshInline: syncLatestInlineBlock,
-    });
-    return dashedModule;
-}
+        toast: (message, error) => showToast(message, null, error), escapeHtml, escapeAttr,
+        refreshPanel: () => {}, refreshInline: () => {},
+    },
+    dashedEnabled: () => getSettings().dashedEnabled === true,
+    generationEnv: {
+        chatId: () => getContext().chatId, loadConfig: loadCfg,
+        readSaved: () => readStore(getLinesCacheKey()) || {},
+        buildPrompt: (previousRaw, travelContext, vectorContext) => appendTravelPromptContext(buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext())), vectorContext), travelContext),
+        random: () => Math.random(),
+        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, 10, options),
+        missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
+        onStart: () => {},
+        commit: () => {},
+        fail: () => { if (getContext().chatId) showToast('线生成失败，请重试', null, true); }, cleanup: () => {},
+    },
+    actionsEnv: {
+        isBusy: () => false, readSaved: () => readStore(getLinesCacheKey()), readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+        write: value => writeStore(getLinesCacheKey(), value), remove: () => removeStore(getLinesCacheKey()), confirm: spConfirm, toast: (message, error) => showToast(message, null, error),
+        render: raw => raw, setCached: () => {}, refreshPanel: () => {}, refreshInline: () => {},
+        resetCounter: () => {}, runGenerate: () => {}, precheck: memoryPreCheckConfirm, silent: () => !linesMode,
+    },
+});
+const linesRuntime = linesFeature.runtime;
+const outlineRepository = createOutlineRepository({ keyDesc, readStore, writeStore, chatId: () => getContext()?.chatId });
 let spaceMode           = false;
 let spaceChatHistory    = [];
 let isSpaceChatting     = false;
 let spaceChatAbortController = null;
-let linesAiMsgCounter   = 0;   // counts AI messages since last lines advancement
 let outlineAbortController  = null;
+let outlineGenerationOwner  = null;
 let theaterMode          = false;
 let isGeneratingTheater  = false;
 let theaterAbortController = null;
@@ -1012,7 +1080,7 @@ const isMobile = () => window.innerWidth <= 640;
 // 通用操作菜单只描述动作；具体页面决定何时显示、如何处理动作。
 const ACTION_MENU_CONFIGS = Object.freeze({
     almanac: Object.freeze([
-        Object.freeze({ action: 'generate-almanac', icon: 'fa-wand-magic-sparkles', label: '生成节日', title: 'AI 按世界观铺满一整年' }),
+        Object.freeze({ action: 'generate-almanac', icon: 'fa-wand-magic-sparkles', label: '生成节日', title: 'AI 按世界观逐月考虑，按素材生成' }),
         Object.freeze({ action: 'supplement-anniversary', icon: 'fa-heart-circle-plus', label: '补录纪念日', title: '只增补新里程碑，不重铺、不动现有日历' }),
         Object.freeze({ action: 'manage-calendar', icon: 'fa-calendar-days', label: '历法管理', title: '查看、编辑和管理历法模板' }),
     ]),
@@ -1126,11 +1194,8 @@ jQuery(async () => {
     _stListeners.chat = () => {
         // 聊天边界先推进 revision 并作废点的全部异步 owner；迟到结果不得触碰新聊天。
         pointTaskOwners.nextChatRevision();
-        linesTaskOwners.nextChatRevision();
-        linesTaskOwners.invalidate('lines-generation');
-        linesAbortController?.abort();
-        linesAbortController = null;
-        isGeneratingLines = false;
+        linesFeature.nextChatRevision();
+        linesFeature.onChatChanged({ lastSeen: (getContext().chat?.length ?? 0) - 1 });
         pointTaskOwners.invalidate('point-manual');
         pointTaskOwners.invalidate('point-auto');
         pointState.isGenerating = false;
@@ -1153,7 +1218,7 @@ jQuery(async () => {
         spaceChatAbortController?.abort();
         spaceChatAbortController = null;
         isSpaceChatting = false;
-        getDashedModule().abort();
+        linesFeature.dashed.abort();
         if (!pluginEnabled()) return;
         currentView  = 'user';
         charViewName = null;
@@ -1161,21 +1226,18 @@ jQuery(async () => {
         cachedOutline = null;
         outlineChatHistory = [];
         linesMode    = false;
-        cachedLines  = null;
-        _linesSheet  = 'events';
-        linesAiMsgCounter = 0;
-        getDashedModule().resetError();
+        linesRuntime.reset();
+        linesFeature.setSheet('events');
+        linesFeature.dashed.resetError();
         // 线·swipe：切 chat 复位单调闸到当前末楼（历史楼不误判为新楼），清待重算标记 + 所有临时层。
-        _lastSeenMaxMesId = (getContext().chat?.length ?? 0) - 1;
-        _pendingSwipeGen = null;
-        _floorTextSig = {};   // 切 chat 清楼文本签名，避免跨 chat 同 mesId 串味
-        _clearAllSwipeLines();
+        linesFeature.clearAllSwipe(getContext().chatId);
         // 大纲自动注入：切 chat 复位判定追踪。起点设成当前末楼→载入历史楼不回判；
         // 中断进行中的判定、清计数，避免旧 chat 的判定落到新 chat。
         outlineLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
         outlineJudgeMsgCounter = 0;
         outlineJudgeAbort?.abort();
         outlineJudgeAbort = null;
+        outlineJudgeOwner = null;
         isJudgingOutline = false;
         // 历·自动确认日期：同理切 chat 复位单调闸到末楼、清计数、中断进行中的判定。
         almanacLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
@@ -1190,7 +1252,6 @@ jQuery(async () => {
         ledgerJudgeCounter = 0;
         ledgerJudgeController.reset();
         _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的「同步到点」后台生成
-        _lastDetectedDay  = null;   // days-mode: reset day tracker on chat switch
         spaceMode = false;
         spaceChatHistory = [];
         theaterMode = false;
@@ -1315,12 +1376,15 @@ jQuery(async () => {
         // Master switch: linesEnabled=false disables auto-advance + inline block
         if (getSettings().linesEnabled === false) return;
         const mid = Number(messageId);
+        await linesFeature.onCharacterRendered({ messageId: mid, type, autoSuppressed: isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES) });
+        return;
+        /* legacy decision body retained temporarily for diff context; feature owns this path now.
         // 时旅首楼：自动化线被显式步骤接管——本楼只阻止重复请求，不推进、不提前消费累计进度。
         // （预检占闸先于本监听注册，同一 tick 生效，故此时闸必然已占住。）
         const autoSuppressed = isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES);
         // 🔄重生成握手消费：读一次即清，防陈旧标记泄漏到后续事件。放在 isNewFloor 判定前，但下方分支
         // 顺序保证 isNewFloor 优先——真·新楼即便撞上残留标记也走推进、不会误判成重 roll。
-        const wasPendingReroll = _pendingReroll; _pendingReroll = false;
+        const wasPendingReroll = linesFeature.lifecycle.consumePendingReroll();
         // 单调递增闸：mid 递增 = 真·新楼层；同 mid 重渲染 = swipe/刷新/历史回渲。
         // counter++ 与自动推进只在真·新楼层做（修掉 swipe/重渲染误触 counter 的老 bug）；
         // 但内联块要在**每次**渲染时补回最新楼——重渲染会清掉旧 DOM，不补则硬刷后主楼线块消失。
@@ -1330,49 +1394,47 @@ jQuery(async () => {
         //      流式下这条 CMR 的 type 竟是 undefined 且 GENERATION_STARTED 没 latch 到 'regenerate'（pRr=false），
         //      非流式又被 saveReply 降级成 'normal'。单靠 type/latch → 「点🔄线不重算·必现·毫无动静」。
         //   ③ contentChanged（真·兜底，最稳）：**最新楼**的主文本变了 = 就在原楼重生成 = 重roll。版本无关。
-        //      只认最新楼（mid===_lastSeenMaxMesId）：历史楼改文本不该动当前线（runGenerateLines 写的是全局当前线缓存）。
+        //      只认最新楼（mid===_lastSeenMaxMesId）：历史楼改文本不该动当前线（生成器写的是全局当前线缓存）。
         //      滑到已生成 swipe 属既有 MESSAGE_SWIPED 处理，那里已盖章签名，不会在此误判。
         const _curSig  = _floorSig(mid);
         const _curText = String(getContext().chat?.[mid]?.mes ?? '');
-        const contentChanged = (mid === _lastSeenMaxMesId && _floorTextSig[mid] !== undefined && _curSig !== _floorTextSig[mid] && _curText.trim() !== '');
-        _floorTextSig[mid] = _curSig;   // 记本次签名，供下条 CMR 比对
-        const floorDecision = classifyRenderedFloor({ messageId: mid, lastSeen: _lastSeenMaxMesId, type, pendingReroll: wasPendingReroll, contentChanged, pendingSwipe: _pendingSwipeGen?.mesId === mid });
+        const contentChanged = (mid === linesFeature.lifecycle.lastSeenMaxMesId && linesFeature.lifecycle.floorTextSig[mid] !== undefined && _curSig !== linesFeature.lifecycle.floorTextSig[mid] && _curText.trim() !== '');
+        linesFeature.lifecycle.floorTextSig[mid] = _curSig;
+        const floorDecision = classifyRenderedFloor({ messageId: mid, lastSeen: linesFeature.lifecycle.lastSeenMaxMesId, type, pendingReroll: wasPendingReroll, contentChanged, pendingSwipe: linesFeature.lifecycle.pendingSwipeGen?.mesId === mid });
         const isNewFloor = floorDecision.isNewFloor;
         const isReroll = floorDecision.isReroll;
         let shouldAdvance = false;
         if (isNewFloor) {
-            _lastSeenMaxMesId = mid;
+            linesFeature.lifecycle.lastSeenMaxMesId = mid;
             const mode = getLinesMode();
             if (autoSuppressed) {
                 // 时旅流程进行中：显式流程尚未返回结果，本楼只阻止重复请求，不提前消费已有累计进度。
             } else if (mode === 'days') {
-                shouldAdvance = detectInGameDayChange(mid, /* excludeCurrent */ true);
+                shouldAdvance = linesFeature.detectInGameDayChange();
             } else if (mode === 'turns') {
                 const interval = getLinesInterval();
                 // 先自增后比较：interval=1 时每个新楼都推进。原来"先比较(>=)、末尾再 ++"，counter 从 0 起，
                 // 首个新楼 0>=1 不成立 → 第一楼不推进、整体相位晚一拍（切 chat / 删线归零后每次重犯），
                 // 表现为"这一楼和上一楼线相同"。对齐「面·大纲判定」的 ++counter 写法即可。
-                const advance = createAdvanceStrategy({ mode: 'turns', interval, counter: linesAiMsgCounter });
-                linesAiMsgCounter = advance.counter;
+                const advance = linesFeature.lifecycle.advanceCounter({ mode: 'turns', interval });
                 shouldAdvance = advance.shouldAdvance;
             }
             // mode === 'manual': never auto-advance, only inline block append
-        } else if (isReroll || (_pendingSwipeGen && _pendingSwipeGen.mesId === mid)) {
+        } else if (isReroll || (linesFeature.lifecycle.pendingSwipeGen && linesFeature.lifecycle.pendingSwipeGen.mesId === mid)) {
             // 重 roll（🔄 重生成按钮）刚渲染完 → 先贴当前线（避免重算期间主楼空白），再从楼层基线 B0 重算。
             // 纯 swipe 生成新变体（_pendingSwipeGen 命中）不再自动重算——只本地重挂，用户想更新线自己点刷新键。
             // 借此避开「swipe 撞后台/改写插件请求」的并发；🔄 重 roll 仍保留自动重算（用户明确要留）。
             // 区分靠 _pendingSwipeGen：只在 MESSAGE_SWIPED 带 pendingGeneration 时置位，重 roll 走 GENERATION_STARTED 不置。
-            const wasSwipeGen = !!(_pendingSwipeGen && _pendingSwipeGen.mesId === mid);
-            _pendingSwipeGen = null;
-            appendLinesInlineBlock(mid, false);
-            // 非推进楼没有 B0 基线，_regenLinesForSwipe 内部会早退、线保持原样（与既有重 roll 语义一致，防止凭空推进）。
-            if (!wasSwipeGen) _regenLinesForSwipe(mid, true);
+            const wasSwipeGen = linesFeature.lifecycle.consumePendingSwipe(mid);
+            linesFeature.appendInlineBlock(mid, false);
+            // 非推进楼没有 B0 基线，feature 内部会早退、线保持原样（与既有重 roll 语义一致，防止凭空推进）。
+            if (!wasSwipeGen) linesFeature.rerunSwipe({ mesId: mid, forceRegen: true });
             return;
         }
         // 新楼层按 shouldAdvance 推进并贴块；刷新/历史/swipe 回退重渲染 shouldAdvance=false，仅把内联块补回最新楼。
-        appendLinesInlineBlock(mid, shouldAdvance);
+        linesFeature.appendInlineBlock(mid, shouldAdvance);
         // 全量通知：线随剧情真推进了才弹（不推进不响，对应「变了才提示」）
-        if (shouldAdvance && getSettings().notifyMode === 'full') showToast('线已随剧情自动推进 · 请注意查看');
+        if (shouldAdvance && getSettings().notifyMode === 'full') showToast('线已随剧情自动推进 · 请注意查看'); */
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     if (_stListeners.timeTravel) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
@@ -1399,12 +1461,21 @@ jQuery(async () => {
         if (!info?.pendingGeneration) relandStoryClockAnchor();
         syncLatestAlmanacBlock();
         syncLatestScheduleBlock();   // 点·日程条：swipe 后一并重挂（点本身不随 swipe 变，纯补块）
+        await linesFeature.onSwiped({ mesId, info });
+        return;
+        /* feature-owned swipe decision; legacy bridge body below is unreachable.
         if (getSettings().linesEnabled === false) return;
         const mid = Number(mesId);
-        const swipeDecision = chooseSwipeLayer({ pendingGeneration: !!info?.pendingGeneration, swipeId: Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0), stored: _readSwipeLines(getContext().chatId, mid), baseline: '' });
-        if (swipeDecision.action === 'wait') { _pendingSwipeGen = { mesId: mid }; return; }
-        _floorTextSig[mid] = _floorSig(mid);   // 盖章：滑到已生成 swipe 由本处处理，别让随后 CMR 的内容签名把它误判成重roll
-        _applyStoredSwipeLines(mid, Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0));
+            const swipeDecision = chooseSwipeLayer({ pendingGeneration: !!info?.pendingGeneration, swipeId: Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0), stored: linesFeature.readSwipe(getContext().chatId, mid), baseline: '' });
+        if (swipeDecision.action === 'wait') { linesFeature.lifecycle.markPendingSwipe(mid); return; }
+        linesFeature.lifecycle.floorTextSig[mid] = _floorSig(mid);
+        linesFeature.applyStoredSwipe({
+            chatId: getContext().chatId, mesId: mid,
+            swipeId: Number(info?.nextSwipeId ?? getContext().chat?.[mid]?.swipe_id ?? 0),
+            key: getLinesCacheKey(), writeStore,
+            render: hit => { if (linesMode) linesFeature.renderBody(linesRuntime.html || linesFeature.renderLines(hit)); },
+            syncInline: syncLatestInlineBlock,
+        }); */
     };
     eventSource.on(event_types.MESSAGE_SWIPED, _stListeners.swiped);
     // 线·编辑盖章：用户小铅笔改正文 → 只把该楼签名基线刷成编辑后正文，绝不重算/生成。
@@ -1415,23 +1486,13 @@ jQuery(async () => {
     // emit 时机：messageEditDone 先 renderEditedMessage 再 emit，故 chat[mid].mes 已是新正文，_floorSig 拿到的即新签名。
     if (_stListeners.edited) eventSource.removeListener?.(event_types.MESSAGE_EDITED, _stListeners.edited);
     _stListeners.edited = (mesId) => {
-        if (!pluginEnabled()) return;           // 插件总关
-        if (getSettings().linesEnabled === false) return;
-        const mid = Number(mesId);
-        if (!Number.isFinite(mid)) return;
-        const edited = markEditedFloor({ messageId: mid, signature: _floorSig(mid) });
-        if (edited) _floorTextSig[edited.messageId] = edited.signature;    // 盖章：对齐到编辑后正文，别让随后 CMR 把这次编辑误判成重roll
+        linesFeature.onEdited({ mesId });
     };
     eventSource.on(event_types.MESSAGE_EDITED, _stListeners.edited);
     // 线·固定：用户发出下一条消息 → 上一 AI 楼层定稿，清掉它的 swipe 临时层（store 已是当前 swipe 的线）。
     if (_stListeners.sent) eventSource.removeListener?.(event_types.MESSAGE_SENT, _stListeners.sent);
     _stListeners.sent = (insertAt) => {
-        if (!pluginEnabled()) return;   // 插件总关
-        if (getSettings().linesEnabled === false) return;
-        const chat = getContext().chat;
-        if (!Array.isArray(chat)) return;
-        const floor = floorToFinalize({ chat, insertAt });
-        if (floor != null) _clearSwipeLines(getContext().chatId, floor);
+        linesFeature.onSent({ insertAt });
     };
     eventSource.on(event_types.MESSAGE_SENT, _stListeners.sent);
     // 生成态闸（防楼内块流式频闪）：ST 流式每 token 重写末楼 .mes_text 会冲掉线块/七天条，observer 若在流式间隙补块就「补→被冲→再补」肉眼频闪。
@@ -1440,30 +1501,18 @@ jQuery(async () => {
     // 时间戳闸靠「最近流式 token 时间」续期、到点自动失效，绝不卡死。
     if (_stListeners.genStart) eventSource.removeListener?.(event_types.GENERATION_STARTED, _stListeners.genStart);
     _stListeners.genStart = (genType, _opts, dryRun) => {
-        if (!pluginEnabled()) return;   // 插件总关
-        if (dryRun) return;
-        _stStreamUntil = Date.now() + 3000;   // 盖住首 token 前的模型延迟；无 token 也 3s 自愈
-        // 🔄重生成：此刻 type 尚是原始 'regenerate'（还没进 saveReply 被降级成 'normal'）→ 置位待下一条 CMR 消费。
-        if (genType === 'regenerate') {
-            _pendingReroll = true;
-            _rerollExcludedAssistant = null;
-            _rerollExcludedAssistant = snapshotLastAssistant(getContext().chat);
-        }
+        linesFeature.onGenerationStarted({ genType, dryRun });
     };
     eventSource.on(event_types.GENERATION_STARTED, _stListeners.genStart);
     if (_stListeners.streamTok) eventSource.removeListener?.(event_types.STREAM_TOKEN_RECEIVED, _stListeners.streamTok);
-    _stListeners.streamTok = () => { if (!pluginEnabled()) return; _stStreamUntil = Date.now() + 1500; }; // 每个可见 token 把闸续 1.5s；token 停 1.5s 后 observer 自动恢复补块
+    _stListeners.streamTok = () => { linesFeature.onToken(); };
     eventSource.on(event_types.STREAM_TOKEN_RECEIVED, _stListeners.streamTok);
     if (_stListeners.genEnd) {
         eventSource.removeListener?.(event_types.GENERATION_ENDED, _stListeners.genEnd);
         eventSource.removeListener?.(event_types.GENERATION_STOPPED, _stListeners.genEnd);
     }
     _stListeners.genEnd = () => {
-        if (!pluginEnabled()) return;   // 插件总关
-        _stStreamUntil = 0;   // 立即开闸（有 ENDED 就即时恢复；没有也无妨，时间戳会自愈）
-        _pendingReroll = false;
-        _rerollExcludedAssistant = null;
-        setTimeout(() => refreshInlineWindow(true), 60);   // 流式结束 → 重算渲染窗口（最新楼冻快照+重挂）
+        linesFeature.onGenerationEnded();
     };
     eventSource.on(event_types.GENERATION_ENDED, _stListeners.genEnd);
     eventSource.on(event_types.GENERATION_STOPPED, _stListeners.genEnd);
@@ -1590,7 +1639,6 @@ jQuery(async () => {
     if (_bbbReadyListener) window.removeEventListener('st-baibai-book:ready', _bbbReadyListener);
     _bbbReadyListener = () => {
         if (!pluginEnabled()) return;   // 插件总关
-        _bbbWarned = false;
         getMemText._bbbWarned = false;
         if (getSettings().useBaiBaiBook) { try { renderMemorySection(); } catch {} }
     };
@@ -1641,21 +1689,20 @@ jQuery(async () => {
 // 一键中断所有在飞的后台判定与生成（点/线/虚线/面/间/棱/历 + 三路日期判定 + 同步到点），并清 re-entry 闸，
 // 让重新开启后能干净重跑。照 CHAT_CHANGED 的中断序列集中一处。
 function _abortAllBackground() {
-    linesTaskOwners.invalidate('lines-generation');
+    linesFeature.abortGeneration();
     for (const c of [
-        linesAbortController, spaceChatAbortController,
+        linesFeature.runtime.controller, spaceChatAbortController,
         pointState.scheduleAbortController, outlineAbortController, theaterAbortController,
         axisState.almanacAbortController, outlineChatAbortController,
         outlineJudgeAbort, dateDetectionController.abortController, _autoRegenSchedAbort,
         ledgerCaptureController.abortController, ledgerJudgeController.abortController,
     ]) { try { c?.abort(); } catch {} }
-    getDashedModule().abort();
-    linesAbortController = spaceChatAbortController = null;
+    linesFeature.dashed.abort();
     pointState.scheduleAbortController = outlineAbortController = theaterAbortController = null;
     axisState.almanacAbortController = outlineChatAbortController = null;
     outlineJudgeAbort = _autoRegenSchedAbort = null;
     ledgerJudgeController.reset();
-    isGeneratingOutline = isGeneratingLines = false;
+    isGeneratingOutline = false;
     isGeneratingTheater = axisState.isGeneratingAlmanac = false;
     isJudgingOutline = false;
     ledgerCaptureController.reset();
@@ -1700,11 +1747,9 @@ function applyPluginEnabled(on) {
 
 // ─── In-game day-change detection (桥接到历·almTodayAnchor) ───────────────────
 // days 模式（跟随局内时间）的推进检测：从历的权威「今天」取 {月-日}，变化即推进。
-// 历史上这里读柏宝书 state.time（见 detectInGameDayChange 内注释），已改为桥接 almTodayAnchor
+// 历史上这里读柏宝书 state.time，现已改为桥接 almTodayAnchor
 // 六层兜底源——柏宝书没装也能靠记忆/线/点/正文推进，且与历共用同一个「今天」。
 // extractDayFromTime / _cnToNumber / _CN_* 仍被 almTodayAnchor、parseJudgedDate 复用，保留。
-let _lastDetectedDay = null;
-let _bbbWarned       = false;   // 现已无读取点（旧 days 检测的唯一读者随桥接删除）；仅剩 622 处复位，留着不动柏宝书就绪handler
 
 
 // 中文数字 → 阿拉伯数字（覆盖 0–99，足以处理古代年月日）。含农历「廿/卅」与大写/繁体（民国·契据式）。
@@ -1713,22 +1758,6 @@ let _bbbWarned       = false;   // 现已无读取点（旧 days 检测的唯一
 // 抽出"这一天"的规范化 key。剥掉 era 前缀、时分秒尾巴以及数字前导零，
 // 让同一天不同写法（"1287/04/01" ≡ "1287/4/1" ≡ "1287年4月1日"）落到同一
 // 个 key 上。返回 null 表示无法识别 → 不推进。
-
-// days 模式（设置里的「跟随局内时间」自动推进）：桥接到历的权威「今天」almTodayAnchor()。
-// 旧实现硬依赖外部柏宝书快照、且只读上一条 AI 楼 —— 柏宝书没装就静默永不推进（days 模式等于废的）。
-// almTodayAnchor 是六层兜底（①柏宝书→②记忆→③线→④点→⑤正文扫描→⑥兜底）：柏宝书在时答案一致、
-// 不在时靠记忆/线/点/正文继续推进；其⑤正文层直接读本楼原文，天然吸收「正文已跳日、慢源没跟上」的相位差。
-// 变更键取 {月-日}，与上次检测到的不同即算「过了一天」→ 推进一次。
-// 注：almTodayAnchor 读当前最新态、不接受楼层参数，故 messageId/excludeCurrent 仅为兼容旧签名保留、不再使用。
-function detectInGameDayChange(messageId, excludeCurrent = false) {
-    let md;
-    try { md = almTodayAnchor(); } catch { return false; }
-    if (!md || !Number.isFinite(+md.month) || !Number.isFinite(+md.day)) return false;
-    const day = `${+md.month}-${+md.day}`;
-    const decision = createAdvanceStrategy({ mode: 'days', dayAnchor: day, previousDay: _lastDetectedDay });
-    _lastDetectedDay = day;
-    return decision.shouldAdvance;
-}
 
 // ─── 楼内渲染框·快照桥 ────────────────────────────────────────────────────
 // 采集「当前最新」的点/线/历/锚点 → 一份快照对象。这是权威源（sp-store 缓存 + 锚点）的
@@ -1756,65 +1785,7 @@ function prefixNext(next, stall) {
 // rawArg：null=读当前视角活缓存（最新楼，现状不变）；字符串=快照里的线 raw（历史楼）。
 // readOnly：true=历史楼，去掉逐条注入/删除按钮 + 标题条的「推进」按钮（旧楼不触发生成）。
 // 历史楼不并虚线子块（虚线是全局冷知识、非那层楼的历史态）。
-function _buildLinesBlockHtml(rawArg = null, readOnly = false) {
-    if (getSettings().linesInlineEnabled === false) return '';   // 线段单独关 → 不渲这段（与历/点两段自门控对齐）
-    const raw = rawArg != null ? rawArg : (() => {
-        try {
-            const saved = readStore(getLinesCacheKey());
-            return saved?.raw || '';
-        } catch { return ''; }
-    })();
-    const view = inlineState(raw, { readOnly });
-    const lines = view.lines;
-    const dashedSub = !view.readOnly && view.dashed.enabled ? getDashedModule().inlineHtml() : '';   // 虚线冷知识折进同一个块的 body
-    if (lines.length) {
-        const linesHtml = lines.map((l, i) => {
-            const levelNum = parseInt(l.level, 10);
-            const level    = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
-            const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
-            const beadsHtml = Array.from({length: 4}, (_, i) =>
-                `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
-            ).join('');
-            // Per-line inject button — parallels the one in the outer panel (renderLines)。历史楼只读：整组动作按钮不挂。
-            let actions = '';
-            if (view.hasActions && view.lineActions.length) {
-                const injectParts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
-                if (l.desc) injectParts.push(l.desc);
-                if (l.nextText) injectParts.push(l.nextText);
-                actions = `<span class="sp-beat-actions">
-                        ${makeInjectBtn(injectParts.join('\n'))}
-                        <button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button>
-                    </span>`;
-            }
-            return `<div class="sp-inline-line${l.stall ? ' sp-line-stall' : ''}" data-line-idx="${i}" style="border-left:3px solid ${stageColor}20">
-                <div class="sp-inline-head">
-                    <span class="sp-inline-stage" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
-                    ${l.type ? `<span class="sp-inline-type">${escapeHtml(l.type)}</span>` : ''}
-                    <span class="sp-inline-dots">${beadsHtml}</span>
-                    ${l.when ? `<span class="sp-inline-when">${escapeHtml(l.when)}</span>` : ''}
-                    ${l.stall ? `<span class="sp-line-stall-tag sp-inline-stall">停滞</span>` : ''}
-                    ${actions}
-                </div>
-                <div class="sp-inline-name">${escapeHtml(l.name)}</div>
-                ${l.desc ? `<div class="sp-inline-desc">${escapeHtml(cleanText(l.desc))}</div>` : ''}
-                ${l.next ? `<div class="sp-line-next sp-inline-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}">
-                    <span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span>
-                    <span class="sp-line-next-text">${escapeHtml(cleanText(l.next))}</span>
-                </div>` : ''}
-            </div>`;
-        }).join('');
-        const advanceBtn = view.hasActions && view.summaryActions.length ? `<span class="sp-inline-summary-actions">
-            <button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button>
-            <button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button>
-        </span>` : '';
-        return `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count">${view.count} 条活跃</span>${advanceBtn}</summary><div class="sp-inline-body" data-lines-inject-text="${escapeAttr(view.injectText)}">${linesHtml}${dashedSub}</div>`;
-    }
-    // 无活跃线：线块「暂无」；若虚线有内容仍给一个 body 承载它（合并后虚线寄居在线块里）。
-    const emptySummary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count sp-inline-empty">${escapeHtml(view.empty ? (view.emptyState?.title || '暂无') : '')}</span></summary>`;
-    return dashedSub ? `${emptySummary}<div class="sp-inline-body" data-lines-inject-text="${escapeAttr(view.injectText)}">${dashedSub}</div>` : emptySummary;
-}
-
-// 楼内「标注池」框（AI 楼，镜像线块 _buildLinesBlockHtml）：显示当前实际打捞到的暗历条目。
+// 楼内「标注池」框（AI 楼，镜像线块）：显示当前实际打捞到的暗历条目。
 // poolArg：历史楼传快照里冻的 pool [{id,事由,类型,起始锚,周期长度,到期锚,标签,锁}]；最新楼传 null → 读活账 ledger.listEntries()
 //   （与线/点/历「null=读活缓存」同款：最新楼恒反映当前标注池，historical 楼看当时冻结的）。
 // readOnly=false（最新楼）：summary 带「标注/更新」两文字胶囊、每条带「锁定/归档了结」；true（历史楼）：纯只读。
@@ -1828,25 +1799,7 @@ function _removeAllInlineBlocks() {
 }
 
 // 新楼层挂线块 + （可选）首次推进生成。渲染改由 refreshInlineWindow() 统一负责；
-// 本函数保留唯一真副作用——首次推进的线生成（runGenerateLines），以及推进前后的即时刷窗。
-async function appendLinesInlineBlock(messageId, shouldAdvance) {
-    // 先即时刷一次窗，让新楼的框（含当前线态）立刻出现（显隐门/深度窗/视口由控制器判定）
-    refreshInlineWindow(true);
-
-    // If we need to advance, run generation and then refresh again（推进不受显隐门影响）
-    const cfg = loadCfg();
-    if (shouldAdvance && !isGeneratingLines && cfg.url && cfg.key) {
-        // 新楼层首次推进：带上 swipeCtx（当前 swipeId，通常 0），把本次 pre-commit 基线 B0
-        // 连同结果记进 swipe 临时层，后续在本楼 swipe 时能从 B0 重推、来回 swipe 复用。
-        const swipeId = Number(getContext().chat?.[messageId]?.swipe_id ?? 0);
-        await runGenerateLines(true /* silent */, { mesId: Number(messageId), swipeId });
-        refreshInlineWindow(true);   // 推进产生的新线态 → 重刷窗（最新楼会重冻快照+重挂）
-    }
-
-    // 冻快照进本楼：新楼首挂 / 推进后线态已定，把此刻的点/线/历/锚点封存到这条 message（幂等）。
-    freezeSnapshotToFloor(messageId);
-}
-
+// 入口保留唯一真副作用——首次推进的线生成，以及推进前后的即时刷窗。
 // Back-fill：切聊天/初始化/主开关切换时的入口。渲染交给窗口控制器；保留潜伏注入 refresh 真副作用。
 async function backfillLinesInlineBlocks() {
     refreshLinesInjection();   // chat 切换/初始化/主开关切换 → 重设潜伏注入（关闭时内部会清空）
@@ -2225,7 +2178,7 @@ function _buildInlineBoxHtml(snap, isLatest, floorClock = null, floor = null) {
     const localWeekdayRef = isLatest ? undefined : createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor, resolveLocal: f => storyWeekdayRefPure(getContext(), resolvedCalendar, ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
     const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar, localWeekdayRef);
     const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar, localWeekdayRef);
-    const linesInner = _buildLinesBlockHtml(snap ? (snap.line || '') : null, readOnly);
+    const linesInner = linesFeature.inlineHtml(snap ? (snap.line || '') : null, readOnly);
     // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
     const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
 
@@ -2393,6 +2346,7 @@ function mountInlineBox(el, isLatest) {
     if (!boxEl) return;
     boxEl.dataset.sig = _boxSig(html, isLatest);
     msgEl.appendChild(boxEl);
+    syncVectorGlyphTheme(document, currentTheme, (getSettings().themeMode || 'auto') !== 'auto');
 }
 
 // 框签名：内容 HTML + 楼性质（最新/历史）。用于幂等判断，避免每次视口回调都重建 DOM。
@@ -2480,31 +2434,9 @@ function syncLatestScheduleBlock(expectedChatId = null) {
 // 改 AI 行为且增加 token。刷新时机跟内联块同步（见 sync/backfill + 开关 handler）。
 const LINES_INJECT_KEY   = 'sp_lines_latent';
 const LINES_INJECT_DEPTH = 4;
-let linesInjectionController = null;
-function buildLinesInjectionText(lines) {
-    const items = lines.map(l => {
-        const parts = [`- ${l.name}（${l.type || '线'}·${l.stage}${l.stall ? '·停滞' : ''}）`];
-        if (l.desc) parts.push(`  ${cleanText(l.desc)}`);
-        if (l.next) parts.push(`  ${prefixNext(l.next, l.stall)}`);
-        return parts.join('\n');
-    }).join('\n');
-    return [
-        '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】',
-        '以下是这个故事水面之下正在发展的伏笔。请把它们当作暗流，在接下来的叙事中',
-        '自然、含蓄、缓慢地顺势推进：不要生硬提及、不要让角色直接谈论、更不要一次抖开。',
-        items,
-    ].join('\n');
-}
-
 // 重设潜伏注入。读当前视角活跃线；关闭或无活跃线时清空。幂等，可随处多调。
 function refreshLinesInjection() {
-    if (!linesInjectionController) linesInjectionController = createLinesInjectionController({
-        context: () => getContext(), settings: getSettings, enabled: injectEnabled,
-        readRaw: () => readStore(getLinesCacheKey())?.raw || '',
-        promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {},
-        clean: cleanText,
-    });
-    return linesInjectionController.refresh();
+    return linesFeature.injection?.refresh?.();
 }
 
 // ─── 面·大纲自动注入（游标沿节点前进，隐形喂主楼 AI）──────────────────────────────
@@ -2516,8 +2448,16 @@ const OUTLINE_INJECT_KEY   = 'sp_outline_step';
 const OUTLINE_INJECT_DEPTH = 4;
 let   isJudgingOutline       = false;
 let   outlineJudgeAbort      = null;
+let   outlineJudgeOwner      = null;
 let   outlineLastJudgedMsgId = -1;   // 防重放：只判「比上次判过的更新的末楼」，切 chat 时设成末楼
 let   outlineJudgeMsgCounter = 0;    // 攒够 interval 条真·新回复才跑一次判定（照 linesAiMsgCounter 套路）
+function abortOutlineJudge() {
+    const owner = outlineJudgeOwner;
+    outlineJudgeOwner = null;
+    outlineJudgeAbort = null;
+    if (owner) { try { owner.abort(); } catch {} }
+    isJudgingOutline = false;
+}
 
 // 历·自动确认日期的判定状态（抄 outline 那套三闸：防重入 + 单调 msgId + 攒够计数）。仅 API 兜底路用；戳优先路每楼直读不占这些。
 let   almanacLastJudgedMsgId = -1;
@@ -2647,27 +2587,37 @@ const OUTLINE_JUDGE_PROMPT = (cur, nxt, curScene, nxtScene) =>
 
 // 判定当前视角大纲是否该前进一个节点。fire-and-forget，照 runGenerateDashed 的 abort/chatId 守卫。
 async function runJudgeOutlineStep() {
+    if (isJudgingOutline && outlineJudgeOwner?.signal?.aborted) isJudgingOutline = false;
     if (isJudgingOutline) return;
     const chatIdSnap = getContext().chatId;
     const saved = readStore(getOutlineCacheKey());
     if (!saved?.raw) return;
     const beats = parseOutline(saved.raw);
     const cursor = getOutlineCursor();
+    const baseline = { raw: saved.raw, ts: saved.ts ?? null, cursor };
     if (!beats.length || cursor < 1 || cursor >= beats.length) return;   // 已在最后节点 → 无「下一个」可判
     const cur = beats[cursor - 1], nxt = beats[cursor];
-    const myCtrl = outlineJudgeAbort = new AbortController();
+    // Invalidate the pointer before aborting: an abort is advisory and the
+    // provider may ignore it, so identity remains the authoritative guard.
+    const myCtrl = new AbortController();
+    outlineJudgeOwner = myCtrl;
+    outlineJudgeAbort = myCtrl;
     isJudgingOutline = true;
     try {
         const ctx = getContext();
         const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
         const cfg = loadUtilityCfg();   // 机械任务：大纲推进判定可分流到轻量预设，未设则=主 API
-        if (!cfg.url || !cfg.key) { isJudgingOutline = false; outlineJudgeAbort = null; return; }
+        if (!cfg.url || !cfg.key) { isJudgingOutline = false; outlineJudgeOwner = null; outlineJudgeAbort = null; return; }
         const fmt = b => `${b.time ? b.time + '·' : ''}《${b.title}》`;
         const prompt = OUTLINE_JUDGE_PROMPT(fmt(cur), fmt(nxt), cleanText(cur.scene || ''), cleanText(nxt.scene || ''));
         const raw = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal);
-        if (outlineJudgeAbort !== myCtrl) return;                          // 被更新的判定取代
-        if (getContext().chatId !== chatIdSnap) { isJudgingOutline = false; outlineJudgeAbort = null; return; }
-        isJudgingOutline = false; outlineJudgeAbort = null;
+        if (outlineJudgeAbort !== myCtrl || outlineJudgeOwner !== myCtrl || myCtrl.signal.aborted) return;
+        if (getContext().chatId !== chatIdSnap) { isJudgingOutline = false; if (outlineJudgeOwner === myCtrl) outlineJudgeOwner = null; outlineJudgeAbort = null; return; }
+        const latest = readStore(getOutlineCacheKey());
+        if (!latest || latest.raw !== baseline.raw || (latest.ts ?? null) !== baseline.ts || getOutlineCursor() !== baseline.cursor) {
+            isJudgingOutline = false; outlineJudgeOwner = null; outlineJudgeAbort = null; return;
+        }
+        isJudgingOutline = false; outlineJudgeOwner = null; outlineJudgeAbort = null;
         // 只认明确「推进」；含「未/没/不/无 推进」一律不动（无信号不动的兜底）
         const ans = String(raw || '').trim();
         const advanced = /推进/.test(ans) && !/(未|没|不|无)\s*推进/.test(ans);
@@ -2682,8 +2632,8 @@ async function runJudgeOutlineStep() {
             }
         }
     } catch (err) {
-        if (outlineJudgeAbort !== myCtrl) return;          // 被更新的判定取代 → 别动状态
-        isJudgingOutline = false; outlineJudgeAbort = null;
+        if (outlineJudgeAbort !== myCtrl || outlineJudgeOwner !== myCtrl) return;
+        isJudgingOutline = false; outlineJudgeOwner = null; outlineJudgeAbort = null;
         if (err?.name === 'AbortError') return;            // 中止 / 切档 → 不算失败
         if (getContext().chatId !== chatIdSnap) return;    // 已切 chat → 作废，别弹
         // 判定失败也弹（不动游标，纯提示）：同日期判定，每 N 楼跑一次、用户未必盯着，失败要让他知道。
@@ -2704,8 +2654,9 @@ async function runRelocateOutlineCursor(promptAddon = '', externalSignal = null)
     const chatIdSnap = ctx.chatId;
     const cfg = loadUtilityCfg();
     if (!cfg.url || !cfg.key) return { status: 'failed', error: new Error('未配置 API') };
-    outlineJudgeAbort?.abort();
+    abortOutlineJudge();
     const myCtrl = outlineJudgeAbort = new AbortController();
+    outlineJudgeOwner = myCtrl;
     const removeAbortBridge = bridgeAbortSignal(externalSignal, myCtrl);
     isJudgingOutline = true;
     try {
@@ -2730,7 +2681,7 @@ async function runRelocateOutlineCursor(promptAddon = '', externalSignal = null)
         return { status: 'failed', error };
     } finally {
         removeAbortBridge();
-        if (outlineJudgeAbort === myCtrl) outlineJudgeAbort = null;
+        if (outlineJudgeAbort === myCtrl) { outlineJudgeAbort = null; outlineJudgeOwner = null; }
         isJudgingOutline = false;
     }
 }
@@ -3076,7 +3027,7 @@ function initAnchorObserver() {
             scanAnchorButtons();
             // 流式中不重算窗口：ST 每 token 重写 .mes_text，此时算了也会被冲；等流式结束
             // （token 停 1.5s／GENERATION_ENDED／CHARACTER_MESSAGE_RENDERED）统一刷。按钮扫描不受此限（按钮在 .mes 头部）。
-            if (Date.now() < _stStreamUntil) return;
+            if (linesFeature.isStreaming()) return;
             refreshInlineWindow();   // 结构变 → 防抖重算深度窗 + 观察新楼（幂等，已挂的框不动）
         }, 400);
     });
@@ -3699,7 +3650,7 @@ function injectModal() {
                                     <div class="sp-mode-opt sp-mode-opt-sub" style="margin-top:6px">
                                         <input type="checkbox" id="sp-dashed-cleanup-enabled" ${getSettings().dashedCleanupEnabled !== false ? 'checked' : ''}>
                                         <label for="sp-dashed-cleanup-enabled">只保留最近</label>
-                                        <input id="sp-dashed-keep-count" class="sp-input sp-interval-input" type="number" min="2" step="1" value="${escapeAttr(String(getDashedModule().normalizeKeepCount(getSettings().dashedKeepCount)))}" ${getSettings().dashedCleanupEnabled !== false ? '' : 'disabled'} aria-label="保留最近多少条未锁冷知识">
+                                        <input id="sp-dashed-keep-count" class="sp-input sp-interval-input" type="number" min="2" step="1" value="${escapeAttr(String(linesFeature.dashed.normalizeKeepCount(getSettings().dashedKeepCount)))}" ${getSettings().dashedCleanupEnabled !== false ? '' : 'disabled'} aria-label="保留最近多少条未锁冷知识">
                                         <span>条未锁冷知识</span>
                                     </div>
                                     <p class="sp-cfg-hint" style="margin-top:2px">修改后会对当前聊天立刻生效，其他聊天会在下次冷知识更新时按规则清理。锁定的冷知识不会被自动清除。</p>
@@ -4066,7 +4017,7 @@ function injectModal() {
         const stored = _spaceWidgetStore.get(wid);
         if (!stored) { showToast('这张卡片已过期，请再让 AI 生成一次', null, true); return; }
         if (stored.kind === 'schedule_widget') applyScheduleWidget(stored.body, $btn, stored.editIdx);
-        else if (stored.kind === 'line_widget') applyLineWidget(stored.body, $btn, stored.editIdx);
+        else if (stored.kind === 'line_widget') linesFeature.widget.apply(stored.body, stored.editIdx, $btn);
         else if (stored.kind === 'almanac_widget') applyAlmanacWidget(stored.body, $btn, $btn.attr('data-idx'));
         else if (stored.kind === 'era_widget') applyEraWidget(stored.body, $btn);
     });
@@ -4091,12 +4042,12 @@ function injectModal() {
     $linesWrap.on('click', '.sp-lines-sheet-btn', function () {
         const sheet = $(this).attr('data-sheet');
         if (sheet !== 'events' && sheet !== 'dashed') return;
-        _linesSheet = sheet;
-        refreshLinesPanel();
+        linesFeature.setSheet(sheet);
+        linesFeature.refreshPanel();
     });
-    $linesWrap.on('click', '.sp-lines-dashed-add', () => getDashedModule().openDialog());
-    $linesWrap.on('click', '.sp-lines-dashed-lock', function () { getDashedModule().toggle($(this).attr('data-id')); });
-    $linesWrap.on('click', '.sp-lines-dashed-delete', function () { getDashedModule().remove($(this).attr('data-id')); });
+    $linesWrap.on('click', '.sp-lines-dashed-add', () => linesFeature.dashed.openDialog());
+    $linesWrap.on('click', '.sp-lines-dashed-lock', function () { linesFeature.dashed.toggle($(this).attr('data-id')); });
+    $linesWrap.on('click', '.sp-lines-dashed-delete', function () { linesFeature.dashed.remove($(this).attr('data-id')); });
     $in('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
     // 点视图头部 📌：固定/取消固定当前 char（只在 char 视角出现）。名字取按钮 data-name，兜底 charViewName。
     $in('#sp-body').on('click', '.sp-point-pin-char', function () {
@@ -4152,47 +4103,47 @@ function injectModal() {
     // 双绑拆分：面板行在 shadow 内走 $in；楼内行在 light DOM #chat 保持原查询。
     $linesWrap.on('click', '.sp-refresh-lines, .sp-inline-refresh-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        getLinesActions().reroll();
+        linesFeature.actions.reroll();
     });
     $('#chat').on('click', '.sp-refresh-lines, .sp-inline-refresh-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        getLinesActions().reroll();
+        linesFeature.actions.reroll();
     });
     // Advance lines — button appears in both panel toolbar and inline block
     $linesWrap.on('click', '.sp-advance-lines, .sp-inline-advance-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        getLinesActions().advance();
+        linesFeature.actions.advance();
     });
     $('#chat').on('click', '.sp-advance-lines, .sp-inline-advance-lines', function (e) {
         e.stopPropagation();   // inline button lives in <summary>, don't toggle details
-        getLinesActions().advance();
+        linesFeature.actions.advance();
     });
     // 楼层刷新仍直接广泛取材两条，不打开面板的主题选择弹窗。
     $('#chat').on('click', '.sp-inline-refresh-dashed', function (e) {
         e.stopPropagation();
-        getDashedModule().run({ reroll: true });
+        linesFeature.dashed.run({ reroll: true });
     });
     // Per-line delete (× on each line card, panel + inline). No full-clear button anymore.
     $linesWrap.on('click', '.sp-line-del-one', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) getLinesActions().delete(idx);
+        if (Number.isInteger(idx)) linesFeature.actions.delete(idx);
     });
     $('#chat').on('click', '.sp-line-del-one', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) getLinesActions().delete(idx);
+        if (Number.isInteger(idx)) linesFeature.actions.delete(idx);
     });
     // Per-line lock/unlock toggle (panel only — inline block shows a read-only marker).
     $linesWrap.on('click', '.sp-line-pin-toggle', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) getLinesActions().pin(idx);
+        if (Number.isInteger(idx)) linesFeature.actions.pin(idx);
     });
     $('#chat').on('click', '.sp-line-pin-toggle', function (e) {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
-        if (Number.isInteger(idx)) getLinesActions().pin(idx);
+        if (Number.isInteger(idx)) linesFeature.actions.pin(idx);
     });
     // Per-point lock/unlock toggle (schedule panel only; pin 存 raw、机制对齐线，无楼内块)。
     $in('#sp-body').on('click', '.sp-point-pin-toggle', function (e) {
@@ -4282,9 +4233,19 @@ function injectModal() {
     });
     $theater.on('click', '.sp-theater-regen', function () {
         if (isGeneratingTheater) return;
-        const input = String($in('#sp-theater-input').val() || '').trim();
-        if (!input) { showToast('改一下输入再重新生成', null, true); return; }
+        const piece = theaterCurrentPiece;
+        const regen = theater.resolveTheaterRegen(piece, $in('#sp-theater-input').val());
+        const input = regen.input;
+        if (!input) { showToast('旧草稿未记录原主题，请先填写输入', null, true); $in('#sp-theater-input').trigger('focus'); return; }
+        // 即使当前 piece 没来源，也要显式清空旧的全局选择，防止来源串线。
+        _theaterTemplateSource = regen.templateSource;
+        $in('#sp-theater-input').val(input);
         runGenerateTheater(input);
+    });
+    $theater.on('click', '.sp-theater-source-toggle', function () {
+        const $detail = $in('#sp-theater-source-detail'); const open = !$detail.is(':visible');
+        $detail.toggle(open); $(this).attr('aria-expanded', String(open));
+        $(this).find('.sp-theater-source-chevron').attr('class', `fa-solid fa-chevron-${open ? 'up' : 'down'} sp-theater-source-chevron`);
     });
     $theater.on('click', '#sp-abort-theater', abortTheaterGen);
     $theater.on('click', '.sp-theater-back', renderTheaterPanel);
@@ -4614,6 +4575,12 @@ function injectModal() {
         if ($(e.target).closest('button').length) return;   // 不劫持锁/编辑/删除按钮
         axisCalendarActions.toggleItem($(this).attr('data-id'), { targetIsButton: false });
     });
+    $almanac.on('click.spAxisItems', '.sp-alm-pin, .sp-alm-edit, .sp-alm-del', function (e) {
+        e.preventDefault(); e.stopPropagation(); const id = $(this).attr('data-id');
+        if ($(this).hasClass('sp-alm-pin')) toggleAlmanacPin(id);
+        else if ($(this).hasClass('sp-alm-edit')) openAlmanacEditor(id);
+        else deleteAlmanacItem(id);
+    });
     $almanac.on('click', '#sp-abort-almanac', abortAlmanacGen);
     // F4：日历里点空白处（非日格/条目/控件）→ 清掉当前瞬时态。既回退「选中某天」，也清「上下联动高亮」，两者任一存在都响应，做到点空白必回干净全月。
     $almanac.on('click', function (e) {
@@ -4834,12 +4801,12 @@ function injectModal() {
                 $in('#sp-sub-toggle').hide();
                 $in('#sp-content-title').text('线');
                 // 生成在途时切回来：重建 loading，别 fallback 到"生成线"空态误导用户
-                if (isGeneratingLines) {
-                    setLinesBody(loadingHtml('正在推演线', 'sp-abort-lines'));
+                if (linesRuntime.busy) {
+                    linesFeature.renderBody(loadingHtml('正在推演线', 'sp-abort-lines'));
                 } else {
-                    cachedLines = loadCachedLinesForCurrentChat();
-                    if (cachedLines) setLinesBody(cachedLines);
-                    else setLinesBody(renderEmptyLinesState());
+                    const cached = loadCachedLinesForCurrentChat();
+                    if (cached) linesFeature.renderBody(cached);
+                    else linesFeature.renderBody(renderEmptyLinesState());
                 }
                 return;
             }
@@ -5052,21 +5019,21 @@ function injectModal() {
     $in('#sp-dashed-enabled').on('change', function () {
         getSettings().dashedEnabled = this.checked;
         saveSettingsDebounced();
-        if (linesMode) refreshLinesPanel();
+        if (linesMode) linesFeature.refreshPanel();
         syncLatestInlineBlock();
     });
     $in('#sp-dashed-cleanup-enabled').on('change', function () {
         getSettings().dashedCleanupEnabled = this.checked;
         $in('#sp-dashed-keep-count').prop('disabled', !this.checked);
         saveSettingsDebounced();
-        if (this.checked) getDashedModule().cleanup(true);
+        if (this.checked) linesFeature.dashed.cleanup(true);
     });
     $in('#sp-dashed-keep-count').on('change', function () {
-        const count = getDashedModule().normalizeKeepCount(this.value);
+        const count = linesFeature.dashed.normalizeKeepCount(this.value);
         getSettings().dashedKeepCount = count;
         this.value = String(count);
         saveSettingsDebounced();
-        if (getSettings().dashedCleanupEnabled !== false) getDashedModule().cleanup(true);
+        if (getSettings().dashedCleanupEnabled !== false) linesFeature.dashed.cleanup(true);
     });
     // 大纲自动注入（面）开关：on → 按当前大纲+游标立即注入；off → 清空扩展 prompt（游标留 chat_metadata，再开即续）
     $in('#sp-outline-inject').on('change', function () {
@@ -5756,17 +5723,21 @@ function abortScheduleGen() {
 }
 function abortOutlineGen() {
     if (!isGeneratingOutline) return;
+    const owner = outlineGenerationOwner;
     outlineAbortController?.abort();
+    abortOutlineJudge();
     outlineAbortController = null;
+    outlineGenerationOwner = null;
     isGeneratingOutline = false;
-    setOutlineBody(`<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>已中止</p></div>`);
+    if (owner?.baseline?.raw && getContext().chatId === owner.chatId) {
+        cachedOutline = renderOutline(owner.baseline.raw, owner.baseline.cursor ?? 1);
+        if (outlineMode) setOutlineBody(cachedOutline);
+    } else if (outlineMode) setOutlineBody(renderEmptyOutlineState());
 }
 function abortLinesGen() {
-    if (!isGeneratingLines) return;
-    linesAbortController?.abort();
-    linesAbortController = null;
-    isGeneratingLines = false;
-    if (linesMode && _linesSheet === 'events') refreshLinesPanel();
+    if (!linesRuntime.busy) return;
+    linesFeature.abortGeneration();
+    if (linesMode && linesFeature.sheet === 'events') linesFeature.refreshPanel();
 }
 function abortTheaterGen() {
     if (!isGeneratingTheater) return;
@@ -5810,7 +5781,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
         if (!settingsOpen) toggleSettings();
         throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
     }
-    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned), travelContext);
+    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc()), travelContext);
     const apiOpts = travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {});
     apiOpts.pointView = perspective;
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 10, apiOpts);
@@ -6560,8 +6531,9 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10,
         // 与记忆采集(memory.getAiFloors)、间/面讨论(buildRecentChatContext)同口径。
         const s = getSettings();
         const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
+        const excludedAssistant = opts.excludedAssistant || null;
         history = allMsgs.slice(startIdx).map((m, offset) => ({ m, mesId: startIdx + offset })).filter(({ m, mesId }) => {
-            const excluded = _pendingReroll ? _rerollExcludedAssistant : null;
+            const excluded = excludedAssistant;
             if (!excluded || m.is_user || m.is_system) return true;
             return !(mesId === excluded.mesId && String(m.mes ?? '') === excluded.text);
         }).map(({ m }) => ({
@@ -6581,11 +6553,11 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10,
 // ─── Outline cache helpers ────────────────────────────────────────────────────
 
 function getOutlineCacheKey(view, charName) {
-    return keyDesc('outline', 'user', '');
+    return outlineRepository.key('outline');
 }
 
 function getCreativeChatHistoryKey(view, charName) {
-    return keyDesc('creative-chat', 'user', '');
+    return outlineRepository.key('creative-chat');
 }
 
 function loadCreativeChatHistory(view, charName) {
@@ -6615,7 +6587,7 @@ function loadCachedOutlineForCurrentChat(view, charName) {
     if (saved?.raw) {
         // 游标取自同一 saved 对象（对任意 view 都正确；有大纲无 cursor → 默认 1）。
         const n = Number(saved.cursor);
-        const cursor = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+        const cursor = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1;
         return renderOutline(saved.raw, cursor);
     }
     return null;
@@ -6833,79 +6805,8 @@ function replaceNthEventLine(raw, idx0, newEventLine) {
     return replacePointEventBlock(raw, idx0, newEventLine);
 }
 
-// idx0 从 0 起。就地替换 storylines_widget 内第 idx0 条线块（Line: 及其后的 Desc/Next），找不到返回 null。
-function replaceNthLineBlock(raw, idx0, newBlock) {
-    const src = String(raw || '');
-    const m = src.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
-    const inner = m ? m[1] : src;
-    const blocks = [];
-    let cur = null;
-    for (const rawLine of inner.split('\n')) {
-        if (/^\s*Line\s*:/i.test(rawLine)) { if (cur) blocks.push(cur); cur = [rawLine]; }
-        else if (cur) cur.push(rawLine);
-    }
-    if (cur) blocks.push(cur);
-    if (idx0 < 0 || idx0 >= blocks.length) return null;
-    blocks[idx0] = newBlock.split('\n');
-    const newInner = blocks.map(b => b.join('\n').replace(/\s+$/, '')).join('\n\n');
-    return m
-        ? src.replace(m[0], `<storylines_widget>\n${newInner}\n</storylines_widget>`)
-        : `<storylines_widget>\n${newInner}\n</storylines_widget>`;
-}
-
 // 点 widget 由 business/point/widget.js 承担；线 widget 保持冻结。
 const applyScheduleWidget = applyPointWidget;
-
-// ─── Apply widget to storylines (线) ──────────────────────────────────────
-// 无 edit 序号：新增一条线；有 edit="N"：就地替换现有第 N 条线。
-function applyLineWidget(body, $btn, editIdx = null) {
-    // Grab the 3 lines: Line: / Desc: / Next:
-    const rows = body.split('\n').map(l => l.trim()).filter(Boolean);
-    const lineRow = rows.find(l => /^Line\s*:/i.test(l));
-    const descRow = rows.find(l => /^Desc\s*:/i.test(l)) || '';
-    const nextRow = rows.find(l => /^Next\s*:/i.test(l)) || '';
-    if (!lineRow) { showToast('卡片格式不完整，无法应用', null, true); return; }
-    const block = [lineRow, descRow, nextRow].filter(Boolean).join('\n');
-
-    const key = getLinesCacheKey();
-    if (!key) { showToast('当前 chat 没有可写入的线缓存', null, true); return; }
-    let raw = '';
-    const saved = readStore(key);
-    if (saved?.raw) raw = saved.raw;
-    if (editIdx != null) {
-        // 改现有第 N 条
-        const newRaw = raw ? replaceNthLineBlock(raw, editIdx - 1, block) : null;
-        if (newRaw == null) { showToast(`找不到第 ${editIdx} 条线，请刷新面板后重试`, null, true); return; }
-        raw = newRaw;
-    } else if (!raw) {
-        raw = `<storylines_widget>\n${block}\n</storylines_widget>`;
-    } else {
-        const widgetMatch = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
-        if (widgetMatch) {
-            const inner = widgetMatch[1].replace(/\s+$/, '');
-            const newInner = `${inner}\n\n${block}\n`;
-            raw = raw.replace(widgetMatch[0], `<storylines_widget>${newInner}</storylines_widget>`);
-        } else {
-            raw = `<storylines_widget>\n${raw}\n\n${block}\n</storylines_widget>`;
-        }
-    }
-    if (editIdx == null) {
-        // 「间」新增的线默认锁定：不靠正文锚定, 全靠 pin 保命。
-        const parsed = parseLines(raw);
-        if (parsed.length) {
-            parsed[parsed.length - 1].pin = true;
-            raw = linesToRaw(parsed);
-        }
-    }
-    writeStore(key, { raw, ts: Date.now() });
-    // Refresh lines view + inline block on latest AI floor
-    const html = renderLines(raw);
-    cachedLines = html;
-    if (linesMode) setLinesBody(html);
-    syncLatestInlineBlock();
-    $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到线'}`);
-    showToast(editIdx != null ? `已替换线·第 ${editIdx} 条` : '已加到线');
-}
 
 // ─── Apply widget to almanac (历) ─────────────────────────────────────────
 // 历是一张扁平日期表（非 raw 文本）。一张卡一个日期，按 idx 取该条单独注入。
@@ -7455,12 +7356,17 @@ function renderTheaterPanel() {
     // 跟 API 模型选择当初同款坑）。骨架先渲染，refreshTheaterTemplates() 异步填充。
     const drafts = theater.loadDrafts().slice().reverse();
     const saved  = theater.loadSaved().slice().reverse();
-    const piece  = theaterCurrentPiece;
+    const available = [...drafts, ...saved];
+    const currentId = theaterCurrentPiece?.id;
+    const currentValid = currentId && available.find(piece => piece.id === currentId);
+    const piece = theaterCurrentPiece = currentValid ? theaterCurrentPiece : (drafts[0] || saved[0] || null);
 
-    const sourceLabel = piece?.templateSource?.title ? `<div class="sp-theater-source">模板：${escapeHtml(piece.templateSource.title)}</div>` : '';
     const resultHtml = piece
-        ? `${sourceLabel}<div class="sp-theater-result-inner">${piece.html || ''}</div>`
+        ? `<div class="sp-theater-result-inner">${piece.html || ''}</div>`
         : `<div class="sp-empty sp-theater-result-empty"><i class="fa-solid fa-masks-theater"></i><p>填写场景与要求，生成一段小剧场</p></div>`;
+
+    const sourceBlock = piece?.templateSource?.input
+        ? `<div class="sp-theater-source-wrap"><button type="button" class="sp-theater-source-toggle" aria-expanded="false" title="查看本次实际使用内容"><i class="fa-solid fa-file-lines"></i><span>模板 · ${escapeHtml(piece.templateSource.title || '(无标题)')}</span><i class="fa-solid fa-chevron-down sp-theater-source-chevron"></i></button><div id="sp-theater-source-detail" class="sp-theater-source-detail" style="display:none"><div class="sp-theater-source-caption">本次实际使用内容</div><pre>${escapeHtml(piece.templateSource.input)}</pre></div></div>` : '';
 
     // 长篇预览折叠：piece 存在时把结果区包一层，底部给个展开/收起按钮，
     // 具体是否显示按钮由 applyTheaterFold() 按实际高度决定（矮内容不折叠）。
@@ -7502,7 +7408,7 @@ function renderTheaterPanel() {
                     <div class="sp-theater-list-empty">加载中…</div>
                 </div>
             </details>
-            <textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…"></textarea>
+            <textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…">${escapeHtml(piece?.request || piece?.templateSource?.input || '')}</textarea>
             <div class="sp-theater-btn-row">
                 <button class="sp-btn sp-theater-random" title="从模板库随机抽一个模板直接生成"><i class="fa-solid fa-shuffle"></i> 随机</button>
                 <button class="sp-btn sp-btn-primary sp-theater-generate">生成小剧场</button>
@@ -7510,6 +7416,7 @@ function renderTheaterPanel() {
         </div>
         <hr class="sp-theater-divider">
         ${resultBlock}
+        ${sourceBlock}
         ${opBar}
         <hr class="sp-theater-divider">
         <div class="sp-theater-lists">
@@ -7690,6 +7597,7 @@ function setOutlineBody(html) { $in('#sp-outline-beats').html(html); }
 async function triggerGenerateOutline() {
     if (isGeneratingOutline) return;
     if (!await memoryPreCheckConfirm()) return;
+    abortOutlineJudge();
     cachedOutline = null;
     isGeneratingOutline = true;
     setOutlineBody(loadingHtml('正在构思面', 'sp-abort-outline'));
@@ -7698,7 +7606,11 @@ async function triggerGenerateOutline() {
 
 async function runGenerateOutline(apiOpts = {}) {
     const chatIdSnap = getContext().chatId;
+    const savedBaseline = readStore(getOutlineCacheKey()) || {};
+    const baselineCursor = savedBaseline.cursor == null ? 1 : (Number.isFinite(Number(savedBaseline.cursor)) ? Number(savedBaseline.cursor) : 1);
+    const baseline = Object.freeze({ raw: String(savedBaseline.raw || ''), ts: Number(savedBaseline.ts) || null, cursor: baselineCursor, html: savedBaseline.html || null });
     const myCtrl = outlineAbortController = new AbortController();
+    const owner = outlineGenerationOwner = Object.freeze({ controller: myCtrl, chatId: chatIdSnap, baseline });
     try {
         const ctx      = getContext();
         const userName = ctx.name1 || '用户';
@@ -7711,10 +7623,11 @@ async function runGenerateOutline(apiOpts = {}) {
         const prompt   = buildOutlinePrompt(userName, charName, 'user');
         const raw      = await callCustomApi(ctx, prompt, cfg, userName, charName, myCtrl.signal, 10, apiOpts);
 
-        if (outlineAbortController !== myCtrl) return;
+        if (outlineGenerationOwner !== owner || outlineAbortController !== myCtrl) return;
         if (getContext().chatId !== chatIdSnap) {
             isGeneratingOutline = false;
             outlineAbortController = null;
+            if (outlineGenerationOwner === owner) outlineGenerationOwner = null;
             return;
         }
 
@@ -7724,6 +7637,7 @@ async function runGenerateOutline(apiOpts = {}) {
         const html     = renderOutline(raw, 1);
         isGeneratingOutline = false;
         outlineAbortController = null;
+        if (outlineGenerationOwner === owner) outlineGenerationOwner = null;
         cachedOutline = html;
         if (outlineMode) { setOutlineBody(html); if (getSettings().notifyMode !== 'off') showToast('面已生成'); }
         else showToast('面已生成，点击查看', () => {
@@ -7731,14 +7645,24 @@ async function runGenerateOutline(apiOpts = {}) {
             showPanel();
         });
     } catch (err) {
-        if (outlineAbortController !== myCtrl) return;
+        if (outlineGenerationOwner !== owner || outlineAbortController !== myCtrl) return;
         isGeneratingOutline = false;
         outlineAbortController = null;
+        if (outlineGenerationOwner === owner) outlineGenerationOwner = null;
         if (err.name === 'AbortError') {
-            if (outlineMode && getContext().chatId === chatIdSnap) setOutlineBody(`<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>已中止</p></div>`);
+            if (getContext().chatId === chatIdSnap) {
+                if (owner.baseline.raw) { cachedOutline = renderOutline(owner.baseline.raw, owner.baseline.cursor ?? 0); if (outlineMode) setOutlineBody(cachedOutline); }
+                else if (outlineMode) setOutlineBody(renderEmptyOutlineState());
+            }
             return;
         }
         if (getContext().chatId !== chatIdSnap) return;
+        if (owner.baseline?.raw) {
+            cachedOutline = renderOutline(owner.baseline.raw, owner.baseline.cursor ?? 0);
+            if (outlineMode && $(`#${MODAL_ID}`).is(':visible')) setOutlineBody(cachedOutline);
+            showToast('面生成失败，已保留原存档', null, true);
+            return;
+        }
         const errHtml = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(err.message || '未知错误')}</p></div>`;
         // 面板可见才落面板正文；关了面板则弹 toast。必须判可见而非只判 outlineMode——closePanel 只
         // display:none、不重置视角标志，关面板后 outlineMode 仍为真，漏可见性判断会把错误写进看不见的面板、不弹 toast。
@@ -7760,15 +7684,15 @@ function buildOutlinePrompt(userName, charName, perspective = 'user') {
 ③ 核心吸引力：这个故事中最抓人的戏剧张力是什么？（取决于故事类型，可以是情感羁绊，也可以是权谋博弈、生存压迫、复仇执念、逆袭成长、探案解谜等。如“互相利用却暗生情愫”、“以弱胜强的势力博弈”、“绝境求生中的人性考验”、“背负血仇的步步为营”）
 ④ 外部环境现状与发展趋势：当前势力平衡、社会危机、即将发生的大事件等，以及若无干预的自然走向
 ⑤ 剧情模式：这是什么类型的故事？内部驱动力是什么？（如“外部压迫下的生存斗争 + 内部关系演变”或“个人复仇与救赎之旅”）
-⑥ 故事线汇总：至少列出两条故事线。【主线】必备（外部目标、任务、对抗外部势力）；此外按故事类型再选一条或多条副线——如情感线（人物情感关系变化）、成长线（个人能力或心境蜕变）、势力斗争线、复仇线、悬疑解谜线等。副线要贴合本故事的核心吸引力，不要为了凑情感线而生硬加戏。
+⑥ 故事线汇总：按故事需要列出有证据的故事线。【主线】若剧情存在外部目标、任务或对抗外部势力则保留；此外按故事类型选择有依据的副线——如情感线、成长线、势力斗争线、复仇线、悬疑解谜线等。不要为了达到固定数量或凑情感线而生硬加戏。
 ⑦ 各主要角色的行为模式与语言风格特征，确保节点中的人物表现符合原设
 
-【第二步：生成关键节点，目标 8 个】
+【第二步：生成关键节点，建议约 8 个，按素材增减，不要凑数】
 节点必须基于上述分析，体现你确定的剧情模式。
-- 【时间跨度·宏观】这是一份宏观长线大纲，8 个节点应横跨数周乃至数月，是一次庞大的长期推进，绝非日程式的今天/明天/后天。每个节点代表故事的一个**大阶段或重大转折**（可能持续数天到数周），不是某个具体场景、更不是某一天里的一幕。
+- 【时间跨度·宏观】这是一份宏观长线大纲，节点应横跨数周乃至数月，是一次庞大的长期推进，绝非日程式的今天/明天/后天。每个节点代表故事的一个**大阶段或重大转折**（可能持续数天到数周），不是某个具体场景、更不是某一天里的一幕。
 - 【大胆发散】未来本就未知，大纲不必拘泥于眼前既定事实的线性延伸，可以放开想象、铺开多种可能的长线走向，给出有张力的大开大合。
 - 故事线需要螺旋推进（进→退→再进），不可直线发展；这种进退发生在横跨较长时间的大阶段之间，而非连续几场戏之间。
-- 节点覆盖完整故事弧线：开局状态 → 摩擦/试探 → 第一次推进 → 受挫/退后 → 危机爆发 → 关键转折 → 余波 → 新平衡。每个阶段1个节点。
+- 节点可覆盖完整故事弧线，例如开局状态、摩擦/试探、推进、受挫、危机、转折、余波与新平衡；按素材选择阶段，不要求每个阶段固定一个节点。
 - 每个节点的 Scene 和 Think 内容充实，不压缩质量。
 
 【创作顺序】每个节点先想透 Scene（发生了什么）与 Think（创作思考），再从已构思好的内容里提炼 title 与 Subtext 引言，让标题和引言是对内容的凝练与升华。（脑内可先内容后标题，但**输出时仍严格按 Beat→Scene→Subtext→Think 的字段顺序排列**，不可打乱，否则大纲窗口无法解析。）
@@ -7793,7 +7717,7 @@ Beat: 推演时间|标题|类型|所属故事线|结果
 Scene: …
 Subtext: …
 Think: …
-（共8个节点，每节点重复上述结构）
+（节点数量按素材与剧情证据浮动，每节点重复上述结构）
 </outline_widget>`;}
 
 // ─── Outline parse / render ───────────────────────────────────────────────────
@@ -7938,42 +7862,9 @@ function getLinesCacheKey(view, charName) {
 // 楼层没「固定」（用户还没发下一条消息）前，每份 swipe 的线临时存这里：
 // key = sp-lines-swipe-<chatId>-<mesId>；value = { baseline:<B0>, swipes:{ "<swipeId>": <merged> }, view, charName }。
 // baseline = 本楼生成前的线（pre-commit B0），保证每份 swipe 都从 B0 重推、不互相叠加污染。
-function _swipeLinesKey(chatId, mesId) { return `sp-lines-swipe-${chatId}-${mesId}`; }
-function _readSwipeLines(chatId, mesId) {
-    try { return JSON.parse(localStorage.getItem(_swipeLinesKey(chatId, mesId)) || 'null'); }
-    catch { return null; }
-}
-function _writeSwipeLines(chatId, mesId, data) {
-    try { localStorage.setItem(_swipeLinesKey(chatId, mesId), JSON.stringify(data)); } catch { /* 忽略 */ }
-}
-function _clearSwipeLines(chatId, mesId) {
-    try { localStorage.removeItem(_swipeLinesKey(chatId, mesId)); } catch { /* 忽略 */ }
-}
-function _clearAllSwipeLines() {
-    try {
-        const rm = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith('sp-lines-swipe-')) rm.push(k);
-        }
-        rm.forEach(k => localStorage.removeItem(k));
-    } catch { /* 忽略 */ }
-}
+// swipe 存储与恢复由 linesFeature 持有；此处只适配宿主 chat/store/UI 能力。
 // 滑回已生成的 swipe：从临时层取回该 swipe 的线写回 store 当前活跃集 + 刷 UI，不请求 API。
 // 命中返回 true；无记录返回 false（交给调用方决定是否重算）。
-function _applyStoredSwipeLines(mesId, swipeId) {
-    const chatId = getContext().chatId;
-    const rec = _readSwipeLines(chatId, mesId);
-    const hit = rec?.swipes?.[String(swipeId)];
-    if (hit == null) return false;
-    const key = getLinesCacheKey();
-    if (!key) return false;
-    writeStore(key, { raw: hit, ts: Date.now() });
-    cachedLines = renderLines(hit);
-    if (linesMode) setLinesBody(cachedLines);
-    syncLatestInlineBlock(chatId);
-    return true;
-}
 // 楼主文本签名（长度 + 首尾 32 字，避免全量哈希）：给「同 mesId 主文本变了 → 原楼重生成 = 重roll」检出用。
 // 不依赖 ST 的 CMR type / GENERATION_STARTED genType——实测流式重roll下 type=undefined、latch 也不触发，三路检测全漏。
 // 有时间戳则只签 <!-- SDC-start --> 与 <!-- SDC-end --> 之间的正文：正文出完后第三方插件在楼尾追加的变量块落在戳外、
@@ -8007,45 +7898,9 @@ function _prevAiFloorLines(mesId) {
 //   原因——重生成按钮🔄 pop 掉旧楼再 push 新楼、新楼没有 swipe_id → 退化成 0，会命中推进时写下的 swipes["0"]
 //   旧缓存、把**重 roll 前**的旧线又贴回去（表现为「按钮重 roll 线不动·必现」）。重 roll = 内容已换新，
 //   必须重算、绝不能复用旧 swipe 缓存；缓存复用只留给「滑回旧 swipe 只看不生成」那条（MESSAGE_SWIPED 分支）。
-function _regenLinesForSwipe(mesId, forceRegen = false) {
-    const cfg = loadCfg();
-    if (!cfg.url || !cfg.key) return;
-    const chatId = getContext().chatId;
-    const swipeId = Number(getContext().chat?.[mesId]?.swipe_id ?? 0);
-    if (!forceRegen && _applyStoredSwipeLines(mesId, swipeId)) return;   // 该 swipe 已算过，直接复用（仅非强制时）
-    const rec = _readSwipeLines(chatId, mesId);
-    let baseline = rec?.baseline;
-    // 🔄重生成·基线兜底（次要，非本 bug 根因）：楼层基线 B0 是在异步线生成落地时（runGenerateLines 尾）才写进
-    // swipe 临时层的——若用户在那几秒 API 未回时就点🔄，此刻 rec 尚未落盘 → baseline 为空、会早退。
-    // 故临时层无基线时，从「上一 AI 楼定稿快照」重建 B0（快照每楼渲染即同步冻结、无 API 依赖，必已就位）。
-    // 仅重 roll（forceRegen）用，且只在「本楼确实推进过」（当前线 ≠ 上一楼线）时重建——非推进楼当前线本就等于上一楼，跳过、绝不凭空推进。
-    // 注：重 roll「有没有被认出来」是上游 CMR 靠**内容签名**判的（那才是真根因——流式下 CMR 的 type=undefined、latch 不触发）；这里只管拿到基线。
-    if (forceRegen && baseline == null) {
-        const prevLines = _prevAiFloorLines(Number(mesId));
-        let curLines = '';
-        try { curLines = readStore(getLinesCacheKey())?.raw || ''; } catch { /* 空 */ }
-        if (prevLines && curLines && curLines !== prevLines) baseline = prevLines;
-    }
-    // 无基线可依（非推进楼 / 首楼）→ 保持现状，绝不凭空推进。
-    // ⚠ 这条 return 必须在「抢占在飞 gen」之前：非推进楼本就不重算，若先抢占会把上一个推进楼
-    //   还在飞的合法 gen 误杀、又不补新的 → 表现为「重 roll 后线不更新」概率不降反升（回归）。
-    if (baseline == null) return;
-    // 竞态抢占：确认本次要重算了，才中止在飞的旧 gen（上一次 swipe 重算 / 手动重生成 / advance 推进）。
-    // 旧 gen 完成时会把线写回成**重 roll 前**的推演——偶现"重 roll 后线不更新"的根因
-    // （连续快速 roll 时尤甚：第①次的重算还没落，第②次撞 isGeneratingLines 被静默丢弃）。
-    // 抢占后紧接着就 runGenerateLines 启新 gen（旧 gen 的 myCtrl 失配后自行退出），中间无空档。
-    if (isGeneratingLines || linesAbortController) {
-        try { linesAbortController?.abort(); } catch { /* 忽略 */ }
-        isGeneratingLines  = false;
-        linesAbortController = null;
-    }
-    isGeneratingLines = true;
-    runGenerateLines(true, { mesId: Number(mesId), swipeId, baselineRaw: baseline, forceReroll: true });
-}
-
 function loadCachedLinesForCurrentChat(view, charName) {
     const saved = readStore(getLinesCacheKey(view, charName));
-    if (saved?.raw) return renderLines(saved.raw);
+    if (saved?.raw) return linesFeature.renderLines(saved.raw);
     return null;
 }
 
@@ -8452,22 +8307,6 @@ function _anchorFsGestureEnd() {
     document.removeEventListener('mouseup', _anchorFsGestureEnd);
 }
 
-function setLinesBody(eventsHtml) {
-    $in('#sp-lines-toolbar').html(linesToolbarHtml());
-    $in('#sp-lines-list').html(_linesSheet === 'dashed' ? getDashedModule().panelHtml() : eventsHtml);
-}
-
-function refreshLinesPanel() {
-    let eventsHtml;
-    if (isGeneratingLines) eventsHtml = loadingHtml('正在推演线', 'sp-abort-lines');
-    else {
-        const saved = readStore(getLinesCacheKey());
-        eventsHtml = saved?.raw ? renderLines(saved.raw) : renderEmptyLinesState();
-        cachedLines = saved?.raw ? eventsHtml : null;
-    }
-    setLinesBody(eventsHtml);
-}
-
 // 收藏占用统计 → 设置面板「收藏占用」行（打开设置时刷新）
 // ─── 存储管理面板 ──────────────────────────────────────────────────────────────
 // 三层：①本聊天 chat_metadata（点线面间讨论 + 记忆 + 棱永久）②收藏（坐标·服务器）
@@ -8481,6 +8320,7 @@ const STORAGE_KIND_LABELS = {
     'space-chat'   : '间（局外）',
     'dashed'       : '虚线·冷知识',
     'almanac'      : '轴·日历条目（节日/生日/纪念日）',
+    'date-anchor'  : '轴·剧情今天（日期锚点）',
 };
 const STORAGE_OWNKEY_LABELS = {
     'sp-memory' : '记忆',
@@ -8618,12 +8458,10 @@ function invalidateKindTasksForStoreClear(kind) {
         pointState.isGenerating = false;
     } else if (kind === 'outline') {
         outlineAbortController?.abort(); outlineAbortController = null;
-        outlineJudgeAbort?.abort(); outlineJudgeAbort = null;
+        outlineJudgeAbort?.abort(); outlineJudgeAbort = null; outlineJudgeOwner = null;
         isGeneratingOutline = false; isJudgingOutline = false;
     } else if (kind === 'lines') {
-        linesTaskOwners.invalidate('lines-generation');
-        linesAbortController?.abort(); linesAbortController = null;
-        isGeneratingLines = false;
+        linesFeature.abortGeneration();
     } else if (kind === 'space-chat') {
         spaceChatAbortController?.abort(); spaceChatAbortController = null;
         isSpaceChatting = false;
@@ -8631,7 +8469,7 @@ function invalidateKindTasksForStoreClear(kind) {
         outlineChatAbortController?.abort(); outlineChatAbortController = null;
         isOutlineChatting = false;
     } else if (kind === 'dashed') {
-        getDashedModule().abort();
+        linesFeature.dashed.abort();
     }
 }
 
@@ -8643,10 +8481,10 @@ function refreshEditorsAfterStoreClear(kind) {
         syncLatestScheduleBlock();
     }
     if (kind === 'outline') { if (outlineMode) setOutlineBody(renderEmptyOutlineState()); refreshOutlineInjection(); syncLatestInlineBlock(); }
-    if (kind === 'lines') { cachedLines = null; if (linesMode) setLinesBody(renderEmptyLinesState()); refreshLinesInjection(); syncLatestInlineBlock(); }
+    if (kind === 'lines') { linesRuntime.reset(); if (linesMode) linesFeature.renderBody(renderEmptyLinesState()); refreshLinesInjection(); syncLatestInlineBlock(); }
     if (kind === 'dashed') {
-        getDashedModule().resetError();
-        if (linesMode) refreshLinesPanel();
+        linesFeature.dashed.resetError();
+        if (linesMode) linesFeature.refreshPanel();
         syncLatestInlineBlock();
     }
     if (kind === 'space-chat' && spaceMode) $in('#sp-space-msgs').empty();
@@ -8678,8 +8516,8 @@ function refreshEditorsFromCurrentStore(kind) {
         if (outlineMode) setOutlineBody(cachedOutline || renderEmptyOutlineState());
         refreshOutlineInjection();
     } else if (kind === 'lines') {
-        cachedLines = null;
-        if (linesMode) refreshLinesPanel();
+        linesRuntime.reset();
+        if (linesMode) linesFeature.refreshPanel();
         refreshLinesInjection();
     } else if (kind === 'creative-chat') {
         loadCreativeChatHistory();
@@ -8688,8 +8526,8 @@ function refreshEditorsFromCurrentStore(kind) {
         loadSpaceChatHistory();
         if (spaceMode) renderSpaceChatHistory();
     } else if (kind === 'dashed') {
-        getDashedModule().resetError();
-        if (linesMode) refreshLinesPanel();
+        linesFeature.dashed.resetError();
+        if (linesMode) linesFeature.refreshPanel();
         syncLatestInlineBlock();
     }
 }
@@ -8819,118 +8657,18 @@ function renderEmptyLinesState() {
 }
 
 async function triggerGenerateLines() {
-    return getLinesActions().reroll();
+    return linesFeature.generate();
 }
 
 // Advance = generate based on existing raw (preserves previousRaw for continuity).
 // Called from manual-advance buttons on inline block + panel toolbar.
 async function triggerAdvanceLines() {
-    return getLinesActions().advance();
-}
-
-// Remove one storyline by index (as parsed by parseLines). Works on the raw text
-// block-by-block so the OTHER lines keep their exact serialization untouched.
-// Returns: new raw string / '' when the removed line was the last one / null on bad idx.
-function deleteOneLineFromRaw(raw, idx) {
-    const mutation = deleteCanonicalLine(raw, idx);
-    return mutation.ok ? mutation.raw : null;
-    const src = String(raw || '');
-    const m = src.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i);
-    const inner = m ? m[1] : src;
-    const blocks = [];
-    let cur = null;
-    for (const rawLine of inner.split('\n')) {
-        if (/^\s*Line\s*:/i.test(rawLine)) {
-            if (cur) blocks.push(cur);
-            cur = [rawLine];
-        } else if (cur) {
-            cur.push(rawLine);
-        }
-    }
-    if (cur) blocks.push(cur);
-    if (idx < 0 || idx >= blocks.length) return null;
-    blocks.splice(idx, 1);
-    if (!blocks.length) return '';
-    const newInner = blocks.map(b => b.join('\n').replace(/\s+$/, '')).join('\n\n');
-    return m
-        ? src.replace(m[0], `<storylines_widget>\n${newInner}\n</storylines_widget>`)
-        : `<storylines_widget>\n${newInner}\n</storylines_widget>`;
+    return linesFeature.advance();
 }
 
 // Delete just ONE line by index; the other lines stay applied.
-async function triggerDeleteOneLine(idx) { return getLinesActions().delete(idx); }
-function triggerToggleLinePin(idx) { return getLinesActions().pin(idx); }
-let linesGenerationController = null;
-let linesActions = null;
-
-function getLinesActions() {
-    if (!linesActions) linesActions = createLinesActions({
-        isBusy: () => isGeneratingLines,
-        readSaved: () => readStore(getLinesCacheKey()),
-        readRaw: () => readStore(getLinesCacheKey())?.raw || '',
-        write: value => writeStore(getLinesCacheKey(), value), remove: () => removeStore(getLinesCacheKey()),
-        confirm: spConfirm, toast: (message, error) => showToast(message, null, error),
-        render: renderLines, setCached: html => { cachedLines = html; },
-        refreshPanel: () => { if (linesMode) refreshLinesPanel(); }, refreshInline: syncLatestInlineBlock,
-        resetCounter: () => { linesAiMsgCounter = 0; },
-        runGenerate: runGenerateLines, precheck: memoryPreCheckConfirm, silent: () => !linesMode,
-    });
-    return linesActions;
-}
-
-function getLinesGenerationController() {
-    if (linesGenerationController) return linesGenerationController;
-    linesGenerationController = createLinesGenerationController({
-        owners: linesTaskOwners,
-        onStart: owner => { linesAbortController = owner.controller; isGeneratingLines = true; if (linesMode && _linesSheet === 'events') refreshLinesPanel(); },
-        chatId: () => getContext().chatId,
-        loadConfig: loadCfg,
-        missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
-        readSaved: () => readStore(getLinesCacheKey()) || {},
-        buildPrompt: (previousRaw, travelContext) => appendTravelPromptContext(
-            buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext()))),
-            travelContext,
-        ),
-        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, 10, options),
-        commit: (raw, { silent, owner, swipeCtx, travelContext, commitBaseline }) => {
-            const cacheKey = getLinesCacheKey();
-            const html = renderLines(raw);
-            writeStore(cacheKey, { raw, ts: Date.now() });
-            if (swipeCtx?.mesId != null) {
-                const rec = _readSwipeLines(getContext().chatId, swipeCtx.mesId) || { baseline: swipeCtx.baselineRaw ?? commitBaseline.raw ?? '', swipes: {}, view: 'user', charName: '' };
-                if (rec.baseline == null) rec.baseline = swipeCtx.baselineRaw ?? commitBaseline.raw ?? '';
-                rec.swipes[String(swipeCtx.swipeId ?? 0)] = raw;
-                _writeSwipeLines(getContext().chatId, swipeCtx.mesId, rec);
-            }
-            isGeneratingLines = false;
-            linesAbortController = null;
-            cachedLines = html;
-            if (linesMode) { setLinesBody(html); if (!silent && getSettings().notifyMode !== 'off') showToast('线已生成'); }
-            syncLatestInlineBlock(getContext().chatId);
-            if (getSettings().dashedEnabled === true) getDashedModule().run();
-            if (!linesMode && !silent) showToast('线已生成，点击查看', () => { if (!linesMode) $in('.sp-view-btn[data-view="lines"]').trigger('click'); showPanel(); });
-            return travelContext;
-        },
-        fail: () => { if (getContext().chatId) showToast('线生成失败，请重试', null, true); },
-        cleanup: (owner, chatId) => cleanupLinesOwner(owner, chatId),
-    });
-    return linesGenerationController;
-}
-
-async function runGenerateLines(silent = false, swipeCtx = null, travelContext = null) {
-    return getLinesGenerationController().run(silent, swipeCtx, travelContext);
-}
-
-
-function cleanupLinesOwner(owner, chatId) {
-    if (!linesTaskOwners.isOwner(owner, { chatId })) return false;
-    if (linesAbortController === owner.controller) linesAbortController = null;
-    isGeneratingLines = false;
-    linesTaskOwners.finish(owner);
-    if (linesMode) refreshLinesPanel();
-    return true;
-}
-
+async function triggerDeleteOneLine(idx) { return linesFeature.deleteLine(idx); }
+function triggerToggleLinePin(idx) { return linesFeature.togglePin(idx); }
 function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto') {
     return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale);
 }
@@ -8940,13 +8678,8 @@ function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw 
 
 // 线解析统一委托给 business/lines/schema.js。
 function parseLines(raw) { return parseCanonicalLines(raw); }
-// parseLines 的逆：把线对象数组序列化回 <storylines_widget> raw。
-// 字段与 parseLines 严格对称：Line: name|type|stage|level|when|agency|stall|pin
-
-function linesToRaw(lines) { return serializeLines(lines); }
 // 锁定保护：把 oldRaw 里 pin 的线并进 AI 新输出。无锁定线时原样返回（零副作用）。
 
-function mergePinnedLines(oldRaw, aiRaw) { return mergeCanonicalPinned(oldRaw, aiRaw).raw; }
 const STAGE_COLORS = {
     萌芽: '#d6b85a', 发酵: '#d98a3d', 逼近: '#cf5f3f', 已爆发: '#b93f3f', 已消散: '#888888',
     筹备: '#7de9d9', 执行: '#58e8b3', 关键: '#2a8a5d', 已完成: '#1b5e3b', 已失败: '#888888',
@@ -8955,56 +8688,6 @@ const STAGE_COLORS = {
 // 点/线面板 header 下方另起一行的「去间改」引导，视觉对齐历法管理页的 .sp-alm-manager-hint。
 // 「间」能把讨论落地成点/线，想调整时一键跳过去（handler 见 injectModal 委托）。
 const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
-
-function linesToolbarHtml() {
-    return getDashedModule().toolbarHtml({ onEvents: _linesSheet === 'events', lineBusy: isGeneratingLines ? ' sp-refresh-busy' : '', isGeneratingLines });
-}
-
-function renderLines(raw) {
-    const lines = linesViewModel(parseLines(raw));
-    if (lines.length === 0) return SP_JUMP_HINT_LINES + `<div class="sp-raw">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
-    const cards = lines.map((l, i) => {
-        const levelNum  = parseInt(l.level, 10);
-        const level     = Number.isFinite(levelNum) ? Math.max(1, Math.min(4, levelNum)) : 1;
-        const stageColor = STAGE_COLORS[l.stage] || '#9aa6b2';
-        const beadsHtml = Array.from({length: 4}, (_, i) =>
-            `<span class="sp-bead${i < level ? ' sp-bead-on' : ''}" style="${i < level ? `background:${stageColor}` : ''}"></span>`
-        ).join('');
-        const injectParts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
-        if (l.desc) injectParts.push(l.desc);
-        if (l.next) injectParts.push(prefixNext(l.next, l.stall));
-        const injectBtn = makeInjectBtn(injectParts.join('\n'));
-        const stallCls  = l.stall ? ' sp-line-stall' : '';
-        const pinCls    = l.pin ? ' sp-line-pinned' : '';
-        const stallTag  = l.stall ? `<span class="sp-line-stall-tag">停滞</span>` : '';
-        const nextRow   = l.next
-            ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}">
-                    <span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span>
-                    <span class="sp-line-next-text">${escapeHtml(cleanText(l.next))}</span>
-               </div>`
-            : '';
-        return `
-        <div class="sp-beat sp-line-card${stallCls}${pinCls}" data-line-idx="${i}" style="border-left:3px solid ${stageColor}30">
-            <div class="sp-beat-head">
-                <span class="sp-seq-badge">#${i + 1}</span>
-                <span class="sp-beat-type" style="color:${stageColor}">${escapeHtml(l.stage)}</span>
-                ${l.type ? `<span class="sp-beat-line">${escapeHtml(l.type)}</span>` : ''}
-                <span class="sp-beat-time">${beadsHtml}</span>
-                ${stallTag}
-                <span class="sp-beat-actions">
-                    ${injectBtn}
-                    <button class="sp-line-pin-toggle" data-line-idx="${i}" title="${l.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${l.pin ? 'lock' : 'lock-open'}"></i></button>
-                    <button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button>
-                </span>
-            </div>
-            ${l.when ? `<div class="sp-line-when">${escapeHtml(l.when)}</div>` : ''}
-            <div class="sp-beat-title">${escapeHtml(l.name)}</div>
-            ${l.desc ? `<div class="sp-beat-scene">${escapeHtml(cleanText(l.desc))}</div>` : ''}
-            ${nextRow}
-        </div>`;
-    }).join('');
-    return SP_JUMP_HINT_LINES + cards;
-}
 
 
 // ─── 历（日历 / 历法）─────────────────────────────────────────────────────────
@@ -9266,6 +8949,9 @@ function renderMemorySection() {
     $in('#sp-mem-source-database').prop('checked', useDatabase);
     $in('#sp-mem-anima-options').toggle(useAnima || useDatabase);
     $in('#sp-mem-anima-recall').val(getAnimaRecallCount());
+    // 标签设置属于全局清洗规则，与记忆源无关；必须在各外部源 early-return 前回填。
+    $in('#sp-mem-keeptags').val(typeof s.keepTags === 'string' ? s.keepTags : 'content');
+    $in('#sp-mem-extratags').val(typeof s.extraTags === 'string' ? s.extraTags : '');
     // 自定义提示词是全局设置、与记忆源无关，必须在下面按源分支的 early-return 之前回填，
     // 否则用户选 Anima/柏宝书时函数提前 return，重开面板这框会空白（值其实已存盘）。
     $in('#sp-custom-prompt').val(typeof s.customPrompt === 'string' ? s.customPrompt : '');
@@ -9320,8 +9006,6 @@ function renderMemorySection() {
     $in('#sp-mem-l1').val(Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10);
     $in('#sp-mem-skipshort').val(Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50);
     $in('#sp-mem-maxtokens').val(Number.isFinite(+s.memMaxTokens) ? +s.memMaxTokens : 60000);
-    $in('#sp-mem-keeptags').val(typeof s.keepTags  === 'string' ? s.keepTags  : 'content');
-    $in('#sp-mem-extratags').val(typeof s.extraTags === 'string' ? s.extraTags : '');
     refreshMemoryStatus();
 }
 
@@ -9494,11 +9178,10 @@ function bindMemoryHandlers() {
     // input=即打即存（存 sanitize 值但不回写 value，免光标跳）；change=失焦时规范化回写显示。
     // 关键：只用 change 会在「输入框还没失焦就点保存/关面板」时丢掉那次编辑（表现为“动了 API，标签/提示词被重置”）。
     function sanitizeTagList(raw) {
-        return String(raw || '')
+        const cleaned = String(raw || '')
             .split(',')
-            .map(s => s.trim().replace(/^<|>$/g, '').replace(/\/$/, ''))  // tolerate '<content>' or 'content/'
-            .filter(s => /^[\p{L}][\p{L}\p{N}_-]*$/u.test(s))
-            .join(',');
+            .map(s => s.trim().replace(/^<|>$/g, '').replace(/\/$/, ''));
+        return normalizeTagNames(cleaned.join(',')).join(',');
     }
     function bindTagField(sel, key) {
         // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内，同 11820 的 $in 读取）→ 必须 $in 绑定，否则不落存
@@ -9510,6 +9193,7 @@ function bindMemoryHandlers() {
             getSettings()[key] = v;
             this.value = v;                 // 失焦才回写，避免打字途中光标跳到末尾
             saveSettingsDebounced();
+            stSaveSettings();
         });
     }
     bindTagField('#sp-mem-keeptags',  'keepTags');
@@ -10205,6 +9889,7 @@ function applyTheme(theme) {
         wrapper.classList.add(`sp-${theme}`);
         if (forced) wrapper.classList.add(`sp-forced-${theme}`);
     }
+    syncVectorGlyphTheme(document, theme, forced);
     // 坐标全屏快照的字/底色是按 currentTheme 烘死内联进嵌套 shadow 的（renderAnchorFull），变量级
     // 换类救不到；正看全文快照时重渲一次让它跟主题（覆盖手动切主题 + ST 自动跟随两条路径）。
     if (_anchorView.level === 'full' && _anchorCurrentItem) renderAnchorFull(_anchorCurrentItem.id);

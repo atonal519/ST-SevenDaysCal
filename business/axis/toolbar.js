@@ -15,7 +15,7 @@ export function renderAxisToolbar(actionMenuHtml) {
         </div>` : `<div class="sp-alm-tools">
             <button class="sp-icon-btn sp-alm-add" title="手动添加日期" aria-label="手动添加日期"><i class="fa-solid fa-plus"></i></button>
             <div class="sp-alm-wide-tools">
-                <button class="sp-icon-btn sp-alm-gen" title="生成节日（AI 按世界观铺满一整年）" aria-label="生成节日"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+                <button class="sp-icon-btn sp-alm-gen" title="生成节日（AI 按世界观逐月考虑，按素材生成）" aria-label="生成节日"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
                 <button class="sp-icon-btn sp-alm-supplement" title="补录纪念日（只增补新里程碑，不重铺、不动现有日历）" aria-label="补录纪念日"><i class="fa-solid fa-heart-circle-plus"></i></button>
                 <button class="sp-icon-btn sp-alm-manage" title="历法管理" aria-label="历法管理"><i class="fa-solid fa-calendar-days"></i></button>
             </div>
