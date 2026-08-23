@@ -66,7 +66,10 @@ function monthDayFromDayKey(key, cal = loadCalDesc()) {
     if (!key) return null;
     let m;
     if ((m = String(key).match(/^(\d+)-(\d+)-(\d+)$/)) || (m = String(key).match(/^cn-(\d+)-(\d+)-(\d+)$/))) {
-        return almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
+        const md = almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
+        if (!md) return null;
+        const year = +m[1];
+        return year > 0 ? { ...md, year } : md;
     }
     return null;
 }
@@ -194,6 +197,17 @@ function almMapType(t) {
     return 'custom';
 }
 
+// 仅用于新解析出的 AI 历说明：旧存档、用户手填和通用 repository normalize 均不调用。
+// 句末闭合引号/括号存在时，把补出的句号放在闭合符号内，避免生成「……”。」一类倒置标点。
+export function normalizeAlmanacNoteTerminal(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const closing = text.match(/([”’"'》】）)\]\}〉」』〕〗〙〛]+)$/u)?.[1] || '';
+    const body = closing ? text.slice(0, -closing.length).trimEnd() : text;
+    if (/[。！？.!?…]$/u.test(body)) return text;
+    return closing ? `${body}。${closing}` : `${text}。`;
+}
+
 function parseAlmanacWidget(raw) {
     const s = String(raw || '');
     const m = s.match(/<almanac_widget>([\s\S]*?)<\/almanac_widget>/i);
@@ -217,6 +231,8 @@ function parseAlmanacWidget(raw) {
         });
         if (it) out.push(it);
     }
+    // 必须等所有续行救援完成后再补一次句末标点；否则会在续行中间提前插入句号。
+    for (const item of out) item.note = normalizeAlmanacNoteTerminal(item.note);
     return out;
 }
 
@@ -428,7 +444,7 @@ function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
             if (!pair) continue;
             const md = almValidMonthDay({ month: pair.month, day: pair.day }, cal);
             if (!md) continue;
-            return { month: md.month, day: md.day, date: cal === DEFAULT_CAL ? pair.date : null, wd: pair.wd };
+            return { month: md.month, day: md.day, ...(pair.year != null ? { year: pair.year } : {}), date: cal === DEFAULT_CAL ? pair.date : null, wd: pair.wd };
         }
         const key = extractDayFromTime(raw);
         const md  = monthDayFromDayKey(key);
@@ -440,7 +456,7 @@ function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
         // 同楼里紧贴日期的「状态栏周几」token：供上层压过真实 getDay()（写死的剧情周几 > 公历）。缺则 null，退回 getDay。
         const wd = weekdayAdjacent(raw);
         if (explicitWeekdayOnly && wd == null) continue;
-        return { month: md.month, day: md.day, date, wd };
+        return { month: md.month, day: md.day, ...(md.year != null ? { year: md.year } : {}), date, wd };
     }
     return null;
 }

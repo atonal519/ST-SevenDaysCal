@@ -1,5 +1,9 @@
 import { axisState } from './state.js';
 
+export function validateAlmanacResponse(raw) {
+    return /<almanac_widget\b[^>]*>[\s\S]*<\/almanac_widget\s*>/i.test(String(raw || ''));
+}
+
 export function createAxisGenerationController(env = {}) {
     const run = async (supplement = false) => {
         const chat = env.context?.(); const chatId = chat?.chatId; const ctrl = axisState.almanacAbortController = new AbortController();
@@ -8,7 +12,12 @@ export function createAxisGenerationController(env = {}) {
             const userName = chat.name1 || '用户', charName = chat.name2 || '角色', cfg = env.config?.();
             const existing = supplement ? (env.loadItems?.() || []).map(item => `- ${item.name}（${env.dateLabel?.(item)}）`).join('\n') : null;
             const prompt = supplement ? env.supplementPrompt?.(userName, charName, existing) : env.prompt?.(userName, charName);
-            const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 4, { fullMemory: true });
+            // 整历 reroll 必须与旧历隔离：既不把当前历作为 system 数据源再喂回模型，
+            // 也让统一消息构建器剥掉记忆/历史里残留的旧 widget。补录仍需看现有历去重，保持旧调用不变。
+            const apiOptions = supplement
+                ? { fullMemory: true }
+                : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac' };
+            const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 4, apiOptions);
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
             if (env.context?.().chatId !== chatId) return { status: 'cancelled' };
             if (!env.validate?.(raw)) throw new Error(supplement ? '补录返回不完整（缺少 almanac_widget 结束标签），旧历数据未改变，请重试' : '返回不完整（缺少 almanac_widget 结束标签），旧轴数据未改变，请重试');
@@ -36,5 +45,14 @@ export function createAxisGenerationController(env = {}) {
         if (!supplement && (env.loadItems?.() || []).length) { const ok = await env.confirm?.(); if (!ok) return { status: 'cancelled' }; }
         return run(supplement);
     };
-    return { run, trigger, abort: () => axisState.almanacAbortController?.abort(), get isBusy() { return axisState.isGeneratingAlmanac; }, get abortController() { return axisState.almanacAbortController; } };
+    const reset = () => {
+        const ctrl = axisState.almanacAbortController;
+        ctrl?.abort();
+        if (axisState.almanacAbortController === ctrl) {
+            axisState.almanacAbortController = null;
+            axisState.isGeneratingAlmanac = false;
+        }
+        return ctrl;
+    };
+    return { run, trigger, abort: () => axisState.almanacAbortController?.abort(), reset, get isBusy() { return axisState.isGeneratingAlmanac; }, get abortController() { return axisState.almanacAbortController; } };
 }

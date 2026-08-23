@@ -29,7 +29,7 @@ export function createAxisItemUi(env = {}) {
     const emptyHtml = () => `<div class="sp-empty sp-alm-empty">
         <span class="sp-alm-empty-glyph"><i class="fa-regular fa-calendar"></i></span>
         <p>还没有历法数据</p>
-        <p class="sp-alm-empty-hint">点「生成节日」让 AI 按当前世界观铺满一整年，或「添加」手动录入生日、纪念日等</p>
+        <p class="sp-alm-empty-hint">点「生成节日」让 AI 按当前世界观逐月考虑并生成有依据的日期，或「添加」手动录入生日、纪念日等</p>
         <div class="sp-alm-empty-actions"><button class="sp-gen-btn sp-alm-gen">生成节日</button><button class="sp-alm-add-link sp-alm-add">手动添加</button></div>
     </div>`;
     return { rowHtml, emptyHtml };

@@ -30,9 +30,10 @@ const SCHEMA_VERSION = 1;
 const TYPES  = ['持续状态', '约定待办', '周期'];
 const STATES = ['活跃', '已了结'];
 let activeWrites = 0;
+let fixedMetadataPersistence = null;
 const cloneState = value => JSON.parse(JSON.stringify(value));
 import { reconcileLedgerEntries } from './reconcile.js';
-import { reconcileStateAtomic as reconcileStateAtomicCore } from './repository-transaction.js';
+import { reconcileStateAtomic as reconcileStateAtomicCore, handleUnknownPersistence } from './repository-transaction.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  chat_metadata 存取（照 store.js store()/persist() 同款：读路径不实例化空壳）
@@ -78,7 +79,8 @@ function persist() {
 }
 
 // 批量路径专用：等待官方 saveMetadata 返回的 Promise（若有）。ST 内部吞掉的磁盘错误不在此边界可观测。
-function persistAwaitable(boundContext = null) {
+function persistAwaitable(boundContext = null, options = {}) {
+    if (fixedMetadataPersistence) return fixedMetadataPersistence.commit?.(boundContext, options);
     const ctx = boundContext || getContext?.();
     if (!ctx) return Promise.resolve();
     try {
@@ -88,6 +90,11 @@ function persistAwaitable(boundContext = null) {
     } catch (error) {
         return Promise.reject(error);
     }
+}
+
+// 生产事务由 index.js 绑定固定聊天目标的 integrity/commitState saver；测试可不绑定并注入 runtime.save。
+export function bindLedgerMetadataPersistence(adapter = null) {
+    fixedMetadataPersistence = adapter && typeof adapter.commit === 'function' ? adapter : null;
 }
 
 export function readState() {
@@ -154,7 +161,7 @@ function normalizeEntry(obj, id) {
         起始锚  : normalizeAnchor(o.起始锚),
         现状    : String(o.现状 || '').trim(),
         现状锚  : normalizeAnchor(o.现状锚),
-        周期长度: Number.isFinite(+o.周期长度) ? +o.周期长度 : null,   // 仅「周期」
+        周期长度: o.周期长度 === null || o.周期长度 === undefined || String(o.周期长度).trim() === '' ? null : (Number.isFinite(+o.周期长度) && +o.周期长度 > 0 ? +o.周期长度 : null),   // 仅「周期」
         到期锚  : o.到期锚 ? normalizeAnchor(o.到期锚) : null,          // 仅「约定待办/周期」
         状态    : o.状态 === '已了结' ? '已了结' : '活跃',
         锁      : o.锁 === '用户锁' ? '用户锁' : '',
@@ -163,6 +170,18 @@ function normalizeEntry(obj, id) {
     };
     if (typeof o.来源状态 === 'string' && o.来源状态.trim()) entry.来源状态 = o.来源状态.trim();
     return entry;
+}
+
+function validLedgerIdentity(entries, seq) {
+    const ids = (entries || []).map(entry => String(entry?.id || ''));
+    const max = ids.reduce((n, id) => /^L\d+$/.test(id) ? Math.max(n, Number(id.slice(1))) : n, 0);
+    return ids.every(id => /^L\d+$/.test(id)) && new Set(ids).size === ids.length && (seq === undefined || (Number.isInteger(seq) && seq >= max));
+}
+async function compensateOrFail(persist, ctx, target, before, restore, original) {
+    restore();
+    try { const rollback = await persist(ctx, { compensate: true, target }); if (rollback?.ok === false || rollback?.commitState === 'unknown') throw Object.assign(new Error('rollback-save-failed'), { phase: 'rollback-save-failed' }); }
+    catch (error) { error.phase = 'rollback-save-failed'; throw error; }
+    throw original;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -213,11 +232,56 @@ export async function addEntriesAtomic(items) {
     }
 }
 
+// 捕获专用一次保存：新增与现有条目 patch 同事务，任一步失败都恢复内存。
+export async function applyCapturePlanAtomic({ additions = [], patches = [] } = {}, owner = null, runtime = null) {
+    const m = runtime?.state || ledger(true); if (!m) return { added: [], patched: [] };
+    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
+    const guard = () => !owner || (readContext?.()?.chatId === owner.chatId && (owner.guard ? owner.guard() : true));
+    if (!guard()) throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' });
+    const before = cloneState({ entries: m.entries, seq: m.seq });
+    try {
+        if (!validLedgerIdentity(m.entries, m.seq)) throw Object.assign(new Error('capture-state-invalid'), { phase: 'capture-state-invalid' });
+        const applied = [];
+        const gist = value => String(value || '').replace(/\s+/g, '');
+        const sameEpisode = (old, item) => {
+            const a = old?.起始锚, b = item?.起始锚;
+            const date = a?.历日期 && b?.历日期 && a.历日期.month === b.历日期.month && a.历日期.day === b.历日期.day;
+            const floor = a?.楼层 != null && b?.楼层 != null && Number(a.楼层) === Number(b.楼层);
+            const people = (item?.牵扯 || []).some(x => (old?.牵扯 || []).includes(x));
+            const words = `${old?.事由 || ''} ${(old?.标签 || []).join(' ')}`.split(/[\s、，,]/).filter(x => x.length >= 2);
+            return date && floor && old?.类型 === item?.类型 && people && words.some(x => String(item?.事由 || '').includes(x) || (item?.标签 || []).includes(x));
+        };
+        const added = (Array.isArray(additions) ? additions : [])
+            .filter(item => !['来源已删除', '待确认'].includes(String(item?.来源状态 || '')))
+            .filter(item => !m.entries.some(existing => gist(existing.事由) === gist(item.事由) || sameEpisode(existing, item)))
+            .map(item => normalizeEntry(item, `L${++m.seq}`));
+        for (const change of (Array.isArray(patches) ? patches : [])) {
+            const entry = m.entries.find(item => item.id === change?.id);
+            if (!entry || entry.状态 === '已了结' || entry.锁 === '用户锁' || ['来源已删除', '待确认'].includes(String(entry.来源状态 || ''))) continue;
+            const patch = change.patch || {};
+            if (patch._sourceToken && !/^F\d+[SE]$/i.test(String(patch._sourceToken))) continue;
+            for (const key of ['现状', '现状锚', '牵扯', '标签', '到期锚', '周期长度']) if (Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined) entry[key] = patch[key];
+            applied.push(entry.id);
+        }
+        m.entries.push(...added);
+        if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length)) throw Object.assign(new Error('capture-plan-invalid'), { phase: 'capture-state-invalid' });
+        if (!guard()) throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' });
+        const saved = await persist(ctx, { ownerGuard: guard, target: owner?.target });
+        if (saved?.commitState === 'unknown') await handleUnknownPersistence(saved, () => { m.entries = before.entries; m.seq = before.seq; }, () => persist(ctx, { compensate: true, target: owner?.target }));
+        if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'capture-save-failed'), { phase: 'capture-save-failed', saveResult: saved });
+        if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length)) await compensateOrFail(persist, ctx, owner?.target, before, () => { m.entries = before.entries; m.seq = before.seq; }, Object.assign(new Error('capture-state-invalid'), { phase: 'capture-state-invalid' }));
+        if (!guard()) {
+            await compensateOrFail(persist, ctx, owner?.target, before, () => { m.entries = before.entries; m.seq = before.seq; }, Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' }));
+        }
+        return { added, patched: applied.map(id => ({ id })) };
+    } catch (error) { m.entries = before.entries; m.seq = before.seq; throw error; }
+}
+
 export async function reconcileEntriesAtomic(sources, chatLength, owner = null, runtime = null) {
     const m = runtime?.state || ledger(true); if (!m) return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 } };
-    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || (bound => persistAwaitable(bound));
+    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
     const guard = () => !owner || (readContext?.()?.chatId === owner.chatId && (owner.guard ? owner.guard() : true));
-    const save = async (check, options = {}) => { if (!options.compensate && !check?.()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' }); return persist(ctx, options); };
+    const save = async (check, options = {}) => { if (!options.compensate && !check?.()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' }); return persist(ctx, { ...options, ownerGuard: check, target: owner?.target }); };
     const result = await reconcileStateAtomicCore(m, sources, chatLength, save, normalizeEntry, guard);
     return result;
 }
@@ -230,11 +294,12 @@ export async function reconcileStateAtomic(state, sources, chatLength, save) {
 // 任意保存失败都恢复原条目，避免出现半轮成功。
 export async function applyJudgePatchesAtomic(patches = [], owner = null, runtime = null) {
     const m = runtime?.state || ledger(true); if (!m) return { ok: false, reason: 'no-ledger', applied: [] };
-    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || (bound => persistAwaitable(bound));
+    const ctx = runtime?.context || getContext?.(); const readContext = runtime?.contextReader || getContext; const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
     const guard = () => !owner || (readContext?.()?.chatId === owner.chatId && (owner.guard ? owner.guard() : true));
     if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
     const before = cloneState(m.entries); const applied = [];
     try {
+        if (!validLedgerIdentity(m.entries, m.seq)) throw Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' });
         for (const change of Array.isArray(patches) ? patches : []) {
             const entry = m.entries.find(item => item.id === change?.id);
             if (!entry) throw Object.assign(new Error('unknown-ledger-id'), { code: 'unknown-ledger-id' });
@@ -243,11 +308,12 @@ export async function applyJudgePatchesAtomic(patches = [], owner = null, runtim
             applied.push(entry.事由);
         }
         if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
-        await persist(ctx);
+        const saved = await persist(ctx, { ownerGuard: guard, target: owner?.target });
+        if (saved?.commitState === 'unknown') await handleUnknownPersistence(saved, () => { m.entries = before; }, () => persist(ctx, { compensate: true, target: owner?.target }));
+        if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'judge-save-failed'), { phase: 'judge-save-failed', saveResult: saved });
+        if (!validLedgerIdentity(m.entries, m.seq)) await compensateOrFail(persist, ctx, owner?.target, { entries: before, seq: m.seq }, () => { m.entries = before; }, Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' }));
         if (!guard()) {
-            m.entries = before;
-            try { await persist(ctx, { compensate: true }); } catch (rollbackError) { rollbackError.phase = 'rollback-save-failed'; throw rollbackError; }
-            throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
+            await compensateOrFail(persist, ctx, owner?.target, { entries: before }, () => { m.entries = before; }, Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' }));
         }
         return { ok: true, applied };
     } catch (error) { m.entries = before; error.phase ||= 'judge-save-failed'; throw error; }

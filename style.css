@@ -929,6 +929,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     position      : absolute;
     inset         : 0;
     z-index       : 20;
+    min-height    : 0;
     /* 双层背景同 .sp-sheet：设置页是铺在面板之上的 absolute 覆盖层，
        半透明会透出底下面板造成叠字，强制不透明 */
     background-color: var(--sp-sheet-bg-legacy);
@@ -963,6 +964,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-height     : 0;
     overflow-y     : auto;
     overflow-x     : hidden;   /* Prevent stray wide content from making the panel scroll sideways */
+    overscroll-behavior: contain;
+    touch-action   : pan-y;
     padding        : 8px 0 4px;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
@@ -2149,6 +2152,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow      : hidden;
     display       : none;
     flex-direction: column;
+    min-width     : 0;
+    max-width     : 100%;
+    box-sizing    : border-box;
 }
 
 .sp-lines-wrap {
@@ -2156,6 +2162,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow      : hidden;
     display       : none;
     flex-direction: column;
+    min-width     : 0;
+    max-width     : 100%;
+    box-sizing    : border-box;
 }
 .sp-lines-toolbar {
     flex-shrink  : 0;
@@ -2169,6 +2178,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items    : center;
     justify-content: space-between;
     gap            : 8px;
+    min-width      : 0;
+    max-width      : 100%;
+    box-sizing     : border-box;
 }
 .sp-lines-tools { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
 
@@ -2178,6 +2190,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow-y     : auto;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
+    min-width     : 0;
+    max-width     : 100%;
+    box-sizing    : border-box;
 }
 .sp-lines-list::-webkit-scrollbar       { width: 4px; }
 .sp-lines-list::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
@@ -2187,6 +2202,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding      : 12px 16px;
     border-bottom: 1px solid var(--sp-divider);
     transition   : background 0.1s;
+    min-width    : 0;
+    max-width    : 100%;
+    box-sizing   : border-box;
+    overflow-wrap: anywhere;
 }
 .sp-beat:last-child { border-bottom: none; }
 .sp-beat:hover      { background: var(--sp-hover-bg); }
@@ -2228,6 +2247,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap        : 7px;
     flex-wrap  : nowrap;
     margin-bottom: 6px;
+    min-width  : 0;
+    max-width  : 100%;
+    box-sizing : border-box;
 }
 /* 尾部图标组（面板：注入/锁/删除；楼内：注入/删除）——靠右对齐且永不换行/收缩。
    前面字段过长时由 .sp-beat-line / .sp-inline-type 截断（见下），图标钉死不动。 */
@@ -2370,6 +2392,29 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height  : 1.4;
     margin-bottom: 5px;
 }
+
+.sp-line-title-with-glyph {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.sp-line-vector-glyph {
+    width: var(--sp-btn-22, 22px);
+    height: var(--sp-btn-22, 22px);
+    flex: 0 0 auto;
+    display: block;
+    color: var(--sp-primary);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.35;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.9;
+    pointer-events: none;
+}
+.sp-line-glyph-edge { opacity: 0.72; stroke-width: 1.1; }
+.sp-line-glyph-node { opacity: 0.28; stroke-width: 1; }
+.sp-line-glyph-node-selected { opacity: 1; stroke-width: 2.2; }
 .sp-beat-outcome {
     font-size  : var(--sp-fs-82);
     color      : var(--sp-on-surface);
@@ -2387,6 +2432,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: 6px;
     border-left  : 2px solid var(--sp-primary);
     opacity      : 0.9;
+    min-width    : 0;
+    max-width    : 100%;
+    box-sizing   : border-box;
+    overflow-wrap: anywhere;
 }
 .sp-beat-subtext {
     font-size   : var(--sp-fs-80);
@@ -2422,6 +2471,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow-x     : clip;
     scrollbar-width: thin;
     scrollbar-color: var(--sp-divider) transparent;
+    min-width     : 0;
+    max-width     : 100%;
+    box-sizing    : border-box;
 }
 .sp-outline-beats::-webkit-scrollbar       { width: 4px; }
 .sp-outline-beats::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
@@ -3267,8 +3319,56 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-dialog-custom-input:focus { border-color: var(--sp-primary); }
 .sp-dialog-custom-input[hidden] { display: none; }
+
+/* 时旅方向单选与 AI 三方向异步选择。 */
+.sp-dialog-single-list {
+    display              : grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap                  : 6px;
+}
+.sp-dialog-single-option {
+    min-width    : 0;
+    padding      : 7px 9px;
+    border       : 0;
+    border-radius: 7px;
+    background   : transparent;
+    color        : var(--sp-subtle);
+    font-family  : var(--sp-font);
+    font-size    : var(--sp-fs-80);
+    cursor       : pointer;
+    overflow-wrap: anywhere;
+}
+.sp-dialog-single-option:hover { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
+.sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 16%, transparent); color: var(--sp-on-surface); }
+.sp-dialog-actions .sp-dialog-button:disabled { opacity: 0.45; cursor: default; }
+.sp-dialog-async-body { min-height: 44px; }
+.sp-dialog-async-list { grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--sp-divider); }
+.sp-dialog-async-list .sp-dialog-single-option {
+    width        : 100%;
+    display      : flex;
+    align-items  : flex-start;
+    gap          : 8px;
+    padding      : 10px 6px;
+    border       : 0;
+    border-bottom: 1px solid var(--sp-divider);
+    border-radius: 0;
+    background   : transparent;
+    color        : var(--sp-on-surface);
+    font-family  : var(--sp-font);
+    font-size    : var(--sp-fs-80);
+    line-height  : 1.5;
+    text-align   : left;
+    cursor       : pointer;
+}
+.sp-dialog-async-list .sp-dialog-single-option i { flex: 0 0 auto; margin-top: 3px; color: var(--sp-subtle); }
+.sp-dialog-async-list .sp-dialog-single-option span { min-width: 0; overflow-wrap: anywhere; }
+.sp-dialog-async-list .sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
+.sp-dialog-async-list .sp-dialog-single-selected i { color: var(--sp-primary); }
+.sp-dialog-async-loading,
+.sp-dialog-async-empty { color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.5; }
 @media (max-width: 420px) {
     .sp-dialog-multi-list { grid-template-columns: 1fr; }
+    .sp-dialog-single-list:not(.sp-dialog-async-list) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ─── Memory section ─────────────────────────────────────────────────────────── */
@@ -3875,6 +3975,39 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-theater-result-inner img { max-width: 100%; height: auto; }
 .sp-theater-result-inner p { margin: 0 0 0.8em; }
+.sp-theater-result-inner .sp-theater-prose {
+    max-width: 100%;
+}
+.sp-theater-result-inner .sp-theater-prose > :first-child { margin-top: 0; }
+.sp-theater-result-inner .sp-theater-prose > :last-child { margin-bottom: 0; }
+.sp-theater-result-inner .sp-theater-scene-break {
+    margin: 1.15em 0;
+    color: var(--sp-subtle);
+    text-align: center;
+}
+.sp-theater-result-inner .sp-theater-scene-break:empty::before {
+    content: '·  ·  ·';
+    display: inline-block;
+    border-top: 1px solid var(--sp-divider);
+    padding: 0.45em 1.1em 0;
+    line-height: 1;
+}
+.sp-theater-result-inner .sp-theater-inset {
+    margin: 1em 0;
+    padding: 0.7em 0.9em;
+    border: 1px solid var(--sp-divider);
+    border-left: 3px solid var(--sp-primary);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--sp-sheet-bg) 88%, var(--sp-primary));
+}
+.sp-theater-result-inner .sp-theater-aside {
+    color: var(--sp-subtle);
+    font-size: 0.94em;
+}
+.sp-theater-result-inner .sp-theater-emphasis {
+    color: var(--sp-primary);
+    font-weight: 600;
+}
 .sp-theater-result-empty { min-height: 120px; padding: 30px 20px; }
 
 /* ── 长篇预览折叠 ── */
@@ -4865,6 +4998,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-today-acts { display: inline-flex; gap: 2px; margin-left: auto; }
 .sp-alm-today-acts .sp-icon-btn { width: 26px; height: 26px; font-size: var(--sp-fs-72); }
 .sp-alm-today-input { width: 44px !important; text-align: center; font-size: var(--sp-fs-78); padding: 4px 6px; }
+.sp-alm-today-month { width: auto !important; min-width: 78px; max-width: min(132px, 38vw); flex: 0 1 132px; text-align: left; text-overflow: ellipsis; }
+.sp-alm-today-calibration-title { white-space: nowrap; flex-shrink: 0; }
+.sp-alm-today-weekday { width: 78px !important; max-width: 78px; flex: 0 1 78px; }
+@media (max-width: 520px) {
+    .sp-alm-today-editing { flex-wrap: wrap; row-gap: 4px; }
+    .sp-alm-today-calibration-title { flex-basis: 100%; }
+    .sp-alm-today-editing .sp-alm-today-acts { margin-left: auto; }
+}
  /* 时间戳·只读行：今天条下方一行，回显主楼 AI 每楼隐形时间戳（起→止），比今天条更素 */
 .sp-alm-clock {
     display      : flex;
@@ -4876,7 +5017,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font-size    : var(--sp-fs-76);
 }
 .sp-alm-clock-lbl   { display: inline-flex; align-items: center; gap: 4px; color: var(--sp-subtle); flex-shrink: 0; }
-.sp-alm-clock-val   { color: var(--sp-on-surface); font-weight: 600; word-break: break-all; }
+.sp-alm-clock-val   { min-width: 0; color: var(--sp-on-surface); font-weight: 600; overflow-wrap: anywhere; }
 .sp-alm-clock-arrow { color: var(--sp-subtle); font-weight: 400; margin: 0 1px; }
 .sp-alm-clock-wait  { color: var(--sp-subtle); font-weight: 400; font-size: var(--sp-fs-72); }
 /* 「同步到点」CTA：改了今天后点落后时在今天条冒出的醒目胶囊；点一下后台把点重生成到今天。busy 态换成静默灰胶囊 */
@@ -5041,6 +5182,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-ledger-auto input[type="checkbox"] { cursor: pointer; }
 .sp-ledger-capture-now { margin-left: auto; flex-shrink: 0; }
+.sp-ledger-capture-busy {
+    cursor: progress;
+    opacity: 0.72;
+}
+.sp-inline-summary-actions .sp-inline-ledger-capture:disabled {
+    cursor: progress;
+    opacity: 0.62;
+}
 
 .sp-ledger-empty {
     padding   : 24px 16px;
@@ -5931,3 +6080,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-time-travel,
 .sp-alm-time-travel-stop { white-space: nowrap; }
+.sp-theater-source-wrap { width: 100%; margin-top: 10px; }
+.sp-theater-source-toggle { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; padding: 6px 9px; border: 1px solid var(--sp-divider); border-radius: 999px; background: color-mix(in oklab, var(--sp-primary) 8%, var(--sp-sheet-bg)); color: var(--sp-subtle); font: inherit; font-size: var(--sp-fs-75); cursor: pointer; }
+.sp-theater-source-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-theater-source-toggle:hover { color: var(--sp-on-surface); border-color: var(--sp-primary); }
+.sp-theater-source-detail { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 9px 10px; border: 1px solid var(--sp-divider); border-radius: 9px; background: color-mix(in oklab, var(--sp-primary) 4%, var(--sp-sheet-bg)); }
+.sp-theater-source-caption { margin-bottom: 5px; font-size: var(--sp-fs-72); color: var(--sp-subtle); }
+.sp-theater-source-detail pre { max-height: 340px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: var(--sp-fs-75); color: var(--sp-on-surface); }

@@ -45,7 +45,8 @@ export function createAxisDateActions(env = {}) {
             stored = storyClock ? (env.repository?.set?.(month, day, 'calibration', { refMonth: month, refDay: day, weekday: +weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe }) || { ok: false, reason: 'missing-repository' }) : saveAnchor(key, month, day);
         }
         if (!stored?.ok) { env.toast?.('日期保存失败，请重试', null, true); return stored || { ok: false, reason: 'save' }; }
-        env.aftermath?.(); env.toast?.(storyClock ? `已校准故事时间为 ${month}月${day}日` : `已把今天钉为 ${month}月${day}日`); return { ok: true, date: { month, day } };
+        const monthLabel = env.monthName?.(calendar, month) || `${month}月`;
+        env.aftermath?.(); env.toast?.(storyClock ? `已校准故事时间为 ${monthLabel}${day}日` : `已把今天钉为 ${monthLabel}${day}日`); return { ok: true, date: { month, day } };
     };
     return { saveAnchor, clearAnchor, saveManual, nudgeToday };
 }

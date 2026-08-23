@@ -3,14 +3,23 @@
 // axis/ledger boundary explicit and avoids importing index.js from business.
 import { axisState } from './state.js';
 
-const ledgerScrollState = { snapshot: null, generation: 0, pendingFrame: null, currentRenderedMode: 'unknown' };
+const ledgerScrollState = { snapshot: null, generation: 0, pendingFrame: null };
+const calendarScrollState = { snapshot: null, generation: 0, pendingFrame: null };
+let currentRenderedMode = 'unknown';
+
+function cancelScheduledFrame(state, { clearSnapshot = true } = {}) {
+    if (state.pendingFrame != null) {
+        (globalThis.cancelAnimationFrame || clearTimeout)(state.pendingFrame);
+        state.pendingFrame = null;
+    }
+    state.generation++;
+    if (clearSnapshot) state.snapshot = null;
+}
 
 export function resetAxisPanelScrollState() {
-    if (ledgerScrollState.pendingFrame != null) {
-        (globalThis.cancelAnimationFrame || clearTimeout)(ledgerScrollState.pendingFrame);
-        ledgerScrollState.pendingFrame = null;
-    }
-    ledgerScrollState.generation++;
+    cancelScheduledFrame(ledgerScrollState);
+    cancelScheduledFrame(calendarScrollState);
+    currentRenderedMode = 'unknown';
 }
 
 export function captureAxisPanelScroll($wrap) {
@@ -34,7 +43,7 @@ export function captureAxisPanelScroll($wrap) {
 }
 
 export function scheduleAxisPanelScrollRestore($wrap, snapshot) {
-    resetAxisPanelScrollState();
+    cancelScheduledFrame(ledgerScrollState, { clearSnapshot: false });
     if (!snapshot || snapshot.sheet !== 'ledger') return;
     const generation = ledgerScrollState.generation;
     const apply = () => {
@@ -59,14 +68,52 @@ export function scheduleAxisPanelScrollRestore($wrap, snapshot) {
     ledgerScrollState.pendingFrame = (globalThis.requestAnimationFrame || (fn => setTimeout(fn, 0)))(apply);
 }
 
+export function captureAxisCalendarScroll($wrap) {
+    const body = $wrap.find('.sp-alm-body').first().get?.(0);
+    if (!body) return null;
+    return {
+        scrollTop: Number(body.scrollTop) || 0,
+        sheet: 'calendar',
+        generation: calendarScrollState.generation,
+    };
+}
+
+export function scheduleAxisCalendarScrollRestore($wrap, snapshot) {
+    cancelScheduledFrame(calendarScrollState, { clearSnapshot: false });
+    if (!snapshot || snapshot.sheet !== 'calendar') return;
+    const generation = calendarScrollState.generation;
+    const apply = () => {
+        calendarScrollState.pendingFrame = null;
+        if (generation !== calendarScrollState.generation || axisState._almanacSheet !== 'calendar' || currentRenderedMode !== 'calendar') return;
+        const body = $wrap.find('.sp-alm-body').first().get?.(0);
+        if (!body) return;
+        const max = Math.max(0, Number(body.scrollHeight || 0) - Number(body.clientHeight || 0));
+        body.scrollTop = Math.min(Math.max(0, Number(snapshot.scrollTop) || 0), max);
+        if (calendarScrollState.snapshot === snapshot) calendarScrollState.snapshot = null;
+    };
+    calendarScrollState.pendingFrame = (globalThis.requestAnimationFrame || (fn => setTimeout(fn, 0)))(apply);
+}
+
 export function createAxisPanel(env) {
     return function renderAlmanacPanel(options = {}) {
         if (!axisState.almanacMode) return;
         const $wrap = env.$in('#sp-almanac-wrap');
-        const oldMode = ledgerScrollState.currentRenderedMode;
+        const oldMode = currentRenderedMode;
         if (oldMode === 'ledger-list' && ledgerScrollState.pendingFrame == null) {
             const current = captureAxisPanelScroll($wrap);
             if (current) ledgerScrollState.snapshot = { ...current, generation: ledgerScrollState.generation };
+        }
+        const preserveCalendar = options.preserveBodyScroll === true && oldMode === 'calendar';
+        if (preserveCalendar) {
+            if (calendarScrollState.pendingFrame == null) {
+                const current = captureAxisCalendarScroll($wrap);
+                if (current) calendarScrollState.snapshot = current;
+            } else {
+                // 连续状态重绘可能发生在上一帧恢复前；沿用最初快照，旧 RAF 作废。
+                cancelScheduledFrame(calendarScrollState, { clearSnapshot: false });
+            }
+        } else {
+            cancelScheduledFrame(calendarScrollState);
         }
         const ledgerEditor = env.getLedgerEditor();
         const targetMode = axisState._almanacManager ? 'calendar-manager'
@@ -77,10 +124,12 @@ export function createAxisPanel(env) {
             : axisState._almanacSheet === 'calendar' ? 'calendar'
             : 'upcoming';
         if (targetMode === 'ledger-list' && oldMode !== 'ledger-list' && oldMode !== 'ledger-editor') ledgerScrollState.snapshot = null;
-        if (targetMode !== 'ledger-list') resetAxisPanelScrollState();
+        if (targetMode !== 'ledger-list') cancelScheduledFrame(ledgerScrollState);
+        if (targetMode !== 'calendar') cancelScheduledFrame(calendarScrollState);
         const finish = () => {
-            ledgerScrollState.currentRenderedMode = targetMode;
+            currentRenderedMode = targetMode;
             if (targetMode === 'ledger-list') scheduleAxisPanelScrollRestore($wrap, ledgerScrollState.snapshot);
+            if (targetMode === 'calendar' && preserveCalendar) scheduleAxisCalendarScrollRestore($wrap, calendarScrollState.snapshot);
         };
         if (axisState._almanacManager) {
             if (env.refreshCalendarManager(options)) { finish(); return; }

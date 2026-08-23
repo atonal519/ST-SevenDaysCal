@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS = {
     notifyMode: 'lite',  // 通知提醒档：'off'=全静音 / 'lite'(默认)=仅你手动生成·刷新时提示 / 'full'=另在后台自动改动点线面历时提示（真改动才弹）
     linesEnabled : true, // master switch: false disables both auto-advance AND inline block rendering
     linesInterval: 2,
-    linesMode: 'turns',  // 'turns' | 'days'
+    linesMode: 'turns',  // 'turns' | 'days' | 'manual'
     linesInject: false,  // 潜伏注入：活跃线隐形注入主楼 AI（IN_CHAT/SYSTEM）；默认关（改 AI 行为+token 成本，opt-in）
     dashedEnabled: false, // 冷知识自动生成/楼层展示：跟线多生成两条；历史与面板手动生成不受此开关删除或阻断
     dashedCleanupEnabled: true, // 冷知识历史自动清理：只限制未锁条目，锁定项不计入数量
@@ -71,7 +71,8 @@ export const DEFAULT_SETTINGS = {
     memMaxTokens   : 60000, // 记忆块注入 tk 预算上限（源无关）：超出则点/线/面/间取近景、历取全程等距节选，压到此值内；0=不限。默认 6w
     useBaiBaiBook  : false, // if true, pull history from 柏宝书 getInjectedHistory() and skip built-in memory entirely
     useAnima       : false, // if true, read summaries from Anima's chat-bound worldbook (anima_summary entries) and skip built-in memory
-    useDatabase    : false, // if true, retrieve raw TavernDB summary entries from the character's primary worldbook
+    useDatabase    : false, // if true, retrieve raw TavernDB summary entries from the selected/default worldbook
+    databaseWorldbookName: '', // empty follows the character primary worldbook; otherwise freeze this exact host book name
     animaRecallCount: 20,
     // Tag sanitizer (used by memory.js:stripTags AND anywhere else that reads
     // AI floor content). Both are comma-separated bare tag names (no <>).

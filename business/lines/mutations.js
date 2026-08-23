@@ -10,10 +10,11 @@ export function togglePin(raw, index) {
 }
 export function mergePinned(oldRaw, aiRaw) {
     const old = parseLines(oldRaw), fresh = parseLines(aiRaw);
+    const queues = new Map();
+    for (const line of fresh) if (line.name) { const queue = queues.get(line.name) || []; queue.push(line); queues.set(line.name, queue); }
     for (const pinned of old.filter(line => line.pin)) {
-        const same = fresh.find(line => line.name && line.name === pinned.name);
-        if (same) same.pin = true; else fresh.push({ ...pinned });
+        const same = queues.get(pinned.name)?.shift();
+        if (same) { same.pin = true; same.cue = pinned.cue ?? null; } else fresh.push({ ...pinned });
     }
-    if (fresh.length > 6) return { ok: false, reason: 'capacity-exceeded', raw: oldRaw, model: old };
     return { ok: true, raw: serializeLines(fresh), model: fresh };
 }

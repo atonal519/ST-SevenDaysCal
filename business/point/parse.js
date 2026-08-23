@@ -99,7 +99,7 @@ export function parseCalendar(raw, calendar = null) {
     // would only skip the first line and treat the rest as content.
     const content = (m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, '');
 
-    const dateMatch = content.match(/^StartDate:\s*((?:\d{4}|null)-\d{2}-\d{2})/m);
+    const dateMatch = content.match(/^StartDate:\s*((?:\d{4}|null)-\d{1,2}-\d{1,2})/m);
     let startDate = null;
     if (dateMatch) {
         const parsedDate = parseCalendarDate(dateMatch[1], calendar) || (Number(dateMatch[1].slice(5, 7)) > 12 ? calendarDate(+dateMatch[1].slice(0, 4), +dateMatch[1].slice(5, 7), +dateMatch[1].slice(8, 10)) : null);
@@ -148,26 +148,40 @@ export function parseCalendar(raw, calendar = null) {
     return { days: days.filter(d => d.events.length > 0), allDays: days, future, startDate, startDateToken: dateMatch?.[1] || null };
 }
 
-// 生成响应写入前的结构闸门：只接受闭合的完整 Day 1–3 及至少 5 条 Future 事件。
+// 生成响应写入前的结构闸门：数量是建议，结构与核心事件才是硬门槛。
 // 这是原始模型响应的硬门禁；锁定回并不能替模型补足缺失的 Future。
 export function validateGeneratedCalendar(raw, calendar = null) {
     const text = String(raw || '');
+    const widget = text.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
+    const eventBlocks = widget ? pointEventBlocksFromInner(widget[1]) : [];
+    const strictEvents = widget ? eventBlocks.every(block => {
+        const fields = block.join('\n').trim().replace(/^Event\s*:\s*/i, '').split('|');
+        return fields.length === 6 || fields.length === 7;
+    }) : false;
     const parsed = parseCalendar(text, calendar);
     const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));
-    const counts = new Map(coreDays.map(day => [day.dayNumber, (coreDays.filter(x => x.dayNumber === day.dayNumber).length)]));
+    const counts = new Map([1, 2, 3].map(n => [n, coreDays.filter(x => x.dayNumber === n).length]));
     const dayMarkers = [1, 2, 3].every(n => counts.get(n) === 1)
         && coreDays.map(day => day.dayNumber).join(',') === '1,2,3'
         && coreDays.every(day => day.events.length > 0);
     const hasClosing = /<\/calendar_widget\s*>/i.test(text);
     const hasFuture = /(?:^|\n)\s*(?:Future\s*:|未来\s*:)/im.test(text);
     const validFutureEvents = parsed.future?.events?.filter(ev => ev && ev.title).length || 0;
+    const dayMissing = [1, 2, 3].find(n => !counts.get(n));
+    const dayDuplicate = [1, 2, 3].find(n => counts.get(n) > 1);
+    const dayEmpty = coreDays.find(day => [1, 2, 3].includes(day.dayNumber) && !day.events.length);
+    const reason = !hasClosing ? 'missing-closing-tag' : !widget ? 'missing-widget' : !strictEvents ? 'invalid-event-fields' : dayMissing ? 'day-missing' : dayDuplicate ? 'day-duplicate' : dayEmpty ? 'day-empty' : !hasFuture ? 'missing-future' : validFutureEvents < 1 ? 'empty-future' : null;
     return {
-        ok: hasClosing && dayMarkers && parsed.days.length >= 3 && hasFuture && validFutureEvents >= 5,
+        ok: !reason,
+        code: reason,
+        reason,
         dayMarkers,
         dayCount: parsed.days.length,
         hasClosing,
         hasFuture,
         futureCount: validFutureEvents,
+        strictEvents,
+        diagnostics: { eventCount: eventBlocks.length, dayCounts: Object.fromEntries(counts), futureCount: validFutureEvents, dayMissing, dayDuplicate, dayEmpty: dayEmpty?.dayNumber || null },
     };
 }
 
@@ -224,9 +238,9 @@ export const POINT_ANCHOR_YEAR = 2024;
 
 // 把点的 StartDate 强钉到给定 month/day，保留天数 / 天气 / 事件 / 锁定——让点整体平移到「今天」。
 export function forceStartDate(raw, month, day, calendar = null) {
-    const { days, future } = parseCalendar(raw, calendar);
+    const { days, allDays, future } = parseCalendar(raw, calendar);
     const startDate = isGregorian(calendar) ? new Date(POINT_ANCHOR_YEAR, month - 1, day) : calendarDate(null, month, day);
-    return serializeCalendar(days, future, startDate, calendar);
+    return serializeCalendar(allDays || days, future, startDate, calendar);
 }
 
 // 合并锁定（对齐 mergePinnedLines(oldRaw, aiRaw)）：从旧 raw 读出被锁事件（连同原所在天），
@@ -235,11 +249,12 @@ export function forceStartDate(raw, month, day, calendar = null) {
 export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
     const oldParsed = parseCalendar(oldRaw, calendar);
     const oldPinned = [];
-    oldParsed.days.forEach((d, i) => d.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: i }); }));
+    (oldParsed.allDays || oldParsed.days).forEach((d, i) => d.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: i }); }));
     if (oldParsed.future) oldParsed.future.events.forEach(ev => { if (ev.pin) oldPinned.push({ ev, dayIndex: 'future' }); });
     if (!oldPinned.length) return aiRaw;
 
     const parsed = parseCalendar(aiRaw, calendar);
+    const targetDays = parsed.allDays || parsed.days;
     const all = [];
     for (const d of parsed.days) for (const ev of d.events) all.push(ev);
     if (parsed.future) for (const ev of parsed.future.events) all.push(ev);
@@ -253,19 +268,19 @@ export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
             continue;
         }   // AI 保留 → 采纳推进，重标 pin；同名多锁点按“逐个消耗匹配”保留，不再反复命中同一条
         const clone = { ...p.ev, pin: true };     // AI 删了 → 原样并回（保命）
-        if (p.dayIndex === 'future' || !Number.isInteger(p.dayIndex) || p.dayIndex >= parsed.days.length) {
+        if (p.dayIndex === 'future' || !Number.isInteger(p.dayIndex) || p.dayIndex >= targetDays.length) {
             if (parsed.future) parsed.future.events.push(clone);
-            else if (parsed.days.length) parsed.days[parsed.days.length - 1].events.push(clone);
-            else parsed.days.push({ events: [clone] });
+            else if (targetDays.length) targetDays[targetDays.length - 1].events.push(clone);
+            else targetDays.push({ events: [clone] });
         } else if (p.dayIndex >= 0) {
-            parsed.days[p.dayIndex].events.push(clone);
-        } else if (parsed.days.length) {
-            parsed.days[0].events.push(clone);
+            targetDays[p.dayIndex].events.push(clone);
+        } else if (targetDays.length) {
+            targetDays[0].events.push(clone);
         } else {
-            parsed.days.push({ events: [clone] });
+            targetDays.push({ events: [clone] });
         }
     }
-    return serializeCalendar(parsed.days, parsed.future, parsed.startDate, calendar, parsed.startDateToken);
+    return serializeCalendar(targetDays, parsed.future, parsed.startDate, calendar, parsed.startDateToken);
 }
 
 // 单个点 → 注入参考文本（注入卡 / 楼内块抽屉用）

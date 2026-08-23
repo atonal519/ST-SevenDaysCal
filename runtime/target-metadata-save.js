@@ -73,6 +73,7 @@ function expandRootOperations(operations, previous, next, allowRootAdds = new Se
     const expanded = [];
     for (const operation of operations || []) {
         if (OWNED_ROOTS.includes(operation?.path)) {
+            if (operation.op === 'test') { expanded.push(operation); continue; }
             const key = operation.path.slice(1);
             if (operation.op === 'add' && allowRootAdds.has(operation.path) && !(key in previous) && key in next) {
                 expanded.push({ op: 'add', path: operation.path, value: clone(next[key]) });
@@ -86,6 +87,10 @@ function expandRootOperations(operations, previous, next, allowRootAdds = new Se
 
 function validateBusinessOperations(operations, allowedRootAdds = new Set()) {
     for (const operation of operations || []) {
+        if (operation?.op === 'test') {
+            if (!(operation.path === '/integrity' || (ownedPath(operation?.path) && !OWNED_ROOTS.includes(operation.path))) || 'from' in operation) return false;
+            continue;
+        }
         if (!['add', 'remove', 'replace'].includes(operation?.op)) return false;
         const rootAdd = operation?.op === 'add' && allowedRootAdds.has(operation?.path);
         if (!ownedPath(operation?.path) || (OWNED_ROOTS.includes(operation.path) && !rootAdd)) return false;
@@ -146,7 +151,8 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
                 if (!same(latestValue, afterValue)) setPointer(rebased, change.path, afterValue, change.op === 'remove');
             }
             const built = await api.buildChatMetadataPatchOperationsAsync(latest, rebased);
-            if (!isCurrent()) return { ok: false, dispatched: false, reason: 'stale-after-build' };
+            if (!isCurrent()) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'stale-after-build' };
+            if ((built || []).some(op => OWNED_ROOTS.includes(op?.path) && ['replace', 'remove'].includes(op?.op))) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
             let businessOperations = expandRootOperations(built.filter(op => op?.path !== '/integrity'), latest, rebased, allowedRootAdds);
             // 服务端 fast-json-patch 要求父对象先存在；root 原本缺失时以一个
             // 受控 root add 承载本事务内容，不能再跟随重复 child add。
@@ -155,7 +161,8 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
                 businessOperations = businessOperations.filter(op => op.path !== root && !op.path?.startsWith(`${root}/`));
                 businessOperations.push({ op: 'add', path: root, value: clone(rebased[key]) });
             }
-            if (!validateBusinessOperations(businessOperations, allowedRootAdds) || !businessOperations.length) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
+            const hasMutation = businessOperations.some(op => ['add', 'remove', 'replace'].includes(op?.op));
+            if (!validateBusinessOperations(businessOperations, allowedRootAdds) || !hasMutation) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
             const operations = [{ op: 'test', path: '/integrity', value: integrity }, ...businessOperations];
             const headers = api.getRequestHeaders();
             const body = captured.target.is_group
@@ -190,7 +197,24 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
             return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'adapter-error', error };
         }
     }
-    return { supported: true, capture, dispatch };
+    async function confirm(captured) {
+        if (!captured?.target || typeof api.refreshChatWriteSnapshotsFromServer !== 'function') return { confirmed: false, available: false, reason: 'read-confirm-unavailable' };
+        try {
+            await api.refreshChatWriteSnapshotsFromServer(captured.target);
+            const latest = clone(api.getChatMetadataSnapshot(captured.target));
+            if (!latest) return { confirmed: false, available: false, reason: 'read-confirm-empty' };
+            const states = (captured.changes || []).map(change => {
+                const before = readPointer(captured.before, change.path);
+                const after = change.op === 'remove' ? undefined : change.value;
+                const current = readPointer(latest, change.path);
+                return same(current, after) ? 'after' : same(current, before) ? 'before' : 'third';
+            });
+            const allAfter = states.length > 0 && states.every(state => state === 'after');
+            const allBefore = states.length > 0 && states.every(state => state === 'before');
+            return { confirmed: allAfter, submitted: allAfter ? true : allBefore ? false : null, available: true, integrity: latest.integrity };
+        } catch (error) { return { confirmed: false, available: false, reason: 'read-confirm-failed', error }; }
+    }
+    return { supported: true, capture, dispatch, confirm };
 }
 
 export const targetMetadataCoreContract = Object.freeze({ required: REQUIRED.slice(), ownedRoots: OWNED_ROOTS.slice() });

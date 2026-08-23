@@ -6,7 +6,7 @@
 // escape / weatherChipHtml——均为已拆模块，直接 import）。
 import { parseCalendar, buildPointInjectText } from './parse.js';
 import { isGregorian } from '../calendar/date.js';
-import { buildScheduleDateContext, scheduleDateAtOffset, scheduleWeekdayAtOffset } from './date-context.js';
+import { buildScheduleDateContext, scheduleDateAtOffset, scheduleWeekdayAtOffset, formatPointDate } from './date-context.js';
 import { axisState } from '../axis/state.js';
 import { ALM_WEEKDAYS, almDayOfYear, loadCalDesc } from '../axis/data.js';
 import { escapeHtml, escapeAttr } from '../../utils/dom.js';
@@ -114,7 +114,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         if (startDate) {
             const { month, day, wd } = scheduleDayLabel(i, startDate, ctx);
             wdLabel  = wd == null ? '星期未记录' : ALM_WEEKDAYS[wd];
-            numLabel = month == null || day == null ? '日期未知' : `${month}/${day}`;
+            numLabel = formatPointDate(month, day, ctx.cal, true) || '日期未知';
         }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
             <span class="sp-tab-num">${numLabel}</span>
@@ -129,7 +129,8 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         let dateLabel = `第${di + 1}天`;
         if (startDate) {
             const { month, day: dd, wd } = scheduleDayLabel(di, startDate, ctx);
-            dateLabel = month == null || dd == null ? '日期未知' : `${month}月${dd}日 · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}`;
+            const dateText = formatPointDate(month, dd, ctx.cal);
+            dateLabel = dateText ? `${dateText} · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}` : '日期未知';
         }
         return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
     });

@@ -28,6 +28,41 @@ export function bindApiClient(bridge) {
     if (bridge?.buildMessages) _bridge.buildMessages = bridge.buildMessages;
 }
 
+export function normalizeAbortSignal(value) {
+    if (value == null) return null;
+    if (typeof AbortSignal === 'undefined' || typeof value !== 'object') return null;
+    try {
+        // Native brand check through the prototype getter; unlike throwIfAborted this
+        // has no side effect and accepts already-aborted native signals.
+        const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')?.get?.call(value);
+        return typeof aborted === 'boolean'
+            && typeof value.addEventListener === 'function'
+            && typeof value.removeEventListener === 'function'
+            ? value
+            : null;
+    } catch { return null; }
+}
+
+function throwIfPreAborted(signal) {
+    if (!signal?.aborted) return;
+    // Keep the platform error shape so every caller can handle it as a normal
+    // user abort, before any request bookkeeping or fetch side effect occurs.
+    throw new DOMException('The operation was aborted.', 'AbortError');
+}
+
+export function expandRequestPlaceholders(value, { userName = '', charName = '' } = {}) {
+    return String(value ?? '')
+        .replace(/\{\{user\}\}/g, String(userName ?? ''))
+        .replace(/\{\{char\}\}/g, String(charName ?? ''));
+}
+
+export function expandRequestMessageContents(messages, names = {}) {
+    return (Array.isArray(messages) ? messages : []).map(message => {
+        if (typeof message?.content !== 'string') return message;
+        return { ...message, content: expandRequestPlaceholders(message.content, names) };
+    });
+}
+
 // 内置默认破限提示词：不在 UI 展示。「自定义提示词」框留空 → 注入此默认；填了内容 → 整体替换。
 // 源自柏宝书 ST-BaiBai-Book 的 JAILBREAK_PROMPT（已获作者授权）。
 export const DEFAULT_JAILBREAK = `<sanctuary_override_directive>
@@ -52,19 +87,26 @@ export const GEN_TEMPERATURE = 1.0;
 // - Mixed content: ST is HTTPS, plain-HTTP third-party APIs get blocked
 // - Intranet / firewalled endpoints: browser can't reach them, ST server can
 // This is the same strategy 柏宝书 uses (借鉴柏宝书 client.ts).
-export async function postChatCompletion({ cfg, messages, maxTokens, temperature, signal = null } = {}) {
+export async function postChatCompletion({ cfg, messages, maxTokens, temperature, signal: inputSignal = null, userName = '', charName = '' } = {}) {
+    const signal = normalizeAbortSignal(inputSignal);
+    throwIfPreAborted(signal);
     // 总开关硬闸：插件关闭时挡住一切生成（手动 + 后台判定），防任何路径漏网。tag 供调用方识别、静默处理。
     if (!pluginEnabled()) { const e = new Error('构画已关闭'); e.spDisabled = true; throw e; }
     if (!cfg?.url || !cfg?.key) throw new Error('API 未配置');
     const ctx = getContext();
     if (!ctx?.getRequestHeaders) throw new Error('SillyTavern 上下文不可用');
+    const requestUserName = String(userName || ctx.name1 || '用户');
+    const requestCharName = String(charName || ctx.name2 || '角色');
     const stream = cfg.stream === true;
     // 自定义提示词：注入到 system 最前，全局作用于所有链路（点/线/面/记忆/棱/间/面）。
     // 内置默认破限词恒在，框里内容【追加】在其后（不再整体替换）——破限词永远兜底，
     // 用户在框里写的全局写作规范（去八股 / 控文风等）叠加在破限词之上一起生效。支持 {{char}}/{{user}}。
     const userExtra = (getSettings().customPrompt || '').trim();
-    const custom = substituteParams(userExtra ? `${DEFAULT_JAILBREAK}\n\n${userExtra}` : DEFAULT_JAILBREAK);
-    const si = messages.findIndex(m => m.role === 'system');
+    const custom = substituteParams(expandRequestPlaceholders(userExtra ? `${DEFAULT_JAILBREAK}\n\n${userExtra}` : DEFAULT_JAILBREAK, { userName: requestUserName, charName: requestCharName }));
+    // Request-level replacement applies to every role, not only the global custom prompt.
+    // Keep non-string content (e.g. multimodal parts) untouched and do not rewrite plain "user".
+    messages = expandRequestMessageContents(messages, { userName: requestUserName, charName: requestCharName });
+    const si = messages.findIndex(m => m.role === 'system' && typeof m.content === 'string');
     messages = si >= 0
         ? messages.map((m, idx) => idx === si ? { ...m, content: custom + '\n\n' + m.content } : m)
         : [{ role: 'system', content: custom }, ...messages];
@@ -168,7 +210,7 @@ export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal
     // 30000：推理模型（GLM 等）会先耗一大段思维链预算，长提示词（尤其「面」）下要留足空间，
     // 否则正文被挤空 → 代理回 <none>。
     // opts.temperature：可选，机械/创作按需覆盖（历生成抬温让次要节日与风味更发散）；未给则跟随预设。
-    return postChatCompletion({ cfg, messages, maxTokens: 30000, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal });
+    return postChatCompletion({ cfg, messages, maxTokens: 30000, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal, userName, charName });
 }
 
 // Called by memory.js — minimal wrapper around user's configured API.
@@ -186,8 +228,10 @@ export async function callMemoryApi(messages, signal = null) {
 // Called by theater.js — bare API caller (world info/persona already baked into
 // the messages by theater.js via getTheaterStoryContext). Bare like callMemoryApi;
 // world info is NOT auto-injected here so the beautify pass stays clean.
-export async function callTheaterApi(messages, { maxTokens = 30000, signal = null } = {}) {
+export async function callTheaterApi(messages, { maxTokens = 30000, signal = null, userName = null, charName = null } = {}) {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
-    return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal });
+    const ctx = getContext();
+    if (!userName && !charName) return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: ctx?.name1 || '用户', charName: ctx?.name2 || '角色' });
+    return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: userName || ctx?.name1 || '用户', charName: charName || ctx?.name2 || '角色' });
 }

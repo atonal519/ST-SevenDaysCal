@@ -256,7 +256,7 @@ export function findTravelReply(chat, messageId) {
 }
 
 // 控制器只维护单次会话的内存状态和执行顺序；具体 API、存储、UI 与通知由调用方适配。
-export function createTimeTravelController({ getChatId, getChat, resolveDestinationDate, getCalendar, onStateChange, onStepResult, onSequenceEnd, steps = [] } = {}) {
+export function createTimeTravelController({ getChatId, getChat, resolveDestinationDate, getCalendar, onStateChange, onStepResult, onSequenceEnd, onError, steps = [] } = {}) {
     let state = null;
     let sequenceAbort = null;
     let sessionSeq = 0;
@@ -287,12 +287,12 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
         return true;
     }
 
-    function clear() {
+    function clear(reason = 'cleared') {
         const hadState = !!state;
         sequenceAbort?.abort();
         sequenceAbort = null;
         state = null;
-        if (hadState) reportState('cleared');
+        if (hadState) reportState(reason);
     }
 
     function isInitialFloor(messageId) {
@@ -312,8 +312,14 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                 && state.chatId === getChatId?.()
                 && latest
                 && mid > state.waitingAfterMessageId) {
+                const cancelled = state;
                 state = null;
                 reportState('cancelled');
+                try {
+                    await onSequenceEnd?.({ messageId: mid, chatId: cancelled.chatId, sessionId: cancelled.sessionId, reason: 'cancelled' });
+                } catch (error) {
+                    console.error('[SP 时光旅行] 流程收尾失败', error);
+                }
             }
             return false;
         }
@@ -321,6 +327,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
         active.phase = 'syncing';
         reportState('syncing');
         const myAbort = sequenceAbort = new AbortController();
+        let terminalReason = 'completed';
         try {
             const destinationDate = cleanDate(await resolveDestinationDate?.({
                 messageId: Number(messageId),
@@ -329,6 +336,9 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                 selectedTargetDate: active.selectedTargetDate,
                 signal: myAbort.signal,
             }));
+            if (myAbort.signal.aborted || state !== active || active.chatId !== getChatId?.()) {
+                throw Object.assign(new Error('时光旅行会话已失效'), { name: 'AbortError' });
+            }
             if (!destinationDate) throw new Error('无法读取正文生成后的日期锚点');
             const calendar = getCalendar?.();
             const promptAddon = buildTravelPromptAddon({
@@ -357,20 +367,30 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                     catch (reportError) { console.error('[SP 时光旅行] 步骤错误处理失败', reportError); }
                     result = { status: error?.name === 'AbortError' ? 'cancelled' : 'failed', error };
                 }
+                if (myAbort.signal.aborted || state !== active || active.chatId !== getChatId?.()) {
+                    terminalReason = 'cancelled';
+                    break;
+                }
                 try {
                     await onStepResult?.({ key: step.key || '', result, messageId: Number(messageId), destinationDate });
                 } catch (error) {
                     console.error('[SP 时光旅行] 步骤结果处理失败', error);
                 }
             }
+        } catch (error) {
+            terminalReason = error?.name === 'AbortError' ? 'cancelled' : 'failed';
+            if (terminalReason === 'failed') {
+                try { onError?.(error); }
+                catch (reportError) { console.error('[SP 时光旅行] 外层错误处理失败', reportError); }
+            }
         } finally {
             if (sequenceAbort === myAbort) sequenceAbort = null;
             if (state === active) {
                 state = null;
-                reportState('completed');
+                reportState(terminalReason);
             }
             try {
-                await onSequenceEnd?.({ messageId: Number(messageId), chatId: active.chatId, sessionId: active.sessionId });
+                await onSequenceEnd?.({ messageId: Number(messageId), chatId: active.chatId, sessionId: active.sessionId, reason: terminalReason });
             } catch (error) {
                 console.error('[SP 时光旅行] 流程收尾失败', error);
             }

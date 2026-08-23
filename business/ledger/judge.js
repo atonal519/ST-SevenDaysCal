@@ -1,7 +1,7 @@
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 export const JUDGE_FLOORS = 4;
 
-function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
+export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
     const lines = entries.map(e => env.fmtLedger?.(e, today)).join('\n');
     return `请暂停角色扮演，作为剧情连续性助手，只做一件事：根据下面【已登记事件】各自「距今过了多少天」和最近正文，判断哪些事件的状态**该随时间变化了**，只输出需要更新的那几条。
 
@@ -17,7 +17,7 @@ ${lines || '（暂无活跃事件）'}
 【输出格式】只输出状态**有变化**的条目，每条一行，全角竖线「｜」分隔 4 段，顺序固定：
  编号｜新现状｜动作｜新到期
  · 编号：原样抄方括号里的（如 L3），不带方括号
- · 新现状：更新后的一句话状态（如「伤口已结痂，隐隐作痒」）
+ · 新现状：更新后的完整句（如「伤口已结痂，隐隐作痒。」），必须以合适的终止标点结束；若句末有闭合引号，标点写在引号内
  · 动作：维持 / 了结 / 滚周期（三选一，原样写）
  · 新到期：仅在「约定待办」改期、或有明确下次日子的周期（月经、发薪、值班）本轮滚动时填（如「第3月20日」，自定义历按其月名/月序）；永久例行周期与其余情况一律留空
 - 没有任何该变的，就只回一个字：无
@@ -42,7 +42,7 @@ export function createLedgerJudgeController(options = {}) {
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
         const ctx = env.context();
-        const owner = env.identity?.() || ownerOf(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
+        const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
         let reconcile = null;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         env.render?.(); env.refreshInline?.(true);
@@ -51,13 +51,14 @@ export function createLedgerJudgeController(options = {}) {
             if (reconcile?.error) {
                 if ((reconcile.phase || reconcile.error.phase) === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error: reconcile.error };
                 if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
-                return { status: 'failed', reason: reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error };
+                return { status: 'failed', reason: reconcile.error.saveResult?.reason || reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult };
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const summary = reconcile?.summary || {};
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
             const judgeable = (env.listJudgeable?.() || []).filter(entry => entry?.来源状态 !== '待确认' && entry?.来源状态 !== '来源已删除');
+            if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
             if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
             const cfg = env.config?.();
             if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), reconcile, applied: [] };
@@ -102,7 +103,7 @@ export function createLedgerJudgeController(options = {}) {
             if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
             if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
             if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
-            return { status: 'failed', reason: error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, reconcile, applied: [] };
+            return { status: 'failed', reason: error?.saveResult?.reason || error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, saveResult: error?.saveResult, reconcile, applied: [] };
         } finally { finish(ctrl, owner); removeBridge(); }
     };
     return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };

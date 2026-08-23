@@ -16,7 +16,9 @@ export function createLedgerInlineRenderer(options = {}) {
         if (!items.length) return '';
         const cal = calendarOverride === undefined ? options.calendar?.() : calendarOverride;
         const judging = options.judging?.();
-        const actions = readOnly ? '' : `<span class="sp-inline-summary-actions"><button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-capture" title="打捞新标注">标注</button><button class="sp-mini-btn sp-ledger-pill sp-inline-ledger-judge" title="按时间更新现状" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button></span>`;
+        const capturing = options.capturing?.();
+        const captureAttrs = capturing ? 'disabled aria-disabled="true" aria-busy="true"' : 'aria-disabled="false" aria-busy="false"';
+        const actions = readOnly ? '' : `<span class="sp-inline-summary-actions"><button type="button" class="sp-mini-btn sp-ledger-pill sp-inline-ledger-capture${capturing ? ' sp-ledger-capture-busy' : ''}" title="${capturing ? '正在打捞新标注' : '打捞新标注'}" ${captureAttrs}>${capturing ? '标注中…' : '标注'}</button><button type="button" class="sp-mini-btn sp-ledger-pill sp-inline-ledger-judge" title="按时间更新现状" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button></span>`;
         const rows = items.map(item => {
             const type = options.typeClass?.(item.类型) || 'state'; const locked = item.锁 === '用户锁'; const paused = item.静音 === true;
             const buttons = readOnly ? '' : `<span class="sp-beat-actions"><button class="sp-inline-ledger-lock${locked ? ' sp-inline-locked' : ''}" data-id="${escapeAttr(item.id)}" title="${locked ? '已锁定 · 点击解锁' : '锁定 · AI 判定不再改动此条'}"><i class="fa-solid fa-${locked ? 'lock' : 'lock-open'}"></i></button><button class="sp-inline-ledger-mute${paused ? ' sp-inline-paused' : ''}" data-id="${escapeAttr(item.id)}" title="${paused ? '已暂停埋入 · 点击恢复' : '暂停埋入 · 暂不注入主楼'}"><i class="fa-solid fa-${paused ? 'bell-slash' : 'bell'}"></i></button><button class="sp-inline-ledger-close" data-id="${escapeAttr(item.id)}" title="归档了结 · 移出活跃、可捞回"><i class="fa-solid fa-box-archive"></i></button></span>`;
