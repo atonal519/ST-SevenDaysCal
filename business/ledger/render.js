@@ -256,14 +256,14 @@ export async function execBatch(scope, ids) {
     }
 }
 
-export function renderLedgerSheet() {
+export function renderLedgerControls() {
     const s = getSettings();
     const iv = env.getLedgerCaptureInterval();
     const busy = env.isCapturingLedger();
     const progress = env.getLedgerCaptureProgress?.();
     const judging = env.isJudgingLedger();
     const on = s.ledgerCaptureEnabled;   // 【bug 修复】原为裸未定义 `on`；正源＝自动标注开关设置
-    const ctrl = `<div class="sp-ledger-ctrl">
+    return `<div class="sp-ledger-ctrl">
         <label class="sp-ledger-auto">
             <input type="checkbox" class="sp-ledger-auto-toggle" ${on ? 'checked' : ''}>
             <span>每</span>
@@ -273,6 +273,12 @@ export function renderLedgerSheet() {
         <button type="button" class="sp-mini-btn sp-ledger-pill sp-ledger-capture-now${busy ? ' sp-ledger-capture-busy' : ''}" title="${busy ? '再次点击可中止当前标注' : '立即标注一次'}" aria-busy="${busy ? 'true' : 'false'}" aria-disabled="false">${busy ? (progress ? `中止标注（${progress.done}/${progress.total} 批）` : '中止标注') : '标注'}</button>
         <button type="button" class="sp-mini-btn sp-ledger-pill sp-ledger-judge-now" title="立即判定一次（更新现状 / 了结）" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button>
     </div>`;
+}
+
+export function renderLedgerSheet({ includeControls = true } = {}) {
+    const s = getSettings();
+    const busy = env.isCapturingLedger();
+    const on = s.ledgerCaptureEnabled;
     const entries = ledger.listEntries();
     const cal = loadCalDesc();
     const closed = ledger.listEntries({ includeClosed: true }).filter(e => e.状态 === '已了结');
@@ -289,7 +295,7 @@ export function renderLedgerSheet() {
     if (!entries.length) {
         const hint = busy ? '正在标注…'
             : `暂无活跃刻度条目。聊几楼后${on ? '自动标注' : '（先勾上「自动标注」）'}，或点右上「立即标注」。`;
-        return ctrl + `<div class="sp-ledger-empty">${hint}</div>` + archive;
+        return (includeControls ? renderLedgerControls() : '') + `<div class="sp-ledger-empty">${hint}</div>` + archive;
     }
-    return ctrl + batchBarHtml('ledger-active', entries.length, '批量归档', false) + `<div class="sp-ledger-list">${entries.map(e => ledgerRowHtml(e, cal)).join('')}</div>` + archive;
+    return (includeControls ? renderLedgerControls() : '') + batchBarHtml('ledger-active', entries.length, '批量归档', false) + `<div class="sp-ledger-list">${entries.map(e => ledgerRowHtml(e, cal)).join('')}</div>` + archive;
 }

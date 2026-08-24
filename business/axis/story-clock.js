@@ -1,3 +1,4 @@
+import { _cnToNumber, _CN_MONTH_ALIAS, normalizeCnDateDigits } from '../../utils/cn-date.js';
 const START_RE = /<!--\s*SDC-start\s+([\s\S]*?)\s*-->/i;
 const END_RE = /<!--\s*SDC-end\s+([\s\S]*?)\s*-->/i;
 let deps = { loadCalendar: () => null, validMonthDay: () => null, defaultCalendar: null, monthDayFromKey: () => null, extractDay: () => null, cnToNumber: () => 0, monthAlias: {}, context: () => null };
@@ -11,21 +12,28 @@ function parseStoryWeekday(text) {
     return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(m[2].toLowerCase());
 }
 function parseStoryDate(text) {
-    const s = String(text || '');
+    const s = normalizeCnDateDigits(text);
+    const cn = '[零〇一二两兩三四五六七八九十廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟]+';
+    const toNumber = value => (deps.cnToNumber || _cnToNumber)(value);
+    const valid = (month, day) => deps.validMonthDay({ month, day }, deps.loadCalendar());
     let m = s.match(/(?:^|[\s|｜,，])(\d{4})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
     if (m) return deps.validMonthDay({ month: +m[2], day: +m[3] }, deps.loadCalendar());
-    m = s.match(/(?:^|[\s|｜,，])(?:\d{4}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
-    if (m) return deps.validMonthDay({ month: +m[1], day: +m[2] }, deps.loadCalendar());
-    m = s.match(/(?:^|[\s|｜,，])(\d{1,2})[-/.](\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
-    if (m) return deps.validMonthDay({ month: +m[1], day: +m[2] }, deps.loadCalendar());
     const cal = deps.loadCalendar();
     for (let i = 0; i < (cal?.months?.length || 0); i++) {
         const name = String(cal.months[i]?.name || '').trim(); if (!name) continue;
-        const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:第\\s*)?(初[零〇一二两兩三四五六七八九十廿卅]|[零〇一二两兩三四五六七八九十廿卅]+|\\d{1,2})\\s*日?');
+        const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:第\\s*)?(初' + cn + '|\\d{1,2}|' + cn + ')\\s*日?');
         const hit = re.exec(s); if (!hit) continue;
-        const day = /^\d+$/.test(hit[1]) ? +hit[1] : deps.cnToNumber(hit[1].replace(/^初/, ''));
-        return deps.validMonthDay({ month: i + 1, day }, cal);
+        const day = /^\d+$/.test(hit[1]) ? +hit[1] : toNumber(hit[1].replace(/^初/, ''));
+        if (day != null) return deps.validMonthDay({ month: i + 1, day }, cal);
     }
+    m = s.match(new RegExp(`(?:^|[\\s|｜,，])(?:\\d{1,4}|[^\\s|｜,，]{1,20})?\\s*年\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?`));
+    if (m) { const month = _CN_MONTH_ALIAS[m[1]] ?? toNumber(m[1]); const day = m[2].startsWith('初') ? toNumber(m[2].slice(1)) : toNumber(m[2]); if (month != null && day != null) return valid(month, day); }
+    m = s.match(new RegExp(`(?:^|[\\s|｜,，])(?:\\d{1,4}\\s*年\\s*)?(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?`));
+    if (m) { const month = _CN_MONTH_ALIAS[m[1]] ?? toNumber(m[1]); const day = m[2].startsWith('初') ? toNumber(m[2].slice(1)) : toNumber(m[2]); if (month != null && day != null) return valid(month, day); }
+    m = s.match(/(?:^|[\s|｜,，])(?:\d{1,4}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+    if (m) return valid(+m[1], +m[2]);
+    m = s.match(/(?:^|[\s|｜,，])(\d{1,2})[-/.](\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
+    if (m) return deps.validMonthDay({ month: +m[1], day: +m[2] }, deps.loadCalendar());
     return null;
 }
 function parseStoryTime(raw, { structured = false } = {}) {
@@ -74,7 +82,7 @@ function parseStoryTime(raw, { structured = false } = {}) {
 }
 function parseStoryClockMetaValue(raw) {
     const value = String(raw || '').trim();
-    const field = name => new RegExp(`(?:^|[|｜,，])\\s*(?:${name})\\s*=\\s*([^|｜,，]+)`, 'i').exec(value)?.[1]?.trim();
+    const field = name => new RegExp(`(?:^|[|｜,，;；\\n])\\s*(?:${name})\\s*[=＝:]\\s*([^|｜,，;；\\n}]+)`, 'i').exec(value)?.[1]?.trim();
     const structuredDate = field('date');
     const structuredWeekday = field('weekday|星期');
     const structuredTime = field('time');
@@ -83,7 +91,8 @@ function parseStoryClockMetaValue(raw) {
         ? ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 })[String(structuredWeekday).trim()]
         : parseStoryWeekday(structuredWeekday || value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
-    const time = parseStoryTime(structuredTime || value, { structured: !!structuredTime });
+    const dirtyStructuredTime = structuredTime && /(?:^|\s)[^=＝:|｜,，;；\n]+\s*(?:[=＝]|:(?=\s*[^\d]))/.test(structuredTime);
+    const time = dirtyStructuredTime ? null : parseStoryTime(structuredTime || value, { structured: !!structuredTime });
     return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
 export function parseStoryClock(message) {
@@ -157,6 +166,8 @@ export function createStoryClockController(options = {}) {
 export function parseJudgedDate(answer) {
     const text = String(answer || '').trim(); if (!text || /未知|无法|不确定|不清楚|没有|无明确/.test(text)) return null;
     const calendar = deps.loadCalendar();
+    const shared = parseStoryDate(text);
+    if (shared) return shared;
     let match = text.match(/第?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
     if (match) { const value = deps.validMonthDay({ month: +match[1], day: +match[2] }, calendar); if (value) return value; }
     if (calendar !== deps.defaultCalendar) for (let i = 0; i < calendar.months.length; i++) {

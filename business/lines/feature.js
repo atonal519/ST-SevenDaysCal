@@ -19,6 +19,7 @@ export function createLinesFeature(env = {}) {
     const runtime = env.runtime || createLinesRuntime({ render: env.render });
     const owners = env.owners || createTaskOwnerManager();
     const lifecycle = env.lifecycle || createLinesLifecycle();
+    if (lifecycle.lastDay == null && typeof env.dayAnchor === 'function') lifecycle.lastDay = env.dayAnchor() ?? null;
     const swipeStore = env.swipeStore || createSwipeLinesStore({ storage: env.storage });
     const injection = env.injection || (env.injectionEnv && createLinesInjectionController(env.injectionEnv));
     const dashed = env.dashed || (env.dashedEnv && createDashedModule({ ...env.dashedEnv, refreshPanel: () => refreshPanel?.(true), refreshInline: () => syncInline?.() }));
@@ -145,29 +146,52 @@ export function createLinesFeature(env = {}) {
         if (runtime.busy) runtime.abort();
         return generation?.run?.(true, { mesId: Number(mesId), swipeId, baselineRaw: baseline, forceReroll: true });
     };
+    const onMessageReceived = ({ messageId, type } = {}) => {
+        if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return false;
+        const mid = Number(messageId);
+        const chatId = env.chatId?.();
+        const chat = env.chat?.() || [];
+        const floor = chat[mid];
+        if (!Number.isInteger(mid) || mid !== chat.length - 1 || !floor || floor.is_user || floor.is_system || !String(floor.mes || '').trim() || String(type || '') !== 'normal') return false;
+        if (mid <= lifecycle.lastSeenMaxMesId) return false;
+        if (lifecycle.consumePendingReroll() || lifecycle.pendingSwipeGen?.mesId === mid) {
+            lifecycle.consumePendingSwipe(mid);
+            return false;
+        }
+        return lifecycle.registerFloor({ chatId, messageId: mid, type: 'normal' });
+    };
     const onCharacterRendered = async ({ messageId, type, autoSuppressed = false } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return;
         const mid = Number(messageId);
-        const pendingReroll = lifecycle.consumePendingReroll();
         const signature = env.floorSignature?.(mid) || '';
-        const text = String(env.messageText?.(mid) || '');
-        const changed = mid === lifecycle.lastSeenMaxMesId && lifecycle.floorTextSig[mid] !== undefined && signature !== lifecycle.floorTextSig[mid] && text.trim() !== '';
         lifecycle.floorTextSig[mid] = signature;
-        const decision = classifyRenderedFloor({ messageId: mid, lastSeen: lifecycle.lastSeenMaxMesId, type, pendingReroll, contentChanged: changed, pendingSwipe: lifecycle.pendingSwipeGen?.mesId === mid });
-        let advance = false;
-        if (decision.isNewFloor) {
-            lifecycle.lastSeenMaxMesId = mid;
-            const mode = env.getMode?.();
-            if (!autoSuppressed && mode === 'days') advance = lifecycle.detectInGameDayChange();
-            else if (!autoSuppressed && mode === 'turns') advance = lifecycle.advanceCounter({ mode, interval: env.getInterval?.() }).shouldAdvance;
-        } else if (decision.isReroll || lifecycle.pendingSwipeGen?.mesId === mid) {
-            const swipeGeneration = lifecycle.consumePendingSwipe(mid);
+        if (lifecycle.pendingReroll || lifecycle.pendingSwipeGen?.mesId === mid) {
+            lifecycle.consumePendingReroll();
+            lifecycle.consumePendingSwipe(mid);
+            lifecycle.consumeFloor(mid, env.chatId?.());
             await appendInlineBlock(mid, false);
-            if (!swipeGeneration) await rerunSwipe({ mesId: mid, forceRegen: true });
             return;
         }
+        const credential = lifecycle.consumeFloor(mid, env.chatId?.());
+        if (!credential) { await appendInlineBlock(mid, false); return; }
+        lifecycle.lastSeenMaxMesId = mid;
+        let advance = false;
+        const mode = env.getMode?.();
+        if (!autoSuppressed && mode === 'days') lifecycle.holdConfirmedFloor(credential);
+        else if (!autoSuppressed && mode === 'turns') advance = lifecycle.advanceCounter({ mode, interval: env.getInterval?.() }).shouldAdvance;
         await appendInlineBlock(mid, advance);
         if (advance && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+    };
+    const onDateAftermath = async ({ chatId = env.chatId?.(), messageId, day } = {}) => {
+        if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false || env.getMode?.() !== 'days') return false;
+        const mid = Number(messageId ?? ((env.chat?.() || []).length - 1));
+        const credential = lifecycle.consumeConfirmedFloor(mid, chatId);
+        if (!credential || day == null) return false;
+        const advance = lifecycle.detectInGameDayChange({ day, decide: env.dayAdvance });
+        if (!advance) { await appendInlineBlock(mid, false); return false; }
+        await appendInlineBlock(mid, true);
+        if (env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+        return true;
     };
     const onSwiped = async ({ mesId, info } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return;
@@ -176,7 +200,7 @@ export function createLinesFeature(env = {}) {
         const decision = chooseSwipeLayer({ pendingGeneration: !!info?.pendingGeneration, swipeId, stored: swipeStore.read(env.chatId?.(), mid), baseline: '' });
         if (decision.action === 'wait') { lifecycle.markPendingSwipe(mid); return; }
         lifecycle.floorTextSig[mid] = env.floorSignature?.(mid) || '';
-        if (applyStoredSwipe({ chatId: env.chatId?.(), mesId: mid, swipeId, key: env.cacheKey?.(), writeStore: env.writeStore, syncInline: syncInline })) refreshPanel?.(true);
+        await appendInlineBlock(mid, false);
     };
     const onEdited = ({ mesId } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return;
@@ -238,11 +262,11 @@ export function createLinesFeature(env = {}) {
         get sheet() { return sheet; },
         setSheet: value => { if (value === 'events' || value === 'dashed') sheet = value; return sheet; },
         renderLines, inlineHtml, appendInlineBlock, syncInline, commitGenerationResult, cleanupOwner, abortGeneration,
-        onCharacterRendered, onSwiped, onEdited, onSent, onGenerationStarted, onToken, onGenerationEnded,
+        onMessageReceived, onCharacterRendered, onDateAftermath, onSwiped, onEdited, onSent, onGenerationStarted, onToken, onGenerationEnded,
         isStreaming: () => Date.now() < lifecycle.streamUntil,
         resetCounter: () => { lifecycle.counter = 0; },
         setLastDay: value => { lifecycle.lastDay = value; },
-        onChatChanged: ({ lastSeen = -1 } = {}) => { abortGeneration({ restore: false }); lifecycle.resetChat({ lastSeen }); return env.onChatChanged?.({ lastSeen }); },
+        onChatChanged: ({ lastSeen = -1 } = {}) => { abortGeneration({ restore: false }); lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
         renderBody,
         refreshPanel,
     };

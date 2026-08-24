@@ -1,23 +1,34 @@
 // utils/cn-date.js — 中文日期纯函数（无状态）。Phase 0 从 index.js 机械搬移。
 
 
-export const _CN_NUM_MAP = { 零:0, 〇:0, 一:1, 二:2, 两:2, 兩:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10, 廿:20, 卅:30,
-    壹:1, 贰:2, 貳:2, 叁:3, 參:3, 叄:3, 肆:4, 伍:5, 陆:6, 陸:6, 柒:7, 捌:8, 玖:9, 拾:10 };
+export const _CN_NUM_MAP = { 零:0, 〇:0, 一:1, 二:2, 两:2, 兩:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10, 廿:20, 卄:20, 卅:30, 卌:40,
+    壹:1, 贰:2, 貳:2, 叁:3, 參:3, 叄:3, 肆:4, 伍:5, 陆:6, 陸:6, 柒:7, 捌:8, 玖:9, 拾:10, 佰:100, 仟:1000 };
 
 export const _CN_MONTH_ALIAS = { 正:1, 冬:11, 腊:12, 臘:12 };
+export function normalizeCnDateDigits(value) { return String(value ?? '').replace(/[０-９]/g, ch => String(ch.charCodeAt(0) - 0xFF10)); }
 
 export function _cnToNumber(s) {
     if (!s) return null;
     if (s === '元') return 1;
+    s = normalizeCnDateDigits(s);
     if (/^\d+$/.test(s)) return parseInt(s, 10);
     if (s.length === 1) return _CN_NUM_MAP[s] ?? null;   // 单字含 廿=20 / 卅=30
     // 廿三=23 / 卅一=31（农历日常写 廿一~廿九，偶见卅）：首字定 20/30，其后为个位。
-    if (s[0] === '廿' || s[0] === '卅') {
+    if (s[0] === '廿' || s[0] === '卄' || s[0] === '卅') {
         const ones = _CN_NUM_MAP[s.slice(1)];
         if (ones != null && ones < 10) return _CN_NUM_MAP[s[0]] + ones;
         return null;
     }
-    const t = s.replace(/拾/g, '十');   // 大写「拾」＝十位标记：拾伍→十伍、贰拾叁→贰十叁
+    const t = s.replace(/拾/g, '十').replace(/佰/g, '百').replace(/仟/g, '千');
+    if (t.includes('千') || t.includes('百')) {
+        let total = 0; let rest = t;
+        for (const [unit, factor] of [['千', 1000], ['百', 100]]) {
+            const parts = rest.split(unit);
+            if (parts.length > 1) { total += (parts[0] ? (_CN_NUM_MAP[parts[0]] ?? Number(parts[0])) : 1) * factor; rest = parts.slice(1).join(unit); }
+        }
+        if (rest) { const tail = _cnToNumber(rest); if (tail != null) total += tail; }
+        return total || null;
+    }
     if (t.includes('十')) {
         const [a, b] = t.split('十');
         const tens = a === '' ? 1 : _CN_NUM_MAP[a];

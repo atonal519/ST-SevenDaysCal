@@ -18,7 +18,7 @@ export function classifyRenderedFloor({ messageId, lastSeen = -1, type, pendingR
     const id = Number(messageId);
     const isNewFloor = Number.isFinite(id) && id > Number(lastSeen);
     const isReroll = type === 'regenerate' || type === 'swipe' || pendingReroll || contentChanged;
-    return { isNewFloor, isReroll, shouldRebuild: !isNewFloor && (isReroll || pendingSwipe), id };
+    return { isNewFloor, isReroll, shouldRebuild: false, id };
 }
 
 export function chooseSwipeLayer({ pendingGeneration = false, swipeId = 0, stored = null, baseline = '' } = {}) {

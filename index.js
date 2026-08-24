@@ -9,7 +9,8 @@ import {
 } from './state.js';
 import * as memory from './memory.js';
 import { createTheaterRuntime } from './business/theater/runtime.js';
-import * as anchor from './anchor.js';
+import { createCoordinateRuntime } from './business/coordinate/runtime.js';
+import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
@@ -180,6 +181,9 @@ import { createOutlineFeature } from './business/outline/feature.js';
 import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
+
+// 坐标唯一 runtime；旧 anchor facade 继续保留兼容导出。
+let coordinateRuntime = null;
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
     bindLedgerRender,
@@ -189,7 +193,7 @@ import {
     ledgerTypeClass, fmtLedgerAnchorDate, ledgerRowHtml,
     openLedgerEditor, closeLedgerEditor, ledgerMdToInput, renderLedgerEditor,
     ledgerReadMd, saveLedgerEditor,
-    batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet,
+    batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet, renderLedgerControls,
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
 
@@ -556,6 +560,7 @@ bindLedgerRender({
     getLedgerCaptureProgress: () => ledgerCaptureController.progress,
     isCapturingLedger: () => ledgerCaptureController.isBusy,
     isJudgingLedger: () => ledgerJudgeController.isBusy,
+    renderLedgerControls,
 });
 
 const MODAL_ID   = 'sp-modal-root';
@@ -683,6 +688,7 @@ const renderAlmanacPanel = createAxisPanel({
     renderAlmanacEditor,
     renderLedgerEditor,
     renderLedgerSheet,
+    renderLedgerControls,
     renderAlmanacCalendar,
     renderAlmanacUpcoming,
     almToolbarHtml,
@@ -830,7 +836,8 @@ const timeTravel = createTimeTravelController({
         showToast('时光旅行同步未完整完成，请手动检查各模块', null, true);
     },
     steps: [
-        { key: AUTOMATION_MODULES.LINES, canRun: () => getSettings().linesEnabled !== false, run: async ({ messageId, destinationDate, promptAddon, signal }) => (await linesFeature.generation.run(false, { mesId: Number(messageId), forceReroll: true }, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) || { status: 'updated' }) },
+        // 线不再被时旅步骤直生；若时旅确实落地正常新 AI 楼，由 MESSAGE_RECEIVED→CMR 统一入口处理。
+        { key: AUTOMATION_MODULES.LINES, canRun: () => false, run: async () => ({ status: 'skipped' }) },
         { key: AUTOMATION_MODULES.OUTLINE, canRun: () => outlineFeature.canRelocate(), run: ({ promptAddon, signal }) => outlineFeature.relocate(promptAddon, signal) },
         { key: AUTOMATION_MODULES.POINT, canRun: () => !!readStore(getCacheKey(currentView, charViewName))?.raw, run: ({ destinationDate, promptAddon, signal }) => syncPointToToday(false, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal, allowPendingFollowup: false }) },
         { key: AUTOMATION_MODULES.LEDGER_CAPTURE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
@@ -1413,11 +1420,6 @@ const spaceFeature = createSpaceFeature({
     },
 });
 let theaterMode          = false;
-let anchorMode           = false;  // 锚（收藏楼层）视图是否激活
-let _anchorSavedKeys     = new Set();   // 已收藏楼层键 `${chatId}::${mesid}`（内存缓存，供按钮同步态）
-let _anchorView          = { level: 'chars', charName: null, chatId: null, itemId: null };  // 四层抽屉：角色→聊天→收藏→全文
-let _anchorCurrentItem   = null;   // 当前全文视图的 item（跳转/删除/导出用）
-let _anchorFullTagEdit   = false;  // 全文视图「编辑标签」是否内联展开（避免 body 浮层被面板盖住）
 // 暗历内联编辑态/归档折叠态/批量模式已随 ledger 渲染层迁入 business/ledger/render.js
 // （经 getLedgerEditor/isLedgerArchiveOpen/getBatchScope 等访问器 + resetLedgerRenderState 复位）。
 const _injectTexts      = {};
@@ -1514,18 +1516,30 @@ jQuery(async () => {
             if (getSettings().notifyMode === 'full' && !memoryPauseNoticeShown) { memoryPauseNoticeShown = true; showToast('记忆系统因连续失败已暂停：请检查 API 后点击补齐或重构', null, true); }
         },
     });
-    // Initialize anchor (坐标/收藏楼层) — /api/files 存储层；预热索引 + 载入已收藏楼层键
-    anchor.initAnchor({
-        getSettings: () => {
-            const s = getSettings();
-            return {
-                anchorSizeWarnBytes: Number.isFinite(+s.anchorSizeWarnBytes) ? +s.anchorSizeWarnBytes : 8 * 1024 * 1024,
-            };
+    coordinateRuntime = createCoordinateRuntime({
+        forceNew: true,
+        root: $in('#sp-anchor-body')?.[0] || null,
+        warnBytes: Number(getSettings().anchorSizeWarnBytes) || 8 * 1024 * 1024,
+        hostPorts: { settings: () => getSettings(), dom: () => document, context: () => getContext() },
+        host: {
+            document, context: () => getContext(), settings: () => getSettings(), enabled: () => pluginEnabled(),
+            sheet: () => _spShadow?.querySelector?.('.sp-sheet') || document.querySelector('.sp-sheet'),
+            chatName: () => { const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name'); return el?.value || el?.textContent?.trim() || getContext().chatId || '当前聊天'; },
+            capture: el => { const ctx = getContext?.() || {}; return captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify, messageFormatting: ctx.messageFormatting }); },
+            toast: (message, action, error) => showToast(message, action, error),
+            warn: (message, error) => console.warn(message, error),
+            confirm: message => spConfirm({ title: String(message).includes('收藏') ? '删除收藏' : '删除标签', body: message }),
+            svg: cls => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/></svg>`,
         },
     });
-    refreshAnchorSavedKeys();
-    setTimeout(scanAnchorButtons, 900);
-    initAnchorObserver();
+    coordinateRuntime.feature.init({ chatId: getContext()?.chatId ?? null });
+    coordinateRuntime.feature.bindInteractionCapture($in('#sp-anchor-wrap')?.[0] || null);
+    coordinateRuntime.feature.bindUi($in('#sp-anchor-wrap')?.[0] || null);
+    coordinateRuntime.feature.bindDelete($in('#sp-anchor-wrap')?.[0] || null);
+    coordinateRuntime.feature.bindGestures($in('#sp-anchor-wrap')?.[0] || null);
+    coordinateRuntime.feature.refreshSavedKeys();
+    setTimeout(() => coordinateRuntime.feature.scanButtons(), 900);
+    initChatObserver();
     // 首屏补挂：backfill 内部 refreshLinesInjection()（潜伏注入）+ refreshInlineWindow(true)
     // 统一挂线/历/点三段。历/点无独立首屏副作用，全汇流到同一防抖窗口刷新，一次即可。
     setTimeout(backfillLinesInlineBlocks, 800);
@@ -1558,7 +1572,8 @@ jQuery(async () => {
         spaceFeature.onChatChanged({ enabled: pluginEnabled() });
         linesFeature.dashed.abort();
         theaterFeature.onChatChanged();
-        if (!pluginEnabled()) return;
+        coordinateRuntime?.feature?.onChatChanged({ chatId: getContext()?.chatId ?? null, chatMetadataRef: getContext()?.chatMetadata ?? null, enabled: pluginEnabled() });
+        if (!pluginEnabled()) { coordinateRuntime?.feature?.close?.(); return; }
         currentView  = 'user';
         charViewName = null;
         outlineMode  = false;
@@ -1584,8 +1599,7 @@ jQuery(async () => {
         spaceMode = false;
         theaterMode = false;
         // theater 已在插件关闭早退前统一 reset，避免旧 owner 占住 busy。
-        anchorMode = false;
-        _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null };
+        coordinateRuntime?.feature?.close?.();
         axisState.almanacMode = false;
         axisGenerationController.reset();
         axisState._almanacSheet = 'upcoming';
@@ -1624,20 +1638,8 @@ jQuery(async () => {
         // Back-fill inline blocks for newly loaded chat（backfill 内部已含线注入 + 统一窗口刷新）
         setTimeout(backfillLinesInlineBlocks, 300);
         // 锚：换 chat → 重载已收藏键（按钮态跟着新 chat 走）+ 补齐每楼收藏入口
-        refreshAnchorSavedKeys();
-        setTimeout(scanAnchorButtons, 300);
-        // 锚自愈：按 chat_id_hash（改名不变的稳定键）兜住 CHAT_RENAMED 漏网的收藏
-        //（改名那刻插件没在听 → 旧 chatId 残留、跳转失效）。命中则静默迁到当前 chat 并刷新按钮态。
-        const _healHash = getContext()?.chatMetadata?.chat_id_hash;
-        const _healChatId = getContext()?.chatId;
-        if (_healChatId) {
-            (async () => {
-                let n = 0;
-                if (_healHash) n += await anchor.healChatByHash(_healChatId, getChatDisplayName(), _healHash).catch(() => 0);
-                n += await adoptOrphanAnchors(_healChatId, _healHash).catch(() => 0);
-                if (n > 0) { refreshAnchorSavedKeys(); if (anchorMode) renderAnchorPanel(); }
-            })().catch(err => console.warn('[SP anchor] 自愈失败', safeDiagnosticLog('axis', 'save', err)));
-        }
+        coordinateRuntime?.feature?.refreshSavedKeys();
+        setTimeout(() => coordinateRuntime?.feature?.scanButtons(), 300);
         // Surface memory schema-migration notice, if any (once per upgraded chat)
         setTimeout(checkMemoryMigrationNotice, 500);
         // 跨设备冲突：本机和云端各有一份不同的点线面间 → 弹窗二选一（延后到面板/主题就绪）
@@ -1683,16 +1685,22 @@ jQuery(async () => {
         const token = automationGate.claim({
             scopeId: getContext().chatId,
             messageId: Number(messageId),
-            modules: Object.values(AUTOMATION_MODULES),
+            modules: Object.values(AUTOMATION_MODULES).filter(module => module !== AUTOMATION_MODULES.LINES),
         });
         if (token) _timeTravelClaimTokens.set(session.sessionId, token);
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravelPreflight);
+    if (_stListeners.received) eventSource.removeListener?.(event_types.MESSAGE_RECEIVED, _stListeners.received);
+    _stListeners.received = (messageId, type) => {
+        linesFeature.onMessageReceived({ messageId: Number(messageId), type });
+    };
+    eventSource.on(event_types.MESSAGE_RECEIVED, _stListeners.received);
     if (_stListeners.char) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     _stListeners.char = async (messageId, type) => {
         if (!pluginEnabled()) return;   // 插件总关：不补锚点 / 不挂楼内块 / 不推进 / 不生成
+        coordinateRuntime?.feature?.onCharacterRendered({ messageId: Number(messageId), type });
         // 锚收藏入口独立于线：不受 linesEnabled 影响，新楼渲染后补按钮
-        setTimeout(scanAnchorButtons, 150);
+        setTimeout(() => coordinateRuntime?.feature?.scanButtons(), 150);
         // 历·七天条：独立于线主开关，每次楼层渲染都把七天条补挂到最新 AI 楼（只读，无生成）
         syncLatestAlmanacBlock();
         syncLatestScheduleBlock();   // 点·日程条：同上，随新楼补挂（只读）
@@ -1862,12 +1870,13 @@ jQuery(async () => {
         const stripExt = v => String(v ?? '').replace(/\.jsonl$/i, '');
         const oldId = stripExt(data?.oldFileName), newId = stripExt(data?.newFileName);
         if (!oldId || !newId) return;
+        coordinateRuntime?.feature?.onChatRenamed({ oldId, newId });
         try {
             // 改名后重载 chat，chat_id_hash 已随文件搬到新 chat 上；顺手传进去补到收藏上，
             // 让后续分桶/自愈有稳定键（改名多少次都并一个桶）。
             const hash = getContext()?.chatMetadata?.chat_id_hash ?? null;
-            const n = await anchor.renameChatId(oldId, newId, newId, hash);
-            if (n && anchorMode) renderAnchorPanel();
+            const n = await coordinateRuntime?.feature?.renameChatId(oldId, newId, newId, hash);
+            if (n) coordinateRuntime?.feature?.open('chars');
         } catch (err) { console.warn('[7dayscal] 坐标改名同步失败', safeDiagnosticLog('axis', 'save', err)); }
     };
     eventSource.on(event_types.CHAT_RENAMED, _stListeners.rename);
@@ -1950,7 +1959,7 @@ function _abortAllBackground() {
     if (outlineMode) outlineFeature.chat.load();
 }
 
-// 插件总开关落地。关：藏悬浮球、清所有楼内块与锚点入口（由 refreshInlineWindow/scanAnchorButtons 内部闸兜底）、
+// 插件总开关落地。关：藏悬浮球、清所有楼内块与坐标入口（由各 feature 内部闸兜底）、
 // 断所有后台任务、撤两路潜伏注入。不关面板——用户往往正站在设置里切它，留着好即时切回。
 // 开：按各子开关恢复——显示悬浮球、重挂楼内块与两路注入、补锚点入口。事件监听不注销，靠各 listener 的 pluginEnabled() 闸空转。
 function applyPluginEnabled(on) {
@@ -1961,13 +1970,14 @@ function applyPluginEnabled(on) {
         try { backfillLinesInlineBlocks(); } catch {}   // 重挂线/历/点楼内块 + 重设线潜伏注入
         try { outlineFeature.injection.refresh(); } catch {}       // 重设大纲潜伏注入
         try { refreshStoryClockInjection(); } catch {}    // 重设时间戳注入
-        try { scanAnchorButtons(); } catch {}             // 补回锚点收藏入口
+        try { coordinateRuntime?.feature?.refreshSavedKeys(); coordinateRuntime?.feature?.scanButtons(); } catch {} // 补回锚点收藏入口
         try { refreshInlineWindow(true); } catch {}
         maybeApplyBoundCalendarTemplate().catch(error => {
             console.error('[SP calendar] 重新启用后角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
     } else {
+        try { coordinateRuntime?.feature?.close?.(); } catch {}
         $(`#${FAB_ID}`).css('display', 'none');
         try { _clearAllInlineBoxes(); } catch {}
         _abortAllBackground();
@@ -2677,6 +2687,9 @@ const _DEFAULT_STORY_CLOCK_PROMPT = DEFAULT_STORY_CLOCK_PROMPT;
 function runAnchorAftermath() {
     syncLatestAlmanacBlock();
     syncLatestScheduleBlock();
+    const _linesFloorId = (getContext().chat?.length ?? 0) - 1;
+    const _linesDay = almTodayAnchor();
+    void linesFeature.onDateAftermath({ messageId: _linesFloorId, chatId: getContext().chatId, day: _linesDay ? `${+_linesDay.month}-${+_linesDay.day}` : null });
     if (axisState.almanacMode) renderAlmanacPanel();
     // 点·后台自动跟随「今天」：仅在开关开时才自动重排点（每次一 API）；关（默认）时点原地不动，
     // 用户想对齐今天时去点面板手动刷新即可。syncPointToToday 内部还有「点从未生成过就 no-op」守卫，双保险。
@@ -2710,253 +2723,7 @@ function schedulePointNeedsSync() {
 // 绝不占用 pointState.isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
 let _autoRegenSchedAbort = null;
 async function syncPointToToday(auto = false, travelContext = null) { return pointController.syncPointToToday(auto, travelContext); }
-// 楼层头部（char 名旁）挂一枚「坐标」按钮，点一下 = 抓 live .mes_text.innerHTML 快照存服务器。
-// 已收藏则点按跳锚面板定位。按钮态靠内存里的 _anchorSavedKeys（`chatId::mesid`）同步。
-// 扫描幂等：已有按钮的楼跳过；靠 CHAR_MSG_RENDERED / CHAT_CHANGED / MutationObserver 三路补齐。
-
-const ANCHOR_SVG_INNER = '<path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/>';
-function anchorSvg(cls) {
-    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ANCHOR_SVG_INNER}</svg>`;
-}
-
-const anchorFloorKey = (chatId, mesid) => `${chatId ?? ''}::${mesid ?? ''}`;
-
-function getChatDisplayName() {
-    const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name');
-    const v = el?.value || el?.textContent?.trim();
-    if (v) return v;
-    return getContext().chatId || '当前聊天';
-}
-
-// 重载「已收藏楼层键」缓存（异步读坐标索引），并把当前 DOM 里的按钮态刷成一致。
-async function refreshAnchorSavedKeys() {
-    try {
-        const items = await anchor.getAllItems();
-        _anchorSavedKeys = new Set(items.map(it => anchorFloorKey(it.chatId, it.messageId)));
-    } catch (err) { console.warn('[SP anchor] 读取已收藏键失败', safeDiagnosticLog('axis', 'request', err)); return; }
-    const chatId = getContext().chatId;
-    document.querySelectorAll('#chat .mes .sp-anchor-btn').forEach(btn => {
-        const mid = btn.closest('.mes')?.getAttribute('mesid');
-        const saved = _anchorSavedKeys.has(anchorFloorKey(chatId, mid));
-        btn.classList.toggle('sp-anchor-saved', saved);
-        btn.title = saved ? '已收藏 · 点击取消' : '收藏此楼';
-    });
-}
-
-// 给每条 AI 楼补「收藏此楼」按钮（幂等）。关掉入口开关则清干净。
-function scanAnchorButtons() {
-    if (!pluginEnabled()) {   // 插件总关：清掉并不再补锚点入口（兜住 _anchorObserver 的突变回调）
-        document.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove());
-        return;
-    }
-    if (getSettings().anchorInlineBtn === false) {
-        document.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove());
-        return;
-    }
-    const chatId = getContext().chatId;
-    document.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => {
-        if (mes.querySelector('.sp-anchor-btn')) return;
-        const target = mes.querySelector('.mes_buttons, .extraMesButtons, .name_text')
-            || mes.querySelector('.mes_block') || mes;
-        const mid   = mes.getAttribute('mesid');
-        const saved = _anchorSavedKeys.has(anchorFloorKey(chatId, mid));
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'sp-anchor-btn' + (saved ? ' sp-anchor-saved' : '');
-        btn.title = saved ? '已收藏 · 点击取消' : '收藏此楼';
-        btn.innerHTML = anchorSvg('sp-anchor-btn-svg');
-        btn.addEventListener('click', (e) => {
-            e.preventDefault(); e.stopPropagation();
-            onAnchorButtonClick(mes);
-        });
-        target.appendChild(btn);
-    });
-}
-
-// 用 ST 自己的 messageFormatting 把这楼的原始文本重新渲染一遍，从结果里抠出 <style> 块。
-// 这是美化 CSS 最可靠的来源：正则替换出的 <style> 经 ST 管线会得到 .mes_text .custom-* 选择器，
-// 但落进 DOM 后常被页面优化机制（酒馆助手等）挪走去重，收藏时楼内已经没有了；而 messageFormatting
-// 是纯字符串函数，随时能重放出完整带样式的 HTML，不依赖页面此刻的样式放在哪。
-function collectMessageStyles(messageId) {
-    try {
-        const ctx = getContext();
-        const msg = ctx?.chat?.[messageId];
-        if (!msg || typeof ctx?.messageFormatting !== 'function') return '';
-        const html = ctx.messageFormatting(String(msg.mes ?? ''), msg.name, !!msg.is_system, !!msg.is_user, messageId);
-        return [...String(html).matchAll(/<style>([\s\S]*?)<\/style>/gi)].map(m => m[1]).join('\n');
-    } catch { return ''; }
-}
-
-// 收集页面里作用于消息美化的 CSS 规则（选择器含 .custom- 或 .mes_text 的），冻进快照。
-// 背景：正则美化输出的 <style> 经 ST 管线（encodeStyleTags→DOMPurify 改名 class→decodeStyleTags 加
-// .mes_text 前缀）后会被酒馆助手等从楼层里挪走去重，收藏时楼内已无 style，只剩 custom-* 结构（中间态）。
-// 快照渲染在 :host{all:initial} 的 Shadow DOM 里，页面样式够不着，必须在收藏时把这些规则一并带走。
-// 注意：不能用 `if (r.cssRules) 递归` 判断分组规则——支持 CSS nesting 的浏览器里普通样式规则
-// 也带（空的）cssRules，会把所有规则都当成分组跳过；这里以 selectorText 有无区分。
-function collectCustomCss() {
-    const seen = new Set();
-    const walk = (rules, sink) => {
-        for (const r of rules) {
-            try {
-                const sel = r.selectorText;
-                if (sel) {
-                    // 只收 .custom-* 或 .mes_text 的**后代**规则；裸 .mes_text{} 是容器级主题规则，
-                    // 冻进快照会反过来命中快照容器本身（它也挂着 mes_text class），顶掉容器内边距
-                    const ok = sel.includes('.custom-') || /\.mes_text\s+\S/.test(sel);
-                    if (ok && !seen.has(r.cssText)) {
-                        seen.add(r.cssText);
-                        sink.push(r.cssText);
-                    }
-                } else if (r.cssRules && r.cssRules.length) {
-                    // @media/@supports/@layer 等分组：保留条件头，只收里面命中的规则
-                    const inner = [];
-                    walk(r.cssRules, inner);
-                    if (inner.length) {
-                        const head = String(r.cssText || '').split('{', 1)[0].trim();
-                        sink.push(head ? `${head} {\n${inner.join('\n')}\n}` : inner.join('\n'));
-                    }
-                }
-            } catch { }
-        }
-    };
-    const out = [];
-    for (const sheet of document.styleSheets) {
-        try { if (sheet.cssRules) walk(sheet.cssRules, out); } catch { }   // 跨域表读不了，跳过
-    }
-    return out.join('\n');
-}
-
-// 收藏前把楼层里"活的"渲染冻成静态 HTML，再交给 saveSnapshot 序列化。
-// 关键：酒馆助手(TavernHelper/JS-Slash-Runner)把角色卡状态栏渲染成 <div class="TH-render"><iframe srcdoc>，
-// 真正的状态栏 DOM 活在 iframe.contentDocument 里；直接取 .mes_text.innerHTML 只拿到空的 <iframe> 壳，
-// 序列化后状态栏就没了（且 stripRenderBoxes 还会把 .TH-render 整块删掉）。这里在克隆体上就地把每个
-// same-origin iframe 的 contentDocument 正文 + <style> 一并搬进一个静态容器，替换掉 iframe，状态栏遂被冻存。
-// 跨域/取不到 doc 的 iframe 保持原样（后续 stripRenderBoxes 兜底删除），不至于报错。
-function captureFloorHtml(textEl, messageId = null) {
-    if (!textEl) return '';
-    let clone;
-    try { clone = textEl.cloneNode(true); }
-    catch { return textEl.innerHTML; }
-    // 克隆体里的 iframe 是空壳，得按顺序对应回源 DOM 里那些"活"的 iframe 去读 contentDocument。
-    const liveFrames  = textEl.querySelectorAll('.TH-render iframe, iframe');
-    const cloneFrames = clone.querySelectorAll('.TH-render iframe, iframe');
-    cloneFrames.forEach((cf, i) => {
-        const live = liveFrames[i];
-        let inner = '';
-        try {
-            const doc = live && (live.contentDocument || live.contentWindow?.document);
-            if (doc && doc.body) {
-                const styles = [...doc.querySelectorAll('style')].map(st => st.outerHTML).join('');
-                inner = styles + doc.body.innerHTML;
-            }
-        } catch { inner = ''; }   // 跨域读不到 → 留空，交给下游按 .TH-render 删除
-        if (!inner) return;
-        const frozen = document.createElement('div');
-        frozen.className = 'sp-anchor-frozen-render';
-        frozen.innerHTML = inner;
-        // 连同外层 .TH-render 一起换掉，避免 stripRenderBoxes 把冻好的内容再删一遍
-        const box = cf.closest('.TH-render') || cf;
-        box.replaceWith(frozen);
-    });
-    let css = '';
-    try { css = collectCustomCss(); } catch { css = ''; }
-    let msgCss = '';
-    try { msgCss = collectMessageStyles(messageId); } catch { msgCss = ''; }
-    // data-sp-cap 是捕获代码版本标记（DOMPurify 会保留 data- 属性），排查"改了没生效"时看它
-    return '<div hidden data-sp-cap="3"></div>'
-        + (msgCss ? `<style>${msgCss}</style>` : '')
-        + (css ? `<style>${css}</style>` : '')
-        + clone.innerHTML;
-}
-
-// 孤儿收藏收养（hash 链断掉的旧数据）：拉当前角色现存聊天文件清单，
-// 仅当"该角色只有当前这一个聊天"时，把挂在已消失旧名下、charName 相同的收藏认领进来。
-// 详见 anchor.adoptOrphans 的判据说明。群聊跳过（无 avatar 概念）。
-async function adoptOrphanAnchors(currentChatId, chatIdHash) {
-    const ctx = getContext();
-    if (!currentChatId || ctx.groupId) return 0;
-    const avatar = ctx.characters?.[ctx.characterId]?.avatar;
-    const charName = ctx.name2;
-    if (!avatar || !charName) return 0;
-    let list;
-    try {
-        const res = await fetch('/api/characters/chats', {
-            method : 'POST',
-            headers: ctx.getRequestHeaders(),
-            body   : JSON.stringify({ avatar_url: avatar, simple: true }),
-        });
-        if (!res.ok) return 0;
-        list = await res.json();
-    } catch { return 0; }
-    const rows = Array.isArray(list) ? list : Object.values(list || {});
-    const existing = new Set(
-        rows.map(c => String(c?.file_name || '').replace(/\.jsonl$/i, '')).filter(Boolean)
-    );
-    // 该角色不止一个聊天 → 孤儿归属有歧义，不动
-    if (existing.size !== 1 || !existing.has(String(currentChatId))) return 0;
-    return anchor.adoptOrphans(charName, existing, currentChatId, getChatDisplayName(), chatIdHash ?? null);
-}
-
-async function onAnchorButtonClick(mes) {
-    const ctx    = getContext();
-    const chatId = ctx.chatId ?? null;
-    const mid    = mes.getAttribute('mesid');
-    const key    = anchorFloorKey(chatId, mid);
-    const btn    = mes.querySelector('.sp-anchor-btn');
-    if (_anchorSavedKeys.has(key)) {                                        // 已收藏 → 再点即取消
-        if (btn) btn.classList.add('sp-anchor-busy');
-        try {
-            const ids = await anchor.findItemIdsByFloor(chatId, +mid);      // 同楼可能多条，全删
-            for (const id of ids) await anchor.deleteItem(id);
-            _anchorSavedKeys.delete(key);
-            if (btn) { btn.classList.remove('sp-anchor-saved'); btn.title = '收藏此楼'; }
-            showToast('已取消收藏');
-            if (anchorMode) renderAnchorPanel();
-        } catch (err) {
-            console.error('[SP anchor] 取消收藏失败', safeDiagnosticLog('axis', 'save', err));
-            showToast('取消收藏失败：' + (err?.message || '未知错误'), null, true);
-        } finally {
-            if (btn) btn.classList.remove('sp-anchor-busy');
-        }
-        return;
-    }
-    const textEl = mes.querySelector('.mes_text');
-    if (!textEl) { showToast('找不到楼层内容', null, true); return; }
-    if (btn) btn.classList.add('sp-anchor-busy');
-    try {
-        const savedItem = await anchor.saveSnapshot({
-            chatId,
-            chatIdHash: ctx?.chatMetadata?.chat_id_hash ?? null,   // 改名不变的稳定键，落到每条上，供分桶/自愈用
-            chatName  : getChatDisplayName(),
-            charName  : mes.getAttribute('ch_name') || ctx.name2 || '角色',
-            messageId : mid,
-            floorIndex: Number.isFinite(+mid) ? +mid : null,
-        }, captureFloorHtml(textEl, Number.isFinite(+mid) ? +mid : null));
-        _anchorSavedKeys.add(key);
-        if (btn) { btn.classList.add('sp-anchor-saved'); btn.title = '已收藏 · 点击取消'; }
-        showToast('已收藏此楼', () => openAnchorAtChat(chatId));
-        if (anchorMode) renderAnchorPanel();
-        anchor.checkSize()
-            .then(r => { if (r.over) showToast(`收藏已占 ${anchor.formatBytes(r.bytes)}，可在坐标面板清理`, null, true); })
-            .catch(() => {});
-    } catch (err) {
-        console.error('[SP anchor] 收藏失败', safeDiagnosticLog('axis', 'save', err));
-        showToast('收藏失败：' + (err?.message || '未知错误'), null, true);
-    } finally {
-        if (btn) btn.classList.remove('sp-anchor-busy');
-    }
-}
-
-// 打开锚面板并定位到某 chat 的收藏列表（第三层抽屉；charName 由 renderAnchorItems 回填）
-function openAnchorAtChat(chatId) {
-    _anchorTagFilter = null;   // 直达某聊天层：清筛，免得刚存的楼被旧筛选藏掉
-    _anchorView = { level: 'items', charName: null, chatId, itemId: null };
-    showPanel();
-    if (anchorMode) renderAnchorPanel();
-    else $in('.sp-view-btn[data-view="anchor"]').trigger('click');
-}
-
-// 跨模块跳转只复用现有侧栏切换，并在目标 DOM 就绪后做可选预填；它不发送消息，也不建立第二套路由状态。
+// 跨模块跳转只复用现有侧栏切换，并在目标 DOM 就绪后做可选预填。
 function openPluginViewWithPrefill(view, inputSelector = '', prefill = '') {
     showPanel();
     const $tab = $in(`.sp-side-tab.sp-view-btn[data-view="${view}"]`);
@@ -2974,30 +2741,18 @@ function openPluginViewWithPrefill(view, inputSelector = '', prefill = '') {
     }, 0));
 }
 
-// #chat 变动（swipe/编辑/重渲染会抹掉注入的按钮）→ 防抖补齐
-let _anchorObserver  = null;
-let _anchorScanTimer = null;
-// 盯 #chat 的共用 observer：既给每楼补「收藏」按钮，也在楼层结构变动时重算渲染窗口
-// （新楼进窗要 observe、删楼/swipe 要重定最新楼）。块的挂/卸本身交给渲染窗口的 IntersectionObserver，
-// 这里只负责「结构变了 → 重算窗口」，不再逐块打地鼠。
-function initAnchorObserver() {
+function initChatObserver() {
     const chat = document.querySelector('#chat');
-    if (!chat) { setTimeout(initAnchorObserver, 600); return; }
-    _anchorObserver?.disconnect();
-    _anchorObserver = new MutationObserver(() => {
-        clearTimeout(_anchorScanTimer);
-        _anchorScanTimer = setTimeout(() => {
-            scanAnchorButtons();
-            // 流式中不重算窗口：ST 每 token 重写 .mes_text，此时算了也会被冲；等流式结束
-            // （token 停 1.5s／GENERATION_ENDED／CHARACTER_MESSAGE_RENDERED）统一刷。按钮扫描不受此限（按钮在 .mes 头部）。
-            if (linesFeature.isStreaming()) return;
-            refreshInlineWindow();   // 结构变 → 防抖重算深度窗 + 观察新楼（幂等，已挂的框不动）
+    if (!chat) { setTimeout(initChatObserver, 600); return; }
+    let timer = null;
+    new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            coordinateRuntime?.feature?.onChatDomChanged();
+            if (!linesFeature.isStreaming()) refreshInlineWindow();
         }, 400);
-    });
-    _anchorObserver.observe(chat, { childList: true, subtree: true });
+    }).observe(chat, { childList: true, subtree: true });
 }
-
-// ─── Extensions panel ─────────────────────────────────────────────────────────
 
 function injectExtButton() {
     // No drawer content — panel opened via magic wand or FAB
@@ -4027,165 +3782,6 @@ function injectModal() {
     // ── 棱（小剧场）事件（全部委托到注入式 ui；旧委托仅作为无 UI 兼容路径）──
     const $theater = $in('#sp-theater-wrap');
     theaterFeature.bindUi($theater);
-    // ── 锚（收藏楼层）事件（委托到 #sp-anchor-wrap，三层抽屉动态重渲染）──
-    const $anchor = $in('#sp-anchor-wrap');
-    $anchor.on('click', '.sp-anchor-char-card', function () {
-        _anchorView = { level: 'chats', charName: $(this).attr('data-char'), chatId: null, itemId: null };
-        renderAnchorPanel();
-    });
-    $anchor.on('click', '.sp-anchor-chat-card', function () {
-        _anchorView = { level: 'items', charName: _anchorView.charName, chatId: $(this).attr('data-chatid'), itemId: null };
-        renderAnchorPanel();
-    });
-    $anchor.on('click', '.sp-anchor-item-card', function () {
-        _anchorFullTagEdit = false;   // 每次新进全文都从只读态开始
-        _anchorView = { level: 'full', charName: _anchorView.charName, chatId: _anchorView.chatId, itemId: $(this).attr('data-id') };
-        renderAnchorPanel();
-    });
-    $anchor.on('click', '.sp-anchor-back', function () {
-        const to = $(this).attr('data-to');
-        if (to === 'items')      _anchorView = { level: 'items', charName: _anchorView.charName, chatId: $(this).attr('data-chatid'), itemId: null };
-        else if (to === 'chats') _anchorView = { level: 'chats', charName: $(this).attr('data-char'), chatId: null, itemId: null };
-        else                     _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null };
-        renderAnchorPanel();
-    });
-    $anchor.on('click', '.sp-anchor-fullscreen', function () { toggleAnchorFullscreen(this); });
-    // 全屏浮卡拖拽（PC 专属）：拖右下角标缩放；拖头部空白处移动（排除头部按钮，避免和返回/退出/删除冲突）。
-    $anchor.on('mousedown', '.sp-anchor-fs-resize', function (e) { _anchorFsGestureStart('resize', e); });
-    $anchor.on('mousedown', '.sp-anchor-fs-on .sp-anchor-head', function (e) {
-        if ($(e.target).closest('button, .sp-icon-btn, .sp-anchor-back').length) return;
-        _anchorFsGestureStart('move', e);
-    });
-    $anchor.on('click', '.sp-anchor-tag-edit', function () {
-        if (!_anchorCurrentItem) return;
-        _anchorFullTagEdit = true;
-        renderAnchorFull(_anchorCurrentItem.id);
-    });
-    // 全文内联标签编辑：chip 点选即写库（就地改 it.tags，连点不丢）、新建即选中、完成收起。
-    $anchor.on('click', '.sp-anchor-ftag-chip', async function () {
-        const it = _anchorCurrentItem;
-        if (!it) return;
-        const id = $(this).attr('data-id');
-        const cur = new Set(Array.isArray(it.tags) ? it.tags : []);
-        if (cur.has(id)) cur.delete(id); else cur.add(id);
-        it.tags = [...cur];
-        $(this).toggleClass('sp-tp-chip-on');   // 就地反馈，不整体重渲（避免网络往返闪烁）
-        try { await anchor.setItemTags(it.id, [...cur]); }
-        catch (err) { showToast('保存标签失败：' + (err?.message || ''), null, true); }
-    });
-    $anchor.on('click', '.sp-anchor-ftag-swatch', function () {
-        const scope = $(this).closest('.sp-anchor-ftag-new');
-        scope.find('.sp-anchor-ftag-swatch').removeClass('sp-tp-swatch-on');
-        $(this).addClass('sp-tp-swatch-on');
-    });
-    $anchor.on('click', '.sp-anchor-ftag-add', async function () {
-        const it = _anchorCurrentItem;
-        if (!it) return;
-        const scope = $(this).closest('.sp-anchor-ftag-new');
-        const nm = String(scope.find('.sp-anchor-ftag-name').val() || '').trim();
-        if (!nm) { scope.find('.sp-anchor-ftag-name').trigger('focus'); return; }
-        const color = scope.find('.sp-anchor-ftag-swatch.sp-tp-swatch-on').attr('data-color') || ANCHOR_TAG_PALETTE[0];
-        try {
-            const tag = await anchor.addTag(nm, color);   // 同名去重：返回既有
-            const cur = new Set(Array.isArray(it.tags) ? it.tags : []);
-            if (tag) cur.add(tag.id);
-            it.tags = [...cur];
-            await anchor.setItemTags(it.id, [...cur]);
-            renderAnchorFull(it.id);   // 重渲以显示新 chip（已选中）
-        } catch (err) { showToast('新建标签失败：' + (err?.message || ''), null, true); }
-    });
-    $anchor.on('keydown', '.sp-anchor-ftag-name', function (ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); $(this).closest('.sp-anchor-ftag-new').find('.sp-anchor-ftag-add').trigger('click'); }
-    });
-    $anchor.on('click', '.sp-anchor-ftag-done', function () {
-        _anchorFullTagEdit = false;
-        if (_anchorCurrentItem) renderAnchorFull(_anchorCurrentItem.id);
-    });
-    $anchor.on('click', '.sp-anchor-del', async function () {
-        const it = _anchorCurrentItem;
-        if (!it) return;
-        if (!await spConfirm({ title: '删除收藏', body: '确定删除这条收藏吗？原楼层不受影响。' })) return;
-        await anchor.deleteItem(it.id);
-        _anchorSavedKeys.delete(anchorFloorKey(it.chatId, it.messageId));
-        // 若删的是当前 chat 的楼，同步该楼收藏按钮态
-        if (String(getContext().chatId) === String(it.chatId)) {
-            document.querySelectorAll('#chat .mes .sp-anchor-btn').forEach(btn => {
-                const mid = btn.closest('.mes')?.getAttribute('mesid');
-                if (String(mid) === String(it.messageId)) { btn.classList.remove('sp-anchor-saved'); btn.title = '收藏此楼'; }
-            });
-        }
-        showToast('已删除收藏');
-        _anchorView = { level: 'items', charName: _anchorView.charName, chatId: it.chatId, itemId: null };
-        renderAnchorPanel();
-    });
-
-    // ── 标签筛选栏（三层通用）：点标签筛、点「全部」清 ──
-    $anchor.on('click', '.sp-anchor-filter-chip', function () {
-        const id = $(this).attr('data-id') || null;
-        _anchorTagFilter = (id && id === _anchorTagFilter) ? null : id;   // 再点已选=清除
-        renderAnchorPanel();
-    });
-
-    // ── 标签管理面：入口 + 建/改名/改色/删 ──
-    $anchor.on('click', '.sp-anchor-tagmgr-btn', function () {
-        _tagMgrEditId = null; _tagMgrDelId = null;
-        _anchorView = { level: 'tags', charName: null, chatId: null, itemId: null };
-        renderAnchorPanel();
-    });
-    // 色板选色：仅在所属行内高亮（新建行 / 某编辑行各自独立），保存时现读高亮项，无需额外状态
-    $anchor.on('click', '.sp-tagmgr-swatch', function () {
-        const scope = $(this).closest('.sp-anchor-tagmgr-new, .sp-anchor-tagmgr-row');
-        scope.find('.sp-tagmgr-swatch').removeClass('sp-tp-swatch-on');
-        $(this).addClass('sp-tp-swatch-on');
-    });
-    const _tagMgrPickedColor = (scopeEl) => scopeEl.find('.sp-tagmgr-swatch.sp-tp-swatch-on').attr('data-color') || ANCHOR_TAG_PALETTE[0];
-    $anchor.on('click', '.sp-tagmgr-new-add', async function () {
-        const scope = $(this).closest('.sp-anchor-tagmgr-new');
-        const nm = String(scope.find('.sp-tagmgr-new-name').val() || '').trim();
-        if (!nm) { scope.find('.sp-tagmgr-new-name').trigger('focus'); return; }
-        try { await anchor.addTag(nm, _tagMgrPickedColor(scope)); renderAnchorTagManager(); }
-        catch (err) { showToast('新建标签失败：' + (err?.message || ''), null, true); }
-    });
-    $anchor.on('keydown', '.sp-tagmgr-new-name', function (ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); $(this).closest('.sp-anchor-tagmgr-new').find('.sp-tagmgr-new-add').trigger('click'); }
-    });
-    $anchor.on('click', '.sp-tagmgr-edit', function () {
-        _tagMgrEditId = $(this).closest('.sp-anchor-tagmgr-row').attr('data-id');
-        _tagMgrDelId = null;
-        renderAnchorTagManager();
-    });
-    $anchor.on('click', '.sp-tagmgr-cancel', function () { _tagMgrEditId = null; renderAnchorTagManager(); });
-    $anchor.on('keydown', '.sp-tagmgr-name-input', function (ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); $(this).closest('.sp-anchor-tagmgr-row').find('.sp-tagmgr-save').trigger('click'); }
-    });
-    $anchor.on('click', '.sp-tagmgr-save', async function () {
-        const row = $(this).closest('.sp-anchor-tagmgr-row');
-        const id  = row.attr('data-id');
-        const nm  = String(row.find('.sp-tagmgr-name-input').val() || '').trim();
-        const color = _tagMgrPickedColor(row);
-        try {
-            if (nm) await anchor.renameTag(id, nm);
-            await anchor.recolorTag(id, color);
-            _tagMgrEditId = null;
-            renderAnchorTagManager();
-        } catch (err) { showToast('保存标签失败：' + (err?.message || ''), null, true); }
-    });
-    $anchor.on('click', '.sp-tagmgr-del', function () {
-        _tagMgrDelId = $(this).closest('.sp-anchor-tagmgr-row').attr('data-id');
-        _tagMgrEditId = null;
-        renderAnchorTagManager();
-    });
-    $anchor.on('click', '.sp-tagmgr-del-no', function () { _tagMgrDelId = null; renderAnchorTagManager(); });
-    $anchor.on('click', '.sp-tagmgr-del-yes', async function () {
-        const id = $(this).closest('.sp-anchor-tagmgr-row').attr('data-id');
-        try {
-            const n = await anchor.deleteTag(id);
-            if (_anchorTagFilter === id) _anchorTagFilter = null;   // 正筛的标签被删 → 清筛
-            _tagMgrDelId = null;
-            showToast(`已删除标签${n ? `（从 ${n} 条收藏移除）` : ''}`);
-            renderAnchorTagManager();
-        } catch (err) { showToast('删除标签失败：' + (err?.message || ''), null, true); }
-    });
 
     // ── 历（日历）事件（委托到 #sp-almanac-wrap，两个 sheet 动态重渲染）──
     const $almanac = $in('#sp-almanac-wrap');
@@ -4462,7 +4058,6 @@ function injectModal() {
                 linesMode = false;
                 spaceMode = false;
                 theaterMode = false;
-                anchorMode = false;
                 axisState.almanacMode = false;
                 $in('#sp-body').hide();
                 $in('#sp-lines-wrap').hide();
@@ -4482,7 +4077,6 @@ function injectModal() {
                 outlineMode = false;
                 spaceMode = false;
                 theaterMode = false;
-                anchorMode = false;
                 axisState.almanacMode = false;
                 $in('#sp-body').hide();
                 $in('#sp-outline-wrap').hide();
@@ -4509,7 +4103,6 @@ function injectModal() {
                 outlineMode = false;
                 linesMode = false;
                 theaterMode = false;
-                anchorMode = false;
                 axisState.almanacMode = false;
                 $in('#sp-body').hide();
                 $in('#sp-outline-wrap').hide();
@@ -4529,7 +4122,6 @@ function injectModal() {
                 outlineMode = false;
                 linesMode = false;
                 spaceMode = false;
-                anchorMode = false;
                 axisState.almanacMode = false;
                 $in('#sp-body').hide();
                 $in('#sp-outline-wrap').hide();
@@ -4545,11 +4137,6 @@ function injectModal() {
                 return;
             }
             if (view === 'anchor') {
-                if (anchorMode) return;
-                anchorMode = true;
-                _anchorTagFilter = null;   // 进 anchor 视图复位筛选；层间导航才保留
-                _tagMgrEditId = null; _tagMgrDelId = null;
-                _anchorFullTagEdit = false;
                 outlineMode = false;
                 linesMode = false;
                 spaceMode = false;
@@ -4564,7 +4151,7 @@ function injectModal() {
                 $in('#sp-anchor-wrap').css('display', 'flex');
                 $in('#sp-sub-toggle').hide();
                 $in('#sp-content-title').text('坐标');
-                renderAnchorPanel();
+                coordinateRuntime?.feature?.open('chars');
                 return;
             }
             if (view === 'almanac') {
@@ -4574,7 +4161,6 @@ function injectModal() {
                 linesMode = false;
                 spaceMode = false;
                 theaterMode = false;
-                anchorMode = false;
                 $in('#sp-body').hide();
                 $in('#sp-outline-wrap').hide();
                 $in('#sp-lines-wrap').hide();
@@ -4592,7 +4178,7 @@ function injectModal() {
             if (linesMode)   { linesMode   = false; $in('#sp-lines-wrap').hide(); }
             if (spaceMode)   { spaceMode   = false; $in('#sp-space-wrap').hide(); }
             if (theaterMode) { theaterMode = false; $in('#sp-theater-wrap').hide(); }
-            if (anchorMode)  { anchorMode  = false; $in('#sp-anchor-wrap').hide(); }
+            coordinateRuntime?.feature?.close?.(); $in('#sp-anchor-wrap').hide();
             if (axisState.almanacMode) { axisState.almanacMode = false; $in('#sp-almanac-wrap').hide(); }
             $in('#sp-body').show();
             $in('#sp-sub-toggle').show();
@@ -4807,7 +4393,7 @@ function injectModal() {
     $in('#sp-anchor-inline-btn').on('change', function () {
         getSettings().anchorInlineBtn = this.checked;
         saveSettingsDebounced();
-        scanAnchorButtons();
+        coordinateRuntime?.feature?.scanButtons();
     });
     // Inline model list: pick an item → write to input + refresh active highlight
     $in('#sp-model-list-items').on('click', '.sp-model-list-item', function () {
@@ -5089,7 +4675,7 @@ function refreshCharPinIcon() {
 // 无条件隐藏所有非点 wrap（不靠 mode 标志守卫）：CHAT_CHANGED 在面板隐藏时会把标志清成
 // false 却不动 DOM，若这里再按标志判断就会漏隐藏 → 出现「点 + 坐标」同屏。故一律硬隐藏。
 function resetPanelToScheduleHome() {
-    outlineMode = linesMode = spaceMode = theaterMode = anchorMode = axisState.almanacMode = false;
+    outlineMode = linesMode = spaceMode = theaterMode = axisState.almanacMode = false;
     $in('#sp-outline-wrap').hide();
     $in('#sp-lines-wrap').hide();
     $in('#sp-space-wrap').hide();
@@ -5158,7 +4744,7 @@ function closePanel() {
     // 关闭主面板时取消活动确认，但独立弹窗宿主本身不隐藏。
     // 收全屏残留：全屏中经背景/FAB 关面板时，若不清这些类，body 的滚动锁会滞留（酒馆卡死），
     // 且 .sp-sheet 的 sp-fs-flat 会带到下次打开（手机右移半屏）。棱、坐标一并清。
-    _clearAnchorFs();
+    coordinateRuntime?.feature?.close?.();
     theaterFeature.onPanelClosed();
     _activeSpConfirmCancel?.();
     _activeStoreConflictFinish?.('defer');
@@ -6336,410 +5922,6 @@ function loadCachedLinesForCurrentChat(view, charName) {
     return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  锚·收藏楼层面板：三层抽屉（聊天桶 → 缩略 → 全文）+ Shadow DOM 全文渲染
-// ═══════════════════════════════════════════════════════════════════════════
-
-function setAnchorBody(html) { $in('#sp-anchor-body').html(html); }
-
-
-// ─── 坐标·标签 ─────────────────────────────────────────────────────────────────
-// 8 个低饱和预设色 key；tag 只存 color=key，实际配色由 style.css 的
-// `.sp-anchor-tagchip[data-color="key"]` 定义（日/夜自洽）。JS 侧只用 key 列色板供选择器画色块。
-const ANCHOR_TAG_PALETTE = ['rose', 'amber', 'olive', 'teal', 'indigo', 'plum', 'slate', 'clay'];
-
-// 单标签筛选：模块级状态（null=不筛）。进入 anchor 视图复位，层间导航保留。
-let _anchorTagFilter = null;
-// 标签管理面的行内编辑/删除态（只在管理面内有意义）：正在改名改色的 id / 待确认删除的 id
-let _tagMgrEditId = null;
-let _tagMgrDelId  = null;
-
-// 当前单标签筛选下，某条 item 是否入选（无筛选=全入选；meta 自带 tags，无需拉快照）
-function itemMatchesFilter(it) {
-    if (!_anchorTagFilter) return true;
-    return Array.isArray(it.tags) && it.tags.includes(_anchorTagFilter);
-}
-
-// 三层通用的筛选栏：全局标签 chip + 「全部」清除项，active 高亮。无标签则不渲染。
-function renderAnchorFilterBar(tags, activeId) {
-    if (!Array.isArray(tags) || !tags.length) return '';
-    const allChip = `<button type="button" class="sp-anchor-filter-chip${!activeId ? ' sp-anchor-filter-on' : ''}" data-id="">全部</button>`;
-    const chips = tags.map(t =>
-        `<button type="button" class="sp-anchor-filter-chip sp-anchor-filter-tag${t.id === activeId ? ' sp-anchor-filter-on' : ''}" data-id="${escapeAttr(t.id)}"><span class="sp-anchor-tagchip" data-color="${escapeAttr(t.color || 'slate')}">${escapeHtml(t.name)}</span></button>`
-    ).join('');
-    return `<div class="sp-anchor-filterbar">${allChip}${chips}</div>`;
-}
-
-// item.tags(id 数组) + 标签注册表 Map(id→{name,color}) → 只读 chip 串。
-// 无标签 / 全是孤儿 id 则返回空串（配合 .sp-anchor-item-tags:empty{display:none} 布局零变化）。
-function renderTagChips(tagIds, tagMap) {
-    if (!Array.isArray(tagIds) || !tagIds.length) return '';
-    return tagIds.map(id => {
-        const t = tagMap.get(id);
-        if (!t) return '';
-        return `<span class="sp-anchor-tagchip" data-color="${escapeAttr(t.color || 'slate')}">${escapeHtml(t.name)}</span>`;
-    }).join('');
-}
-
-async function renderAnchorPanel() {
-    if (!anchorMode) return;
-    // 离开全文视图（返回/删除/切档/外部刷新到非 full）时清全屏态；停在同一 full 则不清，
-    // 由 renderAnchorFull 读 #sp-anchor-body 的 fs 类自行保留（「编辑标签」重渲即靠此不丢全屏）。
-    if (_anchorView.level !== 'full') _clearAnchorFs();
-    setAnchorBody('<div class="sp-anchor-loading"><div class="sp-spinner"></div></div>');
-    try {
-        if (_anchorView.level === 'full' && _anchorView.itemId) { await renderAnchorFull(_anchorView.itemId); return; }
-        if (_anchorView.level === 'items' && _anchorView.chatId != null) { await renderAnchorItems(_anchorView.chatId); return; }
-        if (_anchorView.level === 'tags') { await renderAnchorTagManager(); return; }
-        if (_anchorView.level === 'chats') { await renderAnchorChats(_anchorView.charName); return; }
-        await renderAnchorChars();
-    } catch (err) {
-        console.error('[SP anchor] 面板渲染失败', safeDiagnosticLog('axis', 'render', err));
-        setAnchorBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>读取收藏失败：${escapeHtml(err?.message || '未知错误')}</p></div>`);
-    }
-}
-
-// 第一层：按角色分组（同名角色会合并——收藏只存 charName 显示名、无 avatar 键，无法区分同名不同卡）
-async function renderAnchorChars() {
-    const buckets = await anchor.listByChat();
-    const tags = await anchor.getTags();
-    // L1 顶部小 head：标题「标签」+ 标签管理入口（空态也保留，好让用户随时进管理面）
-    const head = `<div class="sp-anchor-head sp-anchor-chars-head">
-        <span class="sp-anchor-head-title">标签</span>
-        <button class="sp-icon-btn sp-anchor-tagmgr-btn" title="标签管理"><i class="fa-solid fa-tags"></i></button>
-    </div>`;
-    if (!buckets.length) {
-        setAnchorBody(`${head}<div class="sp-empty"><span class="sp-anchor-empty-glyph">${anchorSvg('sp-anchor-empty-svg')}</span><p>还没有收藏的楼层</p><p class="sp-anchor-empty-hint">在聊天楼层的角色名旁点「坐标」图标即可收藏</p></div>`);
-        return;
-    }
-    // 把聊天桶再按角色归并：一个角色可能跑了多个聊天文件（多条剧情线）；先按标签过滤 items，丢空桶
-    const chars = new Map();
-    for (const b of buckets) {
-        const items = b.items.filter(itemMatchesFilter);
-        if (!items.length) continue;
-        const key = b.charName || '(未知角色)';
-        if (!chars.has(key)) chars.set(key, { charName: key, chatCount: 0, count: 0, latestTs: 0 });
-        const c = chars.get(key);
-        c.chatCount += 1;
-        c.count     += items.length;
-        const latest = items.reduce((m, it) => Math.max(m, it.ts || 0), 0);
-        if (latest > c.latestTs) c.latestTs = latest;
-    }
-    const list = [...chars.values()].sort((a, z) => z.latestTs - a.latestTs);
-    const sizeInfo = await anchor.checkSize().catch(() => null);
-    const bar = sizeInfo
-        ? `<div class="sp-anchor-sizebar${sizeInfo.over ? ' sp-anchor-sizebar-over' : ''}">已用 ${anchor.formatBytes(sizeInfo.bytes)}${sizeInfo.over ? ' · 偏大，建议清理旧收藏' : ''}</div>`
-        : '';
-    const filterBar = renderAnchorFilterBar(tags, _anchorTagFilter);
-    const cards = list.length ? list.map(c => `
-        <button class="sp-anchor-char-card" data-char="${escapeAttr(c.charName)}">
-            <span class="sp-anchor-chat-icon">${anchorSvg('sp-anchor-chat-svg')}</span>
-            <span class="sp-anchor-chat-main">
-                <span class="sp-anchor-chat-name">${escapeHtml(c.charName)}</span>
-                <span class="sp-anchor-chat-sub">${c.chatCount} 个聊天</span>
-            </span>
-            <span class="sp-anchor-chat-meta">
-                <span class="sp-anchor-chat-count">${c.count}</span>
-                <span class="sp-anchor-chat-ts">${fmtAnchorTs(c.latestTs)}</span>
-            </span>
-        </button>`).join('') : `<div class="sp-anchor-filter-empty">没有含此标签的收藏</div>`;
-    setAnchorBody(`${head}<div class="sp-anchor-scroll">${bar}${filterBar}<div class="sp-anchor-char-list">${cards}</div></div>`);
-}
-
-// 标签管理面（面板内一层，_anchorView.level='tags'）：建 / 改名 / 改色 / 删。
-// 删除是全局破坏性操作（会从所有收藏剥离该标签），故做一次轻量行内确认。
-async function renderAnchorTagManager() {
-    const tags = await anchor.getTags();
-    // 各标签被多少条收藏引用（meta 自带 tags，无需拉快照）
-    const buckets = await anchor.listByChat();
-    const usage = new Map();
-    for (const b of buckets) for (const it of b.items) {
-        if (!Array.isArray(it.tags)) continue;
-        for (const id of it.tags) usage.set(id, (usage.get(id) || 0) + 1);
-    }
-    const swatches = (activeColor) => ANCHOR_TAG_PALETTE.map(c =>
-        `<button type="button" class="sp-tagmgr-swatch${c === activeColor ? ' sp-tp-swatch-on' : ''}" data-color="${c}"><span class="sp-anchor-tagchip" data-color="${c}">A</span></button>`
-    ).join('');
-    const rows = tags.length ? tags.map(t => {
-        const n = usage.get(t.id) || 0;
-        if (_tagMgrEditId === t.id) {
-            // 编辑态：名输入 + 色板 + 保存/取消
-            return `<div class="sp-anchor-tagmgr-row sp-tagmgr-editing" data-id="${escapeAttr(t.id)}">
-                <input type="text" class="sp-tagmgr-name-input sp-input" value="${escapeAttr(t.name)}" maxlength="20">
-                <div class="sp-tagmgr-swatches">${swatches(t.color)}</div>
-                <div class="sp-tagmgr-row-actions">
-                    <button type="button" class="sp-tagmgr-save sp-mini-btn"><i class="fa-solid fa-check"></i></button>
-                    <button type="button" class="sp-tagmgr-cancel sp-mini-btn"><i class="fa-solid fa-xmark"></i></button>
-                </div>
-            </div>`;
-        }
-        if (_tagMgrDelId === t.id) {
-            // 删除确认态
-            return `<div class="sp-anchor-tagmgr-row sp-tagmgr-confirming" data-id="${escapeAttr(t.id)}">
-                <span class="sp-tagmgr-confirm-text">删除「${escapeHtml(t.name)}」？将从 ${n} 条收藏移除</span>
-                <div class="sp-tagmgr-row-actions">
-                    <button type="button" class="sp-tagmgr-del-yes sp-mini-btn sp-mini-btn-danger">删除</button>
-                    <button type="button" class="sp-tagmgr-del-no sp-mini-btn">取消</button>
-                </div>
-            </div>`;
-        }
-        return `<div class="sp-anchor-tagmgr-row" data-id="${escapeAttr(t.id)}">
-            <span class="sp-anchor-tagchip" data-color="${escapeAttr(t.color || 'slate')}">${escapeHtml(t.name)}</span>
-            <span class="sp-tagmgr-usage">${n} 条</span>
-            <div class="sp-tagmgr-row-actions">
-                <button type="button" class="sp-tagmgr-edit sp-icon-btn" title="改名 / 改色"><i class="fa-solid fa-pen"></i></button>
-                <button type="button" class="sp-tagmgr-del sp-icon-btn" title="删除标签"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>`;
-    }).join('') : `<div class="sp-anchor-filter-empty">还没有标签，在下方新建第一个</div>`;
-    setAnchorBody(`
-        <div class="sp-anchor-head sp-anchor-tagmgr-head">
-            <button class="sp-anchor-back" data-to="chars"><i class="fa-solid fa-chevron-left"></i></button>
-            <span class="sp-anchor-head-title">标签管理</span>
-            <span class="sp-anchor-head-count">${tags.length} 个</span>
-        </div>
-        <div class="sp-anchor-scroll">
-            <div class="sp-anchor-tagmgr-new">
-                <input type="text" class="sp-tagmgr-new-name sp-input" placeholder="新建标签名…" maxlength="20">
-                <div class="sp-tagmgr-swatches sp-tagmgr-new-swatches">${swatches(ANCHOR_TAG_PALETTE[0])}</div>
-                <button type="button" class="sp-tagmgr-new-add sp-mini-btn"><i class="fa-solid fa-plus"></i> 新建</button>
-            </div>
-            <div class="sp-anchor-tagmgr-list">${rows}</div>
-        </div>`);
-}
-
-// 第二层：某角色下的聊天文件分桶（charName 为 null 时退化为全部，兜底）
-async function renderAnchorChats(charName) {
-    const all = await anchor.listByChat();
-    const key = charName || '(未知角色)';
-    const allBuckets = charName == null ? all : all.filter(b => (b.charName || '(未知角色)') === key);
-    if (!allBuckets.length) { _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null }; await renderAnchorChars(); return; }
-    const tags = await anchor.getTags();
-    // 每桶按标签过滤 items、丢空桶；count/latestTs 用过滤后的重算
-    const buckets = allBuckets
-        .map(b => {
-            const items = b.items.filter(itemMatchesFilter);
-            return { ...b, items, count: items.length, latestTs: items.reduce((m, it) => Math.max(m, it.ts || 0), 0) };
-        })
-        .filter(b => b.items.length);
-    const filterBar = renderAnchorFilterBar(tags, _anchorTagFilter);
-    const cards = buckets.length ? buckets.map(b => `
-        <button class="sp-anchor-chat-card" data-chatid="${escapeAttr(b.chatId ?? '')}">
-            <span class="sp-anchor-chat-icon">${anchorSvg('sp-anchor-chat-svg')}</span>
-            <span class="sp-anchor-chat-main">
-                <span class="sp-anchor-chat-name">${escapeHtml(b.chatName || '(未命名聊天)')}</span>
-                <span class="sp-anchor-chat-sub">${escapeHtml(b.charName || '')}</span>
-            </span>
-            <span class="sp-anchor-chat-meta">
-                <span class="sp-anchor-chat-count">${b.count}</span>
-                <span class="sp-anchor-chat-ts">${fmtAnchorTs(b.latestTs)}</span>
-            </span>
-        </button>`).join('') : `<div class="sp-anchor-filter-empty">没有含此标签的收藏</div>`;
-    setAnchorBody(`
-        <div class="sp-anchor-head">
-            <button class="sp-anchor-back" data-to="chars"><i class="fa-solid fa-chevron-left"></i></button>
-            <span class="sp-anchor-head-title">${escapeHtml(key)}</span>
-            <span class="sp-anchor-head-count">${buckets.length} 个聊天</span>
-        </div>
-        <div class="sp-anchor-scroll">${filterBar}<div class="sp-anchor-chat-list">${cards}</div></div>`);
-}
-
-// 第三层：某聊天文件内收藏的缩略列表（只显正文前一小段）
-async function renderAnchorItems(chatId) {
-    const buckets = await anchor.listByChat();
-    const bucket  = buckets.find(b => String(b.chatId ?? '') === String(chatId ?? ''));
-    if (!bucket) { _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null }; await renderAnchorChars(); return; }
-    const charKey = bucket.charName || '(未知角色)';
-    _anchorView.charName = charKey;   // 回填角色键：openAnchorAtChat 直达 items 时，返回键也能正确落到角色层
-    const tags = await anchor.getTags();
-    const tagMap = new Map(tags.map(t => [t.id, t]));
-    const items = bucket.items.filter(itemMatchesFilter);
-    const filterBar = renderAnchorFilterBar(tags, _anchorTagFilter);
-    const cards = items.length ? items.map(it => `
-        <button class="sp-anchor-item-card" data-id="${escapeAttr(it.id)}">
-            <span class="sp-anchor-item-tags">${renderTagChips(it.tags, tagMap)}</span>
-            <span class="sp-anchor-item-main">
-                <span class="sp-anchor-item-floor">#${it.floorIndex ?? '?'}</span>
-                <span class="sp-anchor-item-preview">${escapeHtml(it.textPreview || '(无正文预览)')}</span>
-                <span class="sp-anchor-item-ts">${fmtAnchorTs(it.ts)}</span>
-            </span>
-        </button>`).join('') : `<div class="sp-anchor-filter-empty">没有含此标签的收藏</div>`;
-    setAnchorBody(`
-        <div class="sp-anchor-head">
-            <button class="sp-anchor-back" data-to="chats" data-char="${escapeAttr(charKey)}"><i class="fa-solid fa-chevron-left"></i></button>
-            <span class="sp-anchor-head-title">${escapeHtml(bucket.chatName || bucket.charName || '收藏')}</span>
-            <span class="sp-anchor-head-count">${items.length} 条</span>
-        </div>
-        <div class="sp-anchor-scroll">${filterBar}<div class="sp-anchor-item-list">${cards}</div></div>`);
-}
-
-// 第三层：全文——Shadow DOM 渲染，隔离状态栏 <style>（既不外泄污染面板，也不被面板样式覆盖）
-// 关键：ST 的 decodeStyleTags 会给楼层 <style> 每条选择器加 `.mes_text ` 前缀（类名再改 .custom-*），
-// 所以快照容器必须带 class="mes_text" 当祖先，否则正则状态栏「有文字没样式」。
-async function renderAnchorFull(itemId) {
-    const it = await anchor.getItem(itemId);
-    if (!it) { _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null }; await renderAnchorChars(); return; }
-    _anchorCurrentItem = it;
-    // 全屏态挂在 #sp-anchor-body（跨重渲持久）；重建头部时按当前态给全屏按钮初始图标/标题，
-    // 否则「编辑标签」重渲后按钮会被复位成 fa-expand（虽仍在全屏、图标却成「进入全屏」）。
-    const fsOn = !!inEl('#sp-anchor-body')?.classList.contains('sp-anchor-fs-on');
-    const tagMap = new Map((await anchor.getTags()).map(t => [t.id, t]));
-    // 标签区：只读态（chips + 编辑标签按钮）/ 内联编辑态（chip 点选即写 + 新建行 + 完成）。
-    // 内联而非 body 浮层——全文视图铺满面板，浮层会被面板盖住看不见（用户反馈）。
-    let tagsBlock;
-    if (_anchorFullTagEdit) {
-        const selSet = new Set(Array.isArray(it.tags) ? it.tags : []);
-        const allTags = [...tagMap.values()];
-        const chips = allTags.length
-            ? allTags.map(t => `<button type="button" class="sp-anchor-ftag-chip${selSet.has(t.id) ? ' sp-tp-chip-on' : ''}" data-id="${escapeAttr(t.id)}"><span class="sp-anchor-tagchip" data-color="${escapeAttr(t.color || 'slate')}">${escapeHtml(t.name)}</span></button>`).join('')
-            : '<div class="sp-tagpicker-empty">还没有标签，在下方新建</div>';
-        const swatches = ANCHOR_TAG_PALETTE.map((c, i) => `<button type="button" class="sp-anchor-ftag-swatch${i === 0 ? ' sp-tp-swatch-on' : ''}" data-color="${c}"><span class="sp-anchor-tagchip" data-color="${c}">A</span></button>`).join('');
-        tagsBlock = `<div class="sp-anchor-full-tagedit">
-                <div class="sp-anchor-ftag-chips">${chips}</div>
-                <div class="sp-anchor-ftag-new">
-                    <input type="text" class="sp-anchor-ftag-name sp-input" placeholder="新建标签名…" maxlength="20">
-                    <div class="sp-tagmgr-swatches">${swatches}</div>
-                    <button type="button" class="sp-anchor-ftag-add sp-mini-btn"><i class="fa-solid fa-plus"></i></button>
-                </div>
-                <div class="sp-anchor-ftag-foot">
-                    <button type="button" class="sp-anchor-ftag-done sp-mini-btn"><i class="fa-solid fa-check"></i> 完成</button>
-                </div>
-            </div>`;
-    } else {
-        tagsBlock = `<div class="sp-anchor-full-tags">${renderTagChips(it.tags, tagMap)}<button class="sp-anchor-tag-edit sp-mini-btn" type="button"><i class="fa-solid fa-tag"></i> 编辑标签</button></div>`;
-    }
-    setAnchorBody(`
-        <div class="sp-anchor-head">
-            <button class="sp-anchor-back" data-to="items" data-chatid="${escapeAttr(it.chatId ?? '')}"><i class="fa-solid fa-chevron-left"></i></button>
-            <span class="sp-anchor-head-title">${escapeHtml(it.charName || '')}<span class="sp-anchor-head-floor"> · #${it.floorIndex ?? '?'}</span></span>
-            <span class="sp-anchor-head-actions">
-                <button class="sp-icon-btn sp-anchor-fullscreen" title="${fsOn ? '退出全屏' : '全屏浏览（便于截图）'}"><i class="fa-solid ${fsOn ? 'fa-compress' : 'fa-expand'}"></i></button>
-                <button class="sp-icon-btn sp-anchor-del"    title="删除此收藏"><i class="fa-solid fa-trash"></i></button>
-            </span>
-        </div>
-        <div class="sp-anchor-scroll">
-            ${tagsBlock}
-            <div class="sp-anchor-full-host" id="sp-anchor-full-host"></div>
-            <div class="sp-anchor-full-ts">收藏于 ${fmtAnchorTs(it.ts)}</div>
-        </div>
-        <div class="sp-anchor-fs-resize" title="拖拽调整大小"></div>`);
-    const host = inEl('#sp-anchor-full-host');
-    if (host) {
-        // Shadow DOM 的 :host{all:initial} 会切断颜色继承；只设字色救不了——快照里状态栏常自带
-        // 背景卡片，单一字色遇到「浅字撞浅底/深字撞深底」必然翻车（夜间尤其）。正解是给容器一对
-        // **自洽的「底+字」**（见下方取值），状态栏自带 inline 背景的卡片用自己的底覆盖容器底、不受影响；
-        // 只设了字色没设底的状态栏文字则落在容器底上，底与字同主题、必然对比清晰。
-        // 用探针把 CSS 变量解析成具体 rgb（规避 var() 在 getComputedStyle 里不展开的坑）再内联进 Shadow。
-        // Shadow DOM 切断继承；直接读 currentTheme 取硬编码色对，规避探针在 CSS 变量继承链上的不稳定。
-        // 日=深字+浅底，夜=浅字+深底，两两成对必然可读。
-        const isNight = currentTheme === 'night';
-        const fg   = isNight ? '#D8D9DA' : '#2c2e2a';
-        const bg   = isNight ? '#272829' : '#F6F4E8';
-        const link = isNight ? '#A8A49E' : '#DC9B9B';
-        const root = host.shadowRoot || host.attachShadow({ mode: 'open' });
-        // Shadow DOM 的 :host{all:initial} 隔断了 ST 那条 `.mes q:before/:after{content:''}`，
-        // UA 默认的 q 自动引号在 shadow 里复活；而 ST 格式化阶段已把字面引号写进文本，
-        // 于是「字面引号 + UA 自动引号」= 双引号。这里补回同款压制。
-        root.innerHTML = `<style>:host{all:initial;display:block;}
-            .sp-anchor-snap{display:block;color:${fg};background:${bg};padding:16px 18px !important;margin:0 !important;border:none !important;border-radius:10px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:12px;line-height:1.6;word-break:break-word;}
-            .sp-anchor-snap img{max-width:100%;height:auto;}
-            .sp-anchor-snap a{color:${link};}
-            .sp-anchor-snap q:before,.sp-anchor-snap q:after{content:'';}
-        </style><div class="mes_text sp-anchor-snap">${it.html || ''}</div>`;
-    }
-}
-
-// ─── 坐标·导出图片 ─────────────────────────────────────────────────────────────
-// 坐标全屏浏览：纯 CSS 切 class + 锁背景滚动 + Esc 退出（照搬小剧场全屏，稳且不依赖任何库）。
-// 状态类挂 #sp-anchor-body 本身（不是 .sp-anchor-scroll）：setAnchorBody 只换 innerHTML、不动元素本身，
-// 「编辑标签」触发的重渲因此不丢全屏态；头部退出按钮也随卡片一起 fixed，无需 :has() 钉位。
-// 桌面留白成卡片、手机铺满面板（尺寸/留白见 style.css 媒体查询）。
-let _anchorFsEsc = null;
-// 清全屏浮卡的拖拽 inline 尺寸/坐标：退出全屏时必须清，否则 width/height 会黏到非全屏的
-// in-flow #sp-anchor-body 上（它此时是 flex:1 子项），把列表视图撑破版。
-function _clearAnchorFsInline() {
-    const b = inEl('#sp-anchor-body');
-    if (!b) return;
-    b.style.left = b.style.top = b.style.right = b.style.bottom = b.style.width = b.style.height = '';
-}
-// 清坐标全屏态（三个类一起去）：返回/删除/切档等离开全文视图时调用，避免 fixed 卡片黏在列表视图上。
-function _clearAnchorFs() {
-    inEl('#sp-anchor-body')?.classList.remove('sp-anchor-fs-on');
-    inEl('.sp-sheet')?.classList.remove('sp-fs-flat');
-    document.body.classList.remove('sp-anchor-fs-lock');
-    _clearAnchorFsInline();
-}
-function toggleAnchorFullscreen(btnEl) {
-    const body = inEl('#sp-anchor-body');
-    if (!body) return;
-    const on = body.classList.toggle('sp-anchor-fs-on');
-    if (!on) _clearAnchorFsInline();   // 退出：清掉拖拽留下的 inline 尺寸/坐标
-    // 桌面去掉 .sp-sheet 的 transform 让 fixed 卡片逃出面板锚到视口（.sp-fs-flat 在 CSS 里 desktop-only，
-    // 手机不动 → sheet 的居中 translateX(-50%) 保留、卡片不再右移半屏）。
-    inEl('.sp-sheet')?.classList.toggle('sp-fs-flat', on);
-    const $i = $(btnEl).find('i');
-    $i.attr('class', on ? 'fa-solid fa-compress' : 'fa-solid fa-expand');
-    $(btnEl).attr('title', on ? '退出全屏' : '全屏浏览（便于截图）');
-    document.body.classList.toggle('sp-anchor-fs-lock', on);
-    if (on && !_anchorFsEsc) {
-        _anchorFsEsc = (ev) => {
-            if (ev.key !== 'Escape') return;
-            if (inEl('#sp-anchor-body.sp-anchor-fs-on')) $in('.sp-anchor-fullscreen').trigger('click');
-        };
-        document.addEventListener('keydown', _anchorFsEsc);
-    }
-}
-
-// 坐标全屏浮卡·拖拽移动 + 右下角缩放（PC 专属：手机全屏铺满面板、不允许拖，故只绑鼠标、不碰 touch）。
-// 机制镜像主面板 sheet 的 drag/resize：卡片默认位置由 CSS vw/vh 锚定，首次手势时 snap 成显式 px
-// （left/top/width/height + right/bottom:auto），之后 inline 坐标驱动。退出全屏时由 _clearAnchorFs /
-// toggle-off 清掉这些 inline，避免黏到非全屏的 in-flow #sp-anchor-body 上（width/height 会破版）。
-let _anchorFsGesture = null;
-function _anchorFsSnapToPx(card) {
-    if (card.style.width) return;   // 已 snap 过：本次全屏会话内保留用户调好的尺寸
-    const r = card.getBoundingClientRect();
-    card.style.left = r.left + 'px'; card.style.top = r.top + 'px';
-    card.style.width = r.width + 'px'; card.style.height = r.height + 'px';
-    card.style.right = 'auto'; card.style.bottom = 'auto';
-}
-function _anchorFsGestureStart(mode, e) {
-    if (isMobile()) return;
-    const card = inEl('#sp-anchor-body');
-    if (!card || !card.classList.contains('sp-anchor-fs-on')) return;
-    e.preventDefault(); e.stopPropagation();
-    _anchorFsSnapToPx(card);
-    const r = card.getBoundingClientRect();
-    _anchorFsGesture = { mode, startX: e.clientX, startY: e.clientY,
-        origLeft: r.left, origTop: r.top, origW: r.width, origH: r.height };
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', _anchorFsGestureMove);
-    document.addEventListener('mouseup', _anchorFsGestureEnd);
-}
-function _anchorFsGestureMove(e) {
-    if (!_anchorFsGesture) return;
-    if (e.buttons === 0) { _anchorFsGestureEnd(); return; }   // 自愈：鼠标离窗错过 mouseup 时别卡住
-    const card = inEl('#sp-anchor-body');
-    if (!card) return;
-    const g = _anchorFsGesture;
-    if (g.mode === 'move') {
-        const left = Math.max(0, Math.min(g.origLeft + e.clientX - g.startX, window.innerWidth  - card.offsetWidth));
-        const top  = Math.max(0, Math.min(g.origTop  + e.clientY - g.startY, window.innerHeight - 40));
-        card.style.left = left + 'px'; card.style.top = top + 'px';
-    } else {
-        const w = Math.max(320, Math.min(window.innerWidth  - g.origLeft - 8, g.origW + e.clientX - g.startX));
-        const h = Math.max(240, Math.min(window.innerHeight - g.origTop  - 8, g.origH + e.clientY - g.startY));
-        card.style.width = w + 'px'; card.style.height = h + 'px';
-    }
-}
-function _anchorFsGestureEnd() {
-    if (!_anchorFsGesture) return;
-    _anchorFsGesture = null;
-    document.body.style.userSelect = '';
-    document.removeEventListener('mousemove', _anchorFsGestureMove);
-    document.removeEventListener('mouseup', _anchorFsGestureEnd);
-}
-
-// 收藏占用统计 → 设置面板「收藏占用」行（打开设置时刷新）
 // ─── 存储管理面板 ──────────────────────────────────────────────────────────────
 // 三层：①本聊天 chat_metadata（点线面间讨论 + 记忆 + 棱永久）②收藏（坐标·服务器）
 //       ③本机缓存（localStorage：棱草稿 + UI 位置）。构画只统计/清理自己的数据。
@@ -6841,11 +6023,12 @@ async function renderStorageUsage() {
 
     // ② 收藏（坐标·服务器）——异步补进占位
     try {
-        const cnt = await anchor.countItems();
-        const bytes = await anchor.estimateBytes();
+        const usage = await coordinateRuntime?.feature?.storageUsage?.() || { count: 0, bytes: 0 };
+        const cnt = usage.count;
+        const bytes = usage.bytes;
         $in('#sp-storage-anchor-rows').html(
             cnt
-                ? storageRow(`共 ${cnt} 条收藏`, anchor.formatBytes(bytes),
+                ? storageRow(`共 ${cnt} 条收藏`, coordinateRuntime.feature.formatBytes(bytes),
                     `<button class="sp-storage-del sp-mini-btn sp-mini-btn-danger" data-scope="anchor">清空</button>`)
                 : `<div class="sp-cfg-hint" style="padding:4px 0">暂无收藏</div>`
         );
@@ -6927,7 +6110,7 @@ function refreshEditorsFromCurrentStore(kind) {
         const saved = readStore(key);
         const subject = currentView === 'char' ? (charViewName || getContext().name2 || '角色') : (getContext().name1 || '用户');
         pointState.cachedSchedule = saved?.raw ? renderSchedule(saved.raw, saved.userName || subject, currentView, loadCalDesc()) : null;
-        if (!outlineMode && !linesMode && !spaceMode && !theaterMode && !anchorMode && $(`#${MODAL_ID}`).is(':visible')) {
+        if (!outlineMode && !linesMode && !spaceMode && !theaterMode && $(`#${MODAL_ID}`).is(':visible')) {
             setBody(pointState.cachedSchedule || `<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
         }
         syncLatestScheduleBlock();
@@ -7050,15 +6233,11 @@ function bindStorageHandlers() {
 
     // ② 收藏（坐标·服务器）—— 清空全部
     $body.on('click', '.sp-storage-del[data-scope="anchor"]', async function () {
-        const cnt = await anchor.countItems().catch(() => 0);
+        const cnt = await coordinateRuntime?.feature?.storageUsage?.().then(info => info.count).catch(() => 0);
         if (!cnt) { showToast('还没有任何收藏'); return; }
         if (!await spConfirm({ title: '清空全部收藏', body: `确定删除全部 ${cnt} 条收藏吗？此操作不可恢复（原楼层不受影响）。` })) return;
         try {
-            const items = await anchor.getAllItems();
-            for (const it of items) await anchor.deleteItem(it.id);
-            _anchorSavedKeys.clear();
-            document.querySelectorAll('#chat .mes .sp-anchor-btn').forEach(btn => { btn.classList.remove('sp-anchor-saved'); btn.title = '收藏此楼'; });
-            if (anchorMode) { _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null }; renderAnchorPanel(); }
+            await coordinateRuntime?.feature?.clearAll?.();
             renderStorageUsage();
             showToast('已清空全部收藏');
         } catch (err) {
@@ -8323,9 +7502,7 @@ function applyTheme(theme) {
         if (forced) wrapper.classList.add(`sp-forced-${theme}`);
     }
     syncVectorGlyphTheme(document, theme, forced);
-    // 坐标全屏快照的字/底色是按 currentTheme 烘死内联进嵌套 shadow 的（renderAnchorFull），变量级
-    // 换类救不到；正看全文快照时重渲一次让它跟主题（覆盖手动切主题 + ST 自动跟随两条路径）。
-    if (_anchorView.level === 'full' && _anchorCurrentItem) renderAnchorFull(_anchorCurrentItem.id);
+    coordinateRuntime?.feature?.onThemeChanged?.(theme);
 }
 
 // ─── Theme mode toggle (day / night / auto) ─────────────────────────────────

@@ -44,20 +44,20 @@ export function renderAxisCalendar(env) {
     }
     let detailItems;
     let detailHead;
-    if (selected != null) {
-        const selectedDoy = almDayOfYear(month1, selected, cal);
-        detailItems = items.filter(it => almItemCoversDoy(it, selectedDoy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
-        const selectedWd = almWeekdayFor(month1, selected, wkRef, cal);
-        detailHead = `<div class="sp-alm-cal-detail-head"><span>${calMonthName(cal, month1)}${selected}日${selectedWd == null ? '' : ` · ${ALM_WEEKDAYS[selectedWd]}`}</span><span class="sp-alm-cal-detail-tools"><button class="sp-alm-add-day sp-mini-btn" data-day="${selected}">＋加到这天</button><button class="sp-alm-cal-clearsel sp-mini-btn">看全月</button></span></div>`;
-    } else {
-        detailItems = items.filter(it => it.month === month1).sort((a, b) => a.day - b.day);
-        detailHead = '<div class="sp-alm-cal-detail-head"><span>本月日期</span></div>';
-    }
     const travelControl = travelState
         ? '<button class="sp-alm-time-travel-stop sp-mini-btn">中断时旅</button>'
         : (selected != null && !(anchor.month === month1 && anchor.day === selected)
             ? `<button class="sp-alm-time-travel sp-mini-btn" data-day="${selected}">跳到这天</button>`
             : '');
+    if (selected != null) {
+        const selectedDoy = almDayOfYear(month1, selected, cal);
+        detailItems = items.filter(it => almItemCoversDoy(it, selectedDoy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
+        const selectedWd = almWeekdayFor(month1, selected, wkRef, cal);
+        detailHead = `<div class="sp-alm-cal-detail-head"><span>${calMonthName(cal, month1)}${selected}日${selectedWd == null ? '' : ` · ${ALM_WEEKDAYS[selectedWd]}`}</span><span class="sp-alm-cal-detail-tools">${travelControl}<button class="sp-alm-add-day sp-mini-btn" data-day="${selected}">＋加到这天</button><button class="sp-alm-cal-clearsel sp-mini-btn">看全月</button></span></div>`;
+    } else {
+        detailItems = items.filter(it => it.month === month1).sort((a, b) => a.day - b.day);
+        detailHead = '<div class="sp-alm-cal-detail-head"><span>本月日期</span></div>';
+    }
     const rows = detailItems.length ? `<div class="sp-alm-list">${detailItems.map(it => env.almRowHtml(it, ctx)).join('')}</div>` : `<div class="sp-alm-cal-empty">${selected != null ? '这天没有日期' : '本月暂无日期'}</div>`;
-    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div>${head}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${travelControl}${rows}</div></div>`;
+    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${calMonthName(cal, month1)}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div>${head}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${rows}</div></div>`;
 }

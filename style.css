@@ -4709,7 +4709,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-ftag-swatch:hover              { transform: scale(1.08); }
 .sp-anchor-ftag-swatch .sp-anchor-tagchip { pointer-events: none; }
 .sp-anchor-ftag-swatch.sp-tp-swatch-on    { border-color: var(--sp-primary); }
-.sp-anchor-ftag-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+.sp-anchor-ftag-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; white-space: nowrap; }
 
 /* 第三层：全文（Shadow host 外壳，内部样式由 Shadow DOM 隔离） */
 /* 只当透明壳：视觉框只留 Shadow 内的 .sp-anchor-snap 一层，双框显拥挤 */
@@ -5287,6 +5287,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     margin-bottom: 10px;
     border-bottom: 1px solid var(--sp-divider);
 }
+.sp-ledger-ctrl-wrap { padding: 10px 12px 10px; }
+.sp-ledger-ctrl-wrap .sp-ledger-ctrl { margin-bottom: 0; }
+.sp-alm-body-ledger { padding-top: 0; }
 .sp-ledger-auto {
     display    : flex;
     align-items: center;
@@ -5575,7 +5578,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font-weight    : 600;
     color          : var(--sp-on-surface);
 }
-.sp-alm-cal-detail-tools { display: inline-flex; gap: 6px; }
+.sp-alm-cal-detail-tools { display: inline-flex; gap: 6px; flex-wrap: nowrap; white-space: nowrap; min-width: 0; }
+.sp-alm-cal-detail-tools .sp-mini-btn { white-space: nowrap; }
+@container sp-almanac (max-width: 380px) {
+    .sp-alm-cal-detail-tools { gap: 3px; }
+    .sp-alm-cal-detail-tools .sp-mini-btn { padding-left: 6px; padding-right: 6px; font-size: var(--sp-fs-68); }
+}
 .sp-alm-cal-detail .sp-alm-list { gap: 6px; }
 /* 详情行可点（联动到上方网格），给个可点手势 */
 .sp-alm-cal-detail .sp-alm-item { cursor: pointer; }
