@@ -121,6 +121,7 @@ import { createAxisDateActions } from './business/axis/date-actions.js';
 import { createAxisCalendarActions } from './business/axis/calendar-actions.js';
 import { createAxisGenerationController, validateAlmanacResponse } from './business/axis/generation.js';
 import { createAxisInlineRenderer } from './business/axis/inline.js';
+import { createInlineFeature } from './business/inline/feature.js';
 import { createAxisWidgetActions } from './business/axis/widget.js';
 import { createAxisTransactionController } from './business/axis/transaction.js';
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
@@ -185,6 +186,18 @@ import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_A
 
 // 坐标唯一 runtime；旧 anchor facade 继续保留兼容导出。
 let coordinateRuntime = null;
+let inlineFeature = null;
+
+function refreshInlineWindow(immediate = false) { return inlineFeature?.refresh?.(immediate); }
+function _clearAllInlineBoxes() { return inlineFeature?.clear?.(); }
+function syncLatestAlmanacBlock(expectedChatId = null) {
+    if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
+    return refreshInlineWindow(true);
+}
+function syncLatestScheduleBlock(expectedChatId = null) {
+    if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
+    return refreshInlineWindow(true);
+}
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
     bindLedgerRender,
@@ -1544,8 +1557,6 @@ jQuery(async () => {
     // 首屏补挂：backfill 内部 refreshLinesInjection()（潜伏注入）+ refreshInlineWindow(true)
     // 统一挂线/历/点三段。历/点无独立首屏副作用，全汇流到同一防抖窗口刷新，一次即可。
     setTimeout(backfillLinesInlineBlocks, 800);
-    initAlmanacStripDelegation();   // 历·七天条格子点击委托（一次性注册到 document）
-    initScheduleStripDelegation();  // 点·日程条格子点击委托（一次性注册到 document）
     // Reset view state and reload cache on chat switch
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = () => {
@@ -2080,515 +2091,29 @@ const axisInlineRenderer = createAxisInlineRenderer({
     monthName: calMonthName,
     cleanText,
 });
-const _buildAlmanacBlockHtml = (...args) => axisInlineRenderer.buildAlmanacBlock(...args);
-const _almanacStripDayHtml = (...args) => axisInlineRenderer.buildAlmanacDay(...args);
-
-// 七天条 per-day tap：点某格 → 下方就地展开当天安排（再点同格收起、点别格切换）。委托到 document、
-// 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-alm-strip-live 可交互条生效。
-// 注：格子在 <details> 的 body 内，点它不触发 summary 的展开/收起，两套交互互不打架。
-function initAlmanacStripDelegation() {
-    $(document).on('click.spalmstrip', '.sp-dash .sp-alm-strip-live .sp-alm-scell', function (e) {
-        e.preventDefault();
-        e.stopPropagation();   // 别冒泡到 ST 的楼层点击（编辑等）
-        const wrap = this.closest('.sp-alm-strip-live');
-        if (!wrap) return;
-        const sday = wrap.querySelector('.sp-alm-sday');
-        if (!sday) return;
-        if (this.classList.contains('sp-alm-scell-open')) {   // 点已展开的格 → 收起
-            this.classList.remove('sp-alm-scell-open');
-            sday.hidden = true;
-            sday.innerHTML = '';
-            return;
-        }
-        wrap.querySelectorAll('.sp-alm-scell-open').forEach(c => c.classList.remove('sp-alm-scell-open'));
-        this.classList.add('sp-alm-scell-open');
-        const { snap, resolvedCalendar, resolution, readOnly } = _inlineTapCtx(this);
-        if (readOnly && !resolution?.resolved) { sday.innerHTML = '<div class="sp-alm-sday-empty">历法未知 / 日期未知</div>'; sday.hidden = false; return; }
-        sday.innerHTML = _almanacStripDayHtml(Number(this.dataset.doy), snap ? (snap.almanac || []) : null, resolvedCalendar, _inlineTapCtx(this).localWeekdayRef);
-        sday.hidden = false;
-    });
-}
-
-// 清掉所有 AI 楼里的历七天条（维持「只挂最新楼」的单副本）。
-function _removeAllAlmanacBlocks() {
-    document.querySelectorAll('#chat .sp-almanac-inline').forEach(el => el.remove());
-}
-
-// 历改动 / 新楼 / swipe / 切聊天 都汇流到这。渲染改由 refreshInlineWindow() 统一负责（最新楼冻快照+重挂）。
-function syncLatestAlmanacBlock(expectedChatId = null) {
-    if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
-    refreshInlineWindow(true);
-}
-
-// ─── 点·楼内日程条（只读，反映当前视角的点，无生成）──────────────────────────────
-// 与线块/历条平行、共存于最新 AI 楼。收起态是扁扁的「点 · N件待办」条，点整条展开是「日程条」：
-// 每个 Day 一格（周X + 日期 + 天气图标 + 待办数），Future 另起一格；点某格就地展开当天事件（标题+时间）。
-// 纯读楼内 canonical 点 raw（schedule-user），不请求 API、不受 linesEnabled 影响，只受 scheduleInlineEnabled 控制。
-// 外壳/标题条走线的 .sp-inline-* 类，与线块/历条一致；只有条内格子用独立的 .sp-sch-* 类。
-// rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
-// readOnly：true=历史楼，drawer 去掉注入/删除/锁定按钮（在旧楼改点语义矛盾）。
-const _buildScheduleBlockHtml = (...args) => pointInlineRenderer.buildScheduleBlock(...args);
-
-// 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
-// 每次都重读 raw（点 raw 会被重算/锁定改写），按天筛事件；空 → 「这天没有安排」。
-// dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
-// readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
-
-const _scheduleStripDayHtml = (...args) => pointInlineRenderer.buildScheduleDay(...args);
-
-// 日程条 per-day tap：点某格 → 下方就地展开当天事件（再点同格收起、点别格切换）。委托到 document、
-// 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-sch-strip-live 生效。
-function initScheduleStripDelegation() {
-    pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: _inlineTapCtx });
-}
-
-function _removeAllScheduleBlocks() {
-    document.querySelectorAll('#chat .sp-schedule-inline').forEach(el => el.remove());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  楼内仪表盘（今头 + 历/点/线三区·融进一个面板·最新楼全功能 / 历史楼只读）
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// 结构（对齐用户手绘图，不是三段并列）：以「今」为主心骨的一个面板。
-//   ┌─────────────────────────────────────────────┐
-//   │ ┌───────┐  历区（即将到来 ≡ + 未来七天格）     │  ← 顶行：今头 + 历
-//   │ │今 M/D │                                     │
-//   │ │周X ☀  │                                     │
-//   │ └───────┘                                     │
-//   │ 点区（今日待办）                               │
-//   │ 线区（活跃事件线）                             │
-//   └─────────────────────────────────────────────┘
-//
-// 铁律「模块可拆」：历/点/线各自独立开关（各 builder 自门控，关/空→返回 ''）。
-//   某区关 → 面板里根本没这区、其余区流式补位、不留空洞。
-//   今头的日期来源是历/点的锚点 → 历、点全无 → 今头连带收起，面板退成纯线区。
-//   三区全空 → 返回 ''（该楼不挂框）。
-//
-// snap=null → 最新楼：读活缓存、全功能（注入/删除/推进/锁定按钮都在）。
-// snap=对象 → 历史楼：读该楼快照、只读（各 builder 收到 readOnly=true，剥掉可变按钮）。
-
-// 今头/摘要共用的锚点解析：快照有合法锚点用快照，否则退活锚点。
-function _dashAnchor(snap) {
-    return (snap?.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
-        ? { month: +snap.anchor.month, day: +snap.anchor.day }
-        : almTodayAnchor();
-}
-
-// 「是否真有日期上下文」——与点/线/历三个显示开关无关，只看底层数据在不在：钉了锚点、
-// 或有历条目、或有点 raw。用来决定：三区全关（或都空）时，最扁的折叠条是否仍值得显「今 M/D 周X ☀」。
-// 全空（新聊天、没数据）→ false，别硬造个「今 1/1」噪声条。历史楼看快照自带的 almanac/point/anchor。
-function _hasDateData(snap) {
-    if (snap) return !!((Array.isArray(snap.almanac) && snap.almanac.length) || snap.point || snap.anchor);
-    let pinned = false;
-    try { pinned = !!getDateAnchor(charStableKey(getContext())); } catch { pinned = false; }
-    if (pinned) return true;
-    try { if (loadAlmanac().length) return true; } catch { /* 忽略 */ }
-    try { if (readCacheRaw(getCacheKey('user', ''))) return true; } catch { /* 忽略 */ }
-    return false;
-}
-
-// 今头（masthead）：大日期块。月/日 + 周几为主体；天气取点当天格；纪年名(era)由日历描述符驱动，
-// 有则点亮、无则不撑（公历默认无 era）。anchor 缺则退活锚点。
-function _dashMastheadHtml(snap, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
-    let anchor = _dashAnchor(snap);
-    if (storyClockEnabled() && floorClock) {
-        const floorDate = parseJudgedDate(floorClock.end) || parseJudgedDate(floorClock.start);
-        if (floorDate) anchor = floorDate;
-    }
-    const cal = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    let wd = '星期未记录';
-    try {
-        const meta = floorClock?.endMeta?.valid ? floorClock.endMeta : (floorClock?.startMeta?.valid ? floorClock.startMeta : null);
-        const localRef = weekdayRefOverride !== undefined ? weekdayRefOverride : (meta?.weekdayIndex == null ? (!snap ? almWeekdayRef(cal) : null) : { refDoy: almDayOfYear(meta.month, meta.day, cal), refWd: meta.weekdayIndex });
-        const wdIndex = almWeekdayFor(anchor.month, anchor.day, localRef, cal);
-        if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '星期未记录';
-    } catch { /* unknown */ }
-    // 天气：从点当天格（days[0].weather）拿；拿不到留空。历史楼用快照点 raw。
-    let wxHtml = '';
-    try {
-        const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
-        if (raw) {
-            const wx = String(parseCalendar(raw, cal).days?.[0]?.weather || '').trim();
-            if (wx) wxHtml = `<span class="sp-dash-today-wx">${weatherGlyph(wx)}</span>`;
-        }
-    } catch { /* 天气拿不到就不显 */ }
-    // 纪年位：日历描述符带 era（纪年名）时点亮，无则不撑。
-    const eraHtml = calHasEra(cal) ? `<span class="sp-dash-today-era">${escapeHtml(cal.era)}</span>` : '';
-    return `<div class="sp-dash-today">
-        <span class="sp-dash-today-md">${anchor.month}/${anchor.day}</span>
-        <span class="sp-dash-today-wd">${wd}</span>
-        ${(wxHtml || eraHtml) ? `<span class="sp-dash-today-meta">${wxHtml}${eraHtml}</span>` : ''}
-    </div>`;
-}
-
-// 折叠态（整框收成一小条）的摘要内层：今 M/D 周X ☀ + 计数 chips（历N 点N 线N）。
-// 「今 M/D 周X + 天气」是今天的身份标识，只要拿得到日期就恒显——不受点/线/历子开关影响
-// （子开关只管展开面板里那几个区显不显，日期/天气来自剧情锚点+点数据，与显示开关无关）。
-// chips 则跟着子开关走：只给「开着且有内容」的区计数（关掉的区不该在摘要里冒计数）。
-// flat=true：整框只剩这一条（点线历都关但有日期）→ 用 <div> 包、无折叠箭头、不可展开。
-// 时间戳·窄条抬戳：最新楼扫到戳时，戳「抬」成当天身份（end 优先）——
-//   数字戳（2024-10-08 15:10 / 10月8日 …）→ 解析成规整「年月日 周几」，把「时」挪到天气之后；
-//   古风/无法解析（谷雨亥时 / 霜月初三）→ 原样抬（无周几）；完全无戳/关/历史楼 → 锚点兜底日期。
-//   周几：有年且公历按真年算(JS Date)，否则用与锚点同源的年-free 周几（自定义历法也走这条）。
-//   与展开区 storyClockBarHtml（带标签+起→止）互补。
-// 从戳原文抠数字日期/时刻。返回 {year?,month,day,time?}；抠不出数字日期 → null（交回原样抬）。
-function parseStampDate(stamp) {
-    const s = String(stamp || '');
-    let year = null, month = null, day = null, time = '';
-    let m;
-    if ((m = s.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/))) {
-        year = +m[1]; month = +m[2]; day = +m[3];
-    } else if ((m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?/))) {
-        month = +m[1]; day = +m[2];
-    }
-    if (!month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null;   // 非数字日期 → 原样抬
-    if (year != null && !validRealDate(year, month, day)) return null;                  // 严格拒绝 Date 自动归一化日期
-    if ((m = s.match(/(\d{1,2})\s*[:：]\s*(\d{2})/)))   time = `${+m[1]}:${m[2]}`;
-    else if ((m = s.match(/(\d{1,2})\s*[时點点]/)))     time = `${+m[1]}时`;
-    return { year, month, day, time };
-}
-// 组窄条「今 …」那截：{ todayHtml(含 .sp-dash-sum-today 壳), timeHtml(时刻尾巴，贴天气后) }。
-function storyClockHeadParts(isLatest, a, anchorWd, floorClock = null, calendarOverride = undefined) {
-    const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    const format = options => formatStoryClockHeadParts({ anchor: a, anchorWeekday: anchorWd, calendar: renderCalendar, monthName: calMonthName, escapeHtml, ...options });
-    const fallback = format();
-    if (!storyClockEnabled()) return fallback;
-    let clk = floorClock;
-    if (isLatest) {
-        try { clk = latestStoryClock(); } catch { clk = null; }
-    }
-    const stamp = clk && (clk.end || clk.start);
-    if (!stamp) return fallback;
-    const tip = '时间戳·主楼 AI 每楼隐形打点读回';
-    const clockMeta = clk?.endMeta?.valid ? clk.endMeta : (clk?.startMeta?.valid ? clk.startMeta : null);
-    if (clockMeta) {
-        const weekdayText = clockMeta.weekdayIndex == null ? (anchorWd || '星期未记录') : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
-        return format({ clockMeta: { ...clockMeta, weekdayText }, tip });
-    }
-    const p = parseStampDate(stamp);
-    if (!p) return format({ rawStamp: stamp, tip });   // 古风/无法解析 → 原样抬
-    return format({ stampDate: p, tip });
-}
-function _dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
-    const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
-    let head = '';
-    if (hasDate) {
-        const a = _dashAnchor(snap);
-        let wd = '星期未记录';
-        try {
-            const meta = floorClock?.endMeta?.valid ? floorClock.endMeta : (floorClock?.startMeta?.valid ? floorClock.startMeta : null);
-            const localRef = weekdayRefOverride !== undefined ? weekdayRefOverride : (meta?.weekdayIndex == null ? (!snap ? almWeekdayRef(renderCalendar) : null) : { refDoy: almDayOfYear(meta.month, meta.day, renderCalendar), refWd: meta.weekdayIndex });
-            const wdIndex = almWeekdayFor(a.month, a.day, localRef, renderCalendar);
-            if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '星期未记录';
-        } catch { /* unknown */ }
-        // 天气：从点当天格（days[0].weather）拿，与大头 masthead 同源；拿不到就不显。历史楼用快照点 raw。
-        let wxHtml = '';
-        try {
-            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
-            if (raw) {
-            const wx = String(parseCalendar(raw, renderCalendar).days?.[0]?.weather || '').trim();
-                if (wx) wxHtml = `<span class="sp-dash-sum-wx">${weatherGlyph(wx)}</span>`;
-            }
-        } catch { /* 天气拿不到就不显 */ }
-        const parts = storyClockHeadParts(isLatest, a, wd, floorClock, renderCalendar);
-        head = `${parts.todayHtml}${wxHtml}${parts.timeHtml}`;
-    }
-    const chips = [];
-    if (almOn) {
-        const items = snap ? (snap.almanac || []) : loadAlmanac();
-        chips.push(`<span class="sp-dash-sum-chip">轴${Array.isArray(items) ? items.length : 0}</span>`);
-    }
-    if (schOn) {
-        let n = 0;
-        try {
-            const raw = snap ? (snap.point || '') : readCacheRaw(getCacheKey('user', ''));
-            const { days, future } = parseCalendar(raw || '', renderCalendar);
-            n = (days || []).reduce((s, d) => s + (d.events?.length || 0), 0) + (future?.events?.length || 0);
-        } catch { n = 0; }
-        chips.push(`<span class="sp-dash-sum-chip">点${n}</span>`);
-    }
-    if (linesOn) {
-        let n = 0;
-        try {
-            const raw = snap ? (snap.line || '') : (readStore(getLinesCacheKey())?.raw || '');
-            n = parseLines(raw).length;
-        } catch { n = 0; }
-        chips.push(`<span class="sp-dash-sum-chip">线${n}</span>`);
-    }
-    const chipsHtml = chips.length ? `<span class="sp-dash-sum-chips">${chips.join('')}</span>` : '';
-    // 时间戳已抬进 head 的「今 …」那截（见 storyClockHeadParts），此处不再单列一段。
-    const inner = `${head}${chipsHtml}`;
-    // 只有日期没有任何区 → 纯日期条：<div> 包、无箭头、不可折叠（点了也没东西展开）。
-    if (flat) return `<div class="sp-dash-summary sp-dash-summary-flat">${inner}</div>`;
-    return `<summary class="sp-dash-summary">${inner}<i class="fa-solid fa-chevron-down sp-dash-sum-caret"></i></summary>`;
-}
-
-// 组一个仪表盘的完整 HTML（含外壳）。三区全空且无日期 → 返回 ''（该楼不挂框）。
-// 外壳是 <details>：收起 = 一小条摘要（今 M/D 周X ☀ · 历N 点N 线N），展开 = 完整面板。
-// 面板内点/线各自是 <details> 可折叠；历区顶行（今头+即将到来）+ 满宽六格条构成一组。
-// 「今 M/D 周X ☀」在折叠条里恒显（只要有日期数据，与三个显示开关无关）；三区全关但有日期
-// → 退成纯日期扁条（不可展开）。isLatest=true：最新楼、全功能；false：历史楼、只读。
-function _buildInlineBoxHtml(snap, isLatest, floorClock = null, floor = null) {
-    const readOnly = !isLatest;
-    const fallbackRecord = readStore(keyDesc('caldesc-fallback', 'user', ''));
-    const resolvedResult = isLatest ? { resolved: true, calendar: loadCalDesc() } : snapshot.resolveSnapshotCalendar(snap, { fallback: fallbackRecord, marker: !!fallbackRecord, current: loadCalDesc() });
-    const resolvedCalendar = resolvedResult.calendar;
-    if (!resolvedCalendar) return '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>';
-    // 历区返回结构 {summary,upHtml,stripHtml}|null；点/线返回内层字符串或 ''。各自门控开关/空态。
-    const localWeekdayRef = isLatest ? undefined : createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor, resolveLocal: f => storyWeekdayRefPure(getContext(), resolvedCalendar, ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
-    const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar, localWeekdayRef);
-    const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar, localWeekdayRef);
-    const linesInner = linesFeature.inlineHtml(snap ? (snap.line || '') : null, readOnly);
-    // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
-    const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
-
-    // 日期是否真实存在（与显示开关无关）：决定折叠条头 + 纯日期扁条兜底。
-    const hasDateData = _hasDateData(snap);
-    if (!alm && !schInner && !linesInner && !ledgerInner && !hasDateData) return '';   // 啥也没有 → 不挂框
-
-    // 展开面板里的大头 masthead：仅当有「历/点」区在场时出现（线独存时不显大头——edge case A）。
-    const hasDateRegion = !!alm || !!schInner;
-
-    const region = (cls, seg, inner) => inner
-        ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}</details>`
-        : '';
-
-    // 顶行 + 历满宽条：历在场 → 顶行 [方形今头 + 历(summary+即将到来清单)]，六格条满宽落在顶行下方。
-    // 无历但有点 → 顶行只放今头（点提供日期）。历/点全无 → 无顶行（面板从点/线区起）。
-    let top = '', almStripRow = '';
-    if (alm) {
-        // 历整块：满宽 summary 头（点它折叠整个历单元）+ [方形今头 + 即将到来清单] 行 + 满宽六格条。
-        // summary 提到顶行上方通栏铺满（原来缩在右列、今头上方左侧留空白）；今头与清单/六格条一起
-        // 挂在 details 内，随历折叠一并收起——原生 <details> 折叠即隐藏，不再需要 :has() 联动隐藏六格条。
-        const dashTop  = `<div class="sp-dash-top">${_dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
-        const stripRow = alm.stripHtml ? `<div class="sp-alm-strip-region">${alm.stripHtml}</div>` : '';
-        top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}</details>`;
-    } else if (hasDateRegion) {
-        top = `<div class="sp-dash-top sp-dash-top-noalm">${_dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}</div>`;
-    }
-    const schRegion   = region('sp-schedule-inline', 'schedule', schInner);
-    const linesRegion = region('sp-lines-inline', 'lines', linesInner);
-    const ledgerRegion = region('sp-ledger-inline', 'ledger', ledgerInner);
-
-    // 段序：轴(top) → 标注池 → 点 → 线。标注池与日历同属「轴」范畴，紧贴轴放；点/线在其下。
-    const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
-    // 面板体为空但有日期数据（三区都关，只剩日期）→ 纯日期扁条：不可折叠，只显今头缩写。
-    if (!body) {
-        const flatBar = _dashSummaryHtml(snap, true, false, false, false, true, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
-        const cls = 'sp-inline-box sp-dash sp-dash-flat' + (readOnly ? ' sp-inline-box-ro' : '');
-        return `<div class="${cls}">${flatBar}</div>`;
-    }
-
-    const summary = _dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
-    const cls = 'sp-inline-box sp-dash' + (readOnly ? ' sp-inline-box-ro' : '');
-    // 默认折叠成一小条（不带 open）：只显摘要「今 M/D 周X ☀ · 历N 点N 线N」，点开才展开完整面板。
-    return `<details class="${cls}">${summary}<div class="sp-dash-body">${body}</div></details>`;
-}
-
-// 用户楼「召回框」：外壳复用 .sp-inline-box/.sp-dash（与 AI 楼一摸一样形式），内含本回合召回注入回显（丰富版）。
-// snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；最新用户楼传 null → 读 injection controller echo。
-// 字段照召回闭环：类型胶囊(上色) + 事由 + 起始 + 推测应至状态(现状)。纯只读——召回是给用户核对「AI 这轮收到了啥」，无逐条操作。
-// 空召回 → 返回 ''（该用户楼不挂框；关注入/无召回的楼天然无此块）。
-// strip 委托（历/点的 per-day tap）共用：从被点元素回溯它所在的框，判断是否历史楼只读框，
-// 若是则取该楼快照，供 drawer 用快照数据渲染（历史楼 tap 展开看到的是那层楼当时的态，非活缓存）。
-// 返回 { readOnly, snap }：readOnly=false（最新楼）时 snap=null，drawer 各 helper 退回读活缓存。
-function _inlineTapCtx(el) {
-    const box = el.closest?.('.sp-inline-box-ro');
-    if (!box) return { readOnly: false, snap: null, resolvedCalendar: loadCalDesc(), resolution: { resolved: true, source: 'live-current' } };
-    const mesEl = el.closest('.mes');
-    const mid = mesEl?.getAttribute('mesid');
-    const snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
-    const fallback = readStore(keyDesc('caldesc-fallback', 'user', ''));
-    const resolution = snapshot.resolveSnapshotCalendar(snap, { fallback, marker: !!fallback, current: loadCalDesc() });
-    const localWeekdayRef = createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor: mid == null ? null : Number(mid), resolveLocal: f => storyWeekdayRefPure(getContext(), resolution.calendar || loadCalDesc(), ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
-    return { readOnly: true, snap, resolvedCalendar: resolution.calendar, resolution, localWeekdayRef };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  楼内渲染窗口控制器（render_depth 深度窗 + IntersectionObserver 视口懒挂）
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// 取代旧的「三套 syncLatest*/ensureLatest*/backfill* + anchor #chat MutationObserver 打地鼠」：
-// 只在「深度窗口 ∩ 视口」内的 AI 楼挂统一框，超窗只留 message.extra 快照、不挂 DOM，滑回秒重建。
-//
-// 深度窗口：最新 N 层 AI 楼（N=有效 render_depth）。N=0（跟随酒馆助手且它设 0=全渲）→ 不设上限、全挂。
-//   inlineRenderDepth>0 → 用它；=0 → 跟随酒馆助手 render.depth；读不到/为 0 → 用兜底常量。
-// 视口：IntersectionObserver 观察每层 AI 楼，进视口才真正 build DOM、离开视口卸 DOM（省重排）。
-//   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
-//
-// 最新楼（chat 里最后一条 AI 楼）= 全功能、读活缓存；其余窗内楼 = 只读、读各自快照。
-
-const INLINE_RENDER_DEPTH_FALLBACK = 6;   // 跟随酒馆助手但读不到/它为 0 时的内置默认深度
-const INLINE_BOX_SELECTOR = '.sp-inline-box';
-
-let _inlineIO = null;           // IntersectionObserver（视口懒挂）
-let _inlineWinTimer = null;     // 深度窗重算防抖
-
-// 有效渲染深度：inlineRenderDepth>0 直接用；=0 跟随酒馆助手 render.depth；后者读不到/为 0 → 兜底。
-// 返回 0 = 不设深度上限（全渲，仅受视口约束）。
-function effectiveRenderDepth() {
-    const own = Number(getSettings().inlineRenderDepth);
-    if (Number.isFinite(own) && own > 0) return Math.floor(own);
-    // 跟随酒馆助手
-    let th = 0;
-    try { th = Number(extension_settings?.tavern_helper?.render?.depth) || 0; } catch { th = 0; }
-    if (th > 0) return Math.floor(th);
-    // 酒馆助手全渲(0)或读不到：构画自己也别无限渲，用兜底把窗口收住（用户诉求正是"别越翻越大"）
-    return INLINE_RENDER_DEPTH_FALLBACK;
-}
-
-// 是否忽略隐藏楼（跟随酒馆助手的「忽略隐藏楼层」；读不到默认 true——隐藏楼本就不该显块）。
-function inlineIgnoreHidden() {
-    try {
-        const v = extension_settings?.tavern_helper?.render?.depth_ignore_hidden;
-        return v === undefined ? true : !!v;
-    } catch { return true; }
-}
-
-// 当前深度窗内的楼元素集合（含 user 楼）。深度按 AI 楼数算（保原 AI 覆盖不变）：取最新 N 层可见 AI 楼，
-// 窗口 = 从其中最早那层起、到 chat 末尾的连续尾段——自然含其间夹的 user 楼与末尾尚未回复的 user 楼。
-// 忽略隐藏楼——不计数、不入窗。depth=0 → 窗口 = 全部可见楼。
-// 返回 { winSet, latestAiEl, latestUserEl }：两个「最新」各自读活态（AI 楼活缓存/池，user 楼活召回）。
-function computeInlineWindow() {
-    const ignoreHidden = inlineIgnoreHidden();
-    const allSel = ignoreHidden
-        ? '#chat .mes:not([is_system="true"])'
-        : '#chat .mes';
-    const aiSel = ignoreHidden
-        ? '#chat .mes:not([is_user="true"]):not([is_system="true"])'
-        : '#chat .mes:not([is_user="true"])';
-    const allFloors = [...document.querySelectorAll(allSel)];
-    const aiFloors  = [...document.querySelectorAll(aiSel)];
-    const userFloors = allFloors.filter(el => el.getAttribute('is_user') === 'true');
-    const latestAiEl   = aiFloors.length   ? aiFloors[aiFloors.length - 1]     : null;
-    const latestUserEl = userFloors.length ? userFloors[userFloors.length - 1] : null;
-    const depth = effectiveRenderDepth();
-    let win;
-    if (depth > 0 && aiFloors.length > depth) {
-        const earliestAi = aiFloors[aiFloors.length - depth];
-        const startIdx = allFloors.indexOf(earliestAi);
-        win = startIdx >= 0 ? allFloors.slice(startIdx) : allFloors;
-    } else {
-        win = allFloors;
-    }
-    return { winSet: new Set(win), latestAiEl, latestUserEl };
-}
-
-// 在某层楼 el 上挂/更新框。isLatest 决定全功能/只读、活缓存/快照；is_user 决定挂 AI 框(点/线/历/池)还是用户召回框。
-// 幂等：内容 HTML 没变则不动 DOM（保住 <details> 展开态、断自激循环）。
-function mountInlineBox(el, isLatest) {
-    if (!pluginEnabled()) return;   // 插件总关：兜住 IO 回调直呼此处的路径
-    const msgEl = el.querySelector('.mes_text');
-    if (!msgEl) return;
-    const isUser = el.getAttribute('is_user') === 'true';
-    let snap = null;
-    if (isLatest) {
-        // 最新楼：先把当前活态冻进本楼快照（幂等），使「最新楼活态」与「该楼死历史」一致——
-        // 将来滑走、它变历史楼时，读到的快照正是此刻这一屏（AI 楼冻点/线/历/池，用户楼冻召回）。
-        const mid = el.getAttribute('mesid');
-        if (mid != null) freezeSnapshotToFloor(mid);
-    } else {
-        const mid = el.getAttribute('mesid');
-        snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
-        if (!snap) { unmountInlineBox(el); return; }   // 历史楼无快照（老楼 / 用户楼无召回）→ 不显框
-    }
-    const floor = Number(el.getAttribute('mesid'));
-    const floorClock = !isLatest && !isUser ? parseStoryClockPure(getContext()?.chat?.[floor]?.mes || '') : null;
-    const recallResult = !isLatest && snap ? snapshot.resolveSnapshotCalendar(snap, { fallback: readStore(keyDesc('caldesc-fallback', 'user', '')), marker: !!readStore(keyDesc('caldesc-fallback', 'user', '')), current: loadCalDesc() }) : null;
-    const html = isUser ? (recallResult && !recallResult.calendar ? '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>' : _buildUserRecallBoxHtml(snap, isLatest, recallResult?.calendar)) : _buildInlineBoxHtml(snap, isLatest, floorClock, floor);
-    const existing = msgEl.querySelector(':scope > ' + INLINE_BOX_SELECTOR);
-    if (!html) { if (existing) existing.remove(); return; }   // 全空 → 不挂
-    if (existing && existing.dataset.sig === _boxSig(html, isLatest)) return;   // 幂等：签名没变不重建
-    if (existing) existing.remove();
-    const box = document.createElement('div');
-    box.innerHTML = html;
-    const boxEl = box.firstElementChild;
-    if (!boxEl) return;
-    boxEl.dataset.sig = _boxSig(html, isLatest);
-    msgEl.appendChild(boxEl);
-    syncVectorGlyphTheme(document, currentTheme, (getSettings().themeMode || 'auto') !== 'auto');
-}
-
-// 框签名：内容 HTML + 楼性质（最新/历史）。用于幂等判断，避免每次视口回调都重建 DOM。
-function _boxSig(html, isLatest) {
-    // 轻量：长度+性质+首尾片段（够区分内容变化，不必全串比对）。
-    return `${isLatest ? 'L' : 'H'}:${html.length}:${html.slice(0, 24)}:${html.slice(-24)}`;
-}
-
-// 卸掉某层楼的统一框（滑出视口/超深度窗时）。
-function unmountInlineBox(el) {
-    el.querySelectorAll(INLINE_BOX_SELECTOR).forEach(b => b.remove());
-}
-
-// 全量重算渲染窗口：确定深度窗 + 观察窗内每层楼、卸掉窗外楼的框。防抖调用（refreshInlineWindow）。
-function _recomputeInlineWindow() {
-    if (!pluginEnabled()) { _clearAllInlineBoxes(); return; }   // 插件总关：兜住防抖定时器直呼此处的路径
-    if (!_anyInlineSegOn()) { _clearAllInlineBoxes(); return; }   // 三段全关 → 清干净、不观察
-    _ensureInlineIO();
-    const { winSet, latestAiEl, latestUserEl } = computeInlineWindow();
-    const allBoxes = document.querySelectorAll('#chat .mes:not([is_system="true"])');
-    for (const el of allBoxes) {
-        const isLatest = (el === latestAiEl || el === latestUserEl);
-        if (winSet.has(el)) {
-            _inlineIO.observe(el);   // 窗内：交给视口决定挂不挂（重复 observe 无害）
-            // 已在视口内的窗内楼立即挂（IO 首帧可能延迟；最新楼尤其要秒出）
-            if (isLatest || _inViewport(el)) mountInlineBox(el, isLatest);
-        } else {
-            _inlineIO.unobserve(el);
-            unmountInlineBox(el);    // 窗外：卸框、停观察，只留 extra 快照
-        }
-    }
-}
-
-// 是否要观察/挂框：只看主开关。三个子开关只管「哪个区显示」，主开关开着时即便三区全关，
-// 仍可能因有日期数据挂一条纯日期扁条，故观察与否只由主开关决定。
-function _anyInlineSegOn() {
-    return getSettings().inlineRenderEnabled !== false;
-}
-
-// 清掉所有 AI 楼上的统一框（含旧三类残块兜底）。
-function _clearAllInlineBoxes() {
-    document.querySelectorAll('#chat ' + INLINE_BOX_SELECTOR).forEach(b => b.remove());
-    _removeAllInlineBlocks(); _removeAllAlmanacBlocks(); _removeAllScheduleBlocks();
-}
-
-// 粗判元素是否在视口内（IO 首挂前的即时兜底用）。
-function _inViewport(el) {
-    const r = el.getBoundingClientRect();
-    return r.bottom > 0 && r.top < (window.innerHeight || document.documentElement.clientHeight);
-}
-
-// 懒建 IntersectionObserver：窗内楼进视口→挂框、离视口→卸框。取代旧 anchor MutationObserver 补块。
-function _ensureInlineIO() {
-    if (_inlineIO) return;
-    _inlineIO = new IntersectionObserver((entries) => {
-        // 每次回调都现算两个「最新楼」（流式/新楼会变）：最新 AI 楼读活缓存/池，最新 user 楼读活召回。
-        const w = computeInlineWindow();
-        for (const ent of entries) {
-            const el = ent.target;
-            const isLatest = (el === w.latestAiEl || el === w.latestUserEl);
-            if (ent.isIntersecting) mountInlineBox(el, isLatest);
-            else if (!isLatest) unmountInlineBox(el);   // 最新楼即便暂时离屏也保留（用户随时会滑回、且它在推进）
-        }
-    }, { root: null, rootMargin: '200px 0px', threshold: 0 });
-}
-
-// 对外主入口：数据变了 / 楼变了 / 开关变了 → 防抖重算窗口。取代旧 syncLatest*/ensure*/backfill*。
-function refreshInlineWindow(immediate = false) {
-    if (!pluginEnabled()) { _clearAllInlineBoxes(); return; }   // 插件总关：不挂任何楼内块（兜住定时器/观察者等一切调用方）
-    clearTimeout(_inlineWinTimer);
-    if (immediate) { _recomputeInlineWindow(); return; }
-    _inlineWinTimer = setTimeout(_recomputeInlineWindow, 120);
-}
-
-
-// 点生成 / 锁定 / 新楼 / swipe / 切聊天 都汇流到这。渲染改由 refreshInlineWindow() 统一负责。
-function syncLatestScheduleBlock(expectedChatId = null) {
-    if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
-    refreshInlineWindow(true);
-}
-
+inlineFeature?.destroy?.();
+inlineFeature = createInlineFeature({
+    getSettings, extensionSettings: extension_settings, getContext, loadAlmanac, almTodayAnchor, loadCalDesc,
+    almWeekdayRef, almDayOfYear, almWeekdayFor, ALM_WEEKDAYS, escapeHtml, calMonthName, getDateAnchor,
+    charStableKey, readCacheRaw, getCacheKey, parseCalendar, weatherGlyph, calHasEra, validRealDate,
+    formatStoryClockHeadParts, storyClockEnabled, latestStoryClock, parseJudgedDate, readStore,
+    getLinesCacheKey, parseLines, linesFeature, snapshot, keyDesc, createWeekdayConsumerContext,
+    storyWeekdayRefPure, ALM_CHAT_SCAN_LIMIT, pointInlineRenderer, axisInlineRenderer, $, _buildLedgerBlockHtml,
+    pluginEnabled, documentRef: document, windowRef: window,
+    freezeSnapshot: freezeSnapshotToFloor,
+    readSnapshot: id => snapshot.readSnapshot(id),
+    resolveSnapshotCalendar: snap => snapshot.resolveSnapshotCalendar(snap, {
+        fallback: readStore(keyDesc('caldesc-fallback', 'user', '')),
+        marker: !!readStore(keyDesc('caldesc-fallback', 'user', '')),
+        current: loadCalDesc(),
+    }),
+    chatMessage: floor => getContext()?.chat?.[floor]?.mes || '', parseStoryClock: parseStoryClockPure,
+    buildUserRecall: _buildUserRecallBoxHtml,
+    coordinateChanged: () => coordinateRuntime?.feature?.onChatDomChanged?.(),
+    isStreaming: () => linesFeature.isStreaming(),
+    syncTheme: () => syncVectorGlyphTheme(document, currentTheme, (getSettings().themeMode || 'auto') !== 'auto'),
+});
+if (document.querySelector('#chat')) inlineFeature.init();
 // ─── 线·伏笔潜伏注入（隐形注入主楼 AI）────────────────────────────────────────
 // 把当前视角的活跃线（跳过终态 stage）以 SYSTEM 角色注入聊天上下文（IN_CHAT + depth），
 // 让主楼 AI「心里有数」、把伏笔当暗流自然缓慢推进；聊天记录里不显示。默认关（opt-in）——
@@ -2744,6 +2269,10 @@ function openPluginViewWithPrefill(view, inputSelector = '', prefill = '') {
 }
 
 function initChatObserver() {
+    if (typeof inlineFeature !== 'undefined' && inlineFeature) {
+        inlineFeature.init();
+        return;
+    }
     const chat = document.querySelector('#chat');
     if (!chat) { setTimeout(initChatObserver, 600); return; }
     let timer = null;
