@@ -19,6 +19,7 @@
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
 import { normalizeTagNames } from './utils/tag-names.js';
+import { diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
 
 const MEMORY_KEY = 'sp-memory';
 const SCHEMA_VERSION = 3;   // v3 = tag-stripped floor text (v2 summaries included thinking/widget noise; requires rebuild)
@@ -35,6 +36,7 @@ let _getSettings = () => ({
 
 // ─── API caller injection ────────────────────────────────────────────────────
 let _callApi = null;
+let _onPause = null;
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let _queue = [];
@@ -357,7 +359,7 @@ async function processQueue() {
     while (_queue.length) {
         const job = _queue.shift();
         try { await handleJob(job); }
-        catch (err) { console.warn('[SP memory] job failed:', job, err); }
+        catch (err) { console.warn('[SP memory] job failed', safeDiagnosticLog('memory', 'request', err, { background: true })); }
     }
     _running = false;
 }
@@ -406,7 +408,7 @@ async function runL0(groupKey, { queueL1 = true } = {}) {
         response = await _callApi(messages, jobSignal());
     } catch (err) {
         if (err?.name === 'AbortError') return false;    // chat switched; drop silently
-        recordFailure(groupKey, err);
+        recordFailure(groupKey, err, 'request');
         return false;
     }
 
@@ -432,17 +434,20 @@ async function runL0(groupKey, { queueL1 = true } = {}) {
     return true;
 }
 
-function recordFailure(groupKey, err) {
+function recordFailure(groupKey, err, phase = 'request') {
     const m = meta();
     const rec = m.failed[groupKey] || { count: 0 };
     rec.count += 1;
-    rec.lastErr = String(err?.message || err);
+    rec.lastErr = diagnosticMessage(err, { phase });
+    rec.diagnostic = safeDiagnosticLog('memory', phase, err, { background: true });
     delete rec.stripped;                 // 这次是真·模型失败，清掉可能残留的净化空标记
     m.failed[groupKey] = rec;
     m.system.consecutiveFails += 1;
     m.system.lastError = rec.lastErr;
     if (rec.count >= 3 || m.system.consecutiveFails >= 3) {
+        const wasPaused = m.system.paused;
         m.system.paused = true;
+        if (!wasPaused) _onPause?.(safeDiagnosticLog('memory', phase, err, { background: true }));
     }
 }
 
@@ -492,7 +497,8 @@ async function runL1(range) {
         response = await _callApi(messages, jobSignal());
     } catch (err) {
         if (err?.name === 'AbortError') return false;
-        m.system.lastError = 'L1 压缩失败：' + String(err?.message || err);
+        m.system.lastError = diagnosticMessage(err, { phase: 'request' });
+        m.system.lastDiagnostic = safeDiagnosticLog('memory', 'request', err, { background: true });
         return false;
     }
     if (getContext().chatId !== chatIdSnap) return false;
@@ -736,9 +742,10 @@ function onChatChanged() {
 // Handles for idempotent (un)registration
 const _listeners = { char: null, swipe: null, edit: null, del: null, chat: null };
 
-export function initMemory({ getSettings, callApi }) {
+export function initMemory({ getSettings, callApi, onPause }) {
     _getSettings = getSettings || _getSettings;
     _callApi = callApi;
+    _onPause = typeof onPause === 'function' ? onPause : null;
     _jobAbortController = new AbortController();
 
     // Idempotent (un)register — hot reload / double init won't stack handlers

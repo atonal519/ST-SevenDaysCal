@@ -264,7 +264,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
     const snapshot = () => state ? { ...state, sourceDate: { ...state.sourceDate }, selectedTargetDate: { ...state.selectedTargetDate } } : null;
     const reportState = reason => {
         try { onStateChange?.({ state: snapshot(), reason }); }
-        catch (error) { console.error('[SP 时光旅行] 状态刷新失败', error); }
+        catch (error) { console.error('[SP 时光旅行] 状态刷新失败', safeDiagnosticLog('time-travel', 'request', error)); }
     };
 
     function begin({ chatId, sourceDate, selectedTargetDate, direction = '' } = {}) {
@@ -318,7 +318,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                 try {
                     await onSequenceEnd?.({ messageId: mid, chatId: cancelled.chatId, sessionId: cancelled.sessionId, reason: 'cancelled' });
                 } catch (error) {
-                    console.error('[SP 时光旅行] 流程收尾失败', error);
+                    console.error('[SP 时光旅行] 流程收尾失败', safeDiagnosticLog('time-travel', 'save', error));
                 }
             }
             return false;
@@ -328,6 +328,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
         reportState('syncing');
         const myAbort = sequenceAbort = new AbortController();
         let terminalReason = 'completed';
+        const failedSteps = [];
         try {
             const destinationDate = cleanDate(await resolveDestinationDate?.({
                 messageId: Number(messageId),
@@ -364,7 +365,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                     }
                 } catch (error) {
                     try { step.onError?.(error); }
-                    catch (reportError) { console.error('[SP 时光旅行] 步骤错误处理失败', reportError); }
+                    catch (reportError) { console.error('[SP 时光旅行] 步骤错误处理失败', safeDiagnosticLog('time-travel', 'parse', reportError)); }
                     result = { status: error?.name === 'AbortError' ? 'cancelled' : 'failed', error };
                 }
                 if (myAbort.signal.aborted || state !== active || active.chatId !== getChatId?.()) {
@@ -374,14 +375,20 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
                 try {
                     await onStepResult?.({ key: step.key || '', result, messageId: Number(messageId), destinationDate });
                 } catch (error) {
-                    console.error('[SP 时光旅行] 步骤结果处理失败', error);
+                    console.error('[SP 时光旅行] 步骤结果处理失败', safeDiagnosticLog('time-travel', 'save', error));
                 }
+                if (result?.status === 'failed') failedSteps.push({ key: step.key || '', error: result.error });
+            }
+            if (failedSteps.length) {
+                terminalReason = 'partial';
+                try { onError?.({ diagnosticCode: 'unknown', phase: 'request', failedSteps: failedSteps.map(step => step.key) }); }
+                catch (reportError) { console.error('[SP 时光旅行] 部分步骤失败提示失败', safeDiagnosticLog('time-travel', 'request', reportError)); }
             }
         } catch (error) {
             terminalReason = error?.name === 'AbortError' ? 'cancelled' : 'failed';
             if (terminalReason === 'failed') {
                 try { onError?.(error); }
-                catch (reportError) { console.error('[SP 时光旅行] 外层错误处理失败', reportError); }
+                catch (reportError) { console.error('[SP 时光旅行] 外层错误处理失败', safeDiagnosticLog('time-travel', 'request', reportError)); }
             }
         } finally {
             if (sequenceAbort === myAbort) sequenceAbort = null;
@@ -392,7 +399,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
             try {
                 await onSequenceEnd?.({ messageId: Number(messageId), chatId: active.chatId, sessionId: active.sessionId, reason: terminalReason });
             } catch (error) {
-                console.error('[SP 时光旅行] 流程收尾失败', error);
+                console.error('[SP 时光旅行] 流程收尾失败', safeDiagnosticLog('time-travel', 'save', error));
             }
         }
         return true;
@@ -400,3 +407,4 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
 
     return Object.freeze({ begin, clear, getState: snapshot, isInitialFloor, handleRendered });
 }
+import { safeDiagnosticLog } from './api/diagnostics.js';

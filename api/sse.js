@@ -58,7 +58,7 @@ export function isPlaceholderContent(s) {
 export function extractCompletion(data) {
     const choice = data?.choices?.[0];
     if (isTruncationFinishReason(responseFinishReason(data))) {
-        throw new Error(truncatedContentMessage());
+        throw makeDiagnosticError('truncated', { phase: 'truncated' });
     }
     const msg = choice?.message;
     let content = msg?.content ?? choice?.text ?? data?.content ?? '';
@@ -68,17 +68,17 @@ export function extractCompletion(data) {
     // 正文为空：兜底取推理内容（至少有东西可渲染，而非白屏/报错）
     const reasoning = msg?.reasoning_content ?? msg?.reasoning ?? '';
     if (typeof reasoning === 'string' && reasoning.trim()) return reasoning.trim();
-    throw new Error(emptyContentMessage(responseFinishReason(data)));
+    throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
 }
 
 export function mapApiError(status, raw) {
     const text = String(raw || '');
     const low = text.toLowerCase();
     // 代理回传的空候选占位（GLM 等推理模型正文为空时常见）：给可读说明而非甩个 <none>
-    if (low === '<none>' || low === 'none' || low.includes('<none>')) return emptyContentMessage('');
+    if (low === '<none>' || low === 'none' || low.includes('<none>')) return diagnosticMessage({ diagnosticCode: 'empty-output' });
     // socket hang up / 网络中断：bbs 作者确认多为超时或网络波动
     if (low.includes('socket hang up') || low.includes('econnreset') || low.includes('network') || low.includes('fetch failed')) {
-        return '网络波动或连接被中断（socket hang up）。多为线路抖动或上游超时，稍后重试；若频繁出现，可在设置里调大「请求超时」或开启「流式传输」。';
+        return diagnosticMessage({ diagnosticCode: 'network' });
     }
     // 400 且报文里出现被拒的参数名 → 引导去剔除框
     if (status === 400) {
@@ -90,8 +90,12 @@ export function mapApiError(status, raw) {
     if (status === 404) return '接口地址不对（404）。请检查 Base URL，或试试补/去掉结尾的 /v1。';
     if (status === 429) return '触发限流（429）。请求太频繁或额度用尽，稍后再试。';
     if (status >= 500) return `上游服务异常（${status}）。通常是中转站或模型服务临时故障，稍后重试。`;
-    if (status) return `HTTP ${status}: ${text.slice(0, 120)}`;
-    return text.slice(0, 160) || '未知错误';
+    if (status === 400) return diagnosticMessage({ diagnosticCode: 'http-400' });
+    if (status === 401 || status === 403) return diagnosticMessage({ diagnosticCode: 'auth' });
+    if (status === 404) return diagnosticMessage({ diagnosticCode: 'not-found' });
+    if (status === 429) return diagnosticMessage({ diagnosticCode: 'rate-limit' });
+    if (status >= 500) return diagnosticMessage({ diagnosticCode: 'server' });
+    return diagnosticMessage({ diagnosticCode: 'unknown' });
 }
 
 // 读取 SSE 流（text/event-stream），拼接 delta.content。
@@ -100,7 +104,7 @@ export async function readSseContent(resp) {
     const reader = resp.body?.getReader();
     if (!reader) {
         const data = await resp.json().catch(() => null);
-        if (!data) throw new Error(emptyContentMessage());
+        if (!data) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
         return extractCompletion(data);
     }
     const decoder = new TextDecoder();
@@ -112,8 +116,8 @@ export async function readSseContent(resp) {
         if (!payload || payload === '[DONE]') return;
         let json;
         try { json = JSON.parse(payload); }
-        catch { throw new Error('流式响应包含损坏的数据事件，未保存部分结果，请重试'); }
-        if (json?.error) throw new Error(json.error.message || '返回错误');
+        catch { throw makeDiagnosticError('sse-invalid', { phase: 'parse' }); }
+        if (json?.error) throw makeDiagnosticError('unknown', { phase: 'request' });
         const choice = json?.choices?.[0];
         const reason = responseFinishReason(json);
         if (reason) finishReason = reason;
@@ -139,7 +143,8 @@ export async function readSseContent(resp) {
         buf = lines.pop() ?? '';
         for (const line of lines) handleLine(line);
     }
-    if (isTruncationFinishReason(finishReason)) throw new Error(truncatedContentMessage());
+    if (isTruncationFinishReason(finishReason)) throw makeDiagnosticError('truncated', { phase: 'truncated' });
+    if (!out.trim()) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
     return out.trim();
 }
 
@@ -166,3 +171,4 @@ export function sleepAbortable(ms, signal) {
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 }
+import { makeDiagnosticError, diagnosticMessage } from './diagnostics.js';

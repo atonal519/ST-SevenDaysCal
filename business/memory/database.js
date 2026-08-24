@@ -1,4 +1,5 @@
 import { isDatabaseMemoEntry, mergeRecallTags } from '../../runtime/refactor-adapters.js';
+import { diagnosticMessage } from '../../api/diagnostics.js';
 
 const EMPTY_COUNTS = Object.freeze({ entries: 0, matched: 0, usable: 0, selected: 0 });
 
@@ -118,24 +119,20 @@ export function createDatabaseMemoryAccess({
     };
 }
 
-function errorReason(error) {
-    const message = error?.message ?? error;
-    return String(message || '').trim();
-}
-
 export function databaseMemoryDiagnostic(result) {
     const bookName = normalizeDatabaseWorldbookName(result?.bookName);
     const book = bookName ? `世界书「${bookName}」` : '目标世界书';
-    const reason = errorReason(result?.error);
+    const knownReason = /^(not found|unavailable|permission denied)$/i.test(String(result?.error?.message || '').trim())
+        ? `：${String(result.error.message).trim()}` : '';
     switch (result?.status) {
         case 'api-unavailable':
             return '检测不到 TavernHelper 世界书读取接口';
         case 'worldbook-unavailable':
             return result?.targetMode === 'explicit' ? `${book}当前不可用` : '未取得角色主世界书';
         case 'worldbook-read-failed':
-            return `${book}读取失败${reason ? `：${reason}` : ''}`;
+            return `${book}读取失败${knownReason || `：${diagnosticMessage(result?.error, { phase: 'request' })}`}`;
         case 'processing-failed':
-            return `${book}数据库纪要处理失败${reason ? `：${reason}` : ''}`;
+            return `${book}数据库纪要处理失败：${diagnosticMessage(result?.error, { phase: 'parse' })}`;
         case 'invalid-response':
             return `${book}返回结构异常`;
         case 'no-match':

@@ -1,4 +1,5 @@
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
+import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnostics.js';
 export const JUDGE_FLOORS = 4;
 
 export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
@@ -61,13 +62,15 @@ export function createLedgerJudgeController(options = {}) {
             if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
             if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
             const cfg = env.config?.();
-            if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), reconcile, applied: [] };
+            if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' }), reconcile, applied: [] };
             const target = env.validDate?.(travel?.targetDate, env.calendar?.());
             const floorContext = env.floorContext?.();
             const floor = floorContext?.floor ?? null;
             const date = target || floorContext?.date || env.today?.();
             const judgePrompt = buildJudgePrompt(env, date, judgeable);
-            const raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true });
+            let raw;
+            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true }); }
+            catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
             if (parsed?.status === 'none') return { status: 'unchanged', reason: 'none', reconcile, applied: [] };
@@ -99,11 +102,16 @@ export function createLedgerJudgeController(options = {}) {
             return { status: 'updated', applied: applied.map(change => change.事由), reconcile };
         } catch (error) {
             if (abortController !== ctrl) return { status: 'cancelled', reason: 'superseded', reconcile, applied: [], error };
-            if (error?.phase === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error };
             if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
-            if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
             if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
-            return { status: 'failed', reason: error?.saveResult?.reason || error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed'), error, saveResult: error?.saveResult, reconcile, applied: [] };
+            if (error?.ledgerPhase === 'rollback-save-failed' || error?.phase === 'rollback-save-failed') { logLedgerFailure(error, { ledgerPhase: 'rollback-save-failed' }); if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.('刻度判定失败：保存状态无法确认，请检查当前聊天数据', null, true); return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error }; }
+            if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
+            const reason = error?.saveResult?.reason || error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed');
+            if (reason === 'api-failed' || reason === 'judge-request' || error?.ledgerPhase === 'judge-request') {
+                logLedgerFailure(error, { ledgerPhase: error?.ledgerPhase || 'judge-request' });
+                if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.(ledgerFailureText('刻度判定失败', error, { phase: error?.ledgerPhase || 'judge-request' }), null, true);
+            }
+            return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, applied: [] };
         } finally { finish(ctrl, owner); removeBridge(); }
     };
     return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };

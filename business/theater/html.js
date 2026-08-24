@@ -13,6 +13,7 @@ export function safePlainTextHtml(raw) {
 }
 
 export function ensureTheaterHtml(html, raw) {
+    // 兼容旧 UI seam；新的 renderTheaterPieceHtml 在持久化展示时强制二次净化。
     if (!String(html || '').trim() && String(raw || '').trim()) return safePlainTextHtml(raw);
     return html;
 }

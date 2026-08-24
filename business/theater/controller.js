@@ -1,7 +1,7 @@
-export function createTheaterController({ owners, repository, generate, current, chatId, chatRevision, names, storyContext, stage, commit, error, reset } = {}) {
+export function createTheaterController({ owners, repository, generate, current, chatId, chatRevision, names, settings, storyContext, stage, commit, error, reset } = {}) {
     let active = null;
     const valid = owner => owners.isValid(owner, { chatId: chatId(), chatRevision: chatRevision() }) && !owner.controller.signal.aborted;
-    const cancellationReason = owner => owner?.cancelReason === 'aborted' ? 'aborted' : 'stale';
+    const cancellationReason = owner => owner?.cancelReason === 'user-abort' ? 'aborted' : (owner?.cancelReason || 'stale');
     async function run(input, options = {}) {
         if (active) return { status: 'skipped' };
         // Freeze the host names exactly once. Story loading and both API stages may
@@ -12,11 +12,12 @@ export function createTheaterController({ owners, repository, generate, current,
         owner.userName = frozenNames.userName || '用户';
         owner.charName = frozenNames.charName || '角色';
         owner.templateSource = options.templateSource || null;
+        owner.settings = settings?.();
         active = owner;
         try {
             owner.storyContext = await storyContext?.(owner);
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
-            const piece = await generate(owner.input, { ...options, signal: owner.controller.signal, userName: owner.userName, charName: owner.charName, storyContext: owner.storyContext, onStage: text => { if (valid(owner)) stage?.(text, owner); } });
+            const piece = await generate(owner.input, { ...options, signal: owner.controller.signal, userName: owner.userName, charName: owner.charName, storyContext: owner.storyContext, settings: owner.settings, isCurrent: () => valid(owner), onStage: text => { if (valid(owner)) stage?.(text, owner); } });
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
             const saved = await repository.pushDraft(owner.chatId, piece);
             if (!saved?.ok) return { status: 'failed', reason: 'draft-save', error: saved?.error || new Error('draft-save-failed') };
@@ -30,5 +31,5 @@ export function createTheaterController({ owners, repository, generate, current,
         }
         finally { if (active === owner) active = null; owners.finish(owner); }
     }
-    return { run, abort: (reason = 'aborted') => { if (!active) return false; const owner = active; owner.cancelReason = reason === 'aborted' ? 'aborted' : 'stale'; owners.invalidate('theater'); reset?.(owner, owner.cancelReason); active = null; return true; }, get owner() { return active; }, get busy() { return !!active; } };
+    return { run, abort: (reason = 'user-abort') => { if (!active) return false; const owner = active; owner.cancelReason = reason === 'aborted' ? 'user-abort' : reason; owners.invalidate('theater'); reset?.(owner, owner.cancelReason); active = null; return true; }, get owner() { return active; }, get busy() { return !!active; } };
 }

@@ -9,7 +9,7 @@ const OWNED_ROOTS = ['/sp-store', '/sp-ledger'];
 function clone(value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); }
 function featureCheck(api) { return REQUIRED.every(name => typeof api?.[name] === 'function'); }
 function validIntegrity(value) { return typeof value === 'string' && value.trim().length > 0; }
-function ownedPath(path) { return OWNED_ROOTS.some(root => path === root || path.startsWith(`${root}/`)); }
+function ownedPath(path, roots = OWNED_ROOTS) { return roots.some(root => path === root || path.startsWith(`${root}/`)); }
 function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 function pointer(key) { return String(key).replace(/~/g, '~0').replace(/\//g, '~1'); }
 
@@ -39,9 +39,9 @@ function ownedDiff(before, after, path, out = []) {
     return out;
 }
 
-function changedOwnedKeys(before, after) {
+function changedOwnedKeys(before, after, roots = OWNED_ROOTS) {
     // metadata object 使用 `sp-store`，JSON Pointer 才使用 `/sp-store`。
-    return OWNED_ROOTS.flatMap(root => {
+    return roots.flatMap(root => {
         const key = root.slice(1);
         return ownedDiff(before?.[key], after?.[key], root);
     });
@@ -69,10 +69,10 @@ function setPointer(value, path, next, remove = false) {
     return value;
 }
 
-function expandRootOperations(operations, previous, next, allowRootAdds = new Set()) {
+function expandRootOperations(operations, previous, next, allowRootAdds = new Set(), roots = OWNED_ROOTS) {
     const expanded = [];
     for (const operation of operations || []) {
-        if (OWNED_ROOTS.includes(operation?.path)) {
+        if (roots.includes(operation?.path)) {
             if (operation.op === 'test') { expanded.push(operation); continue; }
             const key = operation.path.slice(1);
             if (operation.op === 'add' && allowRootAdds.has(operation.path) && !(key in previous) && key in next) {
@@ -85,22 +85,24 @@ function expandRootOperations(operations, previous, next, allowRootAdds = new Se
     return expanded;
 }
 
-function validateBusinessOperations(operations, allowedRootAdds = new Set()) {
+function validateBusinessOperations(operations, allowedRootAdds = new Set(), roots = OWNED_ROOTS) {
     for (const operation of operations || []) {
         if (operation?.op === 'test') {
-            if (!(operation.path === '/integrity' || (ownedPath(operation?.path) && !OWNED_ROOTS.includes(operation.path))) || 'from' in operation) return false;
+            if (!(operation.path === '/integrity' || (ownedPath(operation?.path, roots) && !roots.includes(operation.path))) || 'from' in operation) return false;
             continue;
         }
         if (!['add', 'remove', 'replace'].includes(operation?.op)) return false;
         const rootAdd = operation?.op === 'add' && allowedRootAdds.has(operation?.path);
-        if (!ownedPath(operation?.path) || (OWNED_ROOTS.includes(operation.path) && !rootAdd)) return false;
+        if (!ownedPath(operation?.path, roots) || (roots.includes(operation.path) && !rootAdd)) return false;
         if ('from' in operation) return false;
     }
     return true;
 }
 
-export async function createTargetMetadataSaver({ coreModule = null, fetchImpl = globalThis.fetch } = {}) {
-    const api = coreModule || await import('../../../../../script.js');
+export function createTargetMetadataSaver({ coreModule = null, fetchImpl = globalThis.fetch, ownedRoots = OWNED_ROOTS } = {}) {
+    const roots = [...new Set((ownedRoots || OWNED_ROOTS).map(root => String(root).startsWith('/') ? String(root) : `/${root}`))];
+    const api = coreModule;
+    if (!api) return { supported: false, reason: 'core-module-required' };
     if (!featureCheck(api) || typeof fetchImpl !== 'function') return { supported: false, reason: 'unsupported-core-contract' };
     const invalidate = target => { try { api.invalidateChatWriteSnapshot(target); } catch { /* cache invalidation is best effort */ } };
 
@@ -116,8 +118,8 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
         if (!validTarget || !before || !validIntegrity(expectedIntegrity) || !afterMetadata || typeof afterMetadata !== 'object') return null;
         // after 缺少一个此前存在的 root 不是“清空”意图，直接拒绝；仅在
         // before root 缺失且 after 提供对象时，才生成必要 child add。
-        if (OWNED_ROOTS.some(root => !(root.slice(1) in afterMetadata) && (root.slice(1) in before))) return null;
-        const changes = changedOwnedKeys(before, afterMetadata);
+        if (roots.some(root => !(root.slice(1) in afterMetadata) && (root.slice(1) in before))) return null;
+        const changes = changedOwnedKeys(before, afterMetadata, roots);
         if (!changes.length) return null;
         return { target: clone(fixedTarget), before, after: clone(afterMetadata), expectedIntegrity, changes };
     }
@@ -132,7 +134,7 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
             if (!latest || !validIntegrity(integrity)) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'missing-latest-integrity' };
             const rebased = clone(latest);
             const allowedRootAdds = new Set();
-            for (const root of OWNED_ROOTS) {
+            for (const root of roots) {
                 const key = root.slice(1);
                 const beforeHas = key in captured.before;
                 const latestHas = key in latest;
@@ -152,8 +154,8 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
             }
             const built = await api.buildChatMetadataPatchOperationsAsync(latest, rebased);
             if (!isCurrent()) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'stale-after-build' };
-            if ((built || []).some(op => OWNED_ROOTS.includes(op?.path) && ['replace', 'remove'].includes(op?.op))) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
-            let businessOperations = expandRootOperations(built.filter(op => op?.path !== '/integrity'), latest, rebased, allowedRootAdds);
+            if ((built || []).some(op => roots.includes(op?.path) && ['replace', 'remove'].includes(op?.op))) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
+            let businessOperations = expandRootOperations(built.filter(op => op?.path !== '/integrity'), latest, rebased, allowedRootAdds, roots);
             // 服务端 fast-json-patch 要求父对象先存在；root 原本缺失时以一个
             // 受控 root add 承载本事务内容，不能再跟随重复 child add。
             for (const root of allowedRootAdds) {
@@ -162,7 +164,8 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
                 businessOperations.push({ op: 'add', path: root, value: clone(rebased[key]) });
             }
             const hasMutation = businessOperations.some(op => ['add', 'remove', 'replace'].includes(op?.op));
-            if (!validateBusinessOperations(businessOperations, allowedRootAdds) || !hasMutation) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
+            const validOperations = validateBusinessOperations(businessOperations, allowedRootAdds, roots);
+            if (!validOperations || !hasMutation) return { ok: false, dispatched: false, commitState: 'not-dispatched', reason: 'invalid-operation' };
             const operations = [{ op: 'test', path: '/integrity', value: integrity }, ...businessOperations];
             const headers = api.getRequestHeaders();
             const body = captured.target.is_group
@@ -218,3 +221,23 @@ export async function createTargetMetadataSaver({ coreModule = null, fetchImpl =
 }
 
 export const targetMetadataCoreContract = Object.freeze({ required: REQUIRED.slice(), ownedRoots: OWNED_ROOTS.slice() });
+
+// 官方 host 没有固定目标 patch contract 时的 best-effort 保存；结果明确标记为未确认。
+export function createBestEffortMetadataSaver({ context = () => null } = {}) {
+    return {
+        supported: true,
+        mode: 'legacy-unconfirmed',
+        async commit(boundContext = null, options = {}) {
+            const ctx = boundContext || context?.();
+            const ownerGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => true;
+            const target = options.target;
+            if (!ctx?.chatId || typeof ctx.saveMetadata !== 'function') return { ok: false, reason: 'official-saveMetadata-unavailable', commitState: 'not-dispatched', dispatched: false };
+            if (target?.chatId && target.chatId !== ctx.chatId) return { ok: false, reason: 'target-chat-mismatch', commitState: 'not-dispatched', dispatched: false };
+            if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+            const result = ctx.saveMetadata();
+            if (result?.then) await result;
+            if (!ownerGuard()) return { ok: true, stale: true, reason: 'stale-after-save', commitState: 'legacy-unconfirmed', dispatched: true, bestEffort: true };
+            return { ok: true, reason: 'official-saveMetadata-best-effort', commitState: 'legacy-unconfirmed', dispatched: true, bestEffort: true };
+        },
+    };
+}

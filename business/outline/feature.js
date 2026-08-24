@@ -59,6 +59,7 @@ export function createOutlineFeature(env = {}) {
         bridgeAbortSignal: env.bridgeAbortSignal,
         injection,
         toast: (message, error) => ui.toast(message, error),
+        logDiagnostic: env.logDiagnostic,
         onCursorChanged: ({ target }) => { if (ui.isOutlineMode()) refreshPanel(target); },
     });
     const generation = createOutlineGeneration({

@@ -6,7 +6,7 @@ export function formatLedgerJudgeFeedback(result) {
     const text = {
         busy: '已有刻度更新正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法判定' : r.reason === 'no-entry' ? '暂无可判定的活跃事件' : r.reason === 'spDisabled' ? '刻度功能已停用' : '刻度更新已跳过',
-        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'source-scan-failed' ? '来源扫描失败，未发起 API 请求' : r.reason === 'source-state-invalid' ? '来源状态无法确认，未发起 API 请求' : r.reason === 'source-stale-chat' ? '来源快照或聊天状态已变化，未发起 API 请求' : r.reason === 'source-save-failed' ? '来源校对保存失败，未发起 API 请求' : r.reason === 'metadata-capture-failed' ? '元数据快照无法恢复，未发起保存请求' : r.reason === 'invalid-operation' ? '存档操作校验失败，模型判定未开始' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'judge-state-invalid' ? '刷新保存后状态不一致，已撤销' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，未发起 API 请求' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，持久状态暂无法确认' : r.reason === 'judge-save-failed' ? '刻度保存失败，本轮未写入更新' : r.reason === 'capture-save-failed' ? '刻度标注保存失败，未写入更新' : '刻度判定失败，请检查 API 或网络',
+        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'source-scan-failed' ? '来源扫描失败，未发起 API 请求' : r.reason === 'source-state-invalid' ? '来源状态无法确认，未发起 API 请求' : r.reason === 'source-stale-chat' ? '来源快照或聊天状态已变化，未发起 API 请求' : r.reason === 'source-save-failed' ? '来源校对保存失败，未发起 API 请求' : r.reason === 'metadata-capture-failed' ? '元数据快照无法恢复，未发起保存请求' : r.reason === 'invalid-operation' ? '存档操作校验失败，模型判定未开始' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'judge-state-invalid' ? '刷新保存后状态不一致，已撤销' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，未发起 API 请求' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，持久状态暂无法确认' : r.reason === 'judge-save-failed' ? '刻度保存失败，本轮未写入更新' : r.reason === 'capture-save-failed' ? '刻度标注保存失败，未写入更新' : ledgerFailureText('刻度判定失败', r.error, { ledgerPhase: r.error?.ledgerPhase || 'judge-request' }),
         invalid: '刻度判定格式无法识别',
         unchanged: r.reason === 'protected' ? '本轮变化均无效或受保护，刻度未更新' : '本轮无需更新刻度',
         updated: `刻度刷新 ${(r.applied || []).length} 条${r.applied?.length ? `：${r.applied.join('、')}` : ''}${s.judgeable != null ? `；参与判定 ${s.judgeable} 条` : ''}${pendingText} · 请注意查看`,
@@ -33,7 +33,7 @@ export function formatLedgerCaptureFeedback(result) {
     const text = {
         busy: '已有刻度标注正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法标注' : r.reason === 'spDisabled' ? '刻度功能已停用' : '本次刻度标注已跳过',
-        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，已恢复本地状态' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，请检查当前聊天数据' : '刻度标注失败，请检查 API 或网络',
+        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，已恢复本地状态' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，请检查当前聊天数据' : ledgerFailureText('刻度标注失败', r.error, { ledgerPhase: r.error?.ledgerPhase }),
         unchanged: r.reason === 'duplicate' ? '没有新事件（都已在刻度上）' : '未发现可登记的新事件',
         'needs-confirmation': '本次标注需要确认后才能继续',
         cancelled: r.reason === 'confirmation-cancelled' ? '已取消本次刻度标注' : '刻度标注已中止',
@@ -56,7 +56,7 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         if (inline) {
             $button.prop('disabled', !!busy).attr('aria-disabled', busy ? 'true' : 'false').text(busy ? '标注中…' : '标注');
         } else {
-            $button.attr('aria-disabled', 'false').attr('title', busy ? '再次点击可中止当前标注' : '立即标注一次').text(busy ? '标注中…' : '标注');
+            $button.attr('aria-disabled', 'false').attr('title', busy ? '再次点击可中止当前标注' : '立即标注一次').text(busy ? '中止标注' : '标注');
         }
     };
     const runManualCapture = async (button, { inline = false } = {}) => {
@@ -128,3 +128,4 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         chat.on(`click${namespace}`, '.sp-inline-ledger-close', async function (e) { e.stopPropagation(); await actions.close($(this).attr('data-id'), { inline: true, panel: false }); });
     }
 }
+import { ledgerFailureText } from './diagnostics.js';

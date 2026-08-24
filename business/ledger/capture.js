@@ -195,7 +195,7 @@ export function createLedgerCaptureController(options = {}) {
         const charKey = env.charKey?.(ctx);
         if (!charKey) { if (manual) env.toast?.('当前没有角色卡，无法标注', null, true); return { status: 'skipped', reason: 'no-character', feedbackShown: manual }; }
         const cfg = env.config?.();
-        if (!cfg?.url || !cfg?.key) { if (manual) env.toast?.('请先在设置中填写 API', null, true); return { status: 'failed', reason: 'no-api', error: new Error('未配置 API'), feedbackShown: manual }; }
+        if (!cfg?.url || !cfg?.key) { if (manual) env.toast?.('请先在设置中填写 API', null, true); return { status: 'failed', reason: 'no-api', error: Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' }), feedbackShown: manual }; }
         const chatId = ctx.chatId;
         const ownerSnapshot = ledgerOwnerIdentity(ctx);
         const ctrl = new AbortController(); abortController = ctrl; busy = true;
@@ -228,7 +228,9 @@ export function createLedgerCaptureController(options = {}) {
             }
             const captureOpts = { ...(travel || {}), noAlmanac: true };
             if (recentRecords.length) captureOpts.ledgerSourceFloors = recentRecords;
-            const raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_FLOORS, captureOpts);
+            let raw;
+            try { raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_FLOORS, captureOpts); }
+            catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             let picked = env.parseCapture?.(raw) || [];
             if (!picked.length) { if (manual) env.toast?.('未发现可登记的新事件'); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
@@ -244,7 +246,9 @@ export function createLedgerCaptureController(options = {}) {
                     const unresolved = candidates.filter(item => !String(item._sourceToken || '').trim());
                     if (!unresolved.length) break;
                     const batch = provenanceBatches[i];
-                    const result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), cfg, userName, charName, ctrl.signal, 0, { ...(travel || {}), noAlmanac: true, ledgerSourceFloors: batch });
+                    let result;
+                    try { result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), cfg, userName, charName, ctrl.signal, 0, { ...(travel || {}), noAlmanac: true, ledgerSourceFloors: batch }); }
+                    catch (error) { markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); throw error; }
                     if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
                     const found = env.parseCapture?.(result) || [], batchMap = ledgerSourceMap(batch.flatMap(record => record.sources)), hits = [];
                     for (const item of found) {
@@ -274,10 +278,10 @@ export function createLedgerCaptureController(options = {}) {
             return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: manual || env.settings?.()?.notifyMode === 'full' };
         } catch (err) {
             const ownerCurrent = sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
-            if (err?.phase === 'rollback-save-failed') {
-                if (!ownerCurrent) return { status: 'cancelled', reason: 'source-stale-chat', stale: true, error: err };
-                env.toast?.('刻度保存后状态已过期，且回滚失败，请检查当前聊天数据', null, true);
-                return { status: 'failed', reason: 'rollback-save-failed', error: err, feedbackShown: true };
+            if (err?.ledgerPhase === 'rollback-save-failed' || err?.phase === 'rollback-save-failed') {
+                logLedgerFailure(err, { ledgerPhase: 'rollback-save-failed' });
+                if (ownerCurrent) env.toast?.('刻度保存后状态已过期，且回滚失败，请检查当前聊天数据', null, true);
+                return { status: 'failed', reason: 'rollback-save-failed', error: err, feedbackShown: ownerCurrent };
             }
             if (String(err?.phase || '').startsWith('capture-stale-chat')) return { status: 'cancelled', stale: true };
             if (abortController !== ctrl || !ownerCurrent) return { status: 'cancelled', reason: 'source-stale-chat', stale: true, error: err };
@@ -286,7 +290,11 @@ export function createLedgerCaptureController(options = {}) {
             if (err?.phase === 'persistence-not-committed') { env.toast?.('保存未提交，已恢复本地状态', null, true); return { status: 'failed', reason: 'persistence-not-committed', error: err, feedbackShown: true }; }
             if (err?.phase === 'persistence-unknown') { env.toast?.('刻度持久状态无法确认，已恢复本地状态', null, true); return { status: 'failed', reason: 'persistence-unknown', error: err, feedbackShown: true }; }
             if (err?.spDisabled) return { status: 'skipped', reason: 'spDisabled' };
-            env.toast?.('刻度标注失败，请检查 API 或网络', null, true); return { status: 'failed', reason: err?.phase || 'api-failed', error: err, feedbackShown: true };
+            markLedgerError(err, { phase: err?.ledgerPhase || 'capture-request' });
+            logLedgerFailure(err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal });
+            const manualFailure = manual || env.settings?.()?.notifyMode === 'full';
+            if (manualFailure) env.toast?.(ledgerFailureText('刻度标注失败', err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal }), null, true);
+            return { status: 'failed', reason: err?.ledgerPhase || err?.phase || 'api-failed', error: err, feedbackShown: manualFailure };
         } finally { clear(ctrl); removeBridge(); }
     };
     return {
@@ -296,3 +304,4 @@ export function createLedgerCaptureController(options = {}) {
         get isBusy() { return busy; }, get progress() { return progress; }, get abortController() { return abortController; },
     };
 }
+import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnostics.js';

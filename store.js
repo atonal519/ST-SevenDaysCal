@@ -37,6 +37,9 @@ export const OWN_KEYS = ['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger'];
 // dashed（虚线·冷知识）与 almanac（历）都不分视角，运行时固定走 user scope（子键恒为 dashed-user / almanac-user）。
 // 顺序无所谓，但注意没有任何一个是另一个的前缀——子键解析(usageByKind/clearKind)依赖这点。
 export const KINDS = ['schedule', 'outline', 'lines', 'creative-chat', 'space-chat', 'dashed', 'almanac', 'caldesc', 'caldesc-fallback', 'date-anchor'];
+export const INTERNAL_KINDS = Object.freeze(['caldesc', 'caldesc-fallback', 'date-anchor']);
+export const USER_CLEAR_KINDS = Object.freeze(KINDS.filter(kind => !INTERNAL_KINDS.includes(kind)));
+const isInternalKind = kind => INTERNAL_KINDS.includes(String(kind || ''));
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  scope / 子键
@@ -281,7 +284,12 @@ function valueBytes(v) {
 // 子键 `{kind}-{scope}` → kind。kind 里 creative-chat/space-chat 含连字符，靠已知 KINDS 前缀匹配，
 // 且 KINDS 两两互不为前缀，故匹配唯一。
 function kindOfSubKey(sk) {
-    return KINDS.find(k => sk === k || sk.startsWith(k + '-')) || null;
+    const value = String(sk || '');
+    return [...KINDS].sort((a, b) => b.length - a.length).find(k => value === k || value.startsWith(k + '-')) || null;
+}
+
+export function isStorageDataKeyClearable(dataKey) {
+    return String(dataKey || '') === 'almanac-user';
 }
 
 // 本 chat 各 kind 用量：{ schedule, outline, lines, 'creative-chat', 'space-chat' } → 字节数。
@@ -304,7 +312,7 @@ export function storeTotalBytes() {
 
 // 清掉某 kind 的所有 scope 子键（我/TA 视角全清）。返回删除条数。
 export function clearKind(kind) {
-    if (!KINDS.includes(kind)) return 0;
+    if (!USER_CLEAR_KINDS.includes(kind)) return 0;
     const s = store();
     if (!s) return 0;
     let n = 0;
@@ -318,6 +326,8 @@ export function clearKind(kind) {
 // 精确删除一个 sp-store.data 子键；不按前缀扩展，供高风险 UI 清理使用。
 export async function clearDataKeyAsync(dataKey) {
     if (typeof dataKey !== 'string' || !dataKey) return false;
+    if (!isStorageDataKeyClearable(dataKey)) return false;
+    if (isInternalKind(kindOfSubKey(dataKey))) return false;
     const s = store();
     if (!s || !(dataKey in s.data)) return false;
     const previous = s.data[dataKey];
@@ -332,7 +342,7 @@ export async function clearDataKeyAsync(dataKey) {
 }
 
 export async function clearKindAsync(kind) {
-    if (!KINDS.includes(kind)) return 0;
+    if (!USER_CLEAR_KINDS.includes(kind)) return 0;
     const s = store();
     if (!s) return 0;
     const removed = Object.entries(s.data).filter(([sk]) => sk === kind || sk.startsWith(kind + '-'));
@@ -357,7 +367,7 @@ export function ownKeyBytes(key) {
 // 整体删掉一个构画自有 key（面板"清空本聊天全部点线面间 / 清空记忆 / 清空棱永久"用）。
 // 安全阀：只允许 OWN_KEYS 里的 key，别的插件的数据一律拒删。
 export function clearOwnKey(key) {
-    if (!OWN_KEYS.includes(key)) return false;
+    if (!OWN_KEYS.includes(key) || key === STORE_KEY) return false;
     const cm = getContext?.()?.chatMetadata;
     if (!cm || cm[key] == null) return false;
     delete cm[key];
@@ -366,7 +376,7 @@ export function clearOwnKey(key) {
 }
 
 export async function clearOwnKeyAsync(key) {
-    if (!OWN_KEYS.includes(key)) return false;
+    if (!OWN_KEYS.includes(key) || key === STORE_KEY) return false;
     const cm = getContext?.()?.chatMetadata;
     if (!cm || cm[key] == null) return false;
     const previous = cm[key];

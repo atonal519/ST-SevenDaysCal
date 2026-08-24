@@ -19,7 +19,7 @@ export function createLinesGenerationController(env = {}) {
             const cfg = env.loadConfig();
             if (!cfg?.url || !cfg?.key) {
                 env.missingApi?.({ silent });
-                throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
+                throw makeDiagnosticError('config-missing');
             }
             const savedSnapshot = env.readSaved() || {};
             const commitBaseline = Object.freeze({ chatId, key: env.cacheKey?.() ?? null, raw: String(savedSnapshot.raw || ''), ts: Number(savedSnapshot.ts) || null, cursor: savedSnapshot.cursor ?? 0, html: savedSnapshot.html ?? null });
@@ -51,7 +51,7 @@ export function createLinesGenerationController(env = {}) {
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
             if (!checked.ok) {
-                env.fail?.(new Error(`线输出无效：${checked.reason}`), { silent });
+                env.fail?.(makeDiagnosticError('invalid-structure', { phase: 'parse' }), { silent });
                 return { status: 'failed', reason: checked.reason };
             }
             const latest = env.readSaved() || {};
@@ -76,3 +76,4 @@ export function createLinesGenerationController(env = {}) {
     };
     return { run };
 }
+import { diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';

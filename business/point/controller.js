@@ -1,3 +1,4 @@
+import { diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 // 点任务控制器的宿主边界：owner/lifecycle 由宿主提供，模块只负责统一清理与中止。
 export function splitAbortController(controller) {
     if (!controller || typeof controller.abort !== 'function' || !controller.signal || typeof controller.signal.addEventListener !== 'function') throw new TypeError('需要原生 AbortController');
@@ -64,8 +65,8 @@ export function createPointController(env) {
             const sameOwnerView = sameOwnerIdentity(owner, view, char); const isCurrent = env.state.scheduleAbortController === owner.controller; if (!isCurrent) return; env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton(null); if (!env.canCommit(owner, travelContext) || !sameOwnerView) return;
             if (error?.name === 'AbortError') { restoreManualOwner(owner); return; }
             const restored = restoreManualOwner(owner);
-            if (restored && owner.previousCachedSchedule) env.toast(`点生成失败：${error.message || '未知错误'}；已保留原存档`, null, true);
-            else { const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${env.escape(error.message || '未知错误')}</p></div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true); }
+            if (restored && owner.previousCachedSchedule) env.toast(`点生成失败：${diagnosticMessage(error)}；已保留原存档`, null, true);
+            else { const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${env.escape(diagnosticMessage(error))}</p></div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true); }
         } finally { cleanupManualOwner(owner); }
     }
     async function syncPointToToday(auto = false, travelContext = null) {
@@ -75,15 +76,15 @@ export function createPointController(env) {
         const view = env.view(), char = env.char(), key = env.key(view, char), saved = key && env.read(key), previous = saved?.raw || ''; if (!key || !previous) return { status: 'skipped' };
         env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); const { controller, signal } = splitAbortController(env.setAuto(owner.controller)); env.setSyncing(true);
         try {
-            const ctx = env.context(), cfg = env.config(); if (!cfg.url || !cfg.key) { if (!auto || env.notify() === 'full') env.toast('未配置主 API，无法同步点', null, true); return { status: 'failed', error: new Error('未配置主 API') }; }
+            const ctx = env.context(), cfg = env.config(); if (!cfg.url || !cfg.key) { const error = makeDiagnosticError('config-missing'); env.logDiagnostic?.(safeDiagnosticLog('point', 'request', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(diagnosticMessage(error), null, true); return { status: 'failed', error }; }
             const user = ctx.name1 || '用户', character = view === 'char' ? (char || ctx.name2 || '角色') : (ctx.name2 || '角色'), subject = view === 'char' ? character : user, parsed = env.parse(previous, env.calendar()), pinned = [];
             for (const day of parsed.days) for (const event of day.events) if (event.pin) pinned.push(event); if (parsed.future) for (const event of parsed.future.events) if (event.pin) pinned.push(event);
             const fresh = await env.generate(ctx, user, character, view, signal, pinned, travelContext); if (!env.canCommit(owner, travelContext) || env.state.isGenerating || env.chatId() !== chatId) return { status: 'cancelled' };
-            const today = travelContext?.targetDate || env.today(); const freshCheck = env.validate(fresh, env.calendar()); if (!freshCheck.ok) { if (!auto || env.notify() === 'full') env.toast(`点同步失败：${freshCheck.code || freshCheck.reason || '返回不完整'}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error: new Error(freshCheck.code || '返回不完整') }; }
-            const merged = env.forceStart(env.mergePinned(previous, fresh, env.calendar()), today.month, today.day, env.calendar()); const mergedCheck = env.validate(merged, env.calendar()); if (!mergedCheck.ok) { if (!auto || env.notify() === 'full') env.toast(`点同步失败：${mergedCheck.code || mergedCheck.reason || '结构不完整'}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error: new Error('同步结果不完整') }; }
+            const today = travelContext?.targetDate || env.today(); const freshCheck = env.validate(fresh, env.calendar()); if (!freshCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
+            const merged = env.forceStart(env.mergePinned(previous, fresh, env.calendar()), today.month, today.day, env.calendar()); const mergedCheck = env.validate(merged, env.calendar()); if (!mergedCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
             env.write(key, { raw: merged, userName: subject, ts: Date.now() }); env.sync(); if (env.view() === view && (view !== 'char' || env.char() === char)) { env.setCached(env.render(merged, subject, view, env.calendar())); if (env.panelVisible()) env.setBody(env.cached()); }
             if (auto ? env.notify() === 'full' : env.notify() !== 'off') env.toast(`点已同步到 ${env.monthName(today.month)}${today.day}日`); return { status: 'updated', targetDate: today };
-        } catch (error) { if (error?.name !== 'AbortError' && env.canCommit(owner, travelContext) && (!auto || env.notify() === 'full')) env.toast(`点同步失败：${error.message || '未知错误'}`, null, true); return { status: error?.name === 'AbortError' || travelContext?.signal?.aborted ? 'cancelled' : 'failed', error }; }
+        } catch (error) { const canNotify = error?.name !== 'AbortError' && env.canCommit(owner, travelContext); if (canNotify) { env.logDiagnostic?.(safeDiagnosticLog('point', 'request', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}`, null, true); } return { status: error?.name === 'AbortError' || travelContext?.signal?.aborted ? 'cancelled' : 'failed', error }; }
         finally {
             const pending = env.owners.peekPending(owner); const lifecycle = env.followupState(owner, travelContext, allowPending, pending); if (!lifecycle.canCleanup) return; env.setAuto(null); env.setSyncing(false); env.clearBusy();
             if (!lifecycle.canFollowup) env.owners.discardPending(owner); const followup = pending?.targetDate ? { ...(travelContext || {}), targetDate: pending.targetDate } : travelContext;

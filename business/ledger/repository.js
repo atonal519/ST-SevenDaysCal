@@ -271,6 +271,10 @@ export async function applyCapturePlanAtomic({ additions = [], patches = [] } = 
         if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'capture-save-failed'), { phase: 'capture-save-failed', saveResult: saved });
         if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length)) await compensateOrFail(persist, ctx, owner?.target, before, () => { m.entries = before.entries; m.seq = before.seq; }, Object.assign(new Error('capture-state-invalid'), { phase: 'capture-state-invalid' }));
         if (!guard()) {
+            if (saved?.commitState === 'legacy-unconfirmed') {
+                m.entries = before.entries; m.seq = before.seq;
+                throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat', saveResult: saved });
+            }
             await compensateOrFail(persist, ctx, owner?.target, before, () => { m.entries = before.entries; m.seq = before.seq; }, Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' }));
         }
         return { added, patched: applied.map(id => ({ id })) };
@@ -313,6 +317,10 @@ export async function applyJudgePatchesAtomic(patches = [], owner = null, runtim
         if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'judge-save-failed'), { phase: 'judge-save-failed', saveResult: saved });
         if (!validLedgerIdentity(m.entries, m.seq)) await compensateOrFail(persist, ctx, owner?.target, { entries: before, seq: m.seq }, () => { m.entries = before; }, Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' }));
         if (!guard()) {
+            if (saved?.commitState === 'legacy-unconfirmed') {
+                m.entries = before;
+                throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat', saveResult: saved });
+            }
             await compensateOrFail(persist, ctx, owner?.target, { entries: before }, () => { m.entries = before; }, Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' }));
         }
         return { ok: true, applied };

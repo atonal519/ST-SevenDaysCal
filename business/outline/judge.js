@@ -1,5 +1,6 @@
 import { outlineBaseline, parseOutline, parseOutlineRelocationAnswer, shouldAdvanceOutline } from './schema.js';
 import { buildOutlineJudgePrompt, buildOutlineRelocationPrompt } from './prompts.js';
+import { safeDiagnosticLog } from '../../api/diagnostics.js';
 
 export function createOutlineJudge({
     repository,
@@ -15,6 +16,7 @@ export function createOutlineJudge({
     injection,
     onCursorChanged,
     toast,
+    logDiagnostic,
 } = {}) {
     let owner = null;
     let busy = false;
@@ -102,7 +104,8 @@ export function createOutlineJudge({
             if (!repository.matches(target, baseline)) return { status: 'cancelled' };
             finish(task);
             if (error?.name === 'AbortError' || !repository.isCurrent(target)) return { status: 'cancelled' };
-            toast?.('面自动推进判定失败，请检查 API 或网络', true);
+            logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true }));
+            if (settings?.().notifyMode === 'full') toast?.('面自动推进判定失败，请检查 API 或网络', true);
             return { status: 'failed', error };
         } finally {
             finish(task);
@@ -118,7 +121,7 @@ export function createOutlineJudge({
         if (!beats.length || current < 1) return { status: 'skipped' };
         const ctx = context?.();
         const config = loadConfig?.() || {};
-        if (!config.url || !config.key) return { status: 'failed', error: new Error('未配置 API') };
+        if (!config.url || !config.key) { const error = makeDiagnosticError('config-missing'); logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true })); return { status: 'failed', error }; }
         abort();
         const baseline = outlineBaseline(saved);
         const task = makeOwner(target, baseline);
@@ -144,6 +147,7 @@ export function createOutlineJudge({
         } catch (error) {
             if (!currentAndOwned(task) || error?.name === 'AbortError' || externalSignal?.aborted) return { status: 'cancelled' };
             if (!repository.matches(target, baseline)) return { status: 'cancelled' };
+            logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true }));
             return { status: 'failed', error };
         } finally {
             try { removeBridge(); } catch {}
@@ -190,3 +194,4 @@ export function createOutlineJudge({
         state: () => ({ busy, lastJudgedMessageId, messageCounter }),
     });
 }
+import { makeDiagnosticError } from '../../api/diagnostics.js';

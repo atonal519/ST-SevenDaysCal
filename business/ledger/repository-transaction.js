@@ -67,6 +67,10 @@ export async function reconcileStateAtomic(state, sources, chatLength, save, nor
                 ? fail('source-plan-invalid', 'source-state-invalid') : null;
         if (postSaveError) await compensateAndThrow(postSaveError, () => { state.entries = before; state.seq = beforeSeq; }, () => save?.(() => true, { compensate: true }));
         if (!guard()) {
+            if (saved?.commitState === 'legacy-unconfirmed') {
+                state.entries = before; state.seq = beforeSeq;
+                throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat', saveResult: saved });
+            }
             await compensateAndThrow(fail('source-stale-chat', 'source-stale-chat'), () => { state.entries = before; state.seq = beforeSeq; }, () => save?.(() => true, { compensate: true }));
         }
         return result;

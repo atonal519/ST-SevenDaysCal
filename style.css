@@ -4,6 +4,14 @@
  * root（浏览器缓存，无感）。改样式注意两处同源——勿删全局份，shadow 那份负责窗口。
  * 2026-08-14 Shadow DOM 隔离改造批次1/5。
  */
+/* ST messageFormatting 会把字面引号保留在 <q> 内；浏览器默认又通过
+   q::before/q::after 补一层引号。ST 的全局修正规则进不了本插件的 Shadow DOM，
+   因而需要在同一份 Shadow 样式里明确清零。 */
+q::before,
+q::after {
+    content: '';
+}
+
 /* 字体·构画自管控（不再跟随酒馆 --SmartThemeFontFamily）：
    --sp-font-user 承载「当前生效字体名」，默认＝内置 Nowar Rounded TW Wc（有爱圆体·
    经 index.js 动态 <link> 从 zeoseven 引入，unicode-range 分片、font-display:swap）。
@@ -2568,6 +2576,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     display       : flex;
     flex-direction: column;
     max-width     : 90%;
+    min-width     : 0;
+    box-sizing    : border-box;
 }
 .sp-chat-msg-wrap-user   { align-self: flex-end;   align-items: flex-end; }
 .sp-chat-msg-wrap-ai     { align-self: flex-start; align-items: flex-start; }
@@ -2578,11 +2588,116 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height  : 1.55;
     padding      : 5px 9px;
     border-radius: 8px;
+    min-width    : 0;
+    box-sizing   : border-box;
+    overflow-wrap: anywhere;
     word-break   : break-word;
     /* wrap now handles max-width + alignment; msg is just a filled block */
     max-width    : 100%;
 }
-.sp-chat-msg-content { min-width: 0; }
+.sp-chat-msg-content {
+    min-width    : 0;
+    max-width    : 100%;
+    box-sizing   : border-box;
+    overflow-wrap: anywhere;
+    word-break   : break-word;
+}
+.sp-chat-msg-content p {
+    margin: 0 0 0.7em;
+}
+.sp-chat-msg-content p:last-child {
+    margin-bottom: 0;
+}
+.sp-chat-msg-content h1,
+.sp-chat-msg-content h2,
+.sp-chat-msg-content h3,
+.sp-chat-msg-content h4,
+.sp-chat-msg-content h5,
+.sp-chat-msg-content h6 {
+    margin: 0.8em 0 0.35em;
+    color: var(--sp-on-surface);
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+.sp-chat-msg-content h1 { font-size: 1.25em; }
+.sp-chat-msg-content h2 { font-size: 1.16em; }
+.sp-chat-msg-content h3 { font-size: 1.08em; }
+.sp-chat-msg-content h4,
+.sp-chat-msg-content h5,
+.sp-chat-msg-content h6 { font-size: 1em; }
+.sp-chat-msg-content ul,
+.sp-chat-msg-content ol {
+    margin: 0.35em 0 0.7em;
+    padding-left: 1.35em;
+}
+.sp-chat-msg-content li {
+    margin: 0.18em 0;
+    overflow-wrap: anywhere;
+}
+.sp-chat-msg-content blockquote {
+    margin: 0.65em 0;
+    padding: 0.2em 0.8em;
+    border-left: 2px solid var(--sp-divider);
+    color: var(--sp-subtle);
+}
+.sp-chat-msg-content strong { color: var(--sp-on-surface); }
+.sp-chat-msg-content em { color: var(--sp-subtle); }
+.sp-chat-msg-content code {
+    padding: 0.08em 0.3em;
+    border: 1px solid var(--sp-divider);
+    border-radius: 3px;
+    background: var(--sp-sheet-bg);
+    font-size: 0.92em;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.sp-chat-msg-content pre {
+    max-width: 100%;
+    margin: 0.65em 0;
+    padding: 0.65em 0.75em;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid var(--sp-divider);
+    border-radius: 5px;
+    background: var(--sp-sheet-bg);
+    white-space: pre;
+}
+.sp-chat-msg-content pre > code {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+.sp-chat-msg-content table {
+    display: block;
+    max-width: 100%;
+    margin: 0.65em 0;
+    overflow-x: auto;
+    border-collapse: collapse;
+}
+.sp-chat-msg-content th,
+.sp-chat-msg-content td {
+    padding: 0.3em 0.55em;
+    border: 1px solid var(--sp-divider);
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.sp-chat-msg-content th {
+    color: var(--sp-on-surface);
+    background: var(--sp-sheet-bg);
+}
+.sp-chat-msg-content a {
+    color: var(--sp-primary);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.sp-chat-msg-content img {
+    max-width: 100%;
+    height: auto;
+}
 /* Bubble backgrounds use dedicated --sp-chat-*-bg tokens (defined per theme)
    so we can tune contrast against text color independently of the general
    surface tokens (which have to stay usable for panels/cards). */

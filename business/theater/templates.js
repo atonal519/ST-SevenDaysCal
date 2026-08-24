@@ -13,6 +13,7 @@ export function createTheaterTemplates({ context, bookName = '构画-棱-小剧�
         data.entries[uid] = entry; return entry;
     };
     return {
+        parse: parseTemplateText,
         async list() { const data = await context().loadWorldInfo(bookName); if (!data?.entries) return []; return Object.entries(data.entries).map(([uid, entry]) => entryToTemplate(uid, entry)).sort((a, b) => Number(a.uid) - Number(b.uid)); },
         async add(title, text) { const ctx = context(); const data = await ensureBook(); const entry = createEntry(ctx, data); if (!entry) throw new Error('无法创建模板条目'); entry.comment = String(title || '').trim(); entry.content = String(text || ''); entry.disable = true; entry.key = []; entry.constant = false; await ctx.saveWorldInfo(bookName, data, true); return entryToTemplate(entry.uid, entry); },
         async addBatch(items) { const list = (Array.isArray(items) ? items : []).filter(it => it && (String(it.title || '').trim() || String(it.text || '').trim())); if (!list.length) return 0; const ctx = context(); const existing = await ctx.loadWorldInfo(bookName); const data = existing ? (existing.entries ? existing : { entries: {} }) : { entries: {} }; for (const it of list) { const entry = createEntry(ctx, data); if (!entry) continue; entry.comment = String(it.title || '').trim(); entry.content = String(it.text || ''); entry.disable = true; entry.key = []; entry.constant = false; } await ctx.saveWorldInfo(bookName, data, true); if (!existing) await ctx.updateWorldInfoList?.(); return list.length; },

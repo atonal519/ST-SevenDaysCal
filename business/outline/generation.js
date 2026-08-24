@@ -62,7 +62,7 @@ export function createOutlineGeneration({
             const config = loadConfig?.() || {};
             if (!config.url || !config.key) {
                 openSettings?.();
-                throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
+                throw makeDiagnosticError('config-missing');
             }
             const raw = await callApi?.({
                 ctx,
@@ -116,3 +116,4 @@ export function createOutlineGeneration({
         owner: () => owner,
     });
 }
+import { makeDiagnosticError } from '../../api/diagnostics.js';

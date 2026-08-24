@@ -12,6 +12,7 @@ import {
     retryBackoffMs,
     sleepAbortable,
 } from './sse.js';
+import { makeDiagnosticError } from './diagnostics.js';
 
 // 依赖注入桥：client.js 不反向 import index.js（避免循环依赖），由 index.js 在启动时注入
 // UI 忙碌态（setFabBusy）、调试面板数据源（setLastDebugPayload）与消息构建器（buildMessages）。
@@ -91,8 +92,8 @@ export async function postChatCompletion({ cfg, messages, maxTokens, temperature
     const signal = normalizeAbortSignal(inputSignal);
     throwIfPreAborted(signal);
     // 总开关硬闸：插件关闭时挡住一切生成（手动 + 后台判定），防任何路径漏网。tag 供调用方识别、静默处理。
-    if (!pluginEnabled()) { const e = new Error('构画已关闭'); e.spDisabled = true; throw e; }
-    if (!cfg?.url || !cfg?.key) throw new Error('API 未配置');
+    if (!pluginEnabled()) { const e = makeDiagnosticError('config-missing'); e.spDisabled = true; throw e; }
+    if (!cfg?.url || !cfg?.key) throw makeDiagnosticError('config-missing');
     const ctx = getContext();
     if (!ctx?.getRequestHeaders) throw new Error('SillyTavern 上下文不可用');
     const requestUserName = String(userName || ctx.name1 || '用户');
@@ -170,7 +171,10 @@ export async function postChatCompletion({ cfg, messages, maxTokens, temperature
                 if ((res.status === 429 || res.status >= 500) && attempt < RETRY_MAX && !signal?.aborted) {
                     retryDelay = retryBackoffMs(attempt + 1, res);   // 可重试 → 记下退避时长，出 finally 后再睡
                 } else {
-                    throw new Error(mapApiError(res.status, errText));
+                    throw makeDiagnosticError(
+                        res.status === 400 ? 'http-400' : res.status === 401 || res.status === 403 ? 'auth' : res.status === 404 ? 'not-found' : res.status === 429 ? 'rate-limit' : res.status >= 500 ? 'server' : 'unknown',
+                        { status: res.status, phase: 'request', retryable: res.status === 429 || res.status >= 500 },
+                    );
                 }
             } else if (stream) {
                 const content = await readSseContent(res);
@@ -182,12 +186,12 @@ export async function postChatCompletion({ cfg, messages, maxTokens, temperature
                 return extractCompletion(data);
             }
         } catch (err) {
-            if (timedOut) throw new Error(`请求超时（超过 ${timeoutSec} 秒）。可在设置里调大「请求超时」，或开启「流式传输」让响应边生成边返回。`);
+            if (timedOut) throw makeDiagnosticError('timeout', { phase: 'request' });
             if (err?.name === 'AbortError') throw err;   // 用户主动取消：原样抛出，上层按 AbortError 静默处理
             // fetch 本身抛的网络错误（TypeError: Failed to fetch 等）：也算瞬时抖动，可重试
             if (err instanceof TypeError) {
                 if (attempt < RETRY_MAX && !signal?.aborted) retryDelay = retryBackoffMs(attempt + 1, null);
-                else throw new Error(mapApiError(0, err.message));
+                else throw makeDiagnosticError('network', { phase: 'request' });
             } else {
                 throw err;   // 业务错误（空内容/解析失败等）不重试
             }

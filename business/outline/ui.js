@@ -1,3 +1,5 @@
+import { diagnosticMessage } from '../../api/diagnostics.js';
+
 export function createOutlineUi(host = {}) {
     let controllers = null;
     let bound = false;
@@ -22,7 +24,7 @@ export function createOutlineUi(host = {}) {
     const setOutline = html => host.setOutline?.(html);
     const setLoading = () => setOutline(host.loading?.('正在构思面', 'sp-abort-outline') || '');
     const toast = (message, error = false) => host.toast?.(message, error);
-    const showGenerationError = error => setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escape(error?.message || '未知错误')}</p></div>`);
+    const showGenerationError = error => setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escape(diagnosticMessage(error))}</p></div>`);
     const appendMessage = (role, content, historyIndex = null) => {
         const source = String(content ?? '');
         const display = source.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');

@@ -1,0 +1,4 @@
+const UI_LOCAL_KEYS = ['sp-fab-pos', 'sp-outline-chat-h', 'sp-pos', 'sp-size'];
+function isDeviceLocalKey(key) { return UI_LOCAL_KEYS.includes(key) || (String(key || '').startsWith('sp-cache-') && /-theater-draft(-|$)/.test(key)); }
+export function pluginCacheBytes(storage = globalThis.localStorage) { let bytes = 0; for (let i = 0; i < (storage?.length || 0); i++) { const key = storage.key(i); if (!isDeviceLocalKey(key)) continue; bytes += (key.length + String(storage.getItem(key) || '').length) * 2; } return bytes; }
+export function clearPluginCache(storage = globalThis.localStorage) { const doomed = []; for (let i = 0; i < (storage?.length || 0); i++) { const key = storage.key(i); if (isDeviceLocalKey(key)) doomed.push(key); } doomed.forEach(key => storage.removeItem(key)); return doomed.length; }

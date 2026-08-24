@@ -36,7 +36,13 @@ export function createDateDetectionController(options = {}) {
     const run = async ({ signal: externalSignal = null } = {}) => {
         if (busy) return { status: 'skipped' };
         const ctx = options.context(); const charKey = options.charKey?.(ctx); if (!charKey) return { status: 'skipped' };
-        const cfg = options.config?.(); if (!cfg?.url || !cfg?.key) return { status: 'failed', error: new Error('未配置 API') };
+        const cfg = options.config?.();
+        if (!cfg?.url || !cfg?.key) {
+            const error = makeDiagnosticError('config-missing');
+            options.logDiagnostic?.(safeDiagnosticLog('axis', 'request', error, { background: true }));
+            if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请先配置 API', null, true);
+            return { status: 'failed', error };
+        }
         const chatId = ctx.chatId; const ownerIdentity = identity(); const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
@@ -47,8 +53,9 @@ export function createDateDetectionController(options = {}) {
             return ctrl.signal.aborted ? { status: 'cancelled' } : { ...result, date: md };
         } catch (error) {
             if (abortController !== ctrl || error?.name === 'AbortError' || externalSignal?.aborted || !sameIdentity(ownerIdentity, identity())) return { status: 'cancelled' };
-            options.toast?.('剧情日期自动确认失败，请检查 API 或网络', null, true); return { status: 'failed', error };
+            options.logDiagnostic?.(safeDiagnosticLog('axis', 'request', error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请检查 API 或网络', null, true); return { status: 'failed', error };
         } finally { if (abortController === ctrl) { busy = false; abortController = null; } remove(); }
     };
     return { run, reland, apply, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }
+import { makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';

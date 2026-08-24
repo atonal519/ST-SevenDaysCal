@@ -71,7 +71,7 @@ export function createOutlineChat({
             const config = loadConfig?.() || {};
             if (!config.url || !config.key) {
                 openSettings?.();
-                throw new Error('请先配置 API');
+                throw makeDiagnosticError('config-missing');
             }
             const messages = await buildMessages?.({ target, userMsg, historySnapshot });
             if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
@@ -97,7 +97,7 @@ export function createOutlineChat({
             if (!currentAndOwned(task)) return { status: 'cancelled' };
             if (!repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
             if (error?.name !== 'AbortError') {
-                ui?.appendMessage?.('system', `发送失败：${error?.message || '未知错误'}`);
+                ui?.appendMessage?.('system', `发送失败：${diagnosticMessage(error)}`);
             }
             finish(task);
             return error?.name === 'AbortError' ? { status: 'cancelled' } : { status: 'failed', error };
@@ -152,3 +152,4 @@ export function createOutlineChat({
         history: () => history.slice(),
     });
 }
+import { diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';

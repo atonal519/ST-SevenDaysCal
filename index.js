@@ -5,20 +5,17 @@ import * as scriptCore from '../../../../script.js';
 import { eventSource, event_types, substituteParams, saveSettingsDebounced, saveSettings as stSaveSettings, system_message_types } from '../../../../script.js';
 import {
     buildCreativeChatSystemPrompt,
-    buildSpaceChatSystemPrompt,
     getCreativeChatPlaceholder,
-    getSpaceChatPlaceholder,
-    buildTheaterDraftKey,
 } from './state.js';
 import * as memory from './memory.js';
-import * as theater from './theater.js';
-import { createTheaterRepository } from './business/theater/repository.js';
-import { createTheaterFeature } from './business/theater/feature.js';
+import { createTheaterRuntime } from './business/theater/runtime.js';
 import * as anchor from './anchor.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
-import { createTargetMetadataSaver } from './runtime/target-metadata-save.js';
+import { createBestEffortMetadataSaver, createTargetMetadataSaver } from './runtime/target-metadata-save.js';
+import * as theaterDeviceCache from './runtime/theater-device-cache.js';
+import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
 import { createAutomationGate } from './automation-gate.js';
@@ -42,6 +39,7 @@ import { weatherGlyph, weatherChipHtml, fmtAnchorTs, maskKey } from './utils/for
 import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, genPresetId, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, pluginEnabled, injectEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
+import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
 import { normalizeTagNames } from './utils/tag-names.js';
 import { axisState } from './business/axis/state.js';
 import {
@@ -179,6 +177,8 @@ import { createAdvanceStrategy } from './business/lines/strategy.js';
 import { createLinesFeature } from './business/lines/feature.js';
 import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
+import { createSpaceFeature } from './business/space/feature.js';
+import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
 // ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
 import {
@@ -194,102 +194,45 @@ import {
 import { formatLedgerList } from './business/ledger/inline.js';
 
 // Ledger 正式事务只走固定聊天目标的 integrity/commitState saver；初始化失败时保持不可用，禁止回退到吞错 saveMetadata。
-const ledgerMetadataSaverReady = createTargetMetadataSaver({ coreModule: scriptCore });
+const ledgerMetadataSaverReady = (() => {
+    const advanced = createTargetMetadataSaver({ coreModule: scriptCore });
+    return advanced?.supported ? advanced : createBestEffortMetadataSaver({ context: getContext });
+})();
+const getLedgerTarget = () => {
+    try { return typeof scriptCore.resolveChatStateTarget === 'function' ? scriptCore.resolveChatStateTarget() : null; }
+    catch { return null; }
+};
 ledger.bindLedgerMetadataPersistence({
     async commit(ctx, options = {}) {
         const saver = await ledgerMetadataSaverReady;
         if (!saver?.supported) return { ok: false, reason: saver?.reason || 'metadata-saver-unavailable', commitState: 'not-dispatched' };
         const current = ctx || getContext?.();
-        const target = options.target || scriptCore.resolveChatStateTarget();
+        const target = options.target || getLedgerTarget();
+        if (typeof saver.commit === 'function') return saver.commit(current, { ...options, target, ownerGuard: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
         const after = { ...(current?.chatMetadata || {}) };
         if (current?.chatMetadata?.['sp-ledger']) after['sp-ledger'] = current.chatMetadata['sp-ledger'];
-        let captured = saver.capture(target, after); let saveReason = captured ? 'snapshot-current' : 'snapshot-empty';
-        if (!captured && typeof scriptCore.refreshChatWriteSnapshotsFromServer === 'function') {
-            try { await scriptCore.refreshChatWriteSnapshotsFromServer(target); captured = saver.capture(target, after); saveReason = captured ? 'snapshot-refreshed' : 'snapshot-refresh-empty'; }
-            catch { saveReason = 'snapshot-refresh-failed'; }
-        }
-        if (!captured) return { ok: false, reason: 'metadata-capture-failed', saveReason, dispatched: false, commitState: 'not-dispatched' };
+        const captured = saver.capture(target, after);
+        if (!captured) return { ok: false, reason: 'metadata-capture-failed', dispatched: false, commitState: 'not-dispatched' };
         const result = await saver.dispatch(captured, { isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
-        return { ...result, saveReason: result.saveReason || saveReason, dispatched: result.dispatched ?? false, confirm: () => saver.confirm?.(captured) };
+        return { ...result, dispatched: result.dispatched ?? false, confirm: () => saver.confirm?.(captured) };
     },
 });
 
 const pointTaskOwners = createTaskOwnerManager();
-const theaterTaskOwners = createTaskOwnerManager();
-const theaterRepository = createTheaterRepository({
-    storage: globalThis.localStorage,
-    metadata: () => getContext().chatMetadata?.['sp-theater'] || (getContext().chatMetadata['sp-theater'] = { version: 1, saved: [] }),
-    persist: () => getContext().saveMetadata?.(),
-    keyForChat: chatId => buildTheaterDraftKey(chatId),
-});
-const theaterFeature = createTheaterFeature({
-    owners: theaterTaskOwners,
-    repository: theaterRepository,
-    generate: (...args) => theater.generate(...args),
-    chatId: () => getContext().chatId,
-    chatRevision: () => theaterTaskOwners.currentChatRevision(),
-    names: () => ({ userName: getContext().name1 || '用户', charName: getContext().name2 || '角色' }),
-    storyContext: owner => refreshTheaterStoryContext(owner),
-    stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); },
-    current: () => {},
-    ui: {
-        theater,
-        host: {
-            getChatId: () => getContext().chatId,
-            escapeHtml, escapeAttr,
-            setBody: html => setTheaterBody(html),
-            loading: loadingHtml,
-            isOpen: () => theaterMode && $(`#${MODAL_ID}`).is(':visible'),
-            notifyEnabled: () => getSettings().notifyMode !== 'off',
-            toast: showToast,
-            focus: selector => $in(selector).trigger('focus'),
-            closedSuccess: () => showToast('棱已生成，点击查看', () => { $in('.sp-view-btn[data-view="theater"]').trigger('click'); showPanel(); }),
-            closedFailure: () => showToast('棱生成失败，请重试', null, true),
-            showError: error => setTheaterBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(error?.message || '未知错误')}</p><button class="sp-btn sp-theater-back">返回</button></div>`),
-            data: (element, key) => $(element).data(key),
-            val: (selector, value) => value === undefined ? $in(selector).val() : $in(selector).val(value),
-            closePicker: () => $in('#sp-theater-tpl-picker').removeAttr('open'),
-            confirm: (title, body) => spConfirm({ title, body }),
-            scrollTop: () => $in('#sp-theater-body').scrollTop(0),
-            setTemplateListHtml: html => $in('#sp-theater-tpl-picker-list').html(html),
-            getManagerOpen: () => $in('#sp-theater-tpl-mgr').find('.sp-theater-tpl-library').prop('open'),
-            setManagerHtml: html => { const $mgr = $in('#sp-theater-tpl-mgr'); if ($mgr.length) $mgr.html(html); },
-            setStylePrompt: value => { getSettings().theaterStylePrompt = value; saveSettingsDebounced(); },
-            setAbortPending: () => {
-                $in('#sp-abort-theater').prop('disabled', true).attr('aria-disabled', 'true').html('<i class="fa-solid fa-spinner fa-spin"></i>正在中止…');
-                $in('.sp-loading-text').text('正在中止…');
-            },
-            triggerFileInput: () => $in('#sp-theater-tpl-import-file').trigger('click'),
-            isSourceOpen: () => $in('#sp-theater-source-detail').is(':visible'),
-            setSourceVisible: open => $in('#sp-theater-source-detail').toggle(open),
-            setSourceExpanded: open => $in('.sp-theater-source-toggle').attr('aria-expanded', String(open)),
-            setSourceChevron: className => $in('.sp-theater-source-chevron').attr('class', className),
-            isFullscreen: () => inEl('#sp-theater-result')?.classList.contains('sp-theater-fullscreen') === true,
-            setFullscreen: on => inEl('#sp-theater-result')?.classList.toggle('sp-theater-fullscreen', on),
-            setSheetFlat: on => inEl('.sp-sheet')?.classList.toggle('sp-fs-flat', on),
-            setResultCollapsed: on => inEl('#sp-theater-result')?.classList.toggle('sp-theater-result-collapsed', on),
-            setBodyFullscreenLock: on => document.body.classList.toggle('sp-theater-fs-lock', on),
-            setFullscreenControl: (iconClass, title) => {
-                const btn = inEl('.sp-theater-fullscreen-btn');
-                btn?.querySelector('i')?.setAttribute('class', iconClass);
-                btn?.setAttribute('title', title);
-            },
-            addKeydown: listener => document.addEventListener('keydown', listener),
-            removeKeydown: listener => document.removeEventListener('keydown', listener),
-            toggleResultCollapsed: () => inEl('#sp-theater-result')?.classList.toggle('sp-theater-result-collapsed'),
-            setFoldControl: (label, iconClass) => {
-                const btn = inEl('.sp-theater-fold-toggle');
-                btn?.querySelector('.sp-theater-fold-label')?.replaceChildren(document.createTextNode(label));
-                btn?.querySelector('i')?.setAttribute('class', iconClass);
-            },
-            scrollFoldTop: () => inEl('.sp-theater-fold-toggle')?.closest('.sp-theater-result-wrap')?.scrollIntoView({ block: 'start' }),
-            isResultFoldable: () => inEl('#sp-theater-result')?.classList.contains('sp-theater-result-collapsible') === true,
-            getResultScrollHeight: () => inEl('#sp-theater-result')?.scrollHeight || 0,
-            setFoldVisible: visible => visible ? $in('.sp-theater-fold-toggle').css('display', '') : $in('.sp-theater-fold-toggle').hide(),
-            onPendingResultImagesLoad: measure => inEl('#sp-theater-result')?.querySelectorAll('img').forEach(img => { if (!img.complete) img.addEventListener('load', measure, { once: true }); }),
-        },
-    },
-});
+let theaterFeature;
+let memoryPauseNoticeShown = false;
+function createTheaterHostFeature() {
+    const runtime = createTheaterRuntime({
+        storage: globalThis.localStorage, coreModule: scriptCore, getContext, callTheaterApi,
+        buildWorldInfoContext: ctx => buildWorldInfoContext(ctx), readCardExtras: ctx => readCardExtras(ctx), getMemText: () => getMemText(),
+        names: () => ({ userName: getContext().name1 || '用户', charName: getContext().name2 || '角色' }),
+        settings: () => { const s = getSettings(); return { theaterStylePrompt: typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '', theaterBeautifyPrompt: typeof s.theaterBeautifyPrompt === 'string' ? s.theaterBeautifyPrompt : '' }; },
+        onDiagnostic: diagnostic => { console.warn('[SP theater]', diagnostic); if (getSettings().notifyMode === 'full') showToast('小剧场美化失败，已保留原稿', null, true); },
+        stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); }, renderAiMessageHtml,
+        ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore }),
+    });
+    return runtime.feature;
+}
 
 // Shadow-DOM accessors are dependencies of the top-level DI wiring below.
 // Declare them before any bind/create call can evaluate the dependency.
@@ -427,6 +370,7 @@ const pointController = createPointController({
     setCached: html => { pointState.cachedSchedule = html; },
     notify: () => getSettings().notifyMode,
     canCommit: (owner, travel) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), signal: travel?.signal, pluginEnabled: pluginEnabled() }).canCommit,
+    logDiagnostic: diagnostic => console.warn('[SP point failure]', diagnostic),
     canCallback: owner => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback,
     setView,
     showEmpty: showEmptyGenerate,
@@ -476,7 +420,7 @@ bindLedgerCapture({
 });
 const ledgerCaptureController = createLedgerCaptureController({
     context: getContext,
-    target: () => scriptCore.resolveChatStateTarget(),
+    target: getLedgerTarget,
     charKey: charStableKey,
     config: loadCfg,
     calendar: loadCalDesc,
@@ -523,7 +467,7 @@ const ledgerInjectionController = createLedgerInjectionController({
 const refreshLedgerInjection = () => ledgerInjectionController.refresh();
 const ledgerJudgeController = createLedgerJudgeController({
     context: getContext,
-    target: () => scriptCore.resolveChatStateTarget(),
+    target: getLedgerTarget,
     charKey: charStableKey,
     listJudgeable: () => listJudgeableLedger(),
     fmtLedger: fmtLedgerForJudge,
@@ -544,6 +488,7 @@ const ledgerJudgeController = createLedgerJudgeController({
     dayOfYear: almDayOfYear,
     monthDayFromDoy: almMonthDayFromDoy,
     bridge: bridgeAbortSignal,
+    settings: getSettings,
     toast: showToast,
     refreshInject: refreshLedgerInjection,
     refreshInline: refreshInlineWindow,
@@ -664,7 +609,7 @@ const axisCalendarManager = createCalendarManager({
     commit: cal => axisTransactionController.commit(cal),
     applyCalendar: (template) => axisTransactionController.commit(template),
     writeBindings: bindings => { getSettings().calendarTemplateBindings = bindings; },
-    onApplyError: error => { console.error('[SP calendar] 角色默认历法应用失败', error); showToast('角色绑定已更新，但默认历法没有应用成功，请稍后重试', null, true); },
+    onApplyError: error => { console.error('[SP calendar] 角色默认历法应用失败', safeDiagnosticLog('axis', 'save', error)); showToast('角色绑定已更新，但默认历法没有应用成功，请稍后重试', null, true); },
     limits: { ...CALENDAR_LIMITS, monthNameLength: CALENDAR_LIMITS.monthNameLength, eraNameLength: CALENDAR_LIMITS.eraNameLength },
     root: () => $in('#sp-almanac-wrap'),
     $,
@@ -709,7 +654,7 @@ const axisGenerationController = createAxisGenerationController({
     loadItems: loadAlmanac, saveItems: saveAlmanacItems, dedupKey: almDedupKey, dateLabel: almDateLabel,
     sync: syncLatestAlmanacBlock, render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
     notify: (message, generated) => { if (generated) { if (axisState.almanacMode) { if (getSettings().notifyMode !== 'off') showToast(message); } else showToast(message, () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); }); } else if (getSettings().notifyMode !== 'off') showToast(message); },
-    error: (error, supplement) => { if (axisState.almanacMode) showToast(`${supplement ? '补录失败：' : '生成失败：'}${escapeHtml(error.message || '未知错误')}`, null, true); else showToast(supplement ? '补录纪念日失败，请重试' : '轴生成失败，请重试', null, true); },
+    error: (error, supplement) => { if (axisState.almanacMode) showToast(`${supplement ? '补录失败：' : '生成失败：'}${escapeHtml(diagnosticMessage(error))}`, null, true); else showToast(supplement ? '补录纪念日失败，请重试' : '轴生成失败，请重试', null, true); },
     missingApi: () => { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); },
     missingChat: () => showToast('请先打开一个聊天', null, true),
     confirm: () => spConfirm({ title: '重新生成节日', body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。', confirmText: '生成', cancelText: '取消' }),
@@ -803,6 +748,7 @@ const dateDetectionController = createDateDetectionController({
     settings: getSettings,
     monthName: month => calMonthName(loadCalDesc(), month),
     toast: showToast,
+    logDiagnostic: diagnostic => console.warn('[SP axis failure]', diagnostic),
     aftermath: () => runAnchorAftermath(),
 });
 const applyDetectedDate = (charKey, md, { notify = true } = {}) => dateDetectionController.apply(charKey, md, notify);
@@ -880,7 +826,7 @@ const timeTravel = createTimeTravelController({
     },
     onSequenceEnd: ({ sessionId }) => releaseTimeTravelClaim(sessionId),
     onError: error => {
-        console.error('[SP 时光旅行] 同步流程失败', error);
+        console.error('[SP 时光旅行] 同步流程失败', safeDiagnosticLog('time-travel', 'request', error));
         showToast('时光旅行同步未完整完成，请手动检查各模块', null, true);
     },
     steps: [
@@ -1335,6 +1281,7 @@ const linesFeature = createLinesFeature({
         callApi: (...args) => callCustomApi(...args), filterRerollItems, dialog: customDialog,
         uuid: () => globalThis.crypto?.randomUUID?.(), now: () => Date.now(), random: () => Math.random(),
         toast: (message, error) => showToast(message, null, error), escapeHtml, escapeAttr,
+        logDiagnostic: diagnostic => console.warn('[SP dashed failure]', diagnostic),
         refreshPanel: () => {}, refreshInline: () => {},
     },
     dashedEnabled: () => getSettings().dashedEnabled === true,
@@ -1347,7 +1294,7 @@ const linesFeature = createLinesFeature({
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
         onStart: () => {},
         commit: () => {},
-        fail: () => { if (getContext().chatId) showToast('线生成失败，请重试', null, true); }, cleanup: () => {},
+        fail: (error, { silent = false } = {}) => { const code = classifyGenerationError(error, { phase: error?.phase || 'request' }); const manual = !silent; const notify = shouldNotifyGeneration({ manual, notifyMode: getSettings().notifyMode, code }); const diagnostic = safeDiagnosticLog('lines', error?.phase || 'request', error, { background: !manual }); console.warn('[SP lines failure]', diagnostic); if (notify && getContext().chatId) showToast(`线生成失败：${diagnosticMessage(error)}`, null, true); }, cleanup: () => {},
     },
     actionsEnv: {
         isBusy: () => false, readSaved: () => readStore(getLinesCacheKey()), readRaw: () => readStore(getLinesCacheKey())?.raw || '',
@@ -1402,11 +1349,69 @@ const outlineFeature = createOutlineFeature({
             showPanel();
         }),
     },
+    logDiagnostic: diagnostic => console.warn('[SP outline failure]', diagnostic),
 });
-let spaceMode           = false;
-let spaceChatHistory    = [];
-let isSpaceChatting     = false;
-let spaceChatAbortController = null;
+let spaceMode = false;
+const spaceFeature = createSpaceFeature({
+    context: getContext,
+    keyDesc,
+    readStore,
+    writeStore,
+    loadConfig: loadCfg,
+    postCompletion: ({ config, ...options }) => postChatCompletion({ cfg: config, ...options }),
+    temperature: GEN_TEMPERATURE,
+    placeholder: getSpaceChatPlaceholder,
+    openSettings: () => { if (!settingsOpen) toggleSettings(); },
+    isOpen: () => spaceMode,
+    contextEnv: {
+        context: getContext,
+        settings: getSettings,
+        readOutline: () => outlineFeature.readRaw(),
+        readPointRaw: () => readCacheRaw(getCacheKey('user', '')),
+        numberedPoints: numberedPointList,
+        readLineRaw: () => readStore(getLinesCacheKey())?.raw || '',
+        parseLines: parseCanonicalLines,
+        readLedgerText: () => {
+            try {
+                const items = ledger.listEntries() || [];
+                return items.length ? formatLedgerList(items, { daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo }) : '';
+            } catch { return ''; }
+        },
+        readWorldInfo: ctx => buildWorldInfoContext(ctx),
+        readMemory: () => getMemText(),
+        readRecent: ctx => buildRecentChatContext(ctx),
+        readCardExtras,
+        readAlmanacText: () => getAlmanacInjectText(),
+        readCalendarText: () => getCalDescInjectText(),
+    },
+    renderEnv: {
+        escapeHtml,
+        formatAi: renderAiMessageHtml,
+        parseAlmanac: parseAlmanacWidget,
+        parseEra: parseEraWidget,
+        loadCalendar: loadCalDesc,
+        calendarMonthName: calMonthName,
+        calendarMonthCount: calMonthCount,
+        calendarYearLength: calYearLen,
+    },
+    ui: {
+        $,
+        query: $in,
+        element: inEl,
+        escapeHtml,
+        autoGrow: autoGrowTextarea,
+        copyText: copyPlainText,
+        confirm: spConfirm,
+        toast: (message, error) => showToast(message, null, error),
+        // 轴动作在本 facade 之后初始化；只在真实点击时读取，严禁顶层提前解引用造成 TDZ。
+        widgetActions: () => ({
+            point: (body, $button, editIdx) => applyPointWidget(body, $button, editIdx),
+            lines: (body, editIdx, $button) => linesFeature.widget.apply(body, editIdx, $button),
+            almanac: (body, $button, index) => axisWidgetActions.applyAlmanacWidget(body, $button, index),
+            era: (body, $button) => axisWidgetActions.applyEraWidget(body, $button),
+        }),
+    },
+});
 let theaterMode          = false;
 let anchorMode           = false;  // 锚（收藏楼层）视图是否激活
 let _anchorSavedKeys     = new Set();   // 已收藏楼层键 `${chatId}::${mesid}`（内存缓存，供按钮同步态）
@@ -1481,6 +1486,9 @@ jQuery(async () => {
     // 界面字体：按持久化的 uiFontUrl/uiFontFamily 挂 <link> + 写 --sp-font-user（早于注入 UI，防字体闪切）
     applyUiFont();
     injectExtButton();
+    // 重新挂载主 Shadow root 前先销毁旧棱实例，清理 Esc、图片监听、owner 与 UI 委托。
+    theaterFeature?.destroy?.();
+    theaterFeature = createTheaterHostFeature();
     injectModal();
     injectFab();
     injectToastContainer();
@@ -1501,19 +1509,10 @@ jQuery(async () => {
             };
         },
         callApi: callMemoryApi,
-    });
-    // Initialize theater (棱/小剧场) — storage + two-stage generation pipeline
-    theater.initTheater({
-        getSettings: () => {
-            const s = getSettings();
-            return {
-                theaterStylePrompt   : typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '',
-                theaterBeautifyPrompt: typeof s.theaterBeautifyPrompt === 'string' ? s.theaterBeautifyPrompt : '',
-            };
+        onPause: log => {
+            console.warn('[SP memory pause]', log);
+            if (getSettings().notifyMode === 'full' && !memoryPauseNoticeShown) { memoryPauseNoticeShown = true; showToast('记忆系统因连续失败已暂停：请检查 API 后点击补齐或重构', null, true); }
         },
-        callWriteApi   : callTheaterApi,
-        callBeautifyApi: callTheaterApi,
-        fallbackRender : renderAiMessageHtml,
     });
     // Initialize anchor (坐标/收藏楼层) — /api/files 存储层；预热索引 + 载入已收藏楼层键
     anchor.initAnchor({
@@ -1538,7 +1537,6 @@ jQuery(async () => {
         // 聊天边界先推进 revision 并作废点的全部异步 owner；迟到结果不得触碰新聊天。
         pointTaskOwners.nextChatRevision();
         linesFeature.nextChatRevision();
-        theaterTaskOwners.nextChatRevision();
         linesFeature.onChatChanged({ lastSeen: (getContext().chat?.length ?? 0) - 1 });
         pointTaskOwners.invalidate('point-manual');
         pointTaskOwners.invalidate('point-auto');
@@ -1557,10 +1555,9 @@ jQuery(async () => {
         // 插件总关：迁移照做（幂等·防老用户数据漂移），其余全屏隐藏/后台相关一律不跑。
         // 即使插件当前关闭，切 chat 也必须先失效两路聊天任务，避免旧任务继续占用忙碌状态。
         outlineFeature.onChatChanged({ lastSeen: (getContext().chat?.length ?? 0) - 1 });
-        spaceChatAbortController?.abort();
-        spaceChatAbortController = null;
-        isSpaceChatting = false;
+        spaceFeature.onChatChanged({ enabled: pluginEnabled() });
         linesFeature.dashed.abort();
+        theaterFeature.onChatChanged();
         if (!pluginEnabled()) return;
         currentView  = 'user';
         charViewName = null;
@@ -1585,10 +1582,8 @@ jQuery(async () => {
         ledgerJudgeController.reset();
         _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的「同步到点」后台生成
         spaceMode = false;
-        spaceChatHistory = [];
         theaterMode = false;
-        theaterFeature.abort('stale');
-        theaterFeature.ui?.resetForChat?.();
+        // theater 已在插件关闭早退前统一 reset，避免旧 owner 占住 busy。
         anchorMode = false;
         _anchorView = { level: 'chars', charName: null, chatId: null, itemId: null };
         axisState.almanacMode = false;
@@ -1641,14 +1636,14 @@ jQuery(async () => {
                 if (_healHash) n += await anchor.healChatByHash(_healChatId, getChatDisplayName(), _healHash).catch(() => 0);
                 n += await adoptOrphanAnchors(_healChatId, _healHash).catch(() => 0);
                 if (n > 0) { refreshAnchorSavedKeys(); if (anchorMode) renderAnchorPanel(); }
-            })().catch(err => console.warn('[SP anchor] 自愈失败:', err));
+            })().catch(err => console.warn('[SP anchor] 自愈失败', safeDiagnosticLog('axis', 'save', err)));
         }
         // Surface memory schema-migration notice, if any (once per upgraded chat)
         setTimeout(checkMemoryMigrationNotice, 500);
         // 跨设备冲突：本机和云端各有一份不同的点线面间 → 弹窗二选一（延后到面板/主题就绪）
         if (_mig.status === 'conflict') setTimeout(() => showStoreConflictDialog(_mig), 700);
         maybeApplyBoundCalendarTemplate().catch(error => {
-            console.error('[SP calendar] 角色默认历法自动应用失败', error);
+            console.error('[SP calendar] 角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
         // 切进来立即按新 chat 的大纲+游标重设注入（关着或无大纲时内部自清）。
@@ -1667,10 +1662,10 @@ jQuery(async () => {
         const _mig0 = store.migrateChatFromLocalStorage(getContext().chatId);
         if (_mig0.status === 'conflict') setTimeout(() => showStoreConflictDialog(_mig0), 900);
         if (pluginEnabled()) maybeApplyBoundCalendarTemplate().catch(error => {
-            console.error('[SP calendar] 首屏角色默认历法自动应用失败', error);
+            console.error('[SP calendar] 首屏角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
-    } catch (err) { console.warn('[SP store] 首屏迁移失败:', err); }
+    } catch (err) { console.warn('[SP store] 首屏迁移失败', safeDiagnosticLog('storage', 'save', err)); }
     // Auto-advance storylines, then append inline block to every AI message.
     // NOTE: shouldAdvance triggers generation BEFORE appending the current block,
     // so the current (newest, still-unstable) message is NOT included in the LLM
@@ -1873,7 +1868,7 @@ jQuery(async () => {
             const hash = getContext()?.chatMetadata?.chat_id_hash ?? null;
             const n = await anchor.renameChatId(oldId, newId, newId, hash);
             if (n && anchorMode) renderAnchorPanel();
-        } catch (err) { console.warn('[7dayscal] 坐标改名同步失败:', err); }
+        } catch (err) { console.warn('[7dayscal] 坐标改名同步失败', safeDiagnosticLog('axis', 'save', err)); }
     };
     eventSource.on(event_types.CHAT_RENAMED, _stListeners.rename);
     // 柏宝书就绪事件：加载顺序不固定，早期同步检测可能扑空而误报"未就绪"。
@@ -1938,23 +1933,21 @@ function _abortAllBackground() {
     customDialog.cancelActive();
     linesFeature.abortGeneration();
     for (const c of [
-        linesFeature.runtime.controller, spaceChatAbortController,
+        linesFeature.runtime.controller,
         pointState.scheduleAbortController,
         dateDetectionController.abortController, _autoRegenSchedAbort,
         ledgerCaptureController.abortController, ledgerJudgeController.abortController,
     ]) { try { c?.abort(); } catch {} }
     outlineFeature.abortAll();
+    spaceFeature.abortAll();
     linesFeature.dashed.abort();
     pointState.scheduleAbortController = null;
-    theaterFeature.abort('stale');
-    theaterFeature.ui?.closeVisual?.();
+    theaterFeature.onPluginDisabled();
     axisGenerationController.reset();
     _autoRegenSchedAbort = null;
     ledgerJudgeController.reset();
     ledgerCaptureController.reset();
-    isSpaceChatting = false;
     if (outlineMode) outlineFeature.chat.load();
-    if (spaceMode) renderSpaceChatHistory();
 }
 
 // 插件总开关落地。关：藏悬浮球、清所有楼内块与锚点入口（由 refreshInlineWindow/scanAnchorButtons 内部闸兜底）、
@@ -1963,6 +1956,7 @@ function _abortAllBackground() {
 function applyPluginEnabled(on) {
     const ctx = getContext();
     if (on) {
+        if (theaterMode) theaterFeature.open();
         $(`#${FAB_ID}`).css('display', fabEnabled() ? '' : 'none');
         try { backfillLinesInlineBlocks(); } catch {}   // 重挂线/历/点楼内块 + 重设线潜伏注入
         try { outlineFeature.injection.refresh(); } catch {}       // 重设大纲潜伏注入
@@ -1970,7 +1964,7 @@ function applyPluginEnabled(on) {
         try { scanAnchorButtons(); } catch {}             // 补回锚点收藏入口
         try { refreshInlineWindow(true); } catch {}
         maybeApplyBoundCalendarTemplate().catch(error => {
-            console.error('[SP calendar] 重新启用后角色默认历法自动应用失败', error);
+            console.error('[SP calendar] 重新启用后角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
     } else {
@@ -2739,7 +2733,7 @@ async function refreshAnchorSavedKeys() {
     try {
         const items = await anchor.getAllItems();
         _anchorSavedKeys = new Set(items.map(it => anchorFloorKey(it.chatId, it.messageId)));
-    } catch (err) { console.warn('[SP anchor] 读取已收藏键失败:', err); return; }
+    } catch (err) { console.warn('[SP anchor] 读取已收藏键失败', safeDiagnosticLog('axis', 'request', err)); return; }
     const chatId = getContext().chatId;
     document.querySelectorAll('#chat .mes .sp-anchor-btn').forEach(btn => {
         const mid = btn.closest('.mes')?.getAttribute('mesid');
@@ -2919,7 +2913,7 @@ async function onAnchorButtonClick(mes) {
             showToast('已取消收藏');
             if (anchorMode) renderAnchorPanel();
         } catch (err) {
-            console.error('[SP anchor] 取消收藏失败', err);
+            console.error('[SP anchor] 取消收藏失败', safeDiagnosticLog('axis', 'save', err));
             showToast('取消收藏失败：' + (err?.message || '未知错误'), null, true);
         } finally {
             if (btn) btn.classList.remove('sp-anchor-busy');
@@ -2946,7 +2940,7 @@ async function onAnchorButtonClick(mes) {
             .then(r => { if (r.over) showToast(`收藏已占 ${anchor.formatBytes(r.bytes)}，可在坐标面板清理`, null, true); })
             .catch(() => {});
     } catch (err) {
-        console.error('[SP anchor] 收藏失败', err);
+        console.error('[SP anchor] 收藏失败', safeDiagnosticLog('axis', 'save', err));
         showToast('收藏失败：' + (err?.message || '未知错误'), null, true);
     } finally {
         if (btn) btn.classList.remove('sp-anchor-busy');
@@ -3907,75 +3901,7 @@ function injectModal() {
 
     outlineFeature.bindUi();
 
-    // Space chat (间)
-    function doSendSpaceChat() {
-        const msg = $in('#sp-space-input').val().trim();
-        if (msg && !isSpaceChatting) { const $i = $in('#sp-space-input'); $i.val(''); autoGrowTextarea($i[0]); sendSpaceChat(msg); }
-    }
-    $in('#sp-space-send').on('click', doSendSpaceChat);
-    // 回车换行、只用按钮发送（用户偏好）——不再拦 Enter；自动长高保留。
-    $in('#sp-space-input').on('input', function () { autoGrowTextarea(this); });
-
-    $in('#sp-space-msgs').on('click', '.sp-chat-msg-delete', function () {
-        if (isSpaceChatting) return;
-        const idx = Number($(this).closest('.sp-chat-msg-wrap').attr('data-idx'));
-        if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
-        spaceChatHistory.splice(idx, 1);
-        saveSpaceChatHistory();
-        renderSpaceChatHistory();
-    });
-
-    // 逐条复制：取该条干净文本（AI 剥 widget 标签）写剪贴板，图标闪一下 ✓ 反馈。不受生成中态限制（只读操作）。
-    $in('#sp-space-msgs').on('click', '.sp-chat-msg-copy', async function () {
-        const idx = Number($(this).closest('.sp-chat-msg-wrap').attr('data-idx'));
-        if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
-        const text = spaceMsgPlainText(spaceChatHistory[idx]);
-        const $btn = $(this);
-        if ($btn.data('sp-copy-reset')) { clearTimeout($btn.data('sp-copy-reset')); }
-        const ok = await copyPlainText(text);
-        $btn.html(ok ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-xmark"></i>')
-            .attr('title', ok ? '已复制' : '复制失败');
-        const t = setTimeout(() => {
-            $btn.html('<i class="fa-solid fa-copy"></i>').attr('title', '复制').removeData('sp-copy-reset');
-        }, 1200);
-        $btn.data('sp-copy-reset', t);
-    });
-
-    $in('#sp-space-msgs').on('click', '.sp-chat-msg-edit', function () {
-        if (isSpaceChatting) return;
-        const $msg = $(this).closest('.sp-chat-msg-wrap');
-        const idx  = Number($msg.attr('data-idx'));
-        if (!Number.isInteger(idx) || idx < 0 || idx >= spaceChatHistory.length) return;
-        startSpaceInlineEdit($msg, idx);
-    });
-
-    // Widget apply: attach the AI-generated Event/Line to current chat's cache
-    $in('#sp-space-msgs').on('click', '.sp-space-widget-apply', function () {
-        const $btn = $(this);
-        if ($btn.prop('disabled')) return;
-        const wid = $btn.attr('data-wid');
-        const stored = _spaceWidgetStore.get(wid);
-        if (!stored) { showToast('这张卡片已过期，请再让 AI 生成一次', null, true); return; }
-        if (stored.kind === 'schedule_widget') applyScheduleWidget(stored.body, $btn, stored.editIdx);
-        else if (stored.kind === 'line_widget') linesFeature.widget.apply(stored.body, stored.editIdx, $btn);
-        else if (stored.kind === 'almanac_widget') applyAlmanacWidget(stored.body, $btn, $btn.attr('data-idx'));
-        else if (stored.kind === 'era_widget') applyEraWidget(stored.body, $btn);
-    });
-
-    $in('#sp-space-clear').on('click', async () => {
-        if (isSpaceChatting) return;
-        if (!spaceChatHistory.length) return;
-        const ok = await spConfirm({
-            title: '清空对话',
-            body : '将清空"间"的局外聊天记录。',
-            confirmText: '清空',
-            cancelText : '取消',
-        });
-        if (!ok) return;
-        spaceChatHistory = [];
-        saveSpaceChatHistory();
-        $in('#sp-space-msgs').empty();
-    });
+    spaceFeature.bindUi();
     const $linesWrap = $in('#sp-lines-wrap');
     $linesWrap.on('click', '#sp-gen-lines-now', triggerGenerateLines);
     $linesWrap.on('click', '.sp-lines-sheet-btn', function () {
@@ -4100,7 +4026,7 @@ function injectModal() {
 
     // ── 棱（小剧场）事件（全部委托到注入式 ui；旧委托仅作为无 UI 兼容路径）──
     const $theater = $in('#sp-theater-wrap');
-    theaterFeature.ui.bind($theater);
+    theaterFeature.bindUi($theater);
     // ── 锚（收藏楼层）事件（委托到 #sp-anchor-wrap，三层抽屉动态重渲染）──
     const $anchor = $in('#sp-anchor-wrap');
     $anchor.on('click', '.sp-anchor-char-card', function () {
@@ -4505,7 +4431,7 @@ function injectModal() {
         const isSubBtn  = $btn.hasClass('sp-sub-btn');
 
         // 离开棱时统一走 UI 生命周期出口，避免全屏滚动锁和 Esc listener 跟到其他侧栏。
-        if (isSideTab && theaterMode && view !== 'theater') theaterFeature.ui?.closeVisual?.();
+        if (isSideTab && theaterMode && view !== 'theater') theaterFeature.leave();
 
         // 切模块（历/线/面/棱/锚/轴）会藏掉 sub-toggle → 顺手收起可能开着的 TA▾ 抽屉，免得它残留浮在别处。
         if (isSideTab) closeTaDrawer();
@@ -4594,9 +4520,7 @@ function injectModal() {
                 $in('#sp-space-wrap').css('display', 'flex');
                 $in('#sp-sub-toggle').hide();
                 $in('#sp-content-title').text('间');
-                $in('#sp-space-input').attr('placeholder', getSpaceChatPlaceholder());
-                loadSpaceChatHistory();
-                renderSpaceChatHistory();
+                spaceFeature.open();
                 return;
             }
             if (view === 'theater') {
@@ -4617,7 +4541,7 @@ function injectModal() {
                 $in('#sp-sub-toggle').hide();
                 $in('#sp-content-title').text('棱');
                 if (theaterFeature.busy) setTheaterBody(loadingHtml('正在折射', 'sp-abort-theater'));
-                else theaterFeature.ui?.render();
+                else theaterFeature.open();
                 return;
             }
             if (view === 'anchor') {
@@ -5235,7 +5159,7 @@ function closePanel() {
     // 收全屏残留：全屏中经背景/FAB 关面板时，若不清这些类，body 的滚动锁会滞留（酒馆卡死），
     // 且 .sp-sheet 的 sp-fs-flat 会带到下次打开（手机右移半屏）。棱、坐标一并清。
     _clearAnchorFs();
-    theaterFeature.ui?.closeVisual?.();
+    theaterFeature.onPanelClosed();
     _activeSpConfirmCancel?.();
     _activeStoreConflictFinish?.('defer');
     removeDialogOverlays();
@@ -5504,36 +5428,6 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 10, apiOpts);
 }
 
-
-// Story context for theater's writing agent: world info + persona + character card.
-// Reuses the same readers as 点/线/面 (buildWorldInfoContext / readCardExtras) so
-// the mini-theater is grounded in the same setting. Returns sys blocks + names.
-// NOTE: async work (world info) is prefetched into a cache on panel open; this
-// sync accessor returns the last snapshot so theater.js can build messages sync.
-async function refreshTheaterStoryContext(owner = null) {
-    const ctx = getContext();
-    const chatId = ctx.chatId;
-    const revision = theaterTaskOwners.currentChatRevision();
-    const userName = ctx.name1 || '用户';
-    const charName = ctx.name2 || '角色';
-    const char = ctx.characters?.[ctx.characterId] ?? {};
-    let wiContext = '';
-    try { wiContext = await buildWorldInfoContext(ctx); } catch { wiContext = ''; }
-    if (owner && (!theaterTaskOwners.isValid(owner, { chatId, chatRevision: revision }) || getContext().chatId !== chatId)) throw Object.assign(new Error('theater-story-stale'), { name: 'AbortError' });
-    const { personaDesc, authorNote } = readCardExtras(ctx);
-    const memText = await getMemText();
-    if (owner && (!theaterTaskOwners.isValid(owner, { chatId, chatRevision: revision }) || getContext().chatId !== chatId)) throw Object.assign(new Error('theater-story-stale'), { name: 'AbortError' });
-    const sysBlocks = [
-        personaDesc      ? `【${userName} 的人物设定】\n${personaDesc}` : '',
-        char.description ? `【${charName} 的背景资料】\n${char.description}` : '',
-        char.personality ? `【性格】${char.personality}` : '',
-        char.scenario    ? `【场景】${char.scenario}`    : '',
-        authorNote       ? `【作者注释（当前聊天）】\n${authorNote}` : '',
-        wiContext,
-        memText ? `【故事记忆库】以下是本插件自动生成的剧情客观摘要（从最早到近期的关键事件与伏笔），作为这段小剧场的既有背景，注意与之保持连贯：\n\n${memText}` : '',
-    ].filter(Boolean);
-    return { sysBlocks, userName, charName };
-}
 
 // ─── World-info entry filter (per character) ──────────────────────────────────
 // Stores disabled entry uids per character in extension_settings.
@@ -6056,11 +5950,11 @@ async function _getMemTextRaw(opts = {}) {
     const s = getSettings();
     if (s.useAnima) {
         try { return await getAnimaMemText(opts); }
-        catch (err) { console.warn('[7dayscal] Anima 取摘要出错:', err); return ''; }
+        catch (err) { console.warn('[7dayscal] Anima 取摘要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
     }
     if (s.useDatabase) {
         try { return await databaseMemoryAccess.text(opts); }
-        catch (err) { console.warn('[7dayscal] 数据库取纪要出错:', err); return ''; }
+        catch (err) { console.warn('[7dayscal] 数据库取纪要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
     }
     if (s.useBaiBaiBook) {
         const api = globalThis.STBaiBaiBook;
@@ -6081,7 +5975,7 @@ async function _getMemTextRaw(opts = {}) {
             }
             return api.getInjectedHistory()?.relativeText || '';
         } catch (err) {
-            console.warn('[7dayscal] 柏宝书取历史出错:', err);
+            console.warn('[7dayscal] 柏宝书取历史出错', safeDiagnosticLog('memory', 'request', err, { background: true }));
             return '';
         }
     }
@@ -6097,7 +5991,7 @@ async function _getMemTextRaw(opts = {}) {
 async function getMemText(opts = {}) {
     const raw = await _getMemTextRaw(opts);
     try { return await _capMemText(raw, !!opts.full); }
-    catch (err) { console.warn('[7dayscal] 记忆预算封顶出错，回退原文:', err); return raw; }
+    catch (err) { console.warn('[7dayscal] 记忆预算封顶出错，回退原文', safeDiagnosticLog('memory', 'request', err, { background: true })); return raw; }
 }
 function getMemMaxTokens() {
     const v = parseInt(getSettings().memMaxTokens, 10);
@@ -6294,7 +6188,7 @@ function renderAiMessageHtml(text) {
         try {
             return ctx.messageFormatting(String(text ?? ''), '', false, false, null, {}, false);
         } catch (err) {
-            console.warn('[7dayscal] messageFormatting failed, falling back to plain:', err);
+            console.warn('[7dayscal] messageFormatting failed, falling back to plain', safeDiagnosticLog('generation', 'parse', err));
         } finally {
             if (guardRegex) {
                 const i = de.indexOf('regex');
@@ -6305,150 +6199,16 @@ function renderAiMessageHtml(text) {
     return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
 }
 
-// ─── Space chat widget extraction ─────────────────────────────────────────
-// AI 输出 <schedule_widget> / <line_widget> / <almanac_widget> 时切成三段：
-//   1. widget 之外的正文（如果有）走 markdown 渲染
-//   2. 每个 widget 转成"卡片 + 应用按钮"预览
-// 多个 widget 一起出可以并列显示，用户挑一个应用。
-function extractSpaceWidgets(raw) {
-    const widgets = [];
-    const rx = /<(schedule_widget|line_widget|almanac_widget|era_widget)([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
-    let cleaned = String(raw || '');
-    let m;
-    while ((m = rx.exec(cleaned)) !== null) {
-        const em = (m[2] || '').match(/\bedit\s*=\s*["']?\s*(\d+)/i);
-        widgets.push({ kind: m[1].toLowerCase(), body: m[3].trim(), editIdx: em ? parseInt(em[1], 10) : null });
-    }
-    cleaned = cleaned.replace(rx, '').trim();
-    return { text: cleaned, widgets };
-}
-
-// Turn a widget body into a preview card HTML (no apply button yet — button is
-// wired separately so click handler can capture the raw body).
-function renderSpaceWidgetCard(kind, body, wid, editIdx = null) {
-    if (kind === 'schedule_widget') {
-        const line = body.split('\n').find(l => /^Event\s*:/i.test(l)) || '';
-        const parts = line.replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
-        const [type, title, desc, time, location, dynamic] = parts;
-        const TYPE_META = { main: { label: '明线', color: '#d6b85a' }, hidden: { label: '暗线', color: '#a06fd6' }, bond: { label: '红线', color: '#d67f6f' } };
-        const meta = TYPE_META[type] || { label: type || '?', color: '#9aa6b2' };
-        return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="schedule">
-            <div class="sp-space-widget-head">
-                <span class="sp-space-widget-badge" style="background:${meta.color}22;color:${meta.color};border-color:${meta.color}">
-                    <i class="fa-regular fa-calendar"></i> ${editIdx != null ? `建议改点·第 ${editIdx} 条` : '建议加到点'}（${escapeHtml(meta.label)}）
-                </span>
-            </div>
-            <div class="sp-space-widget-body">
-                <div class="sp-space-widget-title">${escapeHtml(title || '(未命名)')}</div>
-                ${desc ? `<div class="sp-space-widget-desc">${escapeHtml(desc)}</div>` : ''}
-                <div class="sp-space-widget-meta">
-                    ${time ? `<span><i class="fa-regular fa-clock"></i> ${escapeHtml(time)}</span>` : ''}
-                    ${location ? `<span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(location)}</span>` : ''}
-                </div>
-                ${dynamic ? `<div class="sp-space-widget-dynamic">🧵 ${escapeHtml(dynamic)}</div>` : ''}
-            </div>
-            <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换第 ${editIdx} 条` : '应用到点'}</button>
-            </div>
-        </div>`;
-    }
-    if (kind === 'line_widget') {
-        const lineRow = body.split('\n').find(l => /^Line\s*:/i.test(l)) || '';
-        const descRow = body.split('\n').find(l => /^Desc\s*:/i.test(l)) || '';
-        const nextRow = body.split('\n').find(l => /^Next\s*:/i.test(l)) || '';
-        const parts = lineRow.replace(/^Line\s*:\s*/i, '').split('|').map(s => s.trim());
-        const [name, ltype, stage, level, when, agency, stall] = parts;
-        const desc = descRow.replace(/^Desc\s*:\s*/i, '').trim();
-        const next = nextRow.replace(/^Next\s*:\s*/i, '').trim();
-        const isStall = String(stall).toLowerCase() === 'true';
-        return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="line">
-            <div class="sp-space-widget-head">
-                <span class="sp-space-widget-badge sp-space-widget-badge-line">
-                    <i class="fa-solid fa-diagram-project"></i> ${editIdx != null ? `建议改线·第 ${editIdx} 条` : '建议加到线'}
-                </span>
-            </div>
-            <div class="sp-space-widget-body">
-                <div class="sp-space-widget-title">${escapeHtml(name || '(未命名)')}</div>
-                <div class="sp-space-widget-meta">
-                    ${ltype  ? `<span>${escapeHtml(ltype)}</span>` : ''}
-                    ${stage  ? `<span>${escapeHtml(stage)}${isStall ? ' · 停滞' : ''}</span>` : ''}
-                    ${when   ? `<span>${escapeHtml(when)}</span>` : ''}
-                    ${agency ? `<span>${agency === 'player' ? '需推动' : '自演化'}</span>` : ''}
-                </div>
-                ${desc ? `<div class="sp-space-widget-desc">${escapeHtml(desc)}</div>` : ''}
-                ${next ? `<div class="sp-space-widget-next">→ ${escapeHtml(next)}</div>` : ''}
-            </div>
-            <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换第 ${editIdx} 条` : '应用到线'}</button>
-            </div>
-        </div>`;
-    }
-    if (kind === 'almanac_widget') {
-        // 每个日期渲染成**独立一张卡 + 独立按钮**，可分别注入（用 data-idx 对齐 parseAlmanacWidget 的下标）。
-        const items = parseAlmanacWidget(body);
-        if (!items.length) return '';
-        const cal = loadCalDesc();
-        const TYPE_LABEL = { festival: '节日', birthday: '生日', anniversary: '纪念日', custom: '自定义' };
-        return items.map((it, i) => {
-            const dateTxt = it.displayDate || `${calMonthName(cal, it.month)}${it.day}日`;
-            const label = TYPE_LABEL[it.type] || '自定义';
-            return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="almanac">
-                <div class="sp-space-widget-head">
-                    <span class="sp-space-widget-badge sp-space-widget-badge-almanac">
-                        <i class="fa-regular fa-calendar-check"></i> 建议加到历
-                    </span>
-                </div>
-                <div class="sp-space-widget-body">
-                    <div class="sp-space-widget-almrow">
-                        <span class="sp-space-widget-almdate">${escapeHtml(dateTxt)}</span>
-                        <span class="sp-space-widget-almname">${escapeHtml(it.name)}</span>
-                        <span class="sp-space-widget-almtype">${escapeHtml(label)}</span>
-                    </div>
-                </div>
-                <div class="sp-space-widget-actions">
-                    <button class="sp-space-widget-apply" data-wid="${wid}" data-idx="${i}"><i class="fa-solid fa-plus"></i> 应用到轴</button>
-                </div>
-            </div>`;
-        }).join('');
-    }
-    if (kind === 'era_widget') {
-        // 历法/纪年描述符：单张卡，展示纪年名 + 「一年 N 月、共 M 天」+ 每月名·天数；应用即换整套历法。
-        const desc = parseEraWidget(body);
-        if (!desc) return '';
-        const monthsHtml = desc.months
-            .map(mo => `<span class="sp-space-widget-eramonth">${escapeHtml(mo.name)}·${mo.days}天</span>`)
-            .join('');
-        return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="era">
-            <div class="sp-space-widget-head">
-                <span class="sp-space-widget-badge sp-space-widget-badge-era">
-                    <i class="fa-regular fa-calendar-days"></i> 建议应用历法
-                </span>
-            </div>
-            <div class="sp-space-widget-body">
-                <div class="sp-space-widget-title">${escapeHtml(desc.era || '自定义历法')}</div>
-                <div class="sp-space-widget-desc">一年 ${calMonthCount(desc)} 个月、共 ${calYearLen(desc)} 天</div>
-                <div class="sp-space-widget-eramonths">${monthsHtml}</div>
-            </div>
-            <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid fa-calendar-check"></i> 应用历法</button>
-            </div>
-        </div>`;
-    }
-    return '';
-}
-
-// Cache widget bodies by short id so click handler can retrieve them.
-// Persists per-session; not saved to disk (raw is preserved in chat history anyway).
-const _spaceWidgetStore = new Map();
-let _spaceWidgetSeq = 0;
 
 // idx0 从 0 起。就地替换 calendar_widget 内第 idx0 个 Event: 行（保留其 Day/Future 归属与缩进），找不到返回 null。
 function replaceNthEventLine(raw, idx0, newEventLine) {
     return replacePointEventBlock(raw, idx0, newEventLine);
 }
 
-// 点 widget 由 business/point/widget.js 承担；线 widget 保持冻结。
-const applyScheduleWidget = applyPointWidget;
+function readCacheRaw(desc) {
+    const saved = readStore(desc);
+    return saved?.raw || '';
+}
 
 // ─── Apply widget to almanac (历) ─────────────────────────────────────────
 // 历是一张扁平日期表（非 raw 文本）。一张卡一个日期，按 idx 取该条单独注入。
@@ -6473,8 +6233,6 @@ const axisWidgetActions = createAxisWidgetActions({
     commitCalendar: commitCalendarDesc,
     notifyEra: cal => { if (getSettings().notifyMode !== 'off') showToast(`历法已更新：${cal.era ? cal.era + '·' : ''}${calendarSummary(cal)}`); },
 });
-const applyAlmanacWidget = (...args) => axisWidgetActions.applyAlmanacWidget(...args);
-const applyEraWidget = (...args) => axisWidgetActions.applyEraWidget(...args);
 
 async function composeCreativeChatMessages({ target, userMsg, historySnapshot }) {
     const ctx      = getContext();
@@ -6501,25 +6259,6 @@ async function composeCreativeChatMessages({ target, userMsg, historySnapshot })
     return [{ role: 'system', content: sys }, ...historySnapshot, { role: 'user', content: userMsg }];
 }
 
-// ─── Space chat (间：off-scenario OOC) ───────────────────────────────────────
-// Mirrors outline chat but talks to the user out of scene as consultant/知识帮手.
-// Same context sources (world info + memory + outline for reference), no
-// <outline_widget> extraction.
-
-function getSpaceChatHistoryKey(view, charName) {
-    return keyDesc('space-chat', 'user', '');
-}
-
-function loadSpaceChatHistory(view, charName) {
-    const saved = readStore(getSpaceChatHistoryKey(view, charName));
-    spaceChatHistory = Array.isArray(saved) ? saved.filter(item => item?.role && item?.content) : [];
-    return spaceChatHistory;
-}
-
-function saveSpaceChatHistory(view, charName) {
-    writeStore(getSpaceChatHistoryKey(view, charName), spaceChatHistory);
-}
-
 // 写剪贴板：优先 navigator.clipboard（需安全上下文），失败/不可用则退回 execCommand。
 // 酒馆常跑在非 https 的 WebView 里，clipboard API 可能缺失或抛权限错——execCommand 兜底保证手机也能复制。
 async function copyPlainText(text) {
@@ -6540,280 +6279,6 @@ async function copyPlainText(text) {
         return ok;
     } catch { return false; }
 }
-
-// 取某条间消息的可复制纯文本：AI 消息剥掉 widget 标签（只留正文），user/system 原样。
-function spaceMsgPlainText(msg) {
-    if (!msg) return '';
-    const raw = String(msg.content ?? '');
-    if (msg.role === 'assistant') return extractSpaceWidgets(raw).text;
-    return raw;
-}
-
-function renderSpaceChatHistory() {
-    const $msgs = $in('#sp-space-msgs');
-    $msgs.empty();
-    spaceChatHistory.forEach((msg, idx) => {
-        appendSpaceChatMsg(msg.role === 'assistant' ? 'ai' : msg.role, msg.content, idx);
-    });
-}
-
-function appendSpaceChatMsg(role, content, historyIndex = null) {
-    const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
-    const wrapCls = role === 'user' ? 'sp-chat-msg-wrap-user'
-                  : role === 'ai'   ? 'sp-chat-msg-wrap-ai'
-                                    : 'sp-chat-msg-wrap-system';
-    const canAct = role !== 'system' && Number.isInteger(historyIndex);
-    // AI: extract schedule/line widgets first — they render as cards below the
-    // text bubble. Non-widget text still renders as markdown.
-    let contentHtml;
-    let widgetCards = '';
-    if (role === 'ai') {
-        const { text, widgets } = extractSpaceWidgets(content);
-        contentHtml = text ? renderAiMessageHtml(text) : '';
-        widgetCards = widgets.map(w => {
-            const wid = String(++_spaceWidgetSeq);
-            _spaceWidgetStore.set(wid, { kind: w.kind, body: w.body, editIdx: w.editIdx });
-            return renderSpaceWidgetCard(w.kind, w.body, wid, w.editIdx);
-        }).join('');
-    } else {
-        contentHtml = escapeHtml(content).replace(/\n/g, '<br>');
-    }
-    const $wrap = $('<div>').addClass(`sp-chat-msg-wrap ${wrapCls}`);
-    if (canAct) $wrap.attr('data-idx', historyIndex);
-    // Only render the bubble if there's text; if AI's whole reply is just a
-    // widget card, skip the empty bubble
-    if (contentHtml) {
-        const $msg = $('<div>').addClass(`sp-chat-msg ${cls}`);
-        $msg.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
-        $wrap.append($msg);
-    }
-    if (widgetCards) $wrap.append(widgetCards);
-    if (canAct) {
-        const editBtn = role === 'user'
-            ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>'
-            : '';
-        $wrap.append(
-            `<div class="sp-chat-msg-actions">${editBtn}` +
-            `<button class="sp-chat-msg-copy" title="复制"><i class="fa-solid fa-copy"></i></button>` +
-            `<button class="sp-chat-msg-delete" title="删除"><i class="fa-solid fa-trash"></i></button></div>`,
-        );
-    }
-    $wrap.appendTo($in('#sp-space-msgs'));
-    const el = inEl('#sp-space-msgs');
-    if (el) el.scrollTop = el.scrollHeight;
-}
-
-function startSpaceInlineEdit($msg, idx) {
-    const original = spaceChatHistory[idx]?.content ?? '';
-    $msg.find('.sp-chat-msg-content').replaceWith(
-        `<textarea class="sp-chat-msg-editor">${escapeHtml(original)}</textarea>`
-    );
-    $msg.find('.sp-chat-msg-actions').replaceWith(
-        '<div class="sp-chat-msg-actions sp-chat-msg-editing">' +
-        '<button class="sp-chat-msg-edit-save">保存并重发</button>' +
-        '<button class="sp-chat-msg-edit-cancel">取消</button>' +
-        '</div>'
-    );
-    const $ta = $msg.find('.sp-chat-msg-editor');
-    $ta.trigger('focus');
-    const val = $ta.val();
-    $ta[0].setSelectionRange(val.length, val.length);
-
-    $msg.find('.sp-chat-msg-edit-cancel').on('click', () => renderSpaceChatHistory());
-    $msg.find('.sp-chat-msg-edit-save').on('click', () => {
-        if (isSpaceChatting) return;
-        const newText = $ta.val().trim();
-        if (!newText) return;
-        spaceChatHistory.splice(idx);
-        saveSpaceChatHistory();
-        renderSpaceChatHistory();
-        sendSpaceChat(newText);
-    });
-    $ta.on('keydown', e => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            $msg.find('.sp-chat-msg-edit-save').trigger('click');
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            renderSpaceChatHistory();
-        }
-    });
-}
-
-// 「间」聊天改现有点/线：命中关键词才把当前 raw 编号后注入，供 AI 定位"第 N 条"。
-// 关键词与落地卡片一致（见 state.js），避免用户学两套词；单字"点/线"可能误命中，
-// 但注入只是多给点上下文，真正改不改由提示词把关，代价可控。平时不命中就不注入，省 token。
-const EDIT_POINT_KEYWORDS = ['日程', '日历', '待办', '点'];
-const EDIT_LINE_KEYWORDS  = ['事件线', '线索', '伏笔', '线'];
-// 刻度（暗历·时间账）触发词：命中才把活跃条目喂进「间」（省 token，与点/线同套路）。
-const LEDGER_READ_KEYWORDS = ['刻度', '暗历', '暗账', '状态', '伤', '病', '孕', '约定', '周期', '待办', '身心', '现在怎', '好了没', '没了结'];
-// 排障/答疑触发词：命中才把「插件功能 FAQ + 当前开关状态」喂进「间」，让它当客服答「XX 在哪 / 怎么开 / 为啥没生效」。
-const SPACE_HELP_KEYWORDS = ['悬浮球', '悬浮按钮', '开关', '在哪', '怎么开', '怎么用', '怎么设', '为什么', '为啥', '没反应', '没生效', '不生效', '注入', '没出现', '不显示', '设置在', '功能', '干嘛', '干什么', '啥用', '什么用', '怎么弄', '找不到', '能不能', '可以吗', '能吗', '会吗', '支持', '自动', '后台', '纪念日', '补录'];
-
-function readCacheRaw(desc) {
-    const saved = readStore(desc);
-    return saved?.raw || '';
-}
-
-function numberedLineList(raw) {
-    return parseLines(raw).map((l, i) => {
-        const bits = [`#${i + 1}`, l.name || '(未命名)'];
-        if (l.type)  bits.push(`｜${l.type}`);
-        if (l.stage) bits.push(`｜${l.stage}${l.stall ? '(停滞)' : ''}`);
-        if (l.when)  bits.push(`｜${l.when}`);
-        bits.push(`｜${l.agency === 'player' ? '需推动' : '自演化'}`);
-        if (l.desc)  bits.push(`｜${l.desc}`);
-        if (l.next)  bits.push(`｜下一步:${l.next}`);
-        return bits.join(' ');
-    }).join('\n');
-}
-
-// 「间」可读的活跃刻度清单（只读参考，非编号可改列表——刻度不走「改第N条」落地）。
-// 复用注入侧的距今/倒计时语义，但去掉「别念编号」等主楼叙事约束（间是局外答问、可直说）。
-function numberedLedgerList() {
-    let items = [];
-    try { items = ledger.listEntries() || []; } catch { return ''; }
-    if (!items.length) return '';
-    return formatLedgerList(items, { daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo });
-}
-
-// 「间」排障/答疑知识：插件功能 + 每个开关的真实位置（照设置面板实际文案/结构，不是模块简介）。
-// 静态骨架部分是死知识；动态部分（buildSpaceHelpText）再拼当前开关的实际开/关状态，让间能答「你这个没开」。
-const SPACE_HELP_FACTS = `【构画·功能与设置速查（你据此回答用户关于"某开关在哪、怎么开、为啥没生效"的问题，要答得具体、能指路，别只泛泛介绍模块）】
-· 【拿不准就别编，铁律】只回答这份速查覆盖到、或你有明确依据的内容；速查没写到、或你不确定的构画细节，老实说"这条我不太确定，建议点开设置里对应的小问号看说明"，**绝不凭大模型常识编造构画的功能、开关或用法**——宁可说不知道，也别给个听着合理的错答案误导用户。
-· 面板入口：点屏幕上的「构画」悬浮球打开主面板；面板左侧竖排是模块页签——点、轴、线、面、间、棱、坐标。
-· 悬浮球开关：在主面板**右上角**、标题栏那排小图标里——一个**空心圆点**图标（鼠标停上去显示"悬浮按钮"），点它切换悬浮球显示/隐藏（它旁边分别是主题切换、关闭）。**它不在设置里**，很多人找不到就是因为在找设置页。关掉悬浮球后想再打开面板，可从酒馆的扩展/魔杖菜单进入。
-· 设置入口：主面板里的齿轮「设置」。设置从上到下分几大块：总开关 / 基础设置（API、世界书、记忆、显示与通知）/ 模块设置（时间戳、轴、线、面、棱、间）/ 高级设置（标签、自定义提示词、存储管理）。
-· 总开关（设置最顶部）：①「启用构画」——关了整个插件如同未安装。②「允许潜伏注入主楼 AI（线/面/刻度）」——这是**注入总闸**，它关着的话，就算线/面/刻度各自的注入开关开了也不会注入。用户说"我开了注入怎么没用"先让他确认这个总闸。
-· 【谁能后台注入主楼 AI（关键事实，别答错）】只有**三家**能潜伏注入主楼 AI：线、面（大纲）、刻度（暗历）。**「点/日程」不能后台自动注入主楼 AI**——它是只读展示（面板卡片 + 楼内日程条），只能手动生成/刷新，没有"注入开关"。同理「轴/历」本身也不注入正文（历只在楼内挂只读日程块）。用户问"点能不能后台自动注入/自动喂给 AI"，答案是**不能**，别顺着说可以；他要的效果得靠线/面/刻度承载。
-· 时间戳（设置→模块设置→时间戳）：「启用时间戳」，让主楼 AI 每楼打隐形时间戳作时间源，默认开。
-· 故事星期：只认当前 AI 楼 start/end 双侧完整 SDC；缺失或半残时显示“星期未记录”。唯一 fallback 是用户亲自设置的“校准故事时间”人工锚；后续完整有效 SDC 自动接管，点击“恢复自动”会立即重判当前楼。
-· 轴（设置→模块设置→轴）：含「读不到戳时用 API 兜底判定日期」「点·后台自动跟随今天」「（刻度）潜伏注入主楼 AI」等。
-· 轴·生成节日 vs 补录纪念日（都在轴面板右上角工具区，手机端收在 ⋮ 菜单里）：「**生成节日**」按世界观**重铺一整年**——会先参照世界书/角色卡判断故事所在地域文化再铺对应节日（别默认套中华节庆，美国背景就别硬塞中秋），已锁定条与你手动加的会保留、未锁的旧 AI 条被替换。「**补录纪念日**」只**增补**剧情里新浮现的重大里程碑纪念日（上限约 3 条、宁缺毋滥、可能一条都不补），**纯追加、不动任何现有条、也不重铺整历**，补录的条目会自动锁定防日后重铺被冲。两者别混：想加新纪念日又不想动现有历，用「补录纪念日」。目前补录**只有手动触发**，暂无后台自动补录。
-· 线（设置→模块设置→线）：「启用平行事件（线）」「潜伏注入主楼 AI」「虚线·冷知识」「推进策略（回合/时间/手动）+ 间隔」。线以 UC（用户核心角色）为主轴，也会额外放行 1-2 条**非 UC 的配角/NPC 支线**（重要配角自己的小线索，须同一世界观、同一叙事尺度，不会跨尺度乱入）。
-· 面（设置→模块设置→面）：「大纲自动注入」+ 判定间隔。
-· 刻度/暗历（自动标注）：开关在设置里，默认**关**（opt-in，会多一路后台 API）。要它自动从剧情捞状态/约定，得手动开；也可在轴面板「刻度」页手动「立即标注」「立即推进」。每条刻度可单独操作：**锁定**（AI 判定车不再改它）、**暂停埋入**（暂不注入主楼、但仍在账上跟进现状，再点恢复；与锁定正交）、**了结**（归档、可捞回）、**编辑**。刻度注入**不定死条数、也不硬凑**——只挑当下氛围最相关的埋进去（锁定的必进、暂停埋入的必不进），活跃条多也不会硬塞满一堆。
-· 楼内渲染框（设置→基础设置→显示与通知）：主开关「楼内渲染框」，下面有子开关分别控制 点/线/轴/标注池/召回 这几个框显不显；主开关关了子开关全失效。
-· 界面字号：设置→显示与通知里的 −／＋ 步进，独立于酒馆自身的字号。
-· 通知档位：关／简约／全量三档。`;
-
-// 动态拼当前开关实际状态（让间能直接指出「你这个开关现在是关的」，而非泛泛而谈）。
-function buildSpaceHelpText() {
-    const s = getSettings();
-    const on = v => v ? '开' : '关';
-    const state = [
-        `\n【该用户此刻的开关实况（据此排障；发现用户想要的效果依赖的开关是"关"，直接点出来）】`,
-        `- 启用构画：${on(s.pluginEnabled !== false)}`,
-        `- 潜伏注入总闸（线/面/刻度注入的总开关）：${on(s.injectEnabled !== false)}`,
-        `- 时间戳：${on(s.storyClockEnabled !== false)}`,
-        `- 线·启用：${on(s.linesEnabled !== false)}；线·潜伏注入：${on(s.linesInject === true)}`,
-        `- 面·大纲自动注入：${on(s.outlineInject === true)}`,
-        `- 刻度·自动标注：${on(s.ledgerCaptureEnabled === true)}；刻度·潜伏注入：${on(s.ledgerInject === true)}`,
-        `- 楼内渲染框·主开关：${on(s.inlineRenderEnabled !== false)}`,
-        `- 悬浮球显示：${on(s.fabShow !== false)}`,
-    ].join('\n');
-    return `${SPACE_HELP_FACTS}\n${state}`;
-}
-
-// 发给 API 前，把历史 AI 回复里的结构化卡片块换成占位符。旧卡片带的是当时的点/线数据，
-// 会污染"改第 N 条"定位（AI 可能照抄历史里的旧内容）；system 已注入最新编号列表作为唯一真相源。
-// 只作用于发给 API 的副本，不改 spaceChatHistory 本身，界面显示与"应用"按钮不受影响。
-function stripWidgetsForApi(history) {
-    return history.map(m => {
-        if (m.role !== 'assistant') return m;
-        const cleaned = String(m.content || '')
-            .replace(/<schedule_widget[^>]*>[\s\S]*?<\/schedule_widget\s*>/gi, '【已输出一张点卡片（内容以当前面板为准）】')
-            .replace(/<line_widget[^>]*>[\s\S]*?<\/line_widget\s*>/gi, '【已输出一张线卡片（内容以当前面板为准）】')
-            .replace(/<almanac_widget[^>]*>[\s\S]*?<\/almanac_widget\s*>/gi, '【已输出一张历卡片（内容以当前面板为准）】')
-            .replace(/<era_widget[^>]*>[\s\S]*?<\/era_widget\s*>/gi, '【已输出一张历法卡片（内容以当前面板为准）】');
-        return cleaned === m.content ? m : { ...m, content: cleaned };
-    });
-}
-
-async function buildSpaceChatMessages(userMsg) {
-    const ctx      = getContext();
-    const userName = ctx.name1 || '用户';
-    const charName = ctx.name2 || '角色';
-    const outlineCtx = outlineFeature.readRaw();
-    // 命中关键词才注入编号版现有点/线，供"改第 N 条"定位；平时不注入省 token
-    const msg = String(userMsg || '');
-    const pointList = EDIT_POINT_KEYWORDS.some(w => msg.includes(w)) ? numberedPointList(readCacheRaw(getCacheKey('user', ''))) : '';
-    const lineList  = EDIT_LINE_KEYWORDS.some(w => msg.includes(w))  ? numberedLineList(readCacheRaw(getLinesCacheKey())) : '';
-    // 命中刻度词才喂活跃刻度（问状态/伤情/约定/周期时才带，省 token）；命中排障/答疑词才喂功能FAQ+开关实况
-    const ledgerList = LEDGER_READ_KEYWORDS.some(w => msg.includes(w)) ? numberedLedgerList() : '';
-    const faqText    = SPACE_HELP_KEYWORDS.some(w => msg.includes(w))  ? buildSpaceHelpText() : '';
-    const wiContext = await buildWorldInfoContext(ctx);
-    const memText   = await getMemText();
-    const recentCtx = await buildRecentChatContext(ctx);
-    const { personaDesc, authorNote } = readCardExtras(ctx);
-    const sys = buildSpaceChatSystemPrompt({
-        userName,
-        charName,
-        personaDesc,
-        authorNote,
-        outlineRaw: outlineCtx,
-        wiContext,
-        memText,
-        recentCtx,
-        pointList,
-        lineList,
-        ledgerList,
-        almanacText: getAlmanacInjectText(),
-        calDescText: getCalDescInjectText(),
-        faqText,
-        personaOverride: (getSettings().spacePersona || '').trim(),   // 间·人格覆盖：填了就换间的语气/人格（顾问身份恒保留）
-    });
-    return [{ role: 'system', content: sys }, ...stripWidgetsForApi(spaceChatHistory), { role: 'user', content: userMsg }];
-}
-
-const SPACE_HISTORY_CAP = 20;
-
-async function sendSpaceChat(userMsg) {
-    if (isSpaceChatting) return;
-    spaceChatHistory.push({ role: 'user', content: userMsg });
-    let trimmed = false;
-    if (spaceChatHistory.length > SPACE_HISTORY_CAP) {
-        spaceChatHistory.splice(0, spaceChatHistory.length - SPACE_HISTORY_CAP);
-        trimmed = true;
-    }
-    if (trimmed) renderSpaceChatHistory();
-    else appendSpaceChatMsg('user', userMsg, spaceChatHistory.length - 1);
-    saveSpaceChatHistory();
-    isSpaceChatting = true;
-    const chatIdSnap = getContext().chatId;
-    const myCtrl = new AbortController();
-    spaceChatAbortController = myCtrl;
-    const $dots = $('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking').html('<span class="sp-typing"><i></i><i></i><i></i></span>').appendTo($in('#sp-space-msgs'));
-    const el = inEl('#sp-space-msgs');
-    if (el) el.scrollTop = el.scrollHeight;
-    try {
-        const cfg = loadCfg();
-        if (!cfg.url || !cfg.key) { if (!settingsOpen) toggleSettings(); throw new Error('请先配置 API'); }
-        const reply = await postChatCompletion({
-            cfg,
-            messages: await buildSpaceChatMessages(userMsg),
-            maxTokens: 30000,
-            temperature: GEN_TEMPERATURE,
-            signal: myCtrl.signal,
-        });
-        if (spaceChatAbortController !== myCtrl || myCtrl.signal.aborted || getContext().chatId !== chatIdSnap) return;
-        spaceChatHistory.push({ role: 'assistant', content: reply });
-        saveSpaceChatHistory();
-        $dots.remove();
-        appendSpaceChatMsg('ai', reply, spaceChatHistory.length - 1);
-    } catch (err) {
-        if (spaceChatAbortController === myCtrl && getContext().chatId === chatIdSnap && err?.name !== 'AbortError') appendSpaceChatMsg('system', `发送失败：${err.message}`);
-    } finally {
-        $dots.remove();
-        if (spaceChatAbortController === myCtrl) {
-            spaceChatAbortController = null;
-            isSpaceChatting = false;
-        }
-    }
-}
-
-
-
 
 // ─── 棱（小剧场）render ─────────────────────────────────────────────────────────
 
@@ -6929,7 +6394,7 @@ async function renderAnchorPanel() {
         if (_anchorView.level === 'chats') { await renderAnchorChats(_anchorView.charName); return; }
         await renderAnchorChars();
     } catch (err) {
-        console.error('[SP anchor] 面板渲染失败', err);
+        console.error('[SP anchor] 面板渲染失败', safeDiagnosticLog('axis', 'render', err));
         setAnchorBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>读取收藏失败：${escapeHtml(err?.message || '未知错误')}</p></div>`);
     }
 }
@@ -7287,7 +6752,6 @@ const STORAGE_KIND_LABELS = {
     'space-chat'   : '间（局外）',
     'dashed'       : '虚线·冷知识',
     'almanac'      : '轴·日历条目（节日/生日/纪念日）',
-    'date-anchor'  : '轴·剧情今天（日期锚点）',
 };
 const STORAGE_OWNKEY_LABELS = {
     'sp-memory' : '记忆',
@@ -7331,7 +6795,7 @@ async function renderStorageUsage() {
     } else {
         const usage = store.usageByKind();
         const rows = [];
-        for (const kind of store.KINDS) {
+        for (const kind of store.USER_CLEAR_KINDS) {
             const b = usage[kind] || 0;
             if (!b) continue;
             rows.push(storageRow(
@@ -7355,7 +6819,7 @@ async function renderStorageUsage() {
     }
 
     // ③ 本机缓存（localStorage：棱草稿 + UI 位置），先算好（同步）
-    const localBytes = theater.pluginCacheBytes();
+    const localBytes = theaterDeviceCache.pluginCacheBytes();
 
     // 先渲染同步部分 + 收藏占位（服务器读取慢，先占位再补）
     $body.html(`
@@ -7426,8 +6890,7 @@ function invalidateKindTasksForStoreClear(kind) {
     } else if (kind === 'lines') {
         linesFeature.abortGeneration();
     } else if (kind === 'space-chat') {
-        spaceChatAbortController?.abort(); spaceChatAbortController = null;
-        isSpaceChatting = false;
+        spaceFeature.invalidateStoreKind(kind);
     } else if (kind === 'creative-chat') {
         outlineFeature.invalidateStoreKind(kind);
     } else if (kind === 'dashed') {
@@ -7449,14 +6912,11 @@ function refreshEditorsAfterStoreClear(kind) {
         if (linesMode) linesFeature.refreshPanel();
         syncLatestInlineBlock();
     }
-    if (kind === 'space-chat' && spaceMode) $in('#sp-space-msgs').empty();
     if (kind === 'creative-chat') {
         outlineFeature.refreshAfterStoreClear(kind);
     }
     if (kind === 'space-chat') {
-        spaceChatHistory.length = 0;
-        _spaceWidgetStore.clear();
-        if (spaceMode) renderSpaceChatHistory();
+        spaceFeature.refreshAfterStoreClear(kind);
     }
 }
 
@@ -7480,8 +6940,7 @@ function refreshEditorsFromCurrentStore(kind) {
     } else if (kind === 'creative-chat') {
         outlineFeature.refreshFromStore(kind);
     } else if (kind === 'space-chat') {
-        loadSpaceChatHistory();
-        if (spaceMode) renderSpaceChatHistory();
+        spaceFeature.refreshFromStore(kind);
     } else if (kind === 'dashed') {
         linesFeature.dashed.resetError();
         if (linesMode) linesFeature.refreshPanel();
@@ -7498,6 +6957,8 @@ function bindStorageHandlers() {
 
     // 日历条目必须按精确 dataKey 删除，不能调用按 kind 前缀的清理。
     $body.on('click', '.sp-storage-del[data-scope="datakey"]', async function () {
+        const dataKey = $(this).attr('data-key');
+        if (!store.isStorageDataKeyClearable(dataKey)) return;
         const identity = storageChatIdentity();
         if (!identity) return;
         if (!await spConfirm({
@@ -7507,7 +6968,7 @@ function bindStorageHandlers() {
         if (!storageChatStillCurrent(identity)) return;
         invalidateAlmanacTasksForStoreClear();
         try {
-            const ok = await store.clearDataKeyAsync('almanac-user');
+            const ok = await store.clearDataKeyAsync(dataKey);
             if (!storageChatStillCurrent(identity)) return;
             refreshAlmanacAfterStoreClear();
             renderStorageUsage();
@@ -7522,7 +6983,7 @@ function bindStorageHandlers() {
         const kind = $(this).attr('data-kind');
         if (kind === STORAGE_CLEAR_TARGETS.almanac.kind) return;
         const label = STORAGE_KIND_LABELS[kind] || kind;
-        if (!store.KINDS.includes(kind)) return;
+        if (!store.USER_CLEAR_KINDS.includes(kind)) return;
         const identity = storageChatIdentity();
         if (!identity) return;
         const detail = kind === STORAGE_CLEAR_TARGETS.almanac.kind
@@ -7570,10 +7031,19 @@ function bindStorageHandlers() {
             }
             return;
         }
+        if (key === 'sp-theater') {
+            const target = theaterFeature.captureTarget(identity.chatId);
+            const result = await theaterFeature.clearSaved(target);
+            if (!storageChatStillCurrent(identity)) return;
+            if (theaterMode) theaterFeature.resetAfterStorageClear();
+            renderStorageUsage();
+            showToast(result?.ok ? `已清空${label}` : `清空${label}失败`, null, !result?.ok);
+            return;
+        }
         const ok = store.clearOwnKey(key);
         if (!storageChatStillCurrent(identity)) return;
         if (key === 'sp-memory') { refreshMemoryStatus?.(); }
-        if (key === 'sp-theater' && theaterMode) { theaterFeature.ui?.resetForChat?.(); theaterFeature.ui?.render(); }
+        if (key === 'sp-theater' && theaterMode) theaterFeature.resetAfterStorageClear();
         renderStorageUsage();
         showToast(ok ? `已清空${label}` : `${label}本就为空`);
     });
@@ -7592,7 +7062,7 @@ function bindStorageHandlers() {
             renderStorageUsage();
             showToast('已清空全部收藏');
         } catch (err) {
-            console.error('[SP storage] 清空收藏失败', err);
+            console.error('[SP storage] 清空收藏失败', safeDiagnosticLog('storage', 'save', err));
             showToast('清空失败：' + (err?.message || '未知错误'), null, true);
         }
     });
@@ -7600,8 +7070,8 @@ function bindStorageHandlers() {
     // ③ 本机缓存（localStorage：棱草稿 + UI 位置）
     $body.on('click', '.sp-storage-del[data-scope="local"]', async function () {
         if (!await spConfirm({ title: '清理本机缓存', body: '清理本浏览器的棱草稿与界面位置（面板位置/大小）。不影响已存服务端的点线面间和收藏。确定？' })) return;
-        const n = theater.clearPluginCache();
-        if (theaterMode) { theaterFeature.ui?.resetForChat?.(); theaterFeature.ui?.render(); }
+        const n = theaterDeviceCache.clearPluginCache();
+        if (theaterMode) theaterFeature.resetAfterStorageClear();
         renderStorageUsage();
         showToast(`已清理 ${n} 项本机缓存`);
     });
@@ -7845,7 +7315,7 @@ async function fetchModels() {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
         const data = await res.json();
-        if (data?.error) throw new Error(data.error.message || '返回错误');
+        if (data?.error) throw makeDiagnosticError('unknown', { phase: 'request' });
         const models = (data.data || data.models || [])
             .map(m => (typeof m === 'string' ? m : m.id))
             .filter(Boolean).sort();
@@ -7861,7 +7331,7 @@ async function fetchModels() {
         $in('#sp-model-list-section').attr('open', 'open').show();
         showToast(`已加载 ${models.length} 个模型`);
     } catch (err) {
-        showToast(`获取模型失败：${err.message}`, null, true);
+        showToast(`获取模型失败：${diagnosticMessage(err)}`, null, true);
     } finally {
         $btn.prop('disabled', false).html('<i class="fa-solid fa-list"></i>');
     }
@@ -8037,6 +7507,7 @@ async function renderAnimaStatus() {
 
 function refreshMemoryStatus() {
     const r = memory.getHealthReport();
+    if (!r.paused) memoryPauseNoticeShown = false;
     const rows = [
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">AI 楼总数</span><span class="sp-mem-stat-v">${r.totalAi}</span></div>`,
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">稳定分组数</span><span class="sp-mem-stat-v">${r.totalGroups}</span></div>`,
@@ -8057,13 +7528,12 @@ function refreshMemoryStatus() {
 function renderTheaterSection() {
     const s = getSettings();
     $in('#sp-theater-style').val(typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '');
-    void theaterFeature.ui?.refreshTemplates();
+    void theaterFeature?.refreshUi();
 }
 
 // 棱设置分节的事件（config 字段即改即存；模板 CRUD。缓存治理已移交存储管理面板）
 function bindTheaterHandlers() {
-    if (!theaterFeature.ui) return;
-    theaterFeature.ui.bindSettings($in('#sp-theater-section'));
+    theaterFeature?.bindSettings($in('#sp-theater-section'));
 }
 
 function bindMemoryHandlers() {
@@ -8215,7 +7685,7 @@ function bindMemoryHandlers() {
             });
             showToast('补齐完成');
         } catch (err) {
-            showToast('补齐失败：' + err.message, null, true);
+            showToast('补齐失败：' + diagnosticMessage(err), null, true);
         } finally {
             $(this).prop('disabled', false);
             setMemoryProgressVisible(false);
@@ -8245,7 +7715,7 @@ function bindMemoryHandlers() {
             });
             showToast(wasAborted ? '已中止，已还原到重构前的记忆' : '重构完成');
         } catch (err) {
-            showToast('重构失败：' + err.message, null, true);
+            showToast('重构失败：' + diagnosticMessage(err), null, true);
         } finally {
             $(this).prop('disabled', false);
             setMemoryProgressVisible(false);
@@ -8323,7 +7793,7 @@ async function renderWiList() {
     try {
         entries = await getCharBookEntries(ctx);
     } catch (err) {
-        $list.html(`<span class="sp-cfg-hint">加载失败：${escapeHtml(err.message || '未知错误')}</span>`);
+        $list.html(`<span class="sp-cfg-hint">加载失败：${escapeHtml(diagnosticMessage(err))}</span>`);
         return;
     }
 
