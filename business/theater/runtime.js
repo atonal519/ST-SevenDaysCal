@@ -11,6 +11,7 @@ import { THEATER_TEMPLATE_BOOK, THEATER_DRAFT_CAP, theaterDraftKey } from './con
 
 export function createTheaterRuntime(host = {}) {
     const owners = createTaskOwnerManager();
+    const fixedSaver = createTargetMetadataSaver({ coreModule: host.coreModule, ownedRoots: ['/sp-theater'] });
     const captureTarget = (chatId = host.getContext?.()?.chatId) => {
         const context = host.getContext?.(); context.chatMetadata ||= {};
         const metadata = context.chatMetadata['sp-theater'] ||= { version: 1, saved: [] };
@@ -18,7 +19,7 @@ export function createTheaterRuntime(host = {}) {
     };
     const repository = createTheaterRepository({
         storage: host.storage, metadata: () => captureTarget().metadata, persist: () => host.getContext?.().saveMetadata?.(),
-        keyForChat: host.keyForChat || theaterDraftKey, metadataSaver: createTargetMetadataSaver({ coreModule: host.coreModule, ownedRoots: ['/sp-theater'] }), requireFixedSaver: true, cap: THEATER_DRAFT_CAP,
+        keyForChat: host.keyForChat || theaterDraftKey, metadataSaver: fixedSaver.supported ? fixedSaver : null, requireFixedSaver: fixedSaver.supported, cap: THEATER_DRAFT_CAP,
     });
     const templates = createTheaterTemplates({ context: host.getContext, bookName: THEATER_TEMPLATE_BOOK });
     const generation = createTheaterGeneration({

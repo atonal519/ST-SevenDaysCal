@@ -10,11 +10,12 @@ import {
 import * as memory from './memory.js';
 import { createTheaterRuntime } from './business/theater/runtime.js';
 import { createCoordinateRuntime } from './business/coordinate/runtime.js';
+import { enterCoordinateSidebar } from './business/coordinate/ui.js';
 import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
-import { createBestEffortMetadataSaver, createTargetMetadataSaver } from './runtime/target-metadata-save.js';
+import { createBestEffortMetadataSaver, createTargetMetadataSaver, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import * as snapshot from './snapshot.js';
@@ -215,10 +216,7 @@ ledger.bindLedgerMetadataPersistence({
         if (typeof saver.commit === 'function') return saver.commit(current, { ...options, target, ownerGuard: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
         const after = { ...(current?.chatMetadata || {}) };
         if (current?.chatMetadata?.['sp-ledger']) after['sp-ledger'] = current.chatMetadata['sp-ledger'];
-        const captured = saver.capture(target, after);
-        if (!captured) return { ok: false, reason: 'metadata-capture-failed', dispatched: false, commitState: 'not-dispatched' };
-        const result = await saver.dispatch(captured, { isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
-        return { ...result, dispatched: result.dispatched ?? false, confirm: () => saver.confirm?.(captured) };
+        return dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata: after, refresh: scriptCore.refreshChatWriteSnapshotsFromServer, isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
     },
 });
 
@@ -1501,7 +1499,10 @@ jQuery(async () => {
         getSettings: () => {
             const s = getSettings();
             return {
-                useBaiBaiBook  : !!s.useBaiBaiBook || !!s.useAnima,   // Anima 用户同样跳过内置采集/注入（memory.js 只认这一个旗标）
+                pluginEnabled  : s.pluginEnabled !== false,
+                useBaiBaiBook  : !!s.useBaiBaiBook,
+                useAnima       : !!s.useAnima,
+                useDatabase    : !!s.useDatabase,
                 memoryEnabled  : s.memoryEnabled !== false,
                 memoryL0Group  : Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5,
                 memoryL1Group  : Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10,
@@ -1935,6 +1936,7 @@ jQuery(async () => {
 // 一键中断所有在飞的后台判定与生成（点/线/虚线/面/间/棱/历 + 三路日期判定 + 同步到点），并清 re-entry 闸，
 // 让重新开启后能干净重跑。照 CHAT_CHANGED 的中断序列集中一处。
 function _abortAllBackground() {
+    memory.abortAll();
     const activeTravel = timeTravel.getState();
     if (activeTravel) clearTimeTravelSession(activeTravel, { removeWaitingBlock: activeTravel.phase === 'waiting', reason: 'plugin-disabled' });
     _timeTravelSelectionSeq++;
@@ -4137,21 +4139,14 @@ function injectModal() {
                 return;
             }
             if (view === 'anchor') {
-                outlineMode = false;
-                linesMode = false;
-                spaceMode = false;
-                theaterMode = false;
-                axisState.almanacMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-outline-wrap').hide();
-                $in('#sp-lines-wrap').hide();
-                $in('#sp-space-wrap').hide();
-                $in('#sp-theater-wrap').hide();
-                $in('#sp-almanac-wrap').hide();
-                $in('#sp-anchor-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('坐标');
-                coordinateRuntime?.feature?.open('chars');
+                enterCoordinateSidebar({
+                    resetModes: () => { outlineMode = false; linesMode = false; spaceMode = false; theaterMode = false; axisState.almanacMode = false; },
+                    hidePanels: () => { $in('#sp-body').hide(); $in('#sp-outline-wrap').hide(); $in('#sp-lines-wrap').hide(); $in('#sp-space-wrap').hide(); $in('#sp-theater-wrap').hide(); $in('#sp-almanac-wrap').hide(); },
+                    showCoordinate: () => $in('#sp-anchor-wrap').css('display', 'flex'),
+                    hideSubToggle: () => $in('#sp-sub-toggle').hide(),
+                    setTitle: title => $in('#sp-content-title').text(title),
+                    feature: coordinateRuntime?.feature,
+                });
                 return;
             }
             if (view === 'almanac') {
@@ -5518,7 +5513,24 @@ function captureDatabaseMemoryTarget() {
 
 function captureDatabaseWorldbookReader() {
     const th = globalThis.TavernHelper;
-    return typeof th?.getWorldbook === 'function' ? th.getWorldbook.bind(th) : null;
+    if (typeof th?.getWorldbook === 'function') return th.getWorldbook.bind(th);
+    let context = null;
+    try { context = getContext?.() || null; } catch {}
+    if (typeof context?.loadWorldInfo !== 'function') return null;
+    return async name => {
+        const result = await context.loadWorldInfo(name);
+        const entries = result?.entries;
+        if (Array.isArray(entries)) {
+            if (!entries.length) throw new Error('worldbook-entries-empty');
+            return entries;
+        }
+        if (entries && typeof entries === 'object') {
+            const values = Object.values(entries);
+            if (!values.length) throw new Error('worldbook-entries-empty');
+            return values;
+        }
+        throw new Error('worldbook-entries-invalid');
+    };
 }
 
 const databaseMemoryAccess = createDatabaseMemoryAccess({
@@ -6721,7 +6733,7 @@ function bindMemoryHandlers() {
         s.useBaiBaiBook = this.checked;
         if (this.checked) { s.useAnima = false; s.useDatabase = false; }   // 记忆源互斥
         saveSettingsDebounced();
-        if (this.checked) memory.abortRebuild();
+        memory.abortAll();
         renderMemorySection();
     });
     $in('#sp-mem-source-anima').on('change', function () {
@@ -6729,7 +6741,7 @@ function bindMemoryHandlers() {
         s.useAnima = this.checked;
         if (this.checked) { s.useBaiBaiBook = false; s.useDatabase = false; }   // 记忆源互斥
         saveSettingsDebounced();
-        if (this.checked) memory.abortRebuild();
+        memory.abortAll();
         renderMemorySection();
     });
     $in('#sp-mem-source-database').on('change', function () {
@@ -6737,7 +6749,7 @@ function bindMemoryHandlers() {
         s.useDatabase = this.checked;
         if (this.checked) { s.useBaiBaiBook = false; s.useAnima = false; }
         saveSettingsDebounced();
-        if (this.checked) memory.abortRebuild();
+        memory.abortAll();
         renderMemorySection();
     });
     $in('#sp-mem-database-worldbook').on('change', function () {
@@ -6756,6 +6768,7 @@ function bindMemoryHandlers() {
     $in('#sp-mem-enabled').on('change', function () {
         getSettings().memoryEnabled = this.checked;
         saveSettingsDebounced();
+        if (!this.checked) memory.abortAll();
     });
     $in('#sp-mem-l0').on('change', function () {
         const v = Math.max(1, Math.min(30, parseInt(this.value, 10) || 5));

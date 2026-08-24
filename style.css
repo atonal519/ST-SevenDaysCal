@@ -4518,9 +4518,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-scroll   { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px 16px; }
 .sp-anchor-loading  { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
 
-.sp-anchor-sizebar      { font-size: var(--sp-fs-72); color: var(--sp-subtle); padding: 2px 4px 10px; text-align: right; }
-.sp-anchor-sizebar-over { color: var(--sp-neon-color); }
-
 /* 角色层 / 聊天桶 / 缩略卡片 共用列容器 */
 .sp-anchor-char-list, .sp-anchor-chat-list, .sp-anchor-item-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -4785,9 +4782,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font-size: var(--sp-fs-72);
 }
 .sp-anchor-chars-head .sp-anchor-tagmgr-btn {
-    width    : 24px;
+    margin-left: auto;
+    width    : auto;
     height   : 24px;
+    padding  : 0 8px;
     font-size: var(--sp-fs-72);
+    white-space: nowrap;
 }
 
 /* ─── 坐标 · 标签管理面 ─────────────────────────────────────────────────── */

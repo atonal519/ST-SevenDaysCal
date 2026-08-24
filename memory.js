@@ -44,6 +44,16 @@ let _running = false;
 let _abortController = null;      // reserved for rebuild flow (see abortRebuild)
 let _jobAbortController = null;   // shared signal for per-job fetches; aborted on CHAT_CHANGED
 let _isRebuilding = false;        // block every persist while rebuildAll holds uncommitted memory
+let _lifecycleEpoch = 0;          // invalidates late completions even when upstream ignores AbortSignal
+
+function builtInMemoryEnabled() {
+    const settings = _getSettings();
+    return settings.pluginEnabled !== false
+        && settings.memoryEnabled !== false
+        && !settings.useBaiBaiBook
+        && !settings.useAnima
+        && !settings.useDatabase;
+}
 
 // 把两路中止信号合成一个交给 fetch：_jobAbortController（切聊天时掐，防结果串写别的聊天）
 // 与 _abortController（用户点「中止」时掐，重构/补漏用）。历史 bug：fetch 只绑了前者，
@@ -347,6 +357,7 @@ ${body}
 
 // ─── Job queue ───────────────────────────────────────────────────────────────
 function enqueue(job) {
+    if (!builtInMemoryEnabled()) return;
     const key = `${job.type}:${job.groupKey || job.range?.join('-') || ''}`;
     if (_queue.some(j => `${j.type}:${j.groupKey || j.range?.join('-') || ''}` === key)) return;
     _queue.push(job);
@@ -365,17 +376,20 @@ async function processQueue() {
 }
 
 async function handleJob(job) {
-    if (!_callApi) return;
+    if (!_callApi || !builtInMemoryEnabled()) return;
+    const lifecycleEpoch = _lifecycleEpoch;
     if (job.type === 'L0') {
         await runL0(job.groupKey);
     } else if (job.type === 'L1') {
         await runL1(job.range);
     }
-    persist();
+    if (_lifecycleEpoch === lifecycleEpoch && builtInMemoryEnabled()) persist();
 }
 
 // ─── L0 generation ───────────────────────────────────────────────────────────
 async function runL0(groupKey, { queueL1 = true } = {}) {
+    if (!builtInMemoryEnabled()) return false;
+    const lifecycleEpoch = _lifecycleEpoch;
     const m = meta();
     const groups = getStableGroups();
     const group = groups.find(g => g.key === groupKey);
@@ -413,7 +427,7 @@ async function runL0(groupKey, { queueL1 = true } = {}) {
     }
 
     // Guard: don't write results into a different chat's metadata
-    if (getContext().chatId !== chatIdSnap) return false;
+    if (_lifecycleEpoch !== lifecycleEpoch || !builtInMemoryEnabled() || getContext().chatId !== chatIdSnap) return false;
 
     if (!response || response.length < 10) {
         recordFailure(groupKey, new Error('响应为空或过短'));
@@ -477,6 +491,8 @@ function maybeQueueL1() {
 }
 
 async function runL1(range) {
+    if (!builtInMemoryEnabled()) return false;
+    const lifecycleEpoch = _lifecycleEpoch;
     const m = meta();
     const [startMid, endMid] = range;
     const startNum = parseInt(startMid, 10);
@@ -501,7 +517,7 @@ async function runL1(range) {
         m.system.lastDiagnostic = safeDiagnosticLog('memory', 'request', err, { background: true });
         return false;
     }
-    if (getContext().chatId !== chatIdSnap) return false;
+    if (_lifecycleEpoch !== lifecycleEpoch || !builtInMemoryEnabled() || getContext().chatId !== chatIdSnap) return false;
     if (!response || response.length < 20) return false;
 
     m.L1.push({ range, text: response.trim(), ts: Date.now(), builtFrom: entries.length });
@@ -586,6 +602,7 @@ export function getMemoryContext() {
 
 // ─── Fill missing ────────────────────────────────────────────────────────────
 export async function fillMissing(onProgress) {
+    if (!builtInMemoryEnabled()) return;
     // 捕获本地引用：切聊天时 onChatChanged 会把模块级 _abortController 置空，
     // 若循环里还读模块级会 null 解引用崩掉；读本地 ctrl（同一对象、被 abort 过）稳。
     const ctrl = _abortController = new AbortController();   // 之前漏建 → 中止按钮对补漏完全无效；补上让 abortRebuild 能掐到
@@ -633,7 +650,9 @@ export async function fillMissing(onProgress) {
 
 // ─── Rebuild all ─────────────────────────────────────────────────────────────
 export async function rebuildAll(onProgress) {
+    if (!builtInMemoryEnabled()) return;
     const ctrl = _abortController = new AbortController();   // 本地引用，防切聊天置空后 null 解引用（同 fillMissing）
+    const lifecycleEpoch = _lifecycleEpoch;
     const m = meta();
     // 关键：先把旧记忆整体备份，再在**内存里**换成空壳开始重构，此刻**绝不落盘**。
     // 只有完整跑完才让新记忆算数（committed=true）；中途中止 / 异常 → finally 里整体还原旧记忆。
@@ -677,7 +696,7 @@ export async function rebuildAll(onProgress) {
             // 中止或异常：整体还原到重构前，绝不留下"清空但没重建"的空记忆
             m.L0 = backup.L0; m.L1 = backup.L1; m.failed = backup.failed; m.system = backup.system;
             _isRebuilding = false;
-            persist();
+            if (_lifecycleEpoch === lifecycleEpoch && builtInMemoryEnabled()) persist();
         }
         if (_abortController === ctrl) _abortController = null;
     }
@@ -685,10 +704,18 @@ export async function rebuildAll(onProgress) {
 
 export function abortRebuild() { _abortController?.abort(); }
 
+export function abortAll() {
+    _lifecycleEpoch += 1;
+    _queue = [];
+    try { _abortController?.abort(); } catch {}
+    try { _jobAbortController?.abort(); } catch {}
+    _abortController = null;
+    _jobAbortController = new AbortController();
+}
+
 // ─── Event handlers ──────────────────────────────────────────────────────────
 function onCharacterMessageRendered() {
-    if (_getSettings().useBaiBaiBook) return;
-    if (!_getSettings().memoryEnabled) return;
+    if (!builtInMemoryEnabled()) return;
     if (meta().system.paused) return;
     // A new AI floor arrived: any stable group (not the newest) whose L0 is missing
     // gets queued. Delay-by-one is baked into getStableGroups().
@@ -704,7 +731,7 @@ function onCharacterMessageRendered() {
 }
 
 function onMessageMutated(mesId) {
-    if (_getSettings().useBaiBaiBook) return;
+    if (!builtInMemoryEnabled()) return;
     // Any mutation invalidates any L0 whose range contains this mesid
     const m = meta();
     const midNum = parseInt(String(mesId), 10);
@@ -729,13 +756,7 @@ function onMessageMutated(mesId) {
 }
 
 function onChatChanged() {
-    if (_getSettings().useBaiBaiBook) return;
-    _queue = [];
-    _abortController?.abort();
-    _abortController = null;
-    // Cancel any in-flight summary fetch — result would land in wrong chat's metadata
-    _jobAbortController?.abort();
-    _jobAbortController = new AbortController();
+    abortAll();
 }
 
 // ─── Public init ─────────────────────────────────────────────────────────────
@@ -760,7 +781,7 @@ export function initMemory({ getSettings, callApi, onPause }) {
     _listeners.swipe = onMessageMutated;
     _listeners.edit = onMessageMutated;
     _listeners.del = () => {
-        if (_getSettings().useBaiBaiBook) return;
+        if (!builtInMemoryEnabled()) return;
         const m = meta();
         const chat = getChat();
         const validMids = new Set(chat.map((_, i) => String(i)));

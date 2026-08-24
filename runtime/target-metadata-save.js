@@ -222,6 +222,17 @@ export function createTargetMetadataSaver({ coreModule = null, fetchImpl = globa
 
 export const targetMetadataCoreContract = Object.freeze({ required: REQUIRED.slice(), ownedRoots: OWNED_ROOTS.slice() });
 
+export async function dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata, refresh, isCurrent = () => true } = {}) {
+    let captured = saver?.capture?.(target, afterMetadata); let saveReason = captured ? 'snapshot-current' : 'snapshot-empty';
+    if (!captured && typeof refresh === 'function') {
+        try { await refresh(target); captured = saver.capture(target, afterMetadata); saveReason = captured ? 'snapshot-refreshed' : 'snapshot-refresh-empty'; }
+        catch { saveReason = 'snapshot-refresh-failed'; }
+    }
+    if (!captured) return { ok: false, reason: 'metadata-capture-failed', saveReason, dispatched: false, commitState: 'not-dispatched' };
+    const result = await saver.dispatch(captured, { isCurrent });
+    return { ...result, saveReason: result.saveReason || saveReason, dispatched: result.dispatched ?? false, confirm: () => saver.confirm?.(captured) };
+}
+
 // 官方 host 没有固定目标 patch contract 时的 best-effort 保存；结果明确标记为未确认。
 export function createBestEffortMetadataSaver({ context = () => null } = {}) {
     return {

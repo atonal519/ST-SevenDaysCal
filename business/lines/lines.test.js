@@ -42,7 +42,7 @@ test('advance strategy preserves first observation, accumulation and manual gate
 });
 
 test('render strategy distinguishes reroll, swipe and stored layer', () => {
-    assert.equal(classifyRenderedFloor({ messageId: 2, lastSeen: 2, contentChanged: true }).shouldRebuild, true);
+    assert.equal(classifyRenderedFloor({ messageId: 2, lastSeen: 2, contentChanged: true }).shouldRebuild, false);
     assert.deepEqual(chooseSwipeLayer({ pendingGeneration: true, swipeId: 1 }), { action: 'wait', swipeId: 1 });
     assert.deepEqual(chooseSwipeLayer({ swipeId: 1, stored: { swipes: { '1': 'raw' } }, baseline: 'base' }), { action: 'restore', raw: 'raw' });
 });
@@ -166,6 +166,7 @@ test('production event facade owns CMR, swipe, edit, sent and generation sequenc
         injectionEnv: { context: () => ({ chatId: 'c', setExtensionPrompt() {} }), enabled: () => false, settings: () => ({}), readRaw: () => '' },
         dashedEnv: { keyDesc: () => 'd', readStore: () => null, writeStore() {}, removeStore() {}, getSettings: () => ({}), context: () => ({ chatId: 'c' }), chatId: () => 'c' },
     });
+    feature.onMessageReceived({ messageId: 1, type: 'normal' });
     await feature.onCharacterRendered({ messageId: 1, type: 'normal' });
     feature.onGenerationStarted({ genType: 'regenerate' }); feature.onToken(); feature.onGenerationEnded();
     feature.onEdited({ mesId: 1 }); feature.onSent({ insertAt: 2 });

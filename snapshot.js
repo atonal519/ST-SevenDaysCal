@@ -30,8 +30,23 @@ const SNAP_KEY = 'gouhua_snapshot';
 // 老快照缺字段时读取端按缺省兜底，不强制迁移。
 const SNAP_VERSION = 2;
 
+let snapshotSaveTimer = null;
+
 function ctx() {
     try { return getContext?.() || null; } catch { return null; }
+}
+
+function scheduleSnapshotSave() {
+    const context = ctx();
+    if (typeof context?.saveChatDebounced === 'function') {
+        context.saveChatDebounced();
+        return;
+    }
+    if (typeof context?.saveChat !== 'function' || snapshotSaveTimer !== null) return;
+    snapshotSaveTimer = setTimeout(() => {
+        snapshotSaveTimer = null;
+        try { ctx()?.saveChat?.(); } catch { /* official fallback is fire-and-forget */ }
+    }, 200);
 }
 
 // 取第 mesId 层的 message 对象（仅 AI 楼有意义，调用方负责筛）。
@@ -91,7 +106,7 @@ export function writeSnapshot(mesId, snap) {
     // 双写：镜像到当前 swipe 的 swipe_info[swipe_id].extra，随 swipe/删楼/分支正确回滚。
     _mirrorToCurrentSwipe(msg, payload);
 
-    ctx()?.saveChatDebounced?.();
+    scheduleSnapshotSave();
     return true;
 }
 
