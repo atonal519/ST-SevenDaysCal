@@ -63,11 +63,11 @@ export function createInlineFeature(env = {}) {
     // itemsArg：null=读当前活历 loadAlmanac()（最新楼）；数组=快照里的历条目（历史楼）。
     // anchorArg：null=读当前锚点 almTodayAnchor()；{month,day}=快照锚点。历本就只读，无按钮需 gate。
     // 楼内轴渲染统一由 axisInlineRenderer 提供。
-    
+
     // 历楼内只读渲染由 axis inline seam 持有；宿主仅提供实时数据与纯历法 helper。
     const _buildAlmanacBlockHtml = (...args) => axisInlineRenderer.buildAlmanacBlock(...args);
     const _almanacStripDayHtml = (...args) => axisInlineRenderer.buildAlmanacDay(...args);
-    
+
     // 七天条 per-day tap：点某格 → 下方就地展开当天安排（再点同格收起、点别格切换）。委托到 document、
     // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-alm-strip-live 可交互条生效。
     // 注：格子在 <details> 的 body 内，点它不触发 summary 的展开/收起，两套交互互不打架。
@@ -93,18 +93,18 @@ export function createInlineFeature(env = {}) {
             sday.hidden = false;
         });
     }
-    
+
     // 清掉所有 AI 楼里的历七天条（维持「只挂最新楼」的单副本）。
     function _removeAllAlmanacBlocks() {
         doc.querySelectorAll('#chat .sp-almanac-inline').forEach(el => el.remove());
     }
-    
+
     // 历改动 / 新楼 / swipe / 切聊天 都汇流到这。渲染改由 refresh() 统一负责（最新楼冻快照+重挂）。
     function syncLatestAlmanacBlock(expectedChatId = null) {
         if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
         refresh(true);
     }
-    
+
     // ─── 点·楼内日程条（只读，反映当前视角的点，无生成）──────────────────────────────
     // 与线块/历条平行、共存于最新 AI 楼。收起态是扁扁的「点 · N件待办」条，点整条展开是「日程条」：
     // 每个 Day 一格（周X + 日期 + 天气图标 + 待办数），Future 另起一格；点某格就地展开当天事件（标题+时间）。
@@ -113,24 +113,24 @@ export function createInlineFeature(env = {}) {
     // rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
     // readOnly：true=历史楼，drawer 去掉注入/删除/锁定按钮（在旧楼改点语义矛盾）。
     const _buildScheduleBlockHtml = (...args) => pointInlineRenderer.buildScheduleBlock(...args);
-    
+
     // 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
     // 每次都重读 raw（点 raw 会被重算/锁定改写），按天筛事件；空 → 「这天没有安排」。
     // dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
     // readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
-    
+
     const _scheduleStripDayHtml = (...args) => pointInlineRenderer.buildScheduleDay(...args);
-    
+
     // 日程条 per-day tap：点某格 → 下方就地展开当天事件（再点同格收起、点别格切换）。委托到 document、
     // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-sch-strip-live 生效。
     function initScheduleStripDelegation() {
         pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: inlineTapContext });
     }
-    
+
     function _removeAllScheduleBlocks() {
         doc.querySelectorAll('#chat .sp-schedule-inline').forEach(el => el.remove());
     }
-    
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  楼内仪表盘（今头 + 历/点/线三区·融进一个面板·最新楼全功能 / 历史楼只读）
     // ═══════════════════════════════════════════════════════════════════════════
@@ -152,14 +152,14 @@ export function createInlineFeature(env = {}) {
     //
     // snap=null → 最新楼：读活缓存、全功能（注入/删除/推进/锁定按钮都在）。
     // snap=对象 → 历史楼：读该楼快照、只读（各 builder 收到 readOnly=true，剥掉可变按钮）。
-    
+
     // 今头/摘要共用的锚点解析：快照有合法锚点用快照，否则退活锚点。
     function dashAnchor(snap) {
         return (snap?.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
             ? { month: +snap.anchor.month, day: +snap.anchor.day }
             : almTodayAnchor();
     }
-    
+
     // 「是否真有日期上下文」——与点/线/历三个显示开关无关，只看底层数据在不在：钉了锚点、
     // 或有历条目、或有点 raw。用来决定：三区全关（或都空）时，最扁的折叠条是否仍值得显「今 M/D 周X ☀」。
     // 全空（新聊天、没数据）→ false，别硬造个「今 1/1」噪声条。历史楼看快照自带的 almanac/point/anchor。
@@ -172,7 +172,7 @@ export function createInlineFeature(env = {}) {
         try { if (readCacheRaw(getCacheKey('user', ''))) return true; } catch { /* 忽略 */ }
         return false;
     }
-    
+
     // 今头（masthead）：大日期块。月/日 + 周几为主体；天气取点当天格；纪年名(era)由日历描述符驱动，
     // 有则点亮、无则不撑（公历默认无 era）。anchor 缺则退活锚点。
     function dashMastheadHtml(snap, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
@@ -206,7 +206,7 @@ export function createInlineFeature(env = {}) {
             ${(wxHtml || eraHtml) ? `<span class="sp-dash-today-meta">${wxHtml}${eraHtml}</span>` : ''}
         </div>`;
     }
-    
+
     // 折叠态（整框收成一小条）的摘要内层：今 M/D 周X ☀ + 计数 chips（历N 点N 线N）。
     // 「今 M/D 周X + 天气」是今天的身份标识，只要拿得到日期就恒显——不受点/线/历子开关影响
     // （子开关只管展开面板里那几个区显不显，日期/天气来自剧情锚点+点数据，与显示开关无关）。
@@ -308,7 +308,7 @@ export function createInlineFeature(env = {}) {
         if (flat) return `<div class="sp-dash-summary sp-dash-summary-flat">${inner}</div>`;
         return `<summary class="sp-dash-summary">${inner}<i class="fa-solid fa-chevron-down sp-dash-sum-caret"></i></summary>`;
     }
-    
+
     // 组一个仪表盘的完整 HTML（含外壳）。三区全空且无日期 → 返回 ''（该楼不挂框）。
     // 外壳是 <details>：收起 = 一小条摘要（今 M/D 周X ☀ · 历N 点N 线N），展开 = 完整面板。
     // 面板内点/线各自是 <details> 可折叠；历区顶行（今头+即将到来）+ 满宽六格条构成一组。
@@ -327,18 +327,18 @@ export function createInlineFeature(env = {}) {
         const linesInner = linesFeature.inlineHtml(snap ? (snap.line || '') : null, readOnly);
         // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
         const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
-    
+
         // 日期是否真实存在（与显示开关无关）：决定折叠条头 + 纯日期扁条兜底。
         const hasDateData = hasDateContext(snap);
         if (!alm && !schInner && !linesInner && !ledgerInner && !hasDateData) return '';   // 啥也没有 → 不挂框
-    
+
         // 展开面板里的大头 masthead：仅当有「历/点」区在场时出现（线独存时不显大头——edge case A）。
         const hasDateRegion = !!alm || !!schInner;
-    
+
         const region = (cls, seg, inner) => inner
             ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}</details>`
             : '';
-    
+
         // 顶行 + 历满宽条：历在场 → 顶行 [方形今头 + 历(summary+即将到来清单)]，六格条满宽落在顶行下方。
         // 无历但有点 → 顶行只放今头（点提供日期）。历/点全无 → 无顶行（面板从点/线区起）。
         let top = '', almStripRow = '';
@@ -355,7 +355,7 @@ export function createInlineFeature(env = {}) {
         const schRegion   = region('sp-schedule-inline', 'schedule', schInner);
         const linesRegion = region('sp-lines-inline', 'lines', linesInner);
         const ledgerRegion = region('sp-ledger-inline', 'ledger', ledgerInner);
-    
+
         // 段序：轴(top) → 标注池 → 点 → 线。标注池与日历同属「轴」范畴，紧贴轴放；点/线在其下。
         const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
         // 面板体为空但有日期数据（三区都关，只剩日期）→ 纯日期扁条：不可折叠，只显今头缩写。
@@ -364,13 +364,13 @@ export function createInlineFeature(env = {}) {
             const cls = 'sp-inline-box sp-dash sp-dash-flat' + (readOnly ? ' sp-inline-box-ro' : '');
             return `<div class="${cls}">${flatBar}</div>`;
         }
-    
+
         const summary = dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
         const cls = 'sp-inline-box sp-dash' + (readOnly ? ' sp-inline-box-ro' : '');
         // 默认折叠成一小条（不带 open）：只显摘要「今 M/D 周X ☀ · 历N 点N 线N」，点开才展开完整面板。
         return `<details class="${cls}">${summary}<div class="sp-dash-body">${body}</div></details>`;
     }
-    
+
     // 用户楼「召回框」：外壳复用 .sp-inline-box/.sp-dash（与 AI 楼一摸一样形式），内含本回合召回注入回显（丰富版）。
     // snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；最新用户楼传 null → 读 injection controller echo。
     // 字段照召回闭环：类型胶囊(上色) + 事由 + 起始 + 推测应至状态(现状)。纯只读——召回是给用户核对「AI 这轮收到了啥」，无逐条操作。
@@ -389,7 +389,7 @@ export function createInlineFeature(env = {}) {
         const localWeekdayRef = createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor: mid == null ? null : Number(mid), resolveLocal: f => storyWeekdayRefPure(getContext(), resolution.calendar || loadCalDesc(), ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
         return { readOnly: true, snap, resolvedCalendar: resolution.calendar, resolution, localWeekdayRef };
     }
-    
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  楼内渲染窗口控制器（render_depth 深度窗 + IntersectionObserver 视口懒挂）
     // ═══════════════════════════════════════════════════════════════════════════
@@ -403,9 +403,9 @@ export function createInlineFeature(env = {}) {
     //   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
     //
     // 最新楼（chat 里最后一条 AI 楼）= 全功能、读活缓存；其余窗内楼 = 只读、读各自快照。
-    
-    
-    
+
+
+
 
     const clearTimer = key => { if (key) clearTimeout(key); };
     const clearLegacy = () => {

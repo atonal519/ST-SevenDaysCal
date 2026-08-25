@@ -45,7 +45,7 @@ export function createLinesLifecycle() {
         consumePendingReroll() { const value = pendingReroll; pendingReroll = false; return value; },
         markGenerationStarted({ reroll = false, excludedAssistant = null, now = Date.now() } = {}) { streamUntil = now + 3000; if (reroll) { pendingReroll = true; rerollExcludedAssistant = excludedAssistant; } },
         markToken({ now = Date.now() } = {}) { streamUntil = now + 1500; },
-        endGeneration() { streamUntil = 0; pendingReroll = false; rerollExcludedAssistant = null; },
+        endGeneration({ stopped = false } = {}) { streamUntil = 0; if (stopped) { pendingReroll = false; rerollExcludedAssistant = null; } },
         markPendingSwipe(mesId) { pendingSwipeGen = { mesId: Number(mesId) }; },
         consumePendingSwipe(mesId) { if (!pendingSwipeGen || Number(pendingSwipeGen.mesId) !== Number(mesId)) return false; pendingSwipeGen = null; return true; },
         advanceCounter({ mode, interval } = {}) { if (mode === 'manual') return { shouldAdvance: false, counter }; const step = Number.isFinite(Number(interval)) && Number(interval) >= 1 ? Math.floor(Number(interval)) : 1; counter += 1; if (counter >= step) { counter = 0; return { shouldAdvance: true, counter }; } return { shouldAdvance: false, counter }; },

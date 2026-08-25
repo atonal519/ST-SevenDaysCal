@@ -32,21 +32,16 @@ export function createLedgerInjectionController(options = {}) {
     let echo = [];
     const sceneText = (n = 4) => {
         const chat = options.context?.().chat || [];
-        const parts = [], userParts = [];
-        for (let i = chat.length - 1; i >= 0 && userParts.length < 1; i--) {
-            const message = chat[i];
-            if (!message?.is_user) continue;
-            const cleaned = options.stripTags ? options.stripTags(String(message.mes || '')).trim() : String(message.mes || '').trim();
-            if (cleaned) userParts.unshift(cleaned);
-        }
+        const parts = [];
         for (let i = chat.length - 1; i >= 0 && parts.length < n; i--) {
             const message = chat[i];
+            if (!message || message.is_user || message.is_system) continue;
             if (!options.narrative?.(message)) continue;
             const raw = String(message.mes || '');
             const cleaned = options.stripTags ? options.stripTags(raw).trim() : raw.trim();
             if (cleaned) parts.unshift(cleaned);
         }
-        return [...userParts, ...parts].join('\n');
+        return parts.join('\n');
     };
     const clear = ctx => { ctx.setExtensionPrompt(KEY, ''); echo = []; };
     return {

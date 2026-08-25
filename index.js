@@ -18,6 +18,7 @@ import * as ledger from './business/ledger/repository.js';
 import { createBestEffortMetadataSaver, createTargetMetadataSaver, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
+import { selectVisibleChatHistory } from './business/lines/history.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
 import { createAutomationGate } from './automation-gate.js';
@@ -127,7 +128,7 @@ import { createAxisTransactionController } from './business/axis/transaction.js'
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
 import { createAxisDateContext } from './business/axis/date-context.js';
 import { resolveAlmanacContextText, sanitizeGenerationContextText } from './runtime/generation-context.js';
-import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, DEFAULT_STORY_CLOCK_PROMPT, STORY_CLOCK_KEY, createStoryClockController } from './business/axis/story-clock.js';
+import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, buildStoryClockPrompt, STORY_CLOCK_KEY, createStoryClockController } from './business/axis/story-clock.js';
 import { createWeekdayConsumerContext, weekdayContextForPoint } from './business/axis/weekday-coordinator.js';
 import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
 import { createDateDetectionController } from './business/axis/date-detection.js';
@@ -1308,7 +1309,7 @@ const linesFeature = createLinesFeature({
         readSaved: () => readStore(getLinesCacheKey()) || {},
         buildPrompt: (previousRaw, travelContext, vectorContext) => appendTravelPromptContext(buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext())), vectorContext), travelContext),
         random: () => Math.random(),
-        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, 10, options),
+        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, options?.historyLimit ?? 3, options),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
         onStart: () => {},
         commit: () => {},
@@ -1780,15 +1781,16 @@ jQuery(async () => {
     if (_stListeners.streamTok) eventSource.removeListener?.(event_types.STREAM_TOKEN_RECEIVED, _stListeners.streamTok);
     _stListeners.streamTok = () => { linesFeature.onToken(); };
     eventSource.on(event_types.STREAM_TOKEN_RECEIVED, _stListeners.streamTok);
-    if (_stListeners.genEnd) {
-        eventSource.removeListener?.(event_types.GENERATION_ENDED, _stListeners.genEnd);
-        eventSource.removeListener?.(event_types.GENERATION_STOPPED, _stListeners.genEnd);
-    }
+    if (_stListeners.genEnd) eventSource.removeListener?.(event_types.GENERATION_ENDED, _stListeners.genEnd);
+    if (_stListeners.genStopped) eventSource.removeListener?.(event_types.GENERATION_STOPPED, _stListeners.genStopped);
     _stListeners.genEnd = () => {
-        linesFeature.onGenerationEnded();
+        linesFeature.onGenerationEnded({ stopped: false });
+    };
+    _stListeners.genStopped = () => {
+        linesFeature.onGenerationEnded({ stopped: true });
     };
     eventSource.on(event_types.GENERATION_ENDED, _stListeners.genEnd);
-    eventSource.on(event_types.GENERATION_STOPPED, _stListeners.genEnd);
+    eventSource.on(event_types.GENERATION_STOPPED, _stListeners.genStopped);
     // 面·大纲自动注入：独立监听，跟线彻底解耦（绝不复用 _stListeners.char——它 linesEnabled=false
     // 会 early-return，连坐大纲）。每隔 N 楼独立判定一次剧情是否推进到下一节点，推进则游标 +1。
     if (_stListeners.outlineJudge) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.outlineJudge);
@@ -2172,7 +2174,6 @@ function getLedgerJudgeInterval() {
 
 // 自写提示词（吸收柏宝书三套路：拔高到系统强制 / 以上楼 end 为基准推进 / 禁用「某天」敷衍；
 // 措辞、示例、标签名全原创，绝不照搬）。粒度到小时，年份可写可略（本片不校验、不解析）。
-const _DEFAULT_STORY_CLOCK_PROMPT = DEFAULT_STORY_CLOCK_PROMPT;
 
 // 取生效的强注词：用户在设置里二改了(非空)就整段用他的；留空用内置默认（默认词随插件更新）。
 // 重设时间戳注入。关闭时清空。幂等，可随处多调。照 refreshLinesInjection 套路。
@@ -2841,8 +2842,8 @@ function injectModal() {
                                     <p class="sp-cfg-hint" style="margin-top:4px; opacity:.75">另：所有刷新判定都挂钩时间戳；不开启时，遇到楼尾的额外变量计算（如 MVU）可能<b>重复调用 API</b>。</p>
                                     <hr class="sp-mem-divider">
                                     <label class="sp-cfg-group" style="margin-top:10px">强制注入提示词（可二改）</label>
-                                    <p class="sp-cfg-hint"><strong>留空＝用内置默认</strong>（默认词随插件更新走）。自定义正文仍会保留；机器合同会自动追加，不能被自定义正文替换。务必保留 <code>&lt;!-- SDC-start … --&gt;</code> / <code>&lt;!-- SDC-end … --&gt;</code>，并让两端各带月日、周一至周日之一和时间；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
-                                    <textarea id="sp-storyclock-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝用内置默认强制词。"></textarea>
+                                    <p class="sp-cfg-hint"><strong>全部内容均可编辑</strong>；留空＝用内置完整默认（默认词随插件更新走）。删除 SDC 标签或机器合同可能导致时间戳无法识别，风险由你承担。务必让两端各带 date、weekday、time；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
+                                    <textarea id="sp-storyclock-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝用内置完整默认强制词。"></textarea>
                                     <div style="display:flex; gap:8px; margin-top:6px">
                                         <button id="sp-storyclock-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button>
                                         <button id="sp-storyclock-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button>
@@ -4019,7 +4020,7 @@ function guessCharName(ctx) {
     // Priority 2: most frequent "Name:" pattern in recent AI messages
     const NOISE = new Set(['series','chapter','note','summary','part','vol','act','scene',
                            'title','author','narrator','system','user','assistant','ai']);
-    const msgs = (ctx.chat || []).filter(m => !m.is_user).slice(-20);
+    const msgs = (ctx.chat || []).filter(m => !m.is_user && !m.is_system).slice(-20);
     const counts = {};
     for (const m of msgs) {
         const matches = [...(m.mes || '').matchAll(/^([^\s：:「」【\[\n*#]{1,12})[：:]/gm)];
@@ -4535,7 +4536,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc()), travelContext);
     const apiOpts = travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {});
     apiOpts.pointView = perspective;
-    return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 10, apiOpts);
+    return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 3, apiOpts);
 }
 
 
@@ -4903,16 +4904,16 @@ async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 800
     const charName = ctx.name2 || '角色';
     const s = getSettings();
     const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
-    // Walk from the end backwards, collect up to N usable entries (skip hidden system rows)
+    // Walk from the end backwards, collect up to N visible AI entries.
     const rows = [];
     for (let i = chat.length - 1; i >= 0 && rows.length < floorCount; i--) {
         const m = chat[i];
-        if (!m || m.is_system) continue;   // hidden / OOC noise
+        if (!m || m.is_user || m.is_system) continue;   // only visible AI narrative
         const raw = String(m.mes || '');
         if (!raw.trim()) continue;
         const cleaned = memory.stripTags(raw, stripOpts).trim();
         if (!cleaned) continue;
-        const speaker = m.is_user ? userName : (m.name || charName);
+        const speaker = m.name || charName;
         const capped = cleaned.length > perMessageChars
             ? cleaned.slice(0, perMessageChars) + '…'
             : cleaned;
@@ -4961,7 +4962,7 @@ function animaTextTokens(text) {
 }
 function buildAnimaRecallQuery(explicitQuery = '') {
     const ctx = getContext();
-    const recent = Array.isArray(ctx?.chat) ? ctx.chat.slice(-6) : [];
+    const recent = Array.isArray(ctx?.chat) ? ctx.chat.filter(m => !m?.is_user && !m?.is_system).slice(-6) : [];
     const s = getSettings();
     const tail = recent.map(m => memory.stripTags(String(m?.mes || ''), { keepTags: s.keepTags, extraTags: s.extraTags }).slice(-700)).join('\n');
     return `${explicitQuery}\n${tail}`.slice(-6000);
@@ -5189,13 +5190,13 @@ function readCardExtras(ctx) {
     };
 }
 
-// historyLimit：喂给这次调用的「最近 AI 楼」条数上限（连带其配对 user 楼）。默认 10。
-// 传 0 = 完全不喂近景，只靠 system 块（人设/卡描述/世界书/记忆库）——冷知识发散专用，
-// 免得被最近十楼里反复出现的某个道具/场景锚死。点/线/面/判定仍用默认 10（它们要贴当前剧情）。
-async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10, opts = {}) {
+// historyLimit：喂给这次调用的「最近可见 AI 楼」条数上限。默认 3。
+// 传 0 = 完全不喂近景，只靠 system 块（人设/卡描述/世界书/记忆库）。
+async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, opts = {}) {
     const char = ctx.characters?.[ctx.characterId] ?? {};
     const wiContext = await buildWorldInfoContext(ctx);
-    const { personaDesc, authorNote } = readCardExtras(ctx);
+    const { personaDesc, authorNote: rawAuthorNote } = readCardExtras(ctx);
+    const authorNote = rawAuthorNote;
 
     // Story memory (Plan C: objective memory + view tag)
     const rawMemText = await getMemText({ full: opts.fullMemory, query: prompt });
@@ -5230,31 +5231,20 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 10,
         almanacBlock,
         calDescBlock,
     ].filter(Boolean).join('\n\n');
-    // 只取最近 historyLimit 个 AI 回复（连带配对的 user 楼），避免被早期上下文（如日期）锚定。
+    // 常规生成默认只取最近 3 层完整、可见 AI 回复；调用方可显式传入其他预算。
     // historyLimit=0 → 完全不喂历史（history 为空），只留 system + prompt。
     const allMsgs = ctx.chat ?? [];
     let history = [];
     if (historyLimit > 0) {
-        let aiCount = 0;
-        let startIdx = 0;   // 哨兵取 0：AI 楼不足 historyLimit 时喂全部历史；数满才把起点前移做截断
-        for (let i = allMsgs.length - 1; i >= 0; i--) {
-            if (!allMsgs[i].is_user) aiCount++;
-            if (aiCount >= historyLimit) { startIdx = i; break; }
-        }
         // 标签清洗（全局 keepTags/extraTags）：先剥标签结构、再替换变量占位符，
         // 免得展开出的内容里的尖括号被当成标签。点/线/面主生成经此统一清洗，
         // 与记忆采集(memory.getAiFloors)、间/面讨论(buildRecentChatContext)同口径。
         const s = getSettings();
         const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
-        const excludedAssistant = opts.excludedAssistant || null;
-        history = allMsgs.slice(startIdx).map((m, offset) => ({ m, mesId: startIdx + offset })).filter(({ m, mesId }) => {
-            const excluded = excludedAssistant;
-            if (!excluded || m.is_user || m.is_system) return true;
-            return !(mesId === excluded.mesId && String(m.mes ?? '') === excluded.text);
-        }).map(({ m }) => ({
+        history = selectVisibleChatHistory(allMsgs, historyLimit, { excludedAssistant: opts.excludedAssistant, mapMessage: m => ({
             role   : m.is_user ? 'user' : 'assistant',
             content: substituteParams(sanitizeGenerationContextText(m.mes ?? '', { reroll: opts.reroll, stripTags: value => memory.stripTags(value, stripOpts) })),
-        }));
+        }) });
     }
     if (Array.isArray(opts.ledgerSourceFloors)) {
         history = opts.ledgerSourceFloors.map(source => ({
@@ -6128,7 +6118,7 @@ function renderMemorySection() {
     // 自定义提示词是全局设置、与记忆源无关，必须在下面按源分支的 early-return 之前回填，
     // 否则用户选 Anima/柏宝书时函数提前 return，重开面板这框会空白（值其实已存盘）。
     $in('#sp-custom-prompt').val(typeof s.customPrompt === 'string' ? s.customPrompt : '');
-    $in('#sp-storyclock-prompt').val(typeof s.storyClockPrompt === 'string' ? s.storyClockPrompt : '');
+    $in('#sp-storyclock-prompt').val(buildStoryClockPrompt(s));
     $in('#sp-space-persona').val(typeof s.spacePersona === 'string' ? s.spacePersona : '');   // 间·人格覆盖：同为全局设置，须在按源 early-return 前回填
     if (useBbb) {
         $in('#sp-mem-internal').hide();
@@ -6370,15 +6360,19 @@ function bindMemoryHandlers() {
     // 时间戳·强注词二改：与 customPrompt 同套持久化；改后立即重设常驻注入让新词当楼生效。
     $in('#sp-storyclock-prompt').on('input', function () {
         getSettings().storyClockPrompt = this.value;
+        getSettings().storyClockPromptVersion = 2;
         saveSettingsDebounced();
         try { refreshStoryClockInjection(); } catch {}
     }).on('blur', function () {
         getSettings().storyClockPrompt = this.value;
+        getSettings().storyClockPromptVersion = 2;
         stSaveSettings();
     });
     $in('#sp-storyclock-prompt-load').on('click', function () {
-        $in('#sp-storyclock-prompt').val(_DEFAULT_STORY_CLOCK_PROMPT);
-        getSettings().storyClockPrompt = _DEFAULT_STORY_CLOCK_PROMPT;
+        const fullDefault = buildStoryClockPrompt({});
+        $in('#sp-storyclock-prompt').val(fullDefault);
+        getSettings().storyClockPrompt = fullDefault;
+        getSettings().storyClockPromptVersion = 2;
         stSaveSettings();
         try { refreshStoryClockInjection(); } catch {}
         try { showToast('已把默认强制词载入编辑框，可直接修改'); } catch {}
@@ -6387,6 +6381,7 @@ function bindMemoryHandlers() {
     $in('#sp-storyclock-prompt-reset').on('click', function () {
         $in('#sp-storyclock-prompt').val('');
         getSettings().storyClockPrompt = '';
+        getSettings().storyClockPromptVersion = 2;
         stSaveSettings();
         try { refreshStoryClockInjection(); } catch {}
         try { showToast('已恢复内置默认（跟随插件更新）'); } catch {}

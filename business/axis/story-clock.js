@@ -19,12 +19,15 @@ function parseStoryDate(text) {
     let m = s.match(/(?:^|[\s|｜,，])(\d{4})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
     if (m) return deps.validMonthDay({ month: +m[2], day: +m[3] }, deps.loadCalendar());
     const cal = deps.loadCalendar();
-    for (let i = 0; i < (cal?.months?.length || 0); i++) {
-        const name = String(cal.months[i]?.name || '').trim(); if (!name) continue;
+    const monthDescriptors = (cal?.months || [])
+        .map((month, index) => ({ index, name: String(month?.name || '').trim() }))
+        .filter(month => month.name)
+        .sort((a, b) => b.name.length - a.name.length);
+    for (const { index, name } of monthDescriptors) {
         const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:第\\s*)?(初' + cn + '|\\d{1,2}|' + cn + ')\\s*日?');
         const hit = re.exec(s); if (!hit) continue;
         const day = /^\d+$/.test(hit[1]) ? +hit[1] : toNumber(hit[1].replace(/^初/, ''));
-        if (day != null) return deps.validMonthDay({ month: i + 1, day }, cal);
+        if (day != null) return deps.validMonthDay({ month: index + 1, day }, cal);
     }
     m = s.match(new RegExp(`(?:^|[\\s|｜,，])(?:\\d{1,4}|[^\\s|｜,，]{1,20})?\\s*年\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?`));
     if (m) { const month = _CN_MONTH_ALIAS[m[1]] ?? toNumber(m[1]); const day = m[2].startsWith('初') ? toNumber(m[2].slice(1)) : toNumber(m[2]); if (month != null && day != null) return valid(month, day); }
@@ -126,7 +129,13 @@ export const STORY_CLOCK_MACHINE_CONTRACT = [
     'SDC 仅供构画读取，不能代替其他日期输出；构画不读取、不修改、不接管其他时间戳格式。',
     '完成其他输出要求后，仍必须独立输出含完整 date/weekday/time 的 SDC start/end；其他时间戳不能视作已经满足 SDC。',
 ].join('\n');
-export function buildStoryClockPrompt(settings = {}) { const custom = String(settings.storyClockPrompt || '').trim(); return `${custom || DEFAULT_STORY_CLOCK_PROMPT}\n${STORY_CLOCK_MACHINE_CONTRACT}`; }
+export const STORY_CLOCK_PROMPT_VERSION = 2;
+export function buildStoryClockPrompt(settings = {}) {
+    const raw = typeof settings.storyClockPrompt === 'string' ? settings.storyClockPrompt : '';
+    if (!raw.trim()) return `${DEFAULT_STORY_CLOCK_PROMPT}\n${STORY_CLOCK_MACHINE_CONTRACT}`;
+    if (Number(settings.storyClockPromptVersion) >= STORY_CLOCK_PROMPT_VERSION) return raw;
+    return `${raw.trim()}\n${STORY_CLOCK_MACHINE_CONTRACT}`;
+}
 export function latestStoryClock(context, limit = 100) {
     const messages = context?.chat || []; let scanned = 0;
     for (let i = messages.length - 1; i >= 0 && scanned < limit; i--) { const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue; scanned++; const clock = parseStoryClock(msg.mes); const out = { start: clock.start, end: clock.end, floor: i }; Object.defineProperties(out, { duplicate: { value: clock.duplicate, enumerable: false }, startMeta: { value: clock.startMeta, enumerable: false }, endMeta: { value: clock.endMeta, enumerable: false } }); return out; }

@@ -2,7 +2,18 @@ import { deleteLine, togglePin } from './mutations.js';
 import { parseLines } from './schema.js';
 
 export function createLinesActions(env = {}) {
+    let preparing = false;
     const refresh = () => { env.setCached?.(env.render?.(env.readRaw?.() || '')); env.refreshPanel?.(); env.refreshInline?.(); };
+    const runExclusive = async (silent, options) => {
+        if (preparing || env.isBusy?.()) return;
+        preparing = true;
+        try {
+            if (!await env.precheck?.()) return;
+            return await env.runGenerate?.(silent, options);
+        } finally {
+            preparing = false;
+        }
+    };
     return {
         async delete(index) {
             if (env.isBusy?.()) return;
@@ -21,8 +32,8 @@ export function createLinesActions(env = {}) {
             if (!result.ok) return env.toast?.('这条线已不存在，请刷新面板', true);
             env.write?.({ raw: result.raw, ts: Date.now() }); refresh(); env.toast?.(result.model[Number(index)]?.pin ? '已锁定这条线' : '已解锁这条线');
         },
-        async generate() { if (!env.isBusy?.() && await env.precheck?.()) return env.runGenerate?.(false, { reroll: true }); },
-        async advance() { if (!env.isBusy?.() && await env.precheck?.()) return env.runGenerate?.(env.silent?.()); },
-        async reroll() { if (!env.isBusy?.() && await env.precheck?.()) return env.runGenerate?.(false, { reroll: true }); },
+        async generate() { return runExclusive(false, { reroll: true }); },
+        async advance() { return runExclusive(env.silent?.(), undefined); },
+        async reroll() { return runExclusive(false, { reroll: true }); },
     };
 }

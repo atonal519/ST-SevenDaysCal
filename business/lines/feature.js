@@ -218,7 +218,7 @@ export function createLinesFeature(env = {}) {
         lifecycle.markGenerationStarted({ reroll: genType === 'regenerate', excludedAssistant: genType === 'regenerate' ? env.lastAssistant?.() : null });
     };
     const onToken = () => { if (env.pluginEnabled?.()) lifecycle.markToken(); };
-    const onGenerationEnded = () => { if (env.pluginEnabled?.()) { lifecycle.endGeneration(); setTimeout(() => env.refreshInlineWindow?.(true), 60); } };
+    const onGenerationEnded = ({ stopped = false } = {}) => { if (env.pluginEnabled?.()) { lifecycle.endGeneration({ stopped }); setTimeout(() => env.refreshInlineWindow?.(true), 60); } };
     let sheet = 'events';
     const renderBody = body => {
         env.renderPanelDom?.({ toolbar: dashed?.toolbarHtml?.({ onEvents: sheet === 'events', lineBusy: runtime.busy ? ' sp-refresh-busy' : '', generationBusy: runtime.busy }), body: sheet === 'dashed' ? dashed?.panelHtml?.() : String(body || '') });

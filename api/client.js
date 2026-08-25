@@ -209,7 +209,7 @@ export async function postChatCompletion({ cfg, messages, maxTokens, temperature
     }
 }
 
-export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null, historyLimit = 10, opts = {}) {
+export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null, historyLimit = 3, opts = {}) {
     const messages = await _bridge.buildMessages(ctx, prompt, userName, charName, historyLimit, opts);
     // 30000：推理模型（GLM 等）会先耗一大段思维链预算，长提示词（尤其「面」）下要留足空间，
     // 否则正文被挤空 → 代理回 <none>。

@@ -40,7 +40,7 @@ export function createOutlineChat({
         ui?.endThinking?.(previous?.thinking);
     };
     const applyRaw = (target, raw, button = null) => {
-        if (!repository.isCurrent(target) || !String(raw || '').trim()) return false;
+        if (!repository.isCurrent(target) || parseOutline(raw).length === 0) return false;
         if (!repository.commitOutline(target, { raw, ts: now(), cursor: 1 })) return false;
         injection?.refresh(target);
         ui?.setOutline?.(renderer.render(raw, 1));
@@ -88,7 +88,7 @@ export function createOutlineChat({
             history = nextHistory;
             if (nextHistory.length !== historySnapshot.length + 1) ui?.renderHistory?.(history);
             else ui?.appendMessage?.('ai', reply, history.length - 1);
-            if (/<outline_widget/i.test(String(reply || ''))) {
+            if (parseOutline(reply).length > 0) {
                 ui?.showApply?.(button => applyRaw(target, reply, button), target);
             }
             finish(task);
@@ -153,3 +153,4 @@ export function createOutlineChat({
     });
 }
 import { diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
+import { parseOutline } from './schema.js';

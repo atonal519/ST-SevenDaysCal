@@ -26,6 +26,7 @@ export function bindLedgerCapture(next = {}) {
     }
 }
 export const CAPTURE_FLOORS = 6;
+export const CAPTURE_CONTEXT_FLOORS = 3;
 const NON_NARRATIVE = new Set();
 export function ledgerNarrativeMessage(msg) {
     if (!msg || msg.is_user || !String(msg.mes || '').trim()) return false;
@@ -227,9 +228,14 @@ export function createLedgerCaptureController(options = {}) {
                 if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             }
             const captureOpts = { ...(travel || {}), noAlmanac: true };
-            if (recentRecords.length) captureOpts.ledgerSourceFloors = recentRecords;
+            // 最终常规请求只喂最近 3 个可见 AI 楼；内部 6 楼记录仍完整保留给来源锚、稳定性与溯源批处理。
+            const recentVisibleRecords = ledgerAiFloorRecords().filter(record => {
+                const message = ctx.chat?.[record.floor];
+                return !message?.is_user && !message?.is_system && ledgerNarrativeMessage(message);
+            });
+            if (recentVisibleRecords.length) captureOpts.ledgerSourceFloors = recentVisibleRecords.slice(-CAPTURE_CONTEXT_FLOORS);
             let raw;
-            try { raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_FLOORS, captureOpts); }
+            try { raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_CONTEXT_FLOORS, captureOpts); }
             catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             let picked = env.parseCapture?.(raw) || [];

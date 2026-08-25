@@ -27,7 +27,8 @@ export const DEFAULT_SETTINGS = {
     // 时间戳·时间锚点体系（只受 pluginEnabled + 自身开关统辖，独立于线/面注入闸）：强制主楼 AI 每楼正文首尾打时间戳
     // <!-- SDC-start … --> / <!-- SDC-end … -->，构画回读作时间源。默认开——全插件时间地基。
     storyClockEnabled: true,
-    storyClockPrompt : '',       // 时间戳·强注词二改：空=用内置默认（随插件更新走）；非空=整段替换。用户自负 SDC 标签结构，改坏只是时间戳读空、不影响历/点兜底
+    storyClockPrompt : '',       // 时间戳提示词正文；空=用内置完整默认，非空按 storyClockPromptVersion 解释
+    storyClockPromptVersion: 0,  // 0/缺省=旧版基础正文+机器合同；2=用户编辑的完整文本，按原样注入
     themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
     uiScale: 1.0,        // 界面字号缩放倍率：--sp-scale 的持久值（设置里 −/＋ 步进，默认 1.0＝100%），脱钩酒馆 Font Scale
     uiFontUrl   : 'https://fontsapi.zeoseven.com/387/main/result.css',  // 字体 CSS(@font-face) 的 URL：经动态 <link> 引入。默认＝zeoseven 387 有爱圆体(Nowar Rounded TW Wc)，unicode-range 分片、移动端友好。留空=不加载网络字体、只用系统栈

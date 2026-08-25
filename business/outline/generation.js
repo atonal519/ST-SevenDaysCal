@@ -71,7 +71,7 @@ export function createOutlineGeneration({
                 userName,
                 charName,
                 signal: controller.signal,
-                historyLimit: 10,
+                historyLimit: 3,
                 options: apiOptions,
             });
             if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };

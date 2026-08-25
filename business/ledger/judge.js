@@ -1,6 +1,6 @@
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnostics.js';
-export const JUDGE_FLOORS = 4;
+export const JUDGE_FLOORS = 3;
 
 export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
     const lines = entries.map(e => env.fmtLedger?.(e, today)).join('\n');

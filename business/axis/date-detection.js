@@ -1,4 +1,4 @@
-export const DATE_JUDGE_HISTORY_LIMIT = 4;
+export const DATE_JUDGE_HISTORY_LIMIT = 3;
 export const DATE_JUDGE_PROMPT = `请暂停角色扮演，作为剧情分析助手，只做一件事：判断以上最近的对话里，故事此刻发生在哪一天。
 只回答「当前剧情日期」，格式为 M月D日（例如 3月15日）；年份不重要、无需回答。
 若最近对话中并无明确日期线索、无法确定具体月日，就只回答「未知」。

@@ -17,7 +17,7 @@ export function createAxisGenerationController(env = {}) {
             const apiOptions = supplement
                 ? { fullMemory: true }
                 : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac' };
-            const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 4, apiOptions);
+            const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 3, apiOptions);
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
             if (env.context?.().chatId !== chatId) return { status: 'cancelled' };
             if (!env.validate?.(raw)) throw new Error(supplement ? '补录返回不完整（缺少 almanac_widget 结束标签），旧历数据未改变，请重试' : '返回不完整（缺少 almanac_widget 结束标签），旧轴数据未改变，请重试');
