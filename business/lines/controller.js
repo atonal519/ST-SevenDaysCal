@@ -3,6 +3,7 @@ import { mergePinned } from './mutations.js';
 import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
 import { makeDiagnosticError } from '../../api/diagnostics.js';
+import { drawAdultSelections } from './adult.js';
 
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
@@ -29,11 +30,22 @@ export function createLinesGenerationController(env = {}) {
             let drawer = env.drawTickets; let capacity = Number(env.vectorCapacity);
             if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
-            const ticketCount = Math.min(capacity, Math.max(8, sourceLines.filter(line => line.name).length + 2));
+            const adultMode = typeof env.adultMode === 'function' ? env.adultMode() : env.adultMode;
+            const isInitial = identityLines.length === 0;
+            const isDominantPoolRun = adultMode === 'dominant' && (isReroll || isInitial);
+            const ticketCount = Math.min(capacity, isDominantPoolRun ? 7 : Math.max(8, sourceLines.filter(line => line.name).length + 2));
             const freshTickets = await drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision });
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
-            owner.vectorTickets = freshTickets;
-            const vectorContext = { retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets };
+            const selectionCount = isDominantPoolRun ? 5 : (adultMode === 'dominant' ? freshTickets.length : (adultMode === 'mixed' ? 1 : 0));
+            const adultSelections = drawAdultSelections(adultMode, selectionCount, { random: env.random || (() => Math.random()), seed: owner.id });
+            const adultStart = isDominantPoolRun ? 2 : 0;
+            const adultTickets = freshTickets.map((ticket, index) => {
+                const selection = adultSelections[index - adultStart];
+                const pool = isDominantPoolRun ? (index < 2 ? 'sfw' : 'nsfw') : null;
+                return pool || selection ? Object.freeze({ ...ticket, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) }) : ticket;
+            });
+            owner.vectorTickets = adultTickets;
+            const vectorContext = { intent: isDominantPoolRun ? (isReroll ? 'reroll' : 'initial') : 'advance', retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets: adultTickets, adultSelections };
             const prompt = env.buildPrompt(previousRaw, travelContext, vectorContext);
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const beforeCall = env.readSaved() || {};

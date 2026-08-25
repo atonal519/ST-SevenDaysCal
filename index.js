@@ -44,6 +44,7 @@ import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindA
 import { normalizeApiUrl } from './api/sse.js';
 import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
 import { normalizeTagNames } from './utils/tag-names.js';
+import { ADULT_MODES, ADULT_MODE_LABELS, adultModeForCharacter } from './business/lines/adult.js';
 import { axisState } from './business/axis/state.js';
 import {
     ALM_TYPES,
@@ -1291,6 +1292,7 @@ const linesFeature = createLinesFeature({
     renderPanelDom: ({ toolbar, body }) => { $in('#sp-lines-toolbar').html(toolbar); $in('#sp-lines-list').html(body); },
     injectionEnv: {
         context: () => getContext(), settings: getSettings, enabled: injectEnabled,
+        adultMode: () => getAdultMode(charStableKey(getContext())),
         readRaw: () => readStore(getLinesCacheKey())?.raw || '',
         promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
     },
@@ -1306,8 +1308,9 @@ const linesFeature = createLinesFeature({
     dashedEnabled: () => getSettings().dashedEnabled === true,
     generationEnv: {
         chatId: () => getContext().chatId, loadConfig: loadCfg,
+        adultMode: () => getAdultMode(charStableKey(getContext())),
         readSaved: () => readStore(getLinesCacheKey()) || {},
-        buildPrompt: (previousRaw, travelContext, vectorContext) => appendTravelPromptContext(buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext())), vectorContext), travelContext),
+        buildPrompt: (previousRaw, travelContext, vectorContext) => appendTravelPromptContext(buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext())), vectorContext, getAdultMode(charStableKey(getContext()))), travelContext),
         random: () => Math.random(),
         callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, options?.historyLimit ?? 3, options),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
@@ -2935,6 +2938,12 @@ function injectModal() {
                                     <p class="sp-cfg-group" id="sp-scale-hint" style="margin-top:0">叙事尺度（按角色保存）</p>
                                     <div class="sp-mode-row" id="sp-scale-row">
                                         <!-- populated by refreshScaleRadio() when settings opens -->
+                                    </div>
+
+                                    <hr class="sp-mem-divider">
+                                    <p class="sp-cfg-group" style="margin-top:0">成人剧情模式（按角色保存）</p>
+                                    <div class="sp-mode-row" id="sp-adult-row">
+                                        <!-- populated when settings opens -->
                                     </div>
                                 </div>
                             </details>
@@ -4670,6 +4679,22 @@ function setScale(charKey, value) {
     saveSettingsDebounced();
 }
 
+function getAdultModeMap() {
+    const s = getSettings();
+    if (!s.adultMode || typeof s.adultMode !== 'object') s.adultMode = {};
+    return s.adultMode;
+}
+
+function getAdultMode(charKey) {
+    return adultModeForCharacter(getSettings(), charKey);
+}
+
+function setAdultMode(charKey, value) {
+    if (charKey == null) return;
+    getAdultModeMap()[charKey] = ADULT_MODES.includes(value) ? value : 'off';
+    saveSettingsDebounced();
+}
+
 // Resolve the list of world-book names to load for the current character.
 // Prefers TavernHelper's getCharLorebooks (works uniformly across vanilla ST
 // and Luker), falls back to reading character.data directly.
@@ -5797,8 +5822,8 @@ async function triggerGenerateLines() {
     return linesFeature.generate();
 }
 
-function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto', vectorContext = {}) {
-    return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale, vectorContext);
+function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto', vectorContext = {}, adultMode = 'off') {
+    return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale, vectorContext, adultMode);
 }
 
 // ─── Storylines parse / render ────────────────────────────────────────────────
@@ -6058,6 +6083,7 @@ function toggleSettings() {
         renderWiList();     // async, fire-and-forget — fills list when done
         renderWiExcludeList();   // 全局排除清单（async fire-and-forget；冷缓存会强刷世界书全表）
         renderScaleRow();   // per-character scale radios (sync)
+        renderAdultRow();
         renderMemorySection();   // memory status + settings sync
         renderTheaterSection();  // 棱 settings + cache usage + template manager
         renderStorageUsage();    // 存储管理面板：四层用量统计（含坐标收藏占用）
@@ -6466,6 +6492,13 @@ function renderScaleRow() {
             <span>${escapeHtml(SCALE_LABELS[v])}</span>
         </label>`).join('');
     $row.html(opts);
+}
+
+function renderAdultRow() {
+    const $row = $in('#sp-adult-row');
+    if (!$row.length) return;
+    const current = getAdultMode(charStableKey(getContext()));
+    $row.html(ADULT_MODES.map(v => `<label class="sp-mode-opt"><input type="radio" name="sp-lines-adult-mode" value="${v}"${v === current ? ' checked' : ''}><span>${escapeHtml(ADULT_MODE_LABELS[v])}</span></label>`).join(''));
 }
 
 // Render world-info entry checklist for the current character into #sp-wi-list.
@@ -7002,6 +7035,9 @@ function saveSettings() {
         setDisabledKeys(charKey, disabled);
         const scaleVal = $in('input[name="sp-lines-scale"]:checked').val() || 'auto';
         setScale(charKey, scaleVal);
+        const adultVal = $in('input[name="sp-lines-adult-mode"]:checked').val() || 'off';
+        setAdultMode(charKey, adultVal);
+        refreshLinesInjection();
     }
     $k.data('real', key).val(maskKey(key)).attr('type', 'password');
     const $m = $in('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
