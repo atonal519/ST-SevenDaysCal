@@ -14,7 +14,7 @@ export function mergePinned(oldRaw, aiRaw) {
     for (const line of fresh) if (line.name) { const queue = queues.get(line.name) || []; queue.push(line); queues.set(line.name, queue); }
     for (const pinned of old.filter(line => line.pin)) {
         const same = queues.get(pinned.name)?.shift();
-        if (same) { same.pin = true; same.cue = pinned.cue ?? null; } else fresh.push({ ...pinned });
+        if (same) { same.pin = true; same.adult = pinned.adult === true || same.adult === true; same.cue = pinned.cue ?? null; } else fresh.push({ ...pinned });
     }
     return { ok: true, raw: serializeLines(fresh), model: fresh };
 }

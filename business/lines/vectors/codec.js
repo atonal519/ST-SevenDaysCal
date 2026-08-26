@@ -32,4 +32,5 @@ export function ticketFromCue(value) {
     return Object.freeze({ version: VERSION, id: serializeVectorCue(cue), pools: Object.freeze(cue.map(item => item.poolId)), tags: Object.freeze(cue.map(item => item.tagId)), selections: Object.freeze(cue.map(item => Object.freeze({ ...item, ...POOLS[item.poolId].tags.find(tag => tag.id === item.tagId), poolLabel: POOLS[item.poolId].label }))) });
 }
 
-export function stripVectorCueLines(raw) { return String(raw ?? '').split(/\r?\n/).filter(line => !/^\s*Cue\s*:/i.test(line)).join('\n'); }
+export function stripInternalLineLines(raw) { return String(raw ?? '').split(/\r?\n/).filter(line => !/^\s*(?:Cue|Adult)\s*:/i.test(line)).join('\n'); }
+export function stripVectorCueLines(raw) { return stripInternalLineLines(raw); }

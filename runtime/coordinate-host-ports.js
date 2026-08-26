@@ -9,8 +9,9 @@ function toBase64(value) {
 
 export function createCoordinateHostPorts(overrides = {}) {
     const context = overrides.context || (() => globalThis.getContext?.());
+    const fetchImpl = (overrides.fetch || globalThis.fetch)?.bind(globalThis);
     return {
-        fetch: overrides.fetch || globalThis.fetch,
+        fetch: fetchImpl,
         headers: overrides.headers || (() => context?.()?.getRequestHeaders?.() || headers()),
         context,
         pathOf: overrides.pathOf || pathOf,
@@ -18,7 +19,7 @@ export function createCoordinateHostPorts(overrides = {}) {
         dom: overrides.dom || (() => globalThis.document),
         settings: overrides.settings || (() => ({})),
         now: overrides.now || (() => Date.now()),
-        listCharacterChatIds: overrides.listCharacterChatIds || (() => listCharacterChatIds({ context, fetch: overrides.fetch || globalThis.fetch, headers: overrides.headers || (() => context?.()?.getRequestHeaders?.() || headers()) })),
+        listCharacterChatIds: overrides.listCharacterChatIds || (() => listCharacterChatIds({ context, fetch: fetchImpl, headers: overrides.headers || (() => context?.()?.getRequestHeaders?.() || headers()) })),
     };
 }
 

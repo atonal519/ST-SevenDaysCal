@@ -100,8 +100,6 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         } finally { if (current(owner)) redraw(); }
     };
     almanac.off?.(namespace);
-    almanac.on(`change${namespace}`, '.sp-ledger-auto-toggle', function () { settings().ledgerCaptureEnabled = this.checked; saveSettings(); resetCapture?.(); redraw(); });
-    almanac.on(`change${namespace}`, '.sp-ledger-interval', function () { const n = Math.max(1, Math.min(30, Math.floor(Number(this.value) || 5))); settings().ledgerCaptureInterval = n; this.value = String(n); saveSettings(); resetCapture?.(); redraw(); });
     almanac.on(`click${namespace}`, '.sp-ledger-capture-now', function () { return runManualCapture(this); });
     almanac.on(`click${namespace}`, '.sp-ledger-judge-now', function () { return runManualJudge(); });
     almanac.on(`click${namespace}`, '.sp-ledger-edit', function (e) { e.stopPropagation(); const id = $(this).closest('.sp-ledger-row').attr('data-id'); if (id) editor.open(id); });

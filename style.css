@@ -993,6 +993,12 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 
 /* ─── Settings sections (collapsible) ───────────────────────────────────────── */
+:root {
+    --sp-settings-inline-indent: 16px;
+    --sp-settings-disclosure-width: 14px;
+    --sp-settings-disclosure-gap: 8px;
+    --sp-settings-content-indent: calc(var(--sp-settings-inline-indent) + var(--sp-settings-disclosure-width) + var(--sp-settings-disclosure-gap));
+}
 .sp-settings-section {
     border-bottom: 1px solid var(--sp-divider);
 }
@@ -1001,36 +1007,63 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-settings-section-title {
     display      : flex;
     align-items  : center;
-    padding      : 11px 16px;
+    padding      : 11px var(--sp-settings-inline-indent);
     font-size    : var(--sp-fs-82);
     font-weight  : 600;
     color        : var(--sp-on-surface);
     cursor       : pointer;
     user-select  : none;
     list-style   : none;
-    gap          : 8px;
+    gap          : var(--sp-settings-disclosure-gap);
 }
 .sp-settings-section-title::-webkit-details-marker { display: none; }
 .sp-settings-section-title::before {
     content    : '▶';
     font-size  : var(--sp-fs-58);
+    line-height: 1;
     color      : var(--sp-subtle);
     transition : transform 0.18s;
-    display    : inline-block;
-    flex-shrink: 0;
+    display    : inline-flex;
+    flex: 0 0 var(--sp-settings-disclosure-width);
+    width: var(--sp-settings-disclosure-width);
+    height: var(--sp-settings-disclosure-width);
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+    transform-origin: 50% 50%;
 }
-.sp-settings-section[open] .sp-settings-section-title::before { transform: rotate(90deg); }
+.sp-settings-section[open] > .sp-settings-section-title::before { transform: rotate(90deg); }
 .sp-settings-section-title:hover { background: var(--sp-hover-bg); }
+
+/* 静态设置组仍沿用同一层级和留白，但不显示折叠提示。 */
+.sp-settings-section-static > .sp-settings-section-title {
+    cursor: default;
+}
+.sp-settings-section-static > .sp-settings-section-title::before { display: none; }
+.sp-settings-section-static > .sp-settings-section-title:hover { background: transparent; }
+.sp-settings-section-static > .sp-settings-section-body { padding-left: var(--sp-settings-inline-indent); }
 
 .sp-settings-section-body {
     display       : flex;
     flex-direction: column;
     gap           : 8px;
-    padding       : 4px 16px 14px;
+    padding       : 8px var(--sp-settings-inline-indent) 14px var(--sp-settings-content-indent);
     background    : var(--sp-surface);
 }
 
-/* ─── Settings layers (三层收纳盒：基础 / 模块 / 高级) ─────────────────────────── */
+/* 顶部总开关是单个设置，不再伪装成可展开的层级。 */
+.sp-settings-total-row {
+    display       : flex;
+    flex-direction: column;
+    gap           : 5px;
+    padding       : 12px 16px 13px;
+    border-bottom : 1px solid var(--sp-divider);
+    background    : var(--sp-surface);
+}
+.sp-settings-total-row .sp-mode-opt { gap: 8px; }
+.sp-settings-total-row .sp-cfg-hint { margin: 0; padding-left: 24px; }
+
+/* ─── Settings layers (五组收纳盒) ───────────────────────────────────────────── */
 .sp-settings-layer:not(:last-child) { border-bottom: 1px solid var(--sp-divider); }
 .sp-settings-layer-title {
     display       : flex;
@@ -1045,21 +1078,179 @@ select.sp-input { appearance: none; cursor: pointer; }
     user-select   : none;
     list-style    : none;
     background    : var(--sp-hover-bg);
+    border-radius : 0;
 }
 .sp-settings-layer-title::-webkit-details-marker { display: none; }
 .sp-settings-layer-title::before {
-    content    : '▾';
-    font-size  : var(--sp-fs-72);
+    content    : '▶';
+    font-size  : var(--sp-fs-58);
+    line-height: 1;
     color      : var(--sp-subtle);
     transition : transform 0.18s;
-    display    : inline-block;
-    flex-shrink: 0;
+    display    : inline-flex;
+    flex: 0 0 var(--sp-settings-disclosure-width);
+    width: var(--sp-settings-disclosure-width);
+    height: var(--sp-settings-disclosure-width);
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+    transform-origin: 50% 50%;
 }
-.sp-settings-layer:not([open]) > .sp-settings-layer-title::before { transform: rotate(-90deg); }
+.sp-settings-layer[open] > .sp-settings-layer-title::before { transform: rotate(90deg); }
 .sp-settings-layer-title:hover { background: var(--sp-divider); }
+.sp-settings-layer-static > .sp-settings-layer-title {
+    cursor: default;
+}
+.sp-settings-layer-static > .sp-settings-layer-title::before { display: none; }
+.sp-settings-layer-static > .sp-settings-layer-title:hover { background: var(--sp-hover-bg); }
+.sp-settings-layer-body { padding: 8px 0 4px; }
+.sp-settings-subsection {
+    margin: 6px 0;
+    border: 1px solid var(--sp-divider);
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--sp-surface) 92%, var(--sp-hover-bg));
+}
+.sp-settings-subsection > summary {
+    padding: 8px 12px;
+    cursor: pointer;
+    color: var(--sp-subtle);
+    font-size: var(--sp-fs-80);
+    font-weight: 600;
+}
+.sp-settings-subsection > :not(summary) { margin-left: 12px; margin-right: 12px; }
+.sp-settings-subsection > :last-child { margin-bottom: 10px; }
+.sp-settings-subsection-static {
+    padding-bottom: 2px;
+}
+.sp-settings-subsection-static > .sp-settings-subsection-title {
+    padding: 8px 12px 4px;
+    margin-left: 0;
+    margin-right: 0;
+    color: var(--sp-subtle);
+    font-size: var(--sp-fs-80);
+    font-weight: 600;
+}
+.sp-settings-subsection-static > :not(.sp-settings-subsection-title) {
+    margin-left: 12px;
+    margin-right: 12px;
+}
+.sp-settings-subsection-static > :last-child { margin-bottom: 8px; }
 /* 嵌套 section 读作层的子项：标题略缩进，层内最后一节去掉分隔线让层色带干净 */
 .sp-settings-layer-body > .sp-settings-section:last-child { border-bottom: none; }
-.sp-settings-layer-body > .sp-settings-section > .sp-settings-section-title { padding-left: 26px; }
+.sp-settings-layer-body > .sp-settings-section > .sp-settings-section-title { padding-left: var(--sp-settings-inline-indent); }
+
+/* 提示词抽屉是连续的编辑列表；内部间距由容器统一管理，避免零散 inline margin。 */
+#sp-prompts-section > .sp-settings-section-body { gap: 6px; padding: 10px 12px 16px; }
+#sp-prompts-section .sp-settings-subsection {
+    margin: 2px 0;
+    padding: 0 12px;
+    overflow: hidden;
+}
+#sp-prompts-section .sp-settings-subsection[open] {
+    padding-bottom: 12px;
+}
+#sp-prompts-section .sp-settings-subsection > summary {
+    margin: 0 -12px;
+    padding: 8px 12px;
+}
+#sp-prompts-section .sp-settings-subsection > :not(summary) {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin-inline: 0;
+}
+#sp-prompts-section .sp-settings-subsection > p.sp-cfg-hint,
+#sp-prompts-section .sp-settings-subsection > .sp-cfg-label,
+#sp-prompts-section .sp-settings-subsection > textarea,
+#sp-prompts-section .sp-settings-subsection > div {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+#sp-prompts-section .sp-settings-subsection[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+#sp-prompts-section .sp-settings-subsection[open] > summary { margin-bottom: 0; }
+
+/* 提示词胶囊使用本区专属箭头，固定槽位避免标题文字随状态跳动。 */
+#sp-prompts-section .sp-settings-subsection > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-settings-disclosure-gap);
+}
+#sp-prompts-section .sp-settings-subsection > summary::-webkit-details-marker { display: none; }
+#sp-prompts-section .sp-settings-subsection > summary::before {
+    content: '▶';
+    flex: 0 0 var(--sp-settings-disclosure-width);
+    width: var(--sp-settings-disclosure-width);
+    height: var(--sp-settings-disclosure-width);
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--sp-fs-58);
+    line-height: 1;
+    color: var(--sp-subtle);
+    transition: transform 0.18s;
+    transform-origin: 50% 50%;
+}
+#sp-prompts-section .sp-settings-subsection[open] > summary::before { transform: rotate(90deg); }
+#sp-prompts-section .sp-prompt-global > .sp-cfg-hint { margin-top: 4px; }
+#sp-content-switches-section .sp-dashed-keep-row { padding-left: calc(var(--sp-settings-disclosure-width) + var(--sp-settings-disclosure-gap)); }
+
+#sp-prompts-section .sp-settings-subsection .sp-tag-opt {
+    gap: 8px;
+    min-width: 0;
+}
+#sp-prompts-section .sp-settings-subsection .sp-tag-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+#sp-prompts-section .sp-settings-subsection .sp-cfg-label + textarea,
+#sp-prompts-section .sp-settings-subsection textarea {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+/* 字体组与后续显示/通知设置之间使用统一 divider token。 */
+.sp-settings-display-divider { margin: 4px 0 2px; }
+.sp-settings-compat-group { display: contents; }
+
+/* 推进四项和提示词各项均按同一 section 层级对齐。 */
+#sp-settings-pace > .sp-settings-layer-body > .sp-settings-section-title,
+#sp-settings-pace > .sp-settings-layer-body > .sp-settings-section > .sp-settings-section-title {
+    padding-left: 16px;
+}
+#sp-settings-pace > .sp-settings-layer-body > .sp-settings-section > .sp-settings-section-body {
+    padding-left: var(--sp-settings-content-indent);
+}
+#sp-settings-content .sp-mode-opt,
+#sp-settings-pace .sp-mode-opt { gap: 8px; }
+.sp-settings-section-body .sp-mode-opt + .sp-cfg-hint,
+#sp-module-injection-section .sp-cfg-hint {
+    padding-left: calc(var(--sp-settings-disclosure-width) + var(--sp-settings-disclosure-gap));
+}
+#sp-module-injection-section > .sp-settings-section-body {
+    gap: 4px;
+    padding-top: 8px;
+}
+#sp-module-injection-section .sp-settings-subsection-static {
+    padding: 0 0 3px;
+    border: 0;
+    background: transparent;
+}
+#sp-module-injection-section .sp-settings-subsection-static > .sp-settings-subsection-title {
+    padding: 3px 0 4px;
+}
+#sp-module-injection-section .sp-settings-subsection-static > :not(.sp-settings-subsection-title) {
+    margin-left: 0;
+    margin-right: 0;
+}
 
 /* ─── World-info entry checklist ─────────────────────────────────────────────── */
 .sp-wi-list {
@@ -1764,11 +1955,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink: 0;
 }
 .sp-type-world     { border-left: 3px solid #4fc3f7; }
-.sp-type-major     { border-left: 3px solid #ffb74d; }
+.sp-type-major     { border-left: 3px solid #b08968; }
 .sp-type-character { border-left: 3px solid #f48fb1; }
 .sp-type-world     .sp-type-badge { color: #4fc3f7; }
-.sp-type-major     .sp-type-badge { color: #ffb74d; }
+.sp-type-major     .sp-type-badge { color: #b08968; }
 .sp-type-character .sp-type-badge { color: #f48fb1; }
+.sp-event.sp-event-pinned.sp-type-world     { border-left-color: #287fa3; }
+.sp-event.sp-event-pinned.sp-type-major     { border-left-color: #76583f; }
+.sp-event.sp-event-pinned.sp-type-character { border-left-color: #a85f78; }
 
 .sp-event-title { font-size: var(--sp-fs-88); font-weight: 500; color: var(--sp-on-surface); line-height: 1.35; }
 .sp-event-time  { font-family: 'Roboto Mono', monospace; font-size: var(--sp-fs-73); color: var(--sp-subtle); min-width: 0; overflow-wrap: anywhere; }
@@ -2444,6 +2638,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     max-width    : 100%;
     box-sizing   : border-box;
     overflow-wrap: anywhere;
+}
+.sp-line-card .sp-beat-scene {
+    padding      : 0;
+    background   : transparent;
+    border-radius: 0;
+    border-left  : none;
 }
 .sp-beat-subtext {
     font-size   : var(--sp-fs-80);
@@ -3836,7 +4036,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* 锁定态卡片：左边框改用主色调、轻微底色区分，一眼看出"保命线" */
 .sp-line-card.sp-line-pinned {
-    border-left-color: var(--sp-primary) !important;
     background       : rgba(125, 125, 235, 0.05);
 }
 
@@ -3871,7 +4070,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 锁定态点卡片：左内边框主色 + 轻微底色，一眼看出"保留项" */
 .sp-event.sp-event-pinned {
     background : rgba(125, 125, 235, 0.06);
-    box-shadow: inset 3px 0 0 var(--sp-primary);
 }
 /* Only the FIRST .sp-panel-refresh should absorb margin-left:auto —
    the header already sets that. Sibling refresh buttons stack next to it. */

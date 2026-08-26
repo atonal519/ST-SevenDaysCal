@@ -13,9 +13,11 @@ import { activeLines, buildLinesInjection } from './strategy.js';
 import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections } from './adult.js';
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
+import { bindVectorTickets } from './vectors/bind.js';
 
 const raw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
-function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|萌芽|1|今天|world|false|false\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
+function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
+const freshRaw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 test('release schema accepts complete output and preserves uncapped narrative', () => {
     const result = validateLinesResponse(raw);
     assert.equal(result.ok, true);
@@ -31,11 +33,65 @@ test('incomplete model output is rejected without placeholder text', () => {
     assert.equal(result.ok, false);
     assert.doesNotMatch(JSON.stringify(result), /当前状态待补充|后续方向待补充/);
 });
+test('adult provenance is local-only and survives storage round trip', () => {
+    const adult = { name: '成人线', type: '推进', stage: '萌芽', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n', adult: true };
+    const ordinary = { ...adult, name: '普通线', adult: false };
+    const rawStored = serializeLines([adult, ordinary]);
+    assert.match(rawStored, /Adult: true/);
+    assert.equal(parseLines(rawStored)[0].adult, true);
+    assert.equal(parseLines(rawStored)[1].adult, false);
+    assert.equal(parseLines(rawStored.replace(/\nAdult: true/g, ''))[0].adult, false);
+    assert.equal(validateLinesResponse(rawStored).ok, false, 'AI response must not be allowed to provide Adult');
+    const bound = bindVectorTickets({ generatedLines: [{ ...ordinary, ticketId: 'TICKET-1' }, { ...ordinary, ticketId: 'TICKET-2' }], freshTickets: [{ ticketId: 'TICKET-1', adultSelection: {} }, { ticketId: 'TICKET-2' }] });
+    assert.deepEqual(bound.map(line => line.adult), [true, false]);
+});
+test('adult Next guidance enforces one adjacent step in every context', () => {
+    const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'dominant');
+    for (const phrase of ['零身体接触', '互动进行中', '接近结束或刚结束', '不得同条跨越', '不要求一条 Next 全部兑现']) assert.match(prompt, new RegExp(phrase));
+});
+test('controller commits dominant 2+5 adult provenance in output order', async () => {
+    const owners = createTaskOwnerManager(); let saved = { raw: '', ts: 1 };
+    const response = `<storylines_widget>\n${Array.from({ length: 7 }, (_, index) => `Line: 线${index + 1}|推进|筹备|1|今天|world|false|false\nDesc: d${index + 1}\nNext: n${index + 1}`).join('\n')}\n</storylines_widget>`;
+    const result = await createLinesGenerationController({ owners, chatId: () => 'adult-chat', cacheKey: () => 'adult-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => saved, drawTickets: () => drawTickets(7, { seed: 'adult-controller' }), vectorCapacity: 8, adultMode: () => 'dominant', buildPrompt: (...args) => buildLinesPrompt('用户', '角色', 'user', ...args), callApi: async () => responseWithCount(7), commit: raw => { saved = { raw, ts: 2 }; }, cleanup: owner => { owner.status = 'finished'; }, runtime: { start() {}, finish() {} } }).run();
+    assert.equal(result.status, 'updated');
+    assert.deepEqual(parseLines(saved.raw).map(line => line.adult), [false, false, true, true, true, true, true]);
+});
+test('dominant pool accepts free output order but enforces ticket set and strips transient id', () => {
+    const tickets = drawTickets(7, { seed: 'pool-binding' }).map((ticket, index) => ({ ...ticket, ticketId: `TICKET-${index + 1}`, adultPool: index < 2 ? 'sfw' : 'nsfw', ...(index >= 2 ? { adultSelection: { behavior: `b${index}` } } : {}) }));
+    const generated = [5, 0, 2, 1, 4, 3, 6].map((index, lineIndex) => ({ name: `new-${lineIndex}`, type: '推进', stage: '筹备', level: '1', when: '今天', agency: 'world', stall: false, pin: false, desc: 'd', next: 'n', ticketId: tickets[index].ticketId }));
+    const bound = bindVectorTickets({ generatedLines: generated, freshTickets: tickets });
+    assert.deepEqual(bound.map(line => line.adult), [true, false, true, false, true, true, true]);
+    assert.ok(bound.every(line => !Object.hasOwn(line, 'ticketId')));
+    for (const bad of [[1, 2, 3, 4, 5, 6], [0, 1, 2, 4, 5, 6], [0, 1, 2, 3, 4, 6]]) {
+        const invalid = bad.map((index, lineIndex) => ({ ...generated[lineIndex], ticketId: tickets[index].ticketId }));
+        assert.throws(() => bindVectorTickets({ generatedLines: invalid, freshTickets: tickets }));
+    }
+});
+test('ticket protocol rejects missing duplicate unknown and old-line IDs without committing', async () => {
+    const ticket = { ...drawTickets(1, { seed: 'protocol' })[0], ticketId: 'TICKET-1' };
+    const fresh = { name: 'new', type: '推进', stage: '筹备', level: '1', when: '今天', agency: 'world', stall: false, pin: false, desc: 'd', next: 'n' };
+    for (const generated of [
+        [{ ...fresh }],
+        [{ ...fresh, ticketId: 'TICKET-1' }, { ...fresh, name: 'new-2', ticketId: 'TICKET-1' }],
+        [{ ...fresh, ticketId: 'TICKET-X' }],
+    ]) assert.throws(() => bindVectorTickets({ generatedLines: generated, freshTickets: [ticket] }));
+    assert.throws(() => bindVectorTickets({ previousLines: [{ ...fresh, name: 'old', adult: true }], generatedLines: [{ ...fresh, name: 'old', ticketId: 'TICKET-1' }], freshTickets: [ticket] }));
+    let commits = 0;
+    const c = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'protocol-chat', cacheKey: () => 'protocol-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: () => [ticket], buildPrompt: () => 'p', callApi: async () => '<storylines_widget>\nLine: new|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>', commit: () => { commits++; }, cleanup: owner => { owner.status = 'finished'; } });
+    assert.equal((await c.run()).status, 'failed'); assert.equal(commits, 0);
+});
 test('release prompt keeps flexible count, Next contract, and local 6x3 cues', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
     assert.match(prompt, /条目数量按当前剧情证据灵活决定/);
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(prompt, /本轮本地预掷影响角度/);
+});
+test('Ticket is transient and absent from serialized storage/model', () => {
+    const checked = validateLinesResponse('<storylines_widget>\nLine: 新线|推进|筹备|1|今天|world|false|false\nTicket: TICKET-1\nDesc: d\nNext: n\n</storylines_widget>');
+    assert.equal(checked.ok, true); assert.equal(checked.model[0].ticketId, 'TICKET-1');
+    assert.doesNotMatch(serializeLines(checked.model), /Ticket:|ticketId/);
+    const bound = bindVectorTickets({ generatedLines: checked.model, freshTickets: [{ ...drawTickets(1, { seed: 'transient' })[0], ticketId: 'TICKET-1' }] });
+    assert.doesNotMatch(JSON.stringify(bound), /ticketId/);
 });
 test('adult line modes keep off unchanged and reserve explicit adult candidates', () => {
     const off = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'off');
@@ -64,7 +120,7 @@ test('controller uses one API call for manual reroll and commits valid output', 
     const controller = createLinesGenerationController({
         owners: { currentChatRevision: () => 1, isCurrent: () => true, create: () => ({ id: 'o1', controller: new AbortController() }) },
         chatId: () => 'chat', cacheKey: () => 'key', loadConfig: () => ({ url: 'mock', key: 'mock' }), readSaved: () => ({}),
-        drawTickets: async () => [], vectorCapacity: 8, buildPrompt: () => 'release prompt', callApi: async () => { calls++; return raw; },
+        drawTickets: async () => drawTickets(1, { seed: 'manual' }), vectorCapacity: 8, buildPrompt: () => 'release prompt', callApi: async () => { calls++; return freshRaw; },
         commit: value => { committed = value; }, runtime: { start() {}, finish() {} },
     });
     const result = await controller.run(false, { reroll: true });
@@ -77,7 +133,7 @@ test('controller attaches temporary adult selections to fresh tickets by mode wi
         const controller = createLinesGenerationController({
             owners, adultMode: () => mode, chatId: () => 'adult-chat', cacheKey: () => 'adult-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }),
             drawTickets: async count => drawTickets(count, { seed: mode }), vectorCapacity: 8, buildPrompt: (_previous, _travel, vectorContext) => { captured = vectorContext; return 'p'; },
-            callApi: async () => { calls++; return raw; }, commit: () => {}, runtime: { start() {}, finish() {} },
+            callApi: async () => { calls++; return mode === 'dominant' ? responseWithCount(7) : freshRaw; }, commit: () => {}, runtime: { start() {}, finish() {} },
         });
         const result = await controller.run();
         assert.equal(result.status, 'updated'); assert.equal(calls, 1);
@@ -95,7 +151,7 @@ test('dominant initial/reroll uses a temporary 2 SFW plus 5 NSFW pool in one req
         owners, adultMode: () => 'dominant', chatId: () => 'pool-chat', cacheKey: () => 'pool-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }),
         drawTickets: async count => { drawn = count; return seven; }, vectorCapacity: 8,
         buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', '', 'auto', context, 'dominant'); },
-        callApi: async () => { calls++; return raw; }, commit: () => {}, runtime: { start() {}, finish() {} },
+        callApi: async () => { calls++; return responseWithCount(7); }, commit: () => {}, runtime: { start() {}, finish() {} },
     });
     const result = await controller.run(false, { reroll: true });
     assert.equal(result.status, 'updated'); assert.equal(drawn, 7); assert.equal(calls, 1);
@@ -103,7 +159,7 @@ test('dominant initial/reroll uses a temporary 2 SFW plus 5 NSFW pool in one req
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 5);
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 5);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /先输出并领取 SFW 新线，再输出并领取 NSFW 新线/);
+    assert.match(prompt, /输出顺序自由，不要求先 SFW 后 NSFW/);
     assert.match(prompt, /同一主角或同一组参与者可以重复/);
     assert.match(prompt, /场景、关系结构、互动机制、节奏或即时身体\/关系后果之一有实质差异/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
@@ -117,7 +173,7 @@ test('dominant automatic advance keeps existing ticket sizing and does not force
     const controller = createLinesGenerationController({
         owners, adultMode: () => 'dominant', chatId: () => 'advance-chat', cacheKey: () => 'advance-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: old, ts: 1 }),
         drawTickets: async count => { drawn = count; return drawTickets(count, { seed: 18 }); }, vectorCapacity: 8,
-        buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', old, 'auto', context, 'dominant'); }, callApi: async () => raw, commit: () => {}, runtime: { start() {}, finish() {} },
+        buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', old, 'auto', context, 'dominant'); }, callApi: async () => freshRaw, commit: () => {}, runtime: { start() {}, finish() {} },
     });
     const result = await controller.run();
     assert.equal(result.status, 'updated'); assert.equal(drawn, 8); assert.equal(captured.intent, 'advance');
@@ -128,7 +184,7 @@ test('dominant automatic advance keeps existing ticket sizing and does not force
 test('mixed production prompt keeps every fresh ticket while attaching only one adult selection', async () => {
     const owners = createTaskOwnerManager(); let prompt = '';
     const tickets = drawTickets(8, { seed: 'mixed-all' });
-    const controller = createLinesGenerationController({ owners, adultMode: () => 'mixed', chatId: () => 'mixed-chat', cacheKey: () => 'mixed-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async () => tickets, vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', context, 'mixed'); return prompt; }, callApi: async () => raw, commit: () => {}, runtime: { start() {}, finish() {} } });
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'mixed', chatId: () => 'mixed-chat', cacheKey: () => 'mixed-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async () => tickets, vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', context, 'mixed'); return prompt; }, callApi: async () => freshRaw, commit: () => {}, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run()).status, 'updated');
     for (const ticket of tickets) for (const item of ticket.selections) assert.match(prompt, new RegExp(item.label));
     assert.doesNotMatch(prompt, /SFW 新线|NSFW 新线|2 条 SFW/);
@@ -137,7 +193,7 @@ test('mixed production prompt keeps every fresh ticket while attaching only one 
 test('dominant pinned reroll retains pinned identity then applies the 2+5 pool', async () => {
     const owners = createTaskOwnerManager(); let captured = null;
     const pinned = '<storylines_widget>\nLine: 锁线|推进|萌芽|1|今天|world|false|true\nDesc: 已锁定\nNext: 继续\n</storylines_widget>';
-    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'pin-chat', cacheKey: () => 'pin-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: pinned, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'pin-pool' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', pinned, 'auto', context, 'dominant'); }, callApi: async () => raw, commit: () => {}, runtime: { start() {}, finish() {} } });
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'pin-chat', cacheKey: () => 'pin-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: pinned, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'pin-pool' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', pinned, 'auto', context, 'dominant'); }, callApi: async () => responseWithCount(7), commit: () => {}, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
     assert.equal(captured.retained.length, 0, '无 Cue 的 pinned 线仍应进入 legacy 身份区');
     assert.equal(captured.legacyWithoutCue[0], '锁线');
@@ -246,7 +302,7 @@ test('injection controller refreshes adult guidance immediately after mode chang
 test('concurrent generation entry is owned once and stale owner cannot commit', async () => {
     const owners = createTaskOwnerManager(); let calls = 0; let committed = 0; let release;
     const pending = new Promise(resolve => { release = resolve; });
-    const env = { owners, chatId: () => 'chat', cacheKey: () => 'key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async () => [], vectorCapacity: 8, buildPrompt: () => 'p', callApi: async () => { calls++; await pending; return raw; }, commit: () => { committed++; }, runtime: { start() {}, finish() {} } };
+    const env = { owners, chatId: () => 'chat', cacheKey: () => 'key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async () => drawTickets(1, { seed: 'concurrent' }), vectorCapacity: 8, buildPrompt: () => 'p', callApi: async () => { calls++; await pending; return freshRaw; }, commit: () => { committed++; }, runtime: { start() {}, finish() {} } };
     const first = createLinesGenerationController(env).run();
     const second = createLinesGenerationController(env).run();
     await new Promise(resolve => setTimeout(resolve, 0));

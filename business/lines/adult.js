@@ -33,7 +33,7 @@ export function drawAdultSelections(mode, count = 0, { random = Math.random, see
     return Object.freeze(result.map((selection, index) => Object.freeze({ ...selection, index })));
 }
 
-export function adultPromptGuidance(mode) {
+function baseAdultPromptGuidance(mode) {
     const normalized = normalizeAdultMode(mode);
     if (normalized === 'off') return '';
     if (normalized === 'mixed') return `
@@ -43,11 +43,19 @@ export function adultPromptGuidance(mode) {
     return guidance.replace('2+5 是目标配额，证据不足时允许少于目标，不得串味凑数。', '');
 }
 
+export function adultPromptGuidance(mode) {
+    const normalized = normalizeAdultMode(mode);
+    const base = baseAdultPromptGuidance(normalized);
+    if (normalized === 'off') return base;
+    return `${base}\n【成人 Next 单步护栏】成人票的驱动力、行为、节奏、场景与后果供后续多轮展开，不要求一条 Next 全部兑现。先依据最近正文判断亲密进度，每条 Next 只落实当前情境紧邻的一个关系节点或一个连续时间节点：零身体接触或无明确双向回应时，最远写到首次明确邀请/接触及对方当下回应；已处于互动进行中时，只写一个紧接当前动作的玩法变化、主动选择或节奏转折及即时回应/当下影响；已接近结束或刚结束时，只写收束、照料、边界确认或即时关系反应中的一个。不得同条跨越接触前、进行中、事后两个以上区间，不得同时包办结束、事后照料、第二轮和下次预期。即时后果仅指所选动作当场产生的身体感受、选择变化或关系压力；旧 Next 若含多个动作，只取第一个有效节点。仍须明确玩法/行为与双方回应，不得退化为纯氛围暗示。`;
+}
+
 export function adultInjectionGuidance(mode) {
     const normalized = normalizeAdultMode(mode);
     if (normalized === 'off') return '';
-    if (normalized === 'mixed') return '成人模式已开启：若当前线涉及明确成年且自愿的亲密发展，可把欲望、实际行为推进与事后关系变化落实到剧情中，不要只停留在暧昧暗示。Next 必须写下一项具体行为/玩法、主动方与对方回应及即时身体或关系后果；温和收尾不能单独交差。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。';
-    return '成人主导模式已开启：请把明确成年且自愿的成人行为推进作为主要叙事方向，落实实际行为、人物主动选择及事后关系变化；只落实内容本身已经成人化的线，普通/SFW 线不得强行成人化；成人线 Next 必须写下一项具体行为/玩法、主动方与对方回应及即时身体或关系后果；温和收尾不能单独交差。不得用含糊暧昧或淡出回避已建立的成人线。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。';
+    const pacing = '先依据最近正文判断亲密进度，每次只落实当前情境紧邻的一个关系节点或一个连续时间节点：零身体接触/无明确双向回应时最远到首次明确邀请或接触及当下回应；互动进行中只写一个紧接当前动作的具体行为/玩法变化、主动选择或节奏转折及即时回应；接近结束或刚结束时只写收束、照料、边界确认或即时关系反应中的一个。不得同条跨越接触前、进行中、事后两个以上区间，不得同时包办结束、事后照料、第二轮和下次预期。仍须保留明确玩法/行为与双方回应，不得退化为纯氛围暗示。';
+    if (normalized === 'mixed') return `成人模式已开启：若当前线涉及明确成年且自愿的亲密发展，可把欲望与实际行为推进落实到剧情中，不要只停留在暧昧暗示。${pacing}即时后果仅指所选动作当场产生的身体感受、选择变化或关系压力；旧 Next 若含多个动作，只取第一个有效节点。温和收尾不能单独交差。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。`;
+    return `成人主导模式已开启：请把明确成年且自愿的成人行为推进作为主要叙事方向，落实实际行为与人物主动选择；只落实内容本身已经成人化的线，普通/SFW 线不得强行成人化。${pacing}即时后果仅指所选动作当场产生的身体感受、选择变化或关系压力；旧 Next 若含多个动作，只取第一个有效节点。不得用含糊暧昧或淡出回避已建立的成人线。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。`;
 }
 
 export function adultModeForCharacter(settings = {}, key = '') {

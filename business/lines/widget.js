@@ -28,7 +28,7 @@ export function editLineWidget(raw, index, body) {
     if (!item?.name) return { ok: false, reason: 'invalid-widget', raw };
     const model = parseLines(raw);
     if (!model[Number(index)]) return { ok: false, reason: 'line-not-found', raw };
-    model[Number(index)] = { ...item, pin: model[Number(index)].pin === true, cue: model[Number(index)].cue ?? null };
+    model[Number(index)] = { ...item, adult: model[Number(index)].adult === true, pin: model[Number(index)].pin === true, cue: model[Number(index)].cue ?? null };
     return { ok: true, raw: serializeLines(model), model };
 }
 
@@ -50,6 +50,7 @@ export function replaceLineBlock(raw, index, newBlock) {
     if (!Number.isInteger(Number(index)) || index < 0 || index >= blocks.length) return null;
     const oldCueRaw = (blocks[index].find(line => /^\s*Cue\s*:/i.test(line)) || '').replace(/^\s*Cue\s*:\s*/i, '').trim();
     const oldCue = serializeVectorCue(oldCueRaw);
+    const oldAdult = blocks[index].some(line => /^\s*Adult\s*:\s*true\s*$/i.test(line));
     let replacement = String(newBlock || '').split('\n');
     const candidateIndex = replacement.findIndex(line => /^\s*Cue\s*:/i.test(line));
     if (candidateIndex >= 0) {
@@ -58,6 +59,8 @@ export function replaceLineBlock(raw, index, newBlock) {
         replacement = replacement.filter((_, i) => i !== candidateIndex);
         if (valid) replacement.push(`Cue: ${valid}`); else if (oldCue) replacement.push(`Cue: ${oldCue}`);
     } else if (oldCue) replacement.push(`Cue: ${oldCue}`);
+    replacement = replacement.filter(line => !/^\s*Adult\s*:/i.test(line));
+    if (oldAdult) replacement.push('Adult: true');
     blocks[index] = replacement;
     const next = blocks.map(block => block.join('\n').replace(/\s+$/, '')).join('\n\n');
     return match ? source.replace(match[0], `<storylines_widget>\n${next}\n</storylines_widget>`) : `<storylines_widget>\n${next}\n</storylines_widget>`;

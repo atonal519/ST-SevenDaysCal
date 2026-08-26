@@ -42,7 +42,7 @@ export function createLinesGenerationController(env = {}) {
             const adultTickets = freshTickets.map((ticket, index) => {
                 const selection = adultSelections[index - adultStart];
                 const pool = isDominantPoolRun ? (index < 2 ? 'sfw' : 'nsfw') : null;
-                return pool || selection ? Object.freeze({ ...ticket, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) }) : ticket;
+                return Object.freeze({ ...ticket, ticketId: `TICKET-${index + 1}`, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) });
             });
             owner.vectorTickets = adultTickets;
             const vectorContext = { intent: isDominantPoolRun ? (isReroll ? 'reroll' : 'initial') : 'advance', retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets: adultTickets, adultSelections };
@@ -58,7 +58,7 @@ export function createLinesGenerationController(env = {}) {
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
             const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId }) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
             if (!decision.ok) return { status: 'cancelled', reason: decision.reason };
-            const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets });
+            const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             const merged = mergePinned(previousRaw, serializeLines(bound));
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
             env.commit(merged.raw, { silent, owner, swipeCtx, travelContext, commitBaseline });

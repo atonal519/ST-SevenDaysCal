@@ -257,19 +257,10 @@ export async function execBatch(scope, ids) {
 }
 
 export function renderLedgerControls() {
-    const s = getSettings();
-    const iv = env.getLedgerCaptureInterval();
     const busy = env.isCapturingLedger();
     const progress = env.getLedgerCaptureProgress?.();
     const judging = env.isJudgingLedger();
-    const on = s.ledgerCaptureEnabled;   // 【bug 修复】原为裸未定义 `on`；正源＝自动标注开关设置
     return `<div class="sp-ledger-ctrl">
-        <label class="sp-ledger-auto">
-            <input type="checkbox" class="sp-ledger-auto-toggle" ${on ? 'checked' : ''}>
-            <span>每</span>
-            <input type="number" class="sp-input sp-interval-input sp-ledger-interval" min="1" max="30" value="${iv}">
-            <span>楼自动标注</span>
-        </label>
         <button type="button" class="sp-mini-btn sp-ledger-pill sp-ledger-capture-now${busy ? ' sp-ledger-capture-busy' : ''}" title="${busy ? '再次点击可中止当前标注' : '立即标注一次'}" aria-busy="${busy ? 'true' : 'false'}" aria-disabled="false">${busy ? (progress ? `中止标注（${progress.done}/${progress.total} 批）` : '中止标注') : '标注'}</button>
         <button type="button" class="sp-mini-btn sp-ledger-pill sp-ledger-judge-now" title="立即判定一次（更新现状 / 了结）" ${judging ? 'disabled' : ''}>${judging ? '更新中…' : '更新'}</button>
     </div>`;

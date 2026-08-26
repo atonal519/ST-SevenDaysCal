@@ -8,11 +8,22 @@ import { commitLineWidget } from './widget.js';
 import { createDashedModule } from './dashed.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 import { parseLines } from './schema.js';
-import { stripVectorCueLines } from './vectors/codec.js';
+import { stripInternalLineLines } from './vectors/codec.js';
 import { vectorGlyphSvg } from './vectors/glyph.js';
 import { linesViewModel } from './render.js';
 import { inlineState, prefixNext } from './inline.js';
 import { classifyRenderedFloor, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
+
+const LINE_EDGE_COLORS = Object.freeze({
+    ordinary: '#6aab8a',
+    ordinaryPinned: '#3f765c',
+    adult: '#d6b85a',
+    adultPinned: '#8d7330',
+});
+
+const lineEdgeColor = line => line.adult
+    ? (line.pin ? LINE_EDGE_COLORS.adultPinned : LINE_EDGE_COLORS.adult)
+    : (line.pin ? LINE_EDGE_COLORS.ordinaryPinned : LINE_EDGE_COLORS.ordinary);
 
 // 线域组合根：宿主只注入能力与跨域回调；各纯业务子模块不反向读取 index 状态。
 export function createLinesFeature(env = {}) {
@@ -59,17 +70,18 @@ export function createLinesFeature(env = {}) {
     const renderLines = (raw = '') => {
         const parsed = parseLines(raw);
         const lines = linesViewModel(parsed, Number.POSITIVE_INFINITY);
-        if (!lines.length) return `${env.jumpHint?.() || ''}<div class="sp-raw">${env.escapeHtml?.(stripVectorCueLines(raw)).replace(/\n/g, '<br>')}</div>`;
+        if (!lines.length) return `${env.jumpHint?.() || ''}<div class="sp-raw">${env.escapeHtml?.(stripInternalLineLines(raw)).replace(/\n/g, '<br>')}</div>`;
         const colors = env.stageColors || {};
         const cards = lines.map((l, i) => {
             const level = Math.max(1, Math.min(4, Number.parseInt(l.level, 10) || 1));
             const color = colors[l.stage] || '#9aa6b2';
+            const edgeColor = lineEdgeColor(l);
             const beads = Array.from({ length: 4 }, (_, n) => `<span class="sp-bead${n < level ? ' sp-bead-on' : ''}" style="${n < level ? `background:${color}` : ''}"></span>`).join('');
             const parts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
             if (l.desc) parts.push(l.desc);
             if (l.next) parts.push(prefixNext(l.next, l.stall));
             const next = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</span></div>` : '';
-            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}" data-line-idx="${i}" style="border-left:3px solid ${color}30"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${env.makeInjectBtn?.(parts.join('\n')) || ''}<button class="sp-line-pin-toggle" data-line-idx="${i}" title="${l.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${l.pin ? 'lock' : 'lock-open'}"></i></button><button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${titleHtml('sp-beat-title', l)}${l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : ''}${next}</div>`;
+            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${env.makeInjectBtn?.(parts.join('\n')) || ''}<button class="sp-line-pin-toggle" data-line-idx="${i}" title="${l.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${l.pin ? 'lock' : 'lock-open'}"></i></button><button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${titleHtml('sp-beat-title', l)}${l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : ''}${next}</div>`;
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
@@ -81,9 +93,10 @@ export function createLinesFeature(env = {}) {
         const body = view.lines.map((line, i) => {
             const level = Math.max(1, Math.min(4, Number.parseInt(line.level, 10) || 1));
             const color = (env.stageColors || {})[line.stage] || '#9aa6b2';
+            const edgeColor = lineEdgeColor(line);
             const beads = Array.from({ length: 4 }, (_, n) => `<span class="sp-bead${n < level ? ' sp-bead-on' : ''}" style="${n < level ? `background:${color}` : ''}"></span>`).join('');
             const actions = view.hasActions ? `<span class="sp-beat-actions">${env.makeInjectBtn?.([`【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`, line.desc, line.nextText].filter(Boolean).join('\n')) || ''}<button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span>` : '';
-            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}" data-line-idx="${i}" style="border-left:3px solid ${color}20"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}<span class="sp-inline-dots">${beads}</span>${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${titleHtml('sp-inline-name', line)}${line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : ''}${line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span></div>` : ''}</div>`;
+            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}<span class="sp-inline-dots">${beads}</span>${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${titleHtml('sp-inline-name', line)}${line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : ''}${line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span></div>` : ''}</div>`;
         }).join('');
         const controls = !readOnly && view.hasActions ? '<span class="sp-inline-summary-actions"><button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button><button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button></span>' : '';
         const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count${view.empty ? ' sp-inline-empty' : ''}">${view.empty ? '暂无' : `${view.count} 条活跃`}</span>${controls}</summary>`;
