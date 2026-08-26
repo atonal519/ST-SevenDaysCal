@@ -9,6 +9,7 @@ import { enforceLineCapacity } from './capacity.js';
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
     const run = async (silent = false, swipeCtx = null, travelContext = null) => {
+        if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
         const chatId = env.chatId();
         const owner = owners.create('lines-generation', { chatId, chatRevision: owners.currentChatRevision(), intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
         env.runtime?.start(owner.controller); env.onStart?.(owner);
@@ -52,6 +53,7 @@ export function createLinesGenerationController(env = {}) {
             const beforeCall = env.readSaved() || {};
             if (String(beforeCall.raw || '') !== commitBaseline.raw || (Number(beforeCall.ts) || null) !== commitBaseline.ts) return { status: 'cancelled', reason: 'stale-baseline' };
             const raw = await env.callApi(prompt, signal, { ...(travelContext || {}), ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}) });
+            if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
             if (!checked.ok) { env.fail?.(makeDiagnosticError('invalid-structure', { phase: 'parse' }), { silent }); return { status: 'failed', reason: checked.reason }; }

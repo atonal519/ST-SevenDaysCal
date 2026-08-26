@@ -1,4 +1,5 @@
 import { parseCalendar, serializeCalendar } from './parse.js';
+export { editPointDescription, editPointFields } from './edit.js';
 
 function eventsAt(parsed, dayKey) {
     return dayKey === 'future' ? (parsed.future?.events || null) : (parsed.days?.[Number(dayKey)]?.events || null);

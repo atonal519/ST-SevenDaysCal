@@ -1,4 +1,5 @@
 import { calMonthCount, calMonthDays, calYearLen } from './data.js';
+import { renderActionMenu } from '../utils/action-menu.js';
 
 function displayMonthName(calendar, month, monthName) {
     const label = monthName?.(calendar, month);
@@ -52,8 +53,7 @@ export function calendarConflicts(items, cal) {
 export function createAxisUi(env = {}) {
     const actionMenuHtml = menuId => {
         const items = env.actionMenus?.[menuId] || [];
-        const rows = items.map(item => `<button type="button" class="sp-action-menu-item" data-action="${env.escapeAttr(item.action)}" title="${env.escapeAttr(item.title)}"><i class="fa-solid ${env.escapeAttr(item.icon)}" aria-hidden="true"></i><span>${env.escapeHtml(item.label)}</span></button>`).join('');
-        return `<div class="sp-action-menu" data-menu-id="${env.escapeAttr(menuId)}"><button type="button" class="sp-icon-btn sp-action-menu-toggle" title="更多操作" aria-label="更多操作" aria-expanded="false"><i class="fa-solid fa-ellipsis-vertical"></i></button><div class="sp-action-menu-list" hidden>${rows}</div></div>`;
+        return renderActionMenu(menuId, items, env.escapeHtml, env.escapeAttr);
     };
     const todayBarHtml = () => {
         const key = env.charKey?.(), cal = env.calendar?.(), today = env.today?.();

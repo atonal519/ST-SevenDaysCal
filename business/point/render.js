@@ -12,6 +12,7 @@ import { ALM_WEEKDAYS, almDayOfYear, loadCalDesc } from '../axis/data.js';
 import { escapeHtml, escapeAttr } from '../../utils/dom.js';
 import { weatherChipHtml } from '../../utils/format.js';
 import * as store from '../../store.js';
+import { renderActionMenu } from '../utils/action-menu.js';
 
 let env = null;
 export function bindPointRender(e) { env = e; }
@@ -52,21 +53,22 @@ export function scheduleDayLabel(i, startDate, ctx) {
 
 function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
     const meta = TYPE_META[ev.type] || TYPE_META.main;
-    const injectBtn = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel));
     // F5 锁点：仅面板内渲染（有定位 dayKey）且事件有标题时给锁钮；注入卡/无定位场景不显示
-    const pinBtn = (dayKey !== null && ev.title && ev.title.trim())
-        ? `<button class="sp-point-pin-toggle" data-day="${escapeAttr(String(dayKey))}" data-ev="${evIdx}" title="${ev.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${ev.pin ? 'lock' : 'lock-open'}"></i></button>`
-        : '';
     // 删除钮：仅面板内渲染（有定位 dayKey）才给；注入卡/无定位场景不显示。走 .sp-sch-del-one，
     // 与楼内块抽屉同类、共用 handler（#sp-body/#chat 委托）与 triggerDeletePointEvent（同刷主面板+楼内块）。
-    const delBtn = (dayKey !== null)
-        ? `<button class="sp-sch-del-one" data-day="${escapeAttr(String(dayKey))}" data-ev="${evIdx}" title="删除这个点"><i class="fa-solid fa-xmark"></i></button>`
-        : '';
+    const inject = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel));
+    const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
+    const actions = dayKey !== null ? renderActionMenu('point', [
+        { action: 'point-edit', icon: 'fa-pen', label: '编辑', title: '编辑这个点' },
+        { action: 'point-pin', icon: ev.pin ? 'fa-lock-open' : 'fa-lock', label: ev.pin ? '解锁' : '锁定', title: ev.pin ? '解锁这个点' : '锁定这个点' },
+        { action: 'point-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
+        { action: 'point-delete', icon: 'fa-trash', label: '删除', title: '删除这个点' },
+    ], escapeHtml, escapeAttr).replace('data-menu-id="point"', 'data-menu-id="point" data-day="' + escapeAttr(String(dayKey)) + '" data-ev="' + evIdx + '" data-iid="' + iid + '"') : inject;
     return `<div class="sp-event ${meta.cls}${ev.pin ? ' sp-event-pinned' : ''}">
         <div class="sp-event-head">
             <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>
             ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
-            ${injectBtn}${pinBtn}${delBtn}
+        <span class="sp-beat-actions">${actions}</span>
         </div>
         <div class="sp-event-title">${escapeHtml(ev.title)}</div>
         ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}

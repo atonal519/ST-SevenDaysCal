@@ -146,7 +146,7 @@ import { parseCalendar, validateGeneratedCalendar, parsePointEventRecord, firstP
 import { isGregorian as isGregorianCalendar } from './business/calendar/date.js';
 import { buildPrompt } from './business/point/prompt.js';
 import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
-import { togglePointPinRaw, deletePointEventRaw } from './business/point/mutations.js';
+import { togglePointPinRaw, deletePointEventRaw, editPointDescription, editPointFields } from './business/point/mutations.js';
 import { bindPointRepository, getScheduleKey, loadCachedSchedule } from './business/point/repository.js';
 import { createPointActions } from './business/point/actions.js';
 import { createPointWidgetActions } from './business/point/widget.js';
@@ -182,6 +182,8 @@ import { createAdvanceStrategy } from './business/lines/strategy.js';
 import { createLinesFeature } from './business/lines/feature.js';
 import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
+import { editLineDescription } from './business/lines/mutations.js';
+import { editOutlineScene } from './business/outline/schema.js';
 import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { makeChatAnchor, normalizeChatAnchor, createChatAnchorRepository, DATE_ANCHOR_STORE_KEY } from './runtime/chat-date-anchor.js';
@@ -327,6 +329,11 @@ const pointActions = createPointActions({
     parseCalendar,
     togglePointPinRaw,
     deletePointEventRaw,
+    editPointDescription,
+    editPointFields: (raw, day, index, values) => editPointFields(raw, day, index, values),
+    promptFields: options => customDialog.promptFields(options),
+    setEditing: value => { manualEditing.point = value; },
+    isBusy: () => pointState.isGenerating || axisState._almSyncingPoint,
     setCached: html => { pointState.cachedSchedule = html; },
     setBody,
     currentView: () => currentView,
@@ -387,6 +394,7 @@ const pointController = createPointController({
     setCached: html => { pointState.cachedSchedule = html; },
     notify: () => getSettings().notifyMode,
     canCommit: (owner, travel) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), signal: travel?.signal, pluginEnabled: pluginEnabled() }).canCommit,
+    editing: () => manualEditing.point,
     logDiagnostic: diagnostic => console.warn('[SP point failure]', diagnostic),
     canCallback: owner => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback,
     setView,
@@ -1255,12 +1263,15 @@ let _lastMainView      = 'schedule';  // 记住上次打开的模块视图（点
 let charViewName       = null;    // confirmed char name; preserved when switching to user view
 let outlineMode         = false;
 let linesMode           = false;
+const manualEditing = { point: false, lines: false, outline: false };
 // 线·swipe 重算：楼层单调递增闸（区分真·新楼层 vs swipe/历史重渲染），及"待重算 swipe"标记。
 const linesFeature = createLinesFeature({
     jumpHint: () => SP_JUMP_HINT_LINES,
     get stageColors() { return STAGE_COLORS; },
     escapeHtml, escapeAttr, cleanText, makeInjectBtn,
     cacheKey: () => getLinesCacheKey(), chatId: () => getContext().chatId,
+    isEditing: () => manualEditing.lines,
+    readSaved: () => readStore(getLinesCacheKey()) || {},
     writeStore, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
     loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
@@ -1307,6 +1318,7 @@ const linesFeature = createLinesFeature({
     },
     dashedEnabled: () => getSettings().dashedEnabled === true,
     generationEnv: {
+        isEditing: () => manualEditing.lines,
         chatId: () => getContext().chatId, loadConfig: loadCfg,
         adultMode: () => getAdultMode(charStableKey(getContext())),
         readSaved: () => readStore(getLinesCacheKey()) || {},
@@ -1319,8 +1331,10 @@ const linesFeature = createLinesFeature({
         fail: (error, { silent = false } = {}) => { const code = classifyGenerationError(error, { phase: error?.phase || 'request' }); const manual = !silent; const notify = shouldNotifyGeneration({ manual, notifyMode: getSettings().notifyMode, code }); const diagnostic = safeDiagnosticLog('lines', error?.phase || 'request', error, { background: !manual }); console.warn('[SP lines failure]', diagnostic); if (notify && getContext().chatId) showToast(`线生成失败：${diagnosticMessage(error)}`, null, true); }, cleanup: () => {},
     },
     actionsEnv: {
+        setEditing: value => { manualEditing.lines = value; },
         isBusy: () => false, readSaved: () => readStore(getLinesCacheKey()), readRaw: () => readStore(getLinesCacheKey())?.raw || '',
         write: value => writeStore(getLinesCacheKey(), value), remove: () => removeStore(getLinesCacheKey()), confirm: spConfirm, toast: (message, error) => showToast(message, null, error),
+        promptFields: options => customDialog.promptFields(options),
         render: raw => raw, setCached: () => {}, refreshPanel: () => {}, refreshInline: () => {},
         resetCounter: () => {}, runGenerate: () => {}, precheck: memoryPreCheckConfirm, silent: () => !linesMode,
     },
@@ -1350,6 +1364,7 @@ const outlineFeature = createOutlineFeature({
     cleanText,
     escapeHtml,
     confirm: spConfirm,
+    promptTextarea: options => customDialog.promptTextarea(options),
     openSettings: () => { if (!settingsOpen) toggleSettings(); },
     ui: {
         $,
@@ -1606,6 +1621,7 @@ jQuery(async () => {
             toast: (message, action, error) => showToast(message, action, error),
             warn: (message, error) => console.warn(message, error),
             confirm: message => spConfirm({ title: String(message).includes('收藏') ? '删除收藏' : '删除标签', body: message }),
+            selectMany: options => customDialog.selectMany(options),
             svg: cls => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/></svg>`,
         },
     });
@@ -3268,6 +3284,25 @@ function injectModal() {
         e.stopPropagation();
         const idx = Number($(this).attr('data-line-idx'));
         if (Number.isInteger(idx)) linesFeature.actions.pin(idx);
+    });
+    $inAll('#sp-body, #sp-lines-wrap, #sp-outline-wrap').on('click.spManualActionMenu', '.sp-action-menu-toggle', function (e) {
+        e.stopPropagation(); const menu = $(this).closest('.sp-action-menu').get(0); const open = !$(menu).hasClass('sp-action-menu-open'); closeActionMenus(menu); $(menu).toggleClass('sp-action-menu-open', open).find('.sp-action-menu-list').attr('hidden', !open).end().find('.sp-action-menu-toggle').attr('aria-expanded', String(open));
+    }).on('click.spManualActionMenu', '.sp-action-menu-item', function (e) {
+        e.stopPropagation(); const item = $(this); const menu = item.closest('.sp-action-menu'); const action = item.attr('data-action'); const idx = Number(menu.attr('data-line-idx') ?? menu.attr('data-idx')); const day = menu.attr('data-day');
+        closeActionMenus();
+        if (action === 'point-edit') return pointActions.editDescription(day === 'future' ? 'future' : Number(day), Number(menu.attr('data-ev')), { view: currentView, charName: charViewName });
+        if (action === 'point-pin') return triggerTogglePointPin(day === 'future' ? 'future' : Number(day), Number(menu.attr('data-ev')));
+        if (action === 'point-delete') return triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), Number(menu.attr('data-ev')), { view: currentView, charName: charViewName });
+        if (action === 'point-inject') return injectToST(_injectTexts[menu.attr('data-iid')]);
+        if (action === 'line-edit') return linesFeature.actions.edit(idx);
+        if (action === 'line-pin') return linesFeature.actions.pin(idx);
+        if (action === 'line-delete') return linesFeature.actions.delete(idx);
+        if (action === 'line-inject') return injectToST(_injectTexts[menu.attr('data-iid')]);
+        if (action === 'outline-edit') return outlineFeature.actions.editScene(idx - 1);
+        if (action === 'outline-current') return outlineFeature.actions.toggleCursor(idx);
+        if (action === 'outline-inject') return injectToST(outlineFeature.ui.getInjectText(menu.attr('data-iid')));
+        if (action === 'outline-copy') return copyPlainText(outlineFeature.ui.getCopyText(menu.attr('data-cid')));
+        if (action === 'outline-delete') return outlineFeature.actions.deleteBeat(idx - 1);
     });
     // Per-point lock/unlock toggle (schedule panel only; pin 存 raw、机制对齐线，无楼内块)。
     $in('#sp-body').on('click', '.sp-point-pin-toggle', function (e) {

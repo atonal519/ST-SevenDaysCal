@@ -176,6 +176,8 @@ export function createOutlineUi(host = {}) {
         bind,
         makeInjectButton,
         makeCopyButton,
+        getInjectText: id => injectTexts.get(String(id)),
+        getCopyText: id => copyTexts.get(String(id)),
         setOutline,
         setLoading,
         showGenerationError,

@@ -2586,6 +2586,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-overflow: ellipsis;
     white-space  : nowrap;
 }
+.sp-outline-wrap .sp-beat-head > .sp-beat-type {
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+}
 .sp-line-card .sp-beat-type {
     flex-basis: auto;
     max-width : 8em;

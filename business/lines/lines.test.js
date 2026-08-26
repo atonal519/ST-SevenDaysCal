@@ -8,11 +8,28 @@ import { createLinesLifecycle } from './lifecycle.js';
 import { createLinesInjectionController } from './injection.js';
 import { createSwipeLinesStore } from './swipe-store.js';
 import { createLinesActions } from './actions.js';
-import { mergePinned } from './mutations.js';
+import { mergePinned, editLineDescription, editLineFields } from './mutations.js';
 import { activeLines, buildLinesInjection } from './strategy.js';
 import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections } from './adult.js';
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
+
+test('line combined edit updates Desc and Next in one raw mutation', () => {
+    const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc: 旧描述\nNext: 旧下一步\n</storylines_widget>';
+    const result = editLineFields(raw, 0, { desc: ' 新描述 ', next: ' 新下一步 ' });
+    assert.equal(result.ok, true); assert.match(result.raw, /Desc: 新描述\nNext: 新下一步/);
+});
+test('line edit keeps Next inside the selected Line block and handles empty fields', () => {
+    const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc:\nNext:\nLine: B|推进|执行|1|今天|world|false|false\nDesc: B desc\nNext: B next\n</storylines_widget>';
+    const filled = editLineFields(raw, 0, { desc: 'A desc', next: 'A next' });
+    assert.equal(filled.ok, true);
+    assert.match(filled.raw, /Desc: A desc\nNext: A next\nLine: B/);
+    assert.match(filled.raw, /Desc: B desc\nNext: B next/);
+    const cleared = editLineFields(filled.raw, 0, { desc: '', next: '' });
+    assert.equal(cleared.ok, true);
+    assert.doesNotMatch(cleared.raw, /Desc: A desc|Next: A next/);
+    assert.match(cleared.raw, /Desc: B desc\nNext: B next/);
+});
 import { bindVectorTickets } from './vectors/bind.js';
 import { enforceLineCapacity } from './capacity.js';
 import { inlineState } from './inline.js';
@@ -20,6 +37,11 @@ import { inlineState } from './inline.js';
 const raw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
 const freshRaw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
+test('line description edit only changes Desc and normalizes whitespace while preserving identity fields', () => {
+    const source = serializeLines([{ name: '线', type: '冲突', stage: '执行', level: '3', when: '今天', agency: 'player', stall: true, pin: true, adult: true, cue: 'bad', desc: '旧', next: '下一步' }]);
+    const result = editLineDescription(source, 0, ' 新的\n  描述 '); assert.equal(result.ok, true); const line = parseLines(result.raw)[0];
+    assert.equal(line.desc, '新的 描述'); assert.equal(line.name, '线'); assert.equal(line.type, '冲突'); assert.equal(line.stage, '执行'); assert.equal(line.stall, true); assert.equal(line.pin, true); assert.equal(line.adult, true); assert.equal(line.next, '下一步');
+});
 test('release schema accepts complete output and preserves uncapped narrative', () => {
     const result = validateLinesResponse(raw);
     assert.equal(result.ok, true);

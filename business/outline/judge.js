@@ -17,6 +17,7 @@ export function createOutlineJudge({
     onCursorChanged,
     toast,
     logDiagnostic,
+    isEditing = () => false,
 } = {}) {
     let owner = null;
     let busy = false;
@@ -56,7 +57,7 @@ export function createOutlineJudge({
             owner = null;
             busy = false;
         }
-        if (busy) return { status: 'skipped' };
+        if (busy || isEditing()) return { status: 'skipped' };
         const target = repository.capture();
         const saved = repository.readOutline(target);
         if (!saved?.raw) return { status: 'skipped' };
@@ -113,6 +114,7 @@ export function createOutlineJudge({
     };
 
     const relocate = async (promptAddon = '', externalSignal = null) => {
+        if (isEditing()) return { status: 'skipped' };
         const target = repository.capture();
         const saved = repository.readOutline(target);
         if (!saved?.raw) return { status: 'skipped' };

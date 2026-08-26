@@ -13,6 +13,7 @@ import { vectorGlyphSvg } from './vectors/glyph.js';
 import { linesViewModel } from './render.js';
 import { inlineState, prefixNext } from './inline.js';
 import { classifyRenderedFloor, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
+import { renderActionMenu } from '../utils/action-menu.js';
 
 const LINE_EDGE_COLORS = Object.freeze({
     ordinary: '#6aab8a',
@@ -81,7 +82,14 @@ export function createLinesFeature(env = {}) {
             if (l.desc) parts.push(l.desc);
             if (l.next) parts.push(prefixNext(l.next, l.stall));
             const next = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</span></div>` : '';
-            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${env.makeInjectBtn?.(parts.join('\n')) || ''}<button class="sp-line-pin-toggle" data-line-idx="${i}" title="${l.pin ? '解锁' : '锁定'}"><i class="fa-solid fa-${l.pin ? 'lock' : 'lock-open'}"></i></button><button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${titleHtml('sp-beat-title', l)}${l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : ''}${next}</div>`;
+            const inject = env.makeInjectBtn?.(parts.join('\n')) || ''; const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
+            const actions = renderActionMenu('line', [
+                { action: 'line-edit', icon: 'fa-pen', label: '编辑', title: '编辑这条线' },
+                { action: 'line-pin', icon: l.pin ? 'fa-lock-open' : 'fa-lock', label: l.pin ? '解锁' : '锁定', title: l.pin ? '解锁这条线' : '锁定这条线' },
+                { action: 'line-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
+                { action: 'line-delete', icon: 'fa-trash', label: '删除', title: '删除这条线' },
+            ], env.escapeHtml, env.escapeAttr).replace('data-menu-id="line"', `data-menu-id="line" data-line-idx="${i}" data-iid="${iid}"`);
+            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${titleHtml('sp-beat-title', l)}${l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : ''}${next}</div>`;
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
@@ -141,10 +149,16 @@ export function createLinesFeature(env = {}) {
         if (env.isPanelActive?.()) refreshPanel();
         return true;
     };
+    const canonicalMatches = baseline => {
+        const hasSaved = typeof env.readSaved === 'function';
+        const saved = hasSaved ? (env.readSaved() || {}) : { raw: env.readRaw?.() || '' };
+        if (!hasSaved && !String(saved.raw || '')) return true;
+        return !!baseline && String(saved.raw || '') === String(baseline.raw || '') && (!hasSaved || (Number(saved.ts) || null) === (Number(baseline.ts) || null));
+    };
     const abortGeneration = ({ restore = true } = {}) => {
         const owner = owners.invalidate('lines-generation');
         runtime.abort();
-        if (restore && owner?.baseline && owner.baseline.chatId === env.chatId?.()) env.restoreBaseline?.(owner.baseline);
+        if (restore && !env.isEditing?.() && owner?.baseline && owner.baseline.chatId === env.chatId?.() && canonicalMatches(owner.baseline)) env.restoreBaseline?.(owner.baseline);
     };
     const rerunSwipe = async ({ mesId, forceRegen = false } = {}) => {
         const swipe = env.swipeEnv || {};
@@ -152,13 +166,17 @@ export function createLinesFeature(env = {}) {
         if (!cfg.url || !cfg.key) return;
         const chatId = swipe.chatId?.();
         const swipeId = Number(swipe.swipeId?.(mesId) ?? 0);
-        if (!forceRegen && applyStoredSwipe({ chatId, mesId, swipeId, key: swipe.key?.(), writeStore: swipe.writeStore, render: swipe.render, syncInline: swipe.syncInline })) return;
+        if (env.isEditing?.()) return;
+        const expectedSaved = env.readSaved?.() || env.generationEnv?.readSaved?.() || null;
+        const expectedCanonical = expectedSaved ? { raw: String(expectedSaved.raw || ''), ts: Number(expectedSaved.ts) || null } : (env.readRaw?.() ? { raw: env.readRaw(), ts: null } : null);
+        if (!forceRegen && applyStoredSwipe({ chatId, mesId, swipeId, key: swipe.key?.(), writeStore: swipe.writeStore, render: swipe.render, syncInline: swipe.syncInline, expectedCanonical })) return;
         const rec = swipeStore.read(chatId, mesId);
-        let baseline = rec?.baseline;
-        if (forceRegen && baseline == null) baseline = swipe.previousBaseline?.(Number(mesId)) || null;
+        let baseline = forceRegen ? (env.readSaved?.() || env.generationEnv?.readSaved?.() || (env.readRaw?.() ? { raw: env.readRaw?.(), ts: null } : null)) : rec?.baseline;
+        if (forceRegen && baseline && typeof baseline === 'object') baseline = { raw: String(baseline.raw || ''), ts: Number(baseline.ts) || null };
+        if (forceRegen && !baseline) baseline = null;
         if (baseline == null) return;
         if (runtime.busy) runtime.abort();
-        return generation?.run?.(true, { mesId: Number(mesId), swipeId, baselineRaw: baseline, forceReroll: true });
+        return generation?.run?.(true, { mesId: Number(mesId), swipeId, baselineRaw: typeof baseline === 'object' ? baseline.raw : baseline, forceReroll: true });
     };
     const onMessageReceived = ({ messageId, type } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return false;
@@ -244,10 +262,17 @@ export function createLinesFeature(env = {}) {
         renderBody(body);
         return body;
     };
-    const applyStoredSwipe = ({ chatId, mesId, swipeId, key, writeStore, render, syncInline } = {}) => {
+    const applyStoredSwipe = ({ chatId, mesId, swipeId, key, writeStore, render, syncInline, expectedCanonical } = {}) => {
+        if (env.isEditing?.()) return false;
         const rec = swipeStore.read(chatId, mesId);
         const hit = rec?.swipes?.[String(swipeId)];
-        if (hit == null || !key || typeof writeStore !== 'function') return false;
+        if (hit == null || !key || typeof writeStore !== 'function' || !rec?.baseline) return false;
+        const hasSaved = typeof env.readSaved === 'function' || typeof env.generationEnv?.readSaved === 'function';
+        const saved = typeof env.readSaved === 'function' ? (env.readSaved() || {}) : (env.generationEnv?.readSaved?.() || {});
+        const current = hasSaved ? { raw: String(saved.raw || ''), ts: Number(saved.ts) || null } : { raw: env.readRaw?.() || '', ts: null };
+        if (expectedCanonical && (current.raw !== String(expectedCanonical.raw || '') || (expectedCanonical.ts != null && current.ts !== expectedCanonical.ts))) return false;
+        if (hasSaved && ![rec.baseline, ...Object.values(rec.swipes || {})].includes(current.raw)) return false;
+        if (!hasSaved && current.raw && ![rec.baseline, ...Object.values(rec.swipes || {})].includes(current.raw)) return false;
         writeStore(key, { raw: hit, ts: Date.now() });
         runtime.cache(hit);
         render?.(hit);

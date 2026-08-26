@@ -32,6 +32,24 @@ export function parseOutline(raw) {
     return beats;
 }
 
+import { normalizeEditableText } from '../utils/text-edit.js';
+
+// 仅替换指定 Beat 的 Scene 行；不重新序列化，因而保留未知字段与原始包装。
+export function editOutlineScene(raw, index, value) {
+    const source = String(raw || ''); const widget = /<outline_widget\b[^>]*>([\s\S]*?)<\/outline_widget\s*>/i.exec(source); const before = widget ? source.slice(0, widget.index + widget[0].indexOf(widget[1])) : ''; const after = widget ? source.slice(widget.index + widget[0].indexOf(widget[1]) + widget[1].length) : ''; const content = widget ? widget[1] : source; const lines = content.split('\n'); const starts = [];
+    lines.forEach((line, lineIndex) => { if (/^\s*(?:[#>*-]\s*)*Beat\s*[:：]/i.test(line)) starts.push(lineIndex); });
+    const start = starts[Number(index)], end = starts[Number(index) + 1] ?? lines.length;
+    if (start == null) return { ok: false, reason: 'not-found', raw };
+    const normalized = normalizeEditableText(value); let scene = -1, insert = end;
+    for (let i = start + 1; i < end; i++) {
+        if (/^\s*Scene\s*[:：]/i.test(lines[i])) scene = i;
+        else if (insert === end && /^\s*(?:Subtext|Think)\s*[:：]/i.test(lines[i])) insert = i;
+    }
+    if (scene >= 0) { if (normalized) lines[scene] = lines[scene].replace(/^(\s*)Scene\s*[:：].*$/i, `$1Scene: ${normalized}`); else lines.splice(scene, 1); }
+    else if (normalized) lines.splice(insert, 0, `Scene: ${normalized}`);
+    return { ok: true, raw: widget ? before + lines.join('\n') + after : lines.join('\n'), value: normalized };
+}
+
 export function deleteOutlineBeatFromRaw(raw, index) {
     const source = String(raw || '');
     const widget = /<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i.exec(source);

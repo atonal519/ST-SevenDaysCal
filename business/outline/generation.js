@@ -13,6 +13,7 @@ export function createOutlineGeneration({
     settings,
     openSettings,
     now = () => Date.now(),
+    isEditing = () => false,
 } = {}) {
     let owner = null;
     let busy = false;
@@ -43,7 +44,7 @@ export function createOutlineGeneration({
     };
 
     const trigger = async (apiOptions = { reroll: true, module: 'outline' }) => {
-        if (busy) return { status: 'skipped' };
+        if (busy || isEditing()) return { status: 'skipped' };
         const target = repository.capture();
         if (!target?.chatId) return { status: 'skipped' };
         if (precheck && !await precheck()) return { status: 'cancelled' };
@@ -74,7 +75,7 @@ export function createOutlineGeneration({
                 historyLimit: 3,
                 options: apiOptions,
             });
-            if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
+            if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!String(raw || '').trim()) throw new Error('AI 未返回可保存的面内容');
             if (!repository.commitOutline(target, { raw, ts: now(), cursor: 1 }, baseline)) return { status: 'cancelled' };
             finish(task);

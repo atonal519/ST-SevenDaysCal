@@ -1,4 +1,5 @@
 import { parseOutline } from './schema.js';
+import { renderActionMenu } from '../utils/action-menu.js';
 
 export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton, makeCopyButton } = {}) {
     const esc = value => escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
@@ -29,6 +30,13 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
                 ? `<span class="sp-beat-badge sp-beat-badge-cur">进行中</span>`
                 : next ? `<span class="sp-beat-badge sp-beat-badge-next">预计下一步</span>` : '';
             const setCurrent = `<button class="sp-beat-setcur${current ? ' sp-beat-setcur-on' : ''}" data-idx="${index + 1}" title="${current ? '当前剧情点（再点取消狙击）' : '设为当前剧情点'}"><i class="fa-solid fa-location-crosshairs"></i></button>`;
+            const actions = renderActionMenu('outline', [
+                { action: 'outline-edit', icon: 'fa-pen', label: '编辑', title: '编辑这个面' },
+                { action: 'outline-current', icon: current ? 'fa-location-dot' : 'fa-location-crosshairs', label: current ? '取消当前' : '设为当前', title: current ? '取消当前剧情点' : '设为当前剧情点' },
+                { action: 'outline-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
+                { action: 'outline-copy', icon: 'fa-copy', label: '复制', title: '复制这一步' },
+                { action: 'outline-delete', icon: 'fa-trash', label: '删除', title: '删除这个面' },
+            ], escapeHtml, value => String(value ?? '')).replace('data-menu-id="outline"', `data-menu-id="outline" data-idx="${index + 1}" data-iid="${injectButton.match(/data-iid="([^"]+)"/)?.[1] || ''}" data-cid="${copyButton.match(/data-cid="([^"]+)"/)?.[1] || ''}"`);
             return `
         <div class="sp-beat${highlight}">
             <div class="sp-beat-head">
@@ -36,7 +44,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
                 ${badge}
                 <span class="sp-beat-time">${esc(beat.time)}</span>
                 ${beat.type ? `<span class="sp-beat-type">${esc(beat.type)}</span>` : ''}
-                <span class="sp-beat-actions">${setCurrent}${injectButton}${copyButton}<button class="sp-beat-delete" data-idx="${index}" title="删除此节点"><i class="fa-solid fa-trash"></i></button></span>
+                <span class="sp-beat-actions">${actions}</span>
             </div>
             ${beat.line ? `<span class="sp-beat-linerow">${esc(beat.line)}</span>` : ''}
             <div class="sp-beat-title">${esc(beat.title)}</div>

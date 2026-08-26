@@ -5,11 +5,13 @@ import { createOutlineInjection } from './injection.js';
 import { createOutlineJudge } from './judge.js';
 import { createOutlineRenderer } from './render.js';
 import { createOutlineRepository } from './repository.js';
-import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline } from './schema.js';
+import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline, editOutlineScene } from './schema.js';
 import { createOutlineUi } from './ui.js';
 
 export function createOutlineFeature(env = {}) {
     let chatRevision = 0;
+    let editing = false;
+    let editToken = null;
     const captureIdentity = () => {
         const chatId = String(env.context?.()?.chatId ?? '');
         return createOutlineIdentity({
@@ -60,6 +62,7 @@ export function createOutlineFeature(env = {}) {
         injection,
         toast: (message, error) => ui.toast(message, error),
         logDiagnostic: env.logDiagnostic,
+        isEditing: () => editing,
         onCursorChanged: ({ target }) => { if (ui.isOutlineMode()) refreshPanel(target); },
     });
     const generation = createOutlineGeneration({
@@ -75,6 +78,7 @@ export function createOutlineFeature(env = {}) {
         settings: env.settings,
         openSettings: env.openSettings,
         now: env.now,
+        isEditing: () => editing,
     });
     const chat = createOutlineChat({
         repository,
@@ -90,7 +94,27 @@ export function createOutlineFeature(env = {}) {
         now: env.now,
     });
     const actions = Object.freeze({
+        async editScene(index) {
+            if (editing || generation.busy || judge.busy) return false;
+            const target = repository.capture(); const saved = repository.readOutline(target); const beat = parseOutline(saved?.raw || '')[Number(index)];
+            if (!beat) return false;
+            const baseline = repository.baseline(target);
+            if (editing || env.isEditing?.()) return false;
+            const token = Symbol('outline-edit'); editToken = token; editing = true;
+            let value;
+            try {
+                value = await env.promptTextarea?.({ title: `编辑「${beat.title || '未命名'}」`, initialValue: beat.scene || '', placeholder: '填写这一面的场景描述…' });
+            } finally {
+                if (editToken === token) { editToken = null; editing = false; }
+            }
+            if (value === null || value === undefined) return false;
+            if (!repository.matches(target, baseline)) { ui.toast('面已变化，请重新打开编辑', true); return false; }
+            const result = editOutlineScene(saved.raw, Number(index), value); if (!result.ok) return false;
+            if (!repository.commitOutline(target, { raw: result.raw, ts: env.now?.() ?? Date.now(), cursor: baseline.cursor }, baseline)) return false;
+            injection.refresh(target); if (ui.isOutlineMode()) refreshPanel(target); return true;
+        },
         toggleCursor(cursor) {
+            if (editing) return false;
             const target = repository.capture();
             const saved = repository.readOutline(target);
             if (!saved?.raw) return false;
@@ -102,7 +126,7 @@ export function createOutlineFeature(env = {}) {
             return true;
         },
         async deleteBeat(index) {
-            if (generation.busy) return false;
+            if (editing || generation.busy || judge.busy) return false;
             const target = repository.capture();
             const saved = repository.readOutline(target);
             const beat = parseOutline(saved?.raw || '')[index];
@@ -141,6 +165,7 @@ export function createOutlineFeature(env = {}) {
     };
     const onChatChanged = ({ lastSeen = -1 } = {}) => {
         chatRevision += 1;
+        editing = false;
         generation.abort();
         judge.onChatChanged({ lastSeen });
         chat.onChatChanged();

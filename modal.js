@@ -377,5 +377,34 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
         });
     }
 
-    return Object.freeze({ confirm, choose, prompt, selectMany, selectOne, selectOneAsync, cancelActive });
+    function promptTextarea({ title = '', body = '', initialValue = '', placeholder = '', maxLength = 4000, rows = 5, confirmText = '保存', cancelText = '取消', validate } = {}) {
+        return new Promise(resolve => {
+            prepareDialog();
+            const limit = Number(maxLength) > 0 ? Number(maxLength) : 4000;
+            const $overlay = $(`<div id="${OVERLAY_ID}" class="sp-dialog-overlay"><div class="sp-dialog-sheet" role="dialog" aria-modal="true" aria-labelledby="sp-dialog-title"><div id="sp-dialog-title" class="sp-dialog-head">${escapeHtml(title)}</div>${body ? `<div class="sp-dialog-body">${escapeHtml(body)}</div>` : ''}<textarea class="sp-dialog-custom-input" rows="${normalizeTextareaRows(rows)}" maxlength="${limit}" placeholder="${escapeHtml(placeholder)}">${escapeHtml(initialValue)}</textarea><div class="sp-dialog-input-error" aria-live="polite"></div><div class="sp-dialog-actions"><button class="sp-dialog-button sp-dialog-button-secondary sp-dialog-cancel" type="button">${escapeHtml(cancelText)}</button><button class="sp-dialog-button sp-dialog-button-primary sp-dialog-submit" type="button">${escapeHtml(confirmText)}</button></div></div></div>`);
+            const session = mountDialog($overlay, resolve);
+            const submit = () => { const value = String($overlay.find('.sp-dialog-custom-input').val() ?? ''); const error = typeof validate === 'function' ? validate(value) : ''; if (typeof error === 'string' && error) { $overlay.find('.sp-dialog-input-error').html(`<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml(error)}`); return; } session.finish(value); };
+            $overlay.find('.sp-dialog-submit').on('click', submit); $overlay.find('.sp-dialog-cancel').on('click', session.close); $overlay.find('.sp-dialog-custom-input').on('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); session.close(); } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } });
+            setTimeout(() => $overlay.find('.sp-dialog-custom-input').trigger('focus'), 0);
+        });
+    }
+
+    function promptFields({ title = '', body = '', fields = [], confirmText = '保存', cancelText = '取消', validate } = {}) {
+        if (!Array.isArray(fields) || !fields.length) return Promise.resolve(null);
+        return new Promise(resolve => {
+            prepareDialog();
+            const controls = fields.map((field, index) => {
+                const name = String(field?.name || `field${index}`); const label = escapeHtml(field?.label || name); const value = escapeHtml(field?.value ?? '');
+                const control = field?.type === 'input' ? `<input class="sp-dialog-input" data-dialog-field="${escapeHtml(name)}" value="${value}" placeholder="${escapeHtml(field?.placeholder || '')}" maxlength="${Number(field?.maxLength) > 0 ? Number(field.maxLength) : 4000}">` : `<textarea class="sp-dialog-custom-input" data-dialog-field="${escapeHtml(name)}" rows="${normalizeTextareaRows(field?.rows || 3)}" maxlength="${Number(field?.maxLength) > 0 ? Number(field.maxLength) : 4000}" placeholder="${escapeHtml(field?.placeholder || '')}">${value}</textarea>`;
+                return `<label class="sp-dialog-field"><span>${label}</span>${control}</label>${index < fields.length - 1 ? '<div class="sp-dialog-divider"></div>' : ''}`;
+            }).join('');
+            const $overlay = $(`<div id="${OVERLAY_ID}" class="sp-dialog-overlay"><div class="sp-dialog-sheet" role="dialog" aria-modal="true" aria-labelledby="sp-dialog-title"><div id="sp-dialog-title" class="sp-dialog-head">${escapeHtml(title)}</div>${body ? `<div class="sp-dialog-body">${escapeHtml(body)}</div>` : ''}<div class="sp-dialog-fields">${controls}</div><div class="sp-dialog-input-error" aria-live="polite"></div><div class="sp-dialog-actions"><button class="sp-dialog-button sp-dialog-button-secondary sp-dialog-cancel" type="button">${escapeHtml(cancelText)}</button><button class="sp-dialog-button sp-dialog-button-primary sp-dialog-submit" type="button">${escapeHtml(confirmText)}</button></div></div></div>`);
+            const session = mountDialog($overlay, resolve);
+            const submit = () => { const result = {}; $overlay.find('[data-dialog-field]').each(function () { result[String($(this).attr('data-dialog-field'))] = String($(this).val() ?? ''); }); const error = typeof validate === 'function' ? validate(result) : ''; if (typeof error === 'string' && error) { $overlay.find('.sp-dialog-input-error').text(error); return; } session.finish(result); };
+            $overlay.find('.sp-dialog-submit').on('click', submit); $overlay.find('.sp-dialog-cancel').on('click', session.close); $overlay.find('[data-dialog-field]').on('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); session.close(); } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } });
+            setTimeout(() => $overlay.find('[data-dialog-field]').first().trigger('focus'), 0);
+        });
+    }
+
+    return Object.freeze({ confirm, choose, prompt, promptTextarea, promptFields, selectMany, selectOne, selectOneAsync, cancelActive });
 }
