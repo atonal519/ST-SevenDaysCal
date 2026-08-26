@@ -1000,9 +1000,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     --sp-settings-content-indent: calc(var(--sp-settings-inline-indent) + var(--sp-settings-disclosure-width) + var(--sp-settings-disclosure-gap));
 }
 .sp-settings-section {
-    border-bottom: 1px solid var(--sp-divider);
+    border-bottom: none;
 }
-.sp-settings-section:last-child { border-bottom: none; }
 
 .sp-settings-section-title {
     display      : flex;
@@ -1038,6 +1037,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 静态设置组仍沿用同一层级和留白，但不显示折叠提示。 */
 .sp-settings-section-static > .sp-settings-section-title {
     cursor: default;
+    padding-left: var(--sp-settings-content-indent);
 }
 .sp-settings-section-static > .sp-settings-section-title::before { display: none; }
 .sp-settings-section-static > .sp-settings-section-title:hover { background: transparent; }
@@ -1064,7 +1064,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-settings-total-row .sp-cfg-hint { margin: 0; padding-left: 24px; }
 
 /* ─── Settings layers (五组收纳盒) ───────────────────────────────────────────── */
-.sp-settings-layer:not(:last-child) { border-bottom: 1px solid var(--sp-divider); }
+.sp-settings-layer:not(:last-child) { border-bottom: none; }
 .sp-settings-layer-title {
     display       : flex;
     align-items   : center;
@@ -1103,7 +1103,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-settings-layer-static > .sp-settings-layer-title::before { display: none; }
 .sp-settings-layer-static > .sp-settings-layer-title:hover { background: var(--sp-hover-bg); }
-.sp-settings-layer-body { padding: 8px 0 4px; }
+.sp-settings-layer-body { padding: 0; }
 .sp-settings-subsection {
     margin: 6px 0;
     border: 1px solid var(--sp-divider);
@@ -1138,6 +1138,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 嵌套 section 读作层的子项：标题略缩进，层内最后一节去掉分隔线让层色带干净 */
 .sp-settings-layer-body > .sp-settings-section:last-child { border-bottom: none; }
 .sp-settings-layer-body > .sp-settings-section > .sp-settings-section-title { padding-left: var(--sp-settings-inline-indent); }
+#sp-inject-master-section > .sp-settings-section-title {
+    padding-left: var(--sp-settings-content-indent);
+}
 
 /* 提示词抽屉是连续的编辑列表；内部间距由容器统一管理，避免零散 inline margin。 */
 #sp-prompts-section > .sp-settings-section-body { gap: 6px; padding: 10px 12px 16px; }
@@ -1169,9 +1172,45 @@ select.sp-input { appearance: none; cursor: pointer; }
 #sp-prompts-section .sp-settings-subsection[open] {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 4px;
 }
 #sp-prompts-section .sp-settings-subsection[open] > summary { margin-bottom: 0; }
+
+/* 标签清洗：说明与输入项成组排列，避免统一 gap 把上下关系拉散。 */
+#sp-prompts-section .sp-prompt-tags[open] {
+    gap: 0;
+    margin-top: 2px;
+    margin-bottom: 2px;
+}
+#sp-prompts-section .sp-prompt-tags > .sp-cfg-hint:first-of-type {
+    margin-bottom: 6px;
+}
+#sp-prompts-section .sp-prompt-tags > .sp-tag-opt {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+#sp-prompts-section .sp-prompt-tags > .sp-tag-opt + .sp-cfg-hint {
+    margin-top: 4px;
+    margin-bottom: 6px;
+}
+
+#sp-prompts-section .sp-prompt-global[open] {
+    gap: 0;
+}
+#sp-prompts-section .sp-prompt-global > textarea {
+    margin-top: 10px !important;
+}
+
+/* 各提示词编辑项：上一行说明与下方文本框必须有明确的视觉断开。 */
+#sp-prompts-section .sp-prompt-storyclock > textarea,
+#sp-prompts-section .sp-prompt-space > textarea,
+#sp-prompts-section .sp-prompt-theater-write > textarea {
+    margin-top: 8px !important;
+}
+#sp-prompts-section .sp-prompt-space > .sp-cfg-label,
+#sp-prompts-section .sp-prompt-theater-write > .sp-cfg-label {
+    margin-bottom: 0;
+}
 
 /* 提示词胶囊使用本区专属箭头，固定槽位避免标题文字随状态跳动。 */
 #sp-prompts-section .sp-settings-subsection > summary {
