@@ -3019,6 +3019,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     font        : inherit;
     box-sizing  : border-box;
 }
+.sp-root .sp-chat-msg-editor {
+    min-height: 7em;
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
+}
 .sp-chat-msg-actions.sp-chat-msg-editing {
     opacity   : 1;
     align-self: flex-end;
@@ -3581,6 +3586,38 @@ select.sp-input { appearance: none; cursor: pointer; }
     display       : flex;
     flex-direction: column;
     gap           : 10px;
+}
+.sp-dialog-editor-sheet {
+    width     : min(680px, calc(100vw - 40px));
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+}
+.sp-dialog-editor-sheet .sp-dialog-custom-input {
+    min-height: 120px;
+    resize    : vertical;
+    overflow-y: auto;
+}
+.sp-dialog-editor-fields {
+    display       : flex;
+    flex-direction: column;
+}
+.sp-dialog-editor-fields .sp-dialog-field {
+    display       : flex;
+    flex-direction: column;
+    min-width     : 0;
+    gap           : 6px;
+}
+.sp-dialog-editor-fields .sp-dialog-field > span { font-size: var(--sp-fs-92); }
+.sp-dialog-editor-fields .sp-dialog-divider {
+    height    : 1px;
+    margin    : 14px 0;
+    background: var(--sp-divider);
+}
+@media (max-width: 640px) {
+    .sp-dialog-editor-sheet {
+        width     : 100%;
+        max-height: calc(100dvh - 20px);
+    }
 }
 .sp-dialog-head {
     font-size  : var(--sp-fs-95);
@@ -4304,6 +4341,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height: 1.5;
     font-family: var(--sp-font);
 }
+.sp-root .sp-theater-textarea {
+    min-height: 180px;
+    max-height: 50dvh;
+    overflow-y: auto;
+}
 .sp-theater-input-area .sp-theater-btn-row {
     display        : flex;
     gap            : 8px;
@@ -4630,6 +4672,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     line-height: 1.5;
     font-family: var(--sp-font);
 }
+.sp-root .sp-theater-cfg-textarea {
+    min-height: 140px;
+    max-height: 45dvh;
+    overflow-y: auto;
+}
 /* ── Template manager (settings) ── */
 .sp-theater-tpl-mgr {
     display       : flex;
@@ -4721,6 +4768,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     resize     : vertical;
     line-height: 1.5;
     font-family: var(--sp-font);
+}
+.sp-root .sp-theater-tpl-add-row textarea {
+    min-height: 120px;
+    max-height: 40dvh;
+    overflow-y: auto;
 }
 .sp-theater-tpl-add-row #sp-theater-tpl-add { align-self: flex-end; }
 

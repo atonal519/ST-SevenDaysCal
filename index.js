@@ -2623,7 +2623,7 @@ function injectModal() {
                                     </div>
                                     <p class="sp-cfg-hint">留空则使用酒馆当前模型</p>
 
-                                    <!-- API 存储快切：点假框→就地展开内联预设列表（非原生 select 弹窗，避开 WebView 里弹层被插件盖住）；选一项填入下方输入框（仍需点保存生效）；＋新增按域名自动命名、🗑删除，均即时落 settings.json -->
+                                    <!-- API 存储快切：点假框→就地展开内联预设列表（非原生 select 弹窗，避开 WebView 里弹层被插件盖住）；选一项填入下方输入框即生效；＋新增按域名自动命名、🗑删除，均即时落 settings.json -->
                                     <div class="sp-preset-row">
                                         <button type="button" id="sp-preset-box" class="sp-preset-box" title="选择 API 预设">
                                             <span id="sp-preset-label" class="sp-preset-label">选择预设…</span>
@@ -3594,6 +3594,7 @@ function injectModal() {
         const $btn      = $(this);
         const isSideTab = $btn.hasClass('sp-side-tab');
         const isSubBtn  = $btn.hasClass('sp-sub-btn');
+        if (isSideTab && settingsOpen) toggleSettings();
 
         // 离开棱时统一走 UI 生命周期出口，避免全屏滚动锁和 Esc listener 跟到其他侧栏。
         if (isSideTab && theaterMode && view !== 'theater') theaterFeature.leave();
@@ -3767,12 +3768,30 @@ function injectModal() {
         }
     });
 
-    $in('#sp-cfg-save').on('click',      saveSettings);
+    $in('#sp-cfg-save').on('click', function () {
+        const $msg = $in('#sp-cfg-msg');
+        $msg.text('已自动保存 ✓');
+        clearTimeout(this._autoSaveHintTimer);
+        this._autoSaveHintTimer = setTimeout(() => $msg.text(''), 2000);
+        if (settingsOpen) toggleSettings();
+    });
     $in('#sp-key-toggle').on('click',    toggleKeyVisibility);
     $in('#sp-fetch-models').on('click',  fetchModels);
     bindApiPresetEvents();
     renderApiPresetList();
     renderUtilityPresetList();
+    $in('#sp-scale-row').on('change.autoSave', 'input[name="sp-lines-scale"]', function () {
+        const charKey = charStableKey(getContext());
+        if (!charKey) return;
+        setScale(charKey, this.value);
+        refreshLinesInjection();
+    });
+    $in('#sp-adult-row').on('change.autoSave', 'input[name="sp-lines-adult-mode"]', function () {
+        const charKey = charStableKey(getContext());
+        if (!charKey) return;
+        setAdultMode(charKey, this.value);
+        refreshLinesInjection();
+    });
     // 插件总开关：立刻生效——关则全隐身（藏球/清楼内块/断后台/撤注入），开则按各子开关恢复。
     // 用 stSaveSettings 立即落盘，避免用户切完立刻刷新丢状态（与 customPrompt 同理）。
     $in('#sp-plugin-enabled').on('change', function () {
@@ -3987,6 +4006,8 @@ function injectModal() {
     $in('#sp-model-list-items').on('click', '.sp-model-list-item', function () {
         const model = $(this).attr('data-model');
         $in('#sp-cfg-model').val(model);
+        getSettings().apiModel = String(model || '').trim();
+        saveSettingsDebounced();
         $inAll('.sp-model-list-item').removeClass('sp-model-list-item-active');
         $(this).addClass('sp-model-list-item-active');
     });
@@ -3996,7 +4017,14 @@ function injectModal() {
     });
     $in('#sp-cfg-key')
         .on('focus', () => { const r = $in('#sp-cfg-key').data('real'); if (r) $in('#sp-cfg-key').val(r); })
-        .on('blur',  () => { const r = $in('#sp-cfg-key').val().trim() || $in('#sp-cfg-key').data('real') || ''; if (r) $in('#sp-cfg-key').data('real', r).val(maskKey(r)); });
+        .on('input', function () { getSettings().apiKey = this.value.trim(); saveSettingsDebounced(); })
+        .on('blur', function () { const r = $in('#sp-cfg-key').val().trim(); $in('#sp-cfg-key').data('real', r).val(r ? maskKey(r) : ''); getSettings().apiKey = r; saveSettingsDebounced(); });
+    $in('#sp-cfg-url').on('input change', function () { getSettings().apiUrl = this.value.trim().replace(/\/$/, ''); saveSettingsDebounced(); });
+    $in('#sp-cfg-model').on('input change', function () { getSettings().apiModel = this.value.trim(); saveSettingsDebounced(); });
+    $in('#sp-cfg-exclude').on('input change', function () { getSettings().apiExcludeParams = parseExcludeParams(this.value); saveSettingsDebounced(); });
+    $in('#sp-cfg-timeout').on('input change', function () { const n = Number(this.value); if (!Number.isInteger(n) || n < 5 || n > 600) return; getSettings().apiTimeoutSec = n; saveSettingsDebounced(); });
+    $in('#sp-cfg-stream').on('change', function () { getSettings().apiStream = this.checked; saveSettingsDebounced(); });
+    $in('#sp-lines-interval').on('input change', function () { const n = Number(this.value); if (!Number.isInteger(n) || n < 1) return; saveLinesInterval(n); this.value = String(n); });
 
     $in('#sp-body').on('click', '.sp-tab', function () {
         const rawDay = String($(this).attr('data-day') || '').trim().toLowerCase();
@@ -4632,6 +4660,14 @@ function setDisabledKeys(charKey, disabledSet) {
     if (!charKey) return;
     getWiFilter()[charKey] = [...disabledSet];
     saveSettingsDebounced();
+}
+
+function saveCurrentWiSelection() {
+    const charKey = charStableKey(getContext());
+    if (!charKey) return;
+    const disabled = new Set();
+    $inAll('#sp-wi-list .sp-wi-cb').each(function () { if (!this.checked) disabled.add($(this).data('key')); });
+    setDisabledKeys(charKey, disabled);
 }
 
 // ─── World-book global exclusion (B方案) ─────────────────────────────────────
@@ -6792,6 +6828,7 @@ async function renderWiList() {
         }
         $card.toggleClass('sp-wi-card-off', !$cb.prop('checked'));
         syncWiSelectAll();
+        saveCurrentWiSelection();
     }).on('keydown.wi', '.sp-wi-card', function (ev) {
         if (ev.key !== ' ' && ev.key !== 'Enter') return;
         ev.preventDefault();
@@ -6800,11 +6837,13 @@ async function renderWiList() {
         $cb.prop('checked', !$cb.prop('checked'));
         $card.toggleClass('sp-wi-card-off', !$cb.prop('checked'));
         syncWiSelectAll();
+        saveCurrentWiSelection();
     }).on('change.wi', '#sp-wi-select-all', function () {
         const checked = this.checked;
         $list.find('.sp-wi-cb').prop('checked', checked);
         $list.find('.sp-wi-card').toggleClass('sp-wi-card-off', !checked);
         $list.find('.sp-wi-group-cb').prop({ checked, indeterminate: false });
+        saveCurrentWiSelection();
     }).on('change.wi', '.sp-wi-group-cb', function (ev) {
         // Per-book select-all — flip every entry in this <details> group
         ev.stopPropagation();
@@ -6814,6 +6853,7 @@ async function renderWiList() {
         $group.find('.sp-wi-card').toggleClass('sp-wi-card-off', !checked);
         this.indeterminate = false;
         syncWiSelectAll();
+        saveCurrentWiSelection();
     }).on('click.wi', '.sp-wi-group-cb', function (ev) {
         // Don't let click on the summary's checkbox also toggle <details> open/close
         ev.stopPropagation();
@@ -6983,7 +7023,7 @@ function readApiInputs() {
     };
 }
 
-// 把一套预设填回输入框（不生效，等用户点保存）。Key 走 maskKey 遮罩 + data('real') 存真值。
+// 把一套预设填回输入框。Key 走 maskKey 遮罩 + data('real') 存真值。
 function fillApiInputs(p) {
     $in('#sp-cfg-url').val(p.url || '');
     const $k = $in('#sp-cfg-key');
@@ -7032,7 +7072,7 @@ function bindApiPresetEvents() {
         $in('#sp-preset-list').slideToggle(120);
         $(this).toggleClass('sp-preset-box-open');
     });
-    // 选某预设 → 填入输入框（提示仍需点保存生效），收起列表
+    // 选某预设 → 填入输入框并立即应用，收起列表
     $in('#sp-preset-list').on('click', '.sp-preset-item', function () {
         const id = $(this).attr('data-id');
         getSettings().apiPresetActiveId = id;
@@ -7042,7 +7082,8 @@ function bindApiPresetEvents() {
         $in('#sp-preset-box').removeClass('sp-preset-box-open');
         if (!p) return;
         fillApiInputs(p);
-        showPresetHint(`已填入「${p.name}」，点下方「保存」生效`);
+        saveCfg(readApiInputs());
+        showPresetHint(`已填入并应用「${p.name}」`);
     });
 
     // 编辑一条预设（内联，无弹窗）：点 ✎ → 顺手把这条填进输入框并选中它，名字就地变输入框。
@@ -7169,45 +7210,6 @@ function autoPresetName(url) {
     const names = new Set(loadApiPresets().map(p => p.name));
     if (!names.has(base)) return base;
     for (let i = 2; ; i++) { const n = `${base}-${i}`; if (!names.has(n)) return n; }
-}
-
-function saveSettings() {
-    const $k = $in('#sp-cfg-key'), key = ($k.data('real') || $k.val()).trim();
-    saveCfg({
-        url          : $in('#sp-cfg-url').val().trim().replace(/\/$/, ''),
-        key,
-        model        : $in('#sp-cfg-model').val().trim(),
-        excludeParams: parseExcludeParams($in('#sp-cfg-exclude').val()),
-        timeoutSec   : parseInt($in('#sp-cfg-timeout').val(), 10),
-        stream       : $in('#sp-cfg-stream').is(':checked'),
-    });
-    saveLinesInterval($in('#sp-lines-interval').val());
-    saveLinesMode($in('input[name="sp-lines-mode"]:checked').val());
-    // Save world-info entry filter and narrative scale for current character
-    const ctx = getContext();
-    const charKey = charStableKey(ctx);
-    if (charKey) {
-        const disabled = new Set();
-        $inAll('#sp-wi-list .sp-wi-cb').each(function () {
-            if (!this.checked) disabled.add($(this).data('key'));
-        });
-        setDisabledKeys(charKey, disabled);
-        const scaleVal = $in('input[name="sp-lines-scale"]:checked').val() || 'auto';
-        setScale(charKey, scaleVal);
-        const adultVal = $in('input[name="sp-lines-adult-mode"]:checked').val() || 'off';
-        setAdultMode(charKey, adultVal);
-        refreshLinesInjection();
-    }
-    $k.data('real', key).val(maskKey(key)).attr('type', 'password');
-    const $m = $in('#sp-cfg-msg'); $m.text('已保存 ✓'); setTimeout(() => $m.text(''), 2000);
-    const hasApi = !!(loadCfg().url && loadCfg().key);
-    $in('#sp-settings-overlay .sp-api-notice')
-        .removeClass('sp-notice-ok sp-notice-warn')
-        .addClass(hasApi ? 'sp-notice-ok' : 'sp-notice-warn')
-        .html(`<i class="fa-solid ${hasApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
-            ${hasApi ? '已配置独立 API，后台生成不影响聊天'
-                     : '未配置独立 API：生成期间将<b>占用聊天通道</b>'}`);
-    setTimeout(() => { if (settingsOpen) toggleSettings(); }, 400);
 }
 
 function applyTheme(theme) {
