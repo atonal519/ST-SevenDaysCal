@@ -1,4 +1,4 @@
-import { parseLines } from './schema.js';
+import { parseLines, TERMINAL_LINE_STAGES } from './schema.js';
 
 export function prefixNext(next, stall = false) {
     let clean = String(next || '').trim();
@@ -20,7 +20,7 @@ export function selectInlineLines(raw, { readOnly = false, max = Number.POSITIVE
 }
 
 export function buildInlineLineText(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
-    return selectInlineLines(raw, { readOnly, max }).map(line => [
+    return selectInlineLines(raw, { readOnly, max }).filter(line => !TERMINAL_LINE_STAGES.has(line.stage)).map(line => [
         `【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`,
         line.desc,
         line.nextText,
@@ -29,9 +29,13 @@ export function buildInlineLineText(raw, { readOnly = false, max = Number.POSITI
 
 export function inlineState(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
     const lines = selectInlineLines(raw, { readOnly, max });
+    const activeCount = lines.filter(line => !TERMINAL_LINE_STAGES.has(line.stage)).length;
+    const settledCount = lines.length - activeCount;
     return {
         lines,
         count: lines.length,
+        activeCount,
+        settledCount,
         empty: lines.length === 0,
         readOnly,
         hasActions: !readOnly && lines.length > 0,

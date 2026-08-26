@@ -4,6 +4,7 @@ import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
 import { makeDiagnosticError } from '../../api/diagnostics.js';
 import { drawAdultSelections } from './adult.js';
+import { enforceLineCapacity } from './capacity.js';
 
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
@@ -61,7 +62,8 @@ export function createLinesGenerationController(env = {}) {
             const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             const merged = mergePinned(previousRaw, serializeLines(bound));
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
-            env.commit(merged.raw, { silent, owner, swipeCtx, travelContext, commitBaseline });
+            const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model });
+            env.commit(serializeLines(capacityResult.model), { silent, owner, swipeCtx, travelContext, commitBaseline });
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };

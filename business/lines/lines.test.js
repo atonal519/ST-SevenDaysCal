@@ -14,6 +14,8 @@ import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections } fr
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
 import { bindVectorTickets } from './vectors/bind.js';
+import { enforceLineCapacity } from './capacity.js';
+import { inlineState } from './inline.js';
 
 const raw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
@@ -278,6 +280,28 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     assert.doesNotMatch(calls.at(-1)[1], /终线/);
     controller.refresh();
     assert.doesNotMatch(calls.at(-1)[1], /成人模式/);
+});
+
+test('capacity keeps prior queue identities before new lines and preserves pinned extras', () => {
+    const old = Array.from({ length: 8 }, (_, i) => ({ name: `旧${i}`, pin: false }));
+    const fresh = [...old, ...Array.from({ length: 4 }, (_, i) => ({ name: `新${i}`, pin: false }))];
+    const result = enforceLineCapacity({ previousLines: old, mergedLines: fresh });
+    assert.deepEqual(result.model.map(line => line.name), [...old.map(line => line.name), '新0', '新1']);
+    const tenOld = Array.from({ length: 10 }, (_, i) => ({ name: `旧${i}`, pin: false }));
+    assert.equal(enforceLineCapacity({ previousLines: tenOld, mergedLines: [...tenOld, { name: '新', pin: false }] }).model.length, 10);
+    const pinned = enforceLineCapacity({ previousLines: tenOld, mergedLines: [...tenOld, { name: '锁', pin: true }, { name: '锁2', pin: true }] });
+    assert.equal(pinned.model.filter(line => !line.pin).length, 10);
+    assert.deepEqual(pinned.model.filter(line => line.pin).map(line => line.name), ['锁', '锁2']);
+});
+
+test('inline state separates active and settled lines while retaining settled cards', () => {
+    const source = serializeLines([
+        ...Array.from({ length: 7 }, (_, i) => ({ name: `活${i}`, type: '推进', stage: '萌芽', level: '1', when: '今天', agency: 'world', desc: '状态', next: '下一步' })),
+        ...Array.from({ length: 3 }, (_, i) => ({ name: `收${i}`, type: '推进', stage: '已完成', level: '1', when: '今天', agency: 'world', desc: '状态', next: '结束' })),
+    ]);
+    const state = inlineState(source);
+    assert.equal(state.activeCount, 7); assert.equal(state.settledCount, 3); assert.equal(state.count, 10);
+    assert.equal(state.lines.length, 10); assert.match(state.injectText, /活0/); assert.doesNotMatch(state.injectText, /收0/);
 });
 test('adult injection guidance varies by mode without changing line storage', () => {
     const lines = activeLines(raw);
