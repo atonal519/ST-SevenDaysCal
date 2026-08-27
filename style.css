@@ -6300,7 +6300,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     background    : color-mix(in oklab, var(--SmartThemeQuoteColor, #6bb6d6) 12%, rgba(128,128,128,0.06));
     border        : 1px solid color-mix(in oklab, var(--SmartThemeQuoteColor, #6bb6d6) 22%, rgba(128,128,128,0.12));
 }
-.sp-dash-today-md   { font-size: var(--sp-fs-115); font-weight: 800; line-height: 1.1; letter-spacing: 0.01em; }
+.sp-dash-today-md   { min-width: 0; max-width: 100%; display: flex; flex-direction: column; align-items: center; font-weight: 800; line-height: 1.1; letter-spacing: 0.01em; }
+.sp-dash-today-month { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--sp-fs-68); }
+.sp-dash-today-day   { font-size: var(--sp-fs-115); white-space: nowrap; }
 .sp-dash-today-wd   { font-size: var(--sp-fs-68); opacity: 0.7; margin-top: 1px; }
 .sp-dash-today-meta { font-size: var(--sp-fs-72); margin-top: 2px; opacity: 0.85; display: flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; }
 .sp-dash-today-wx   { flex: 0 0 auto; }

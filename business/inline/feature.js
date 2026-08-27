@@ -201,7 +201,7 @@ export function createInlineFeature(env = {}) {
         // 纪年位：日历描述符带 era（纪年名）时点亮，无则不撑。
         const eraHtml = calHasEra(cal) ? `<span class="sp-dash-today-era">${escapeHtml(cal.era)}</span>` : '';
         return `<div class="sp-dash-today">
-            <span class="sp-dash-today-md">${anchor.month}/${anchor.day}</span>
+            <span class="sp-dash-today-md"><span class="sp-dash-today-month">${escapeHtml(calMonthName(cal, anchor.month))}</span><span class="sp-dash-today-day">${anchor.day}日</span></span>
             <span class="sp-dash-today-wd">${wd}</span>
             ${(wxHtml || eraHtml) ? `<span class="sp-dash-today-meta">${wxHtml}${eraHtml}</span>` : ''}
         </div>`;

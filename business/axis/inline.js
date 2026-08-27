@@ -21,7 +21,7 @@ export function createAxisInlineRenderer(env = {}) {
             if (has) { hasAny = true; cover.forEach(it => coveredItems.add(it)); }
             const cls = ['sp-alm-scell']; if (has) cls.push('sp-alm-scell-has');
             const dot = has ? `<span class="sp-alm-dot sp-alm-type-${env.typeMeta(cover[0].type).cls}"></span>` : '';
-            return `<div class="${cls.join(' ')}" data-doy="${doy}"><span class="sp-alm-scell-wd">${wd}</span><span class="sp-alm-scell-md">${md.month}/${md.day}</span>${dot}</div>`;
+            return `<div class="${cls.join(' ')}" data-doy="${doy}"><span class="sp-alm-scell-wd">${wd}</span><span class="sp-alm-scell-md">${env.escapeHtml(env.monthName(cal, md.month))}${md.day}日</span>${dot}</div>`;
         }).join('');
         const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">轴</span><span class="sp-inline-count">${coveredItems.size}个日程</span></summary>`;
         const upcoming = items.map(it => ({ it, d: env.clamp(it.days, 1, env.yearLength(cal), 1) > 1 && env.itemCoversDoy(it, baseDoy, cal) ? -1 : env.daysUntil(it.month, it.day, anchor, cal) }))
