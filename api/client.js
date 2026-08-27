@@ -234,7 +234,7 @@ export async function callMemoryApi(messages, signal = null) {
 // world info is NOT auto-injected here so the beautify pass stays clean.
 export async function callTheaterApi(messages, { maxTokens = 30000, signal = null, userName = null, charName = null } = {}) {
     const cfg = loadCfg();
-    if (!cfg.url || !cfg.key) throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
+    if (!cfg.url || !cfg.key) throw makeDiagnosticError('config-missing');
     const ctx = getContext();
     if (!userName && !charName) return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: ctx?.name1 || '用户', charName: ctx?.name2 || '角色' });
     return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: userName || ctx?.name1 || '用户', charName: charName || ctx?.name2 || '角色' });

@@ -69,7 +69,6 @@ export const DEFAULT_SETTINGS = {
     memoryL0Group  : 5,    // AI floors per L0 entry
     memoryL1Group  : 10,   // L0 entries per L1 chapter
     memorySkipShort: 50,   // skip AI floors shorter than N chars
-    memMaxTokens   : 60000, // 记忆块注入 tk 预算上限（源无关）：超出则点/线/面/间取近景、历取全程等距节选，压到此值内；0=不限。默认 6w
     useBaiBaiBook  : false, // if true, pull history from 柏宝书 getInjectedHistory() and skip built-in memory entirely
     useAnima       : false, // if true, read summaries from Anima's chat-bound worldbook (anima_summary entries) and skip built-in memory
     useDatabase    : false, // if true, retrieve raw TavernDB summary entries from the selected/default worldbook
@@ -106,6 +105,11 @@ export function parseExcludeParams(text) {
     return [...new Set(String(text || '').split(/[\n,，]/).map(s => s.trim()).filter(Boolean))];
 }
 
+export function normalizeApiTimeout(value) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 5 && n <= 600 ? n : 180;
+}
+
 export function loadCfg() {
     const s = getSettings();
     return {
@@ -114,7 +118,7 @@ export function loadCfg() {
         model        : s.apiModel || '',
         excludeParams: Array.isArray(s.apiExcludeParams) ? s.apiExcludeParams : [],
         // 单次请求超时（秒），默认 180；覆盖建连+读取全程，防 socket hang up 卡死
-        timeoutSec   : Number.isFinite(s.apiTimeoutSec) && s.apiTimeoutSec > 0 ? s.apiTimeoutSec : 180,
+        timeoutSec   : normalizeApiTimeout(s.apiTimeoutSec),
         stream       : s.apiStream === true,
     };
 }
@@ -129,7 +133,7 @@ export function loadUtilityCfg() {
         key          : p.key   || '',
         model        : p.model || '',
         excludeParams: Array.isArray(p.excludeParams) ? p.excludeParams : [],
-        timeoutSec   : Number.isFinite(p.timeoutSec) && p.timeoutSec > 0 ? p.timeoutSec : 180,
+        timeoutSec   : normalizeApiTimeout(p.timeoutSec),
         stream       : p.stream === true,
     };
 }
@@ -140,7 +144,7 @@ export function saveCfg(c) {
     s.apiKey           = c.key   || '';
     s.apiModel         = c.model || '';
     s.apiExcludeParams = Array.isArray(c.excludeParams) ? c.excludeParams : [];
-    s.apiTimeoutSec    = Number.isFinite(c.timeoutSec) && c.timeoutSec > 0 ? Math.floor(c.timeoutSec) : 180;
+    s.apiTimeoutSec    = normalizeApiTimeout(c.timeoutSec);
     s.apiStream        = c.stream === true;
     saveSettingsDebounced();
 }
@@ -156,13 +160,14 @@ export function genPresetId() {
 
 export function upsertApiPreset(name, cfg, id) {
     const list = loadApiPresets();
+    const timeout = normalizeApiTimeout(cfg?.timeoutSec);
     const snap = {
         name         : String(name || '').trim() || '未命名',
         url          : cfg.url   || '',
         key          : cfg.key   || '',
         model        : cfg.model || '',
         excludeParams: Array.isArray(cfg.excludeParams) ? cfg.excludeParams : [],
-        timeoutSec   : Number.isFinite(cfg.timeoutSec) && cfg.timeoutSec > 0 ? Math.floor(cfg.timeoutSec) : 180,
+        timeoutSec   : timeout,
         stream       : cfg.stream === true,
     };
     const existing = id ? list.find(p => p.id === id) : null;

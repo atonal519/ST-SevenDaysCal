@@ -1,5 +1,5 @@
 import { parseLines, serializeLines } from './schema.js';
-import { parseVectorCue, serializeVectorCue } from './vectors/codec.js';
+import { serializeVectorCue } from './vectors/codec.js';
 
 export function parseLineWidget(body) {
     const rows = String(body || '').split('\n').map(line => line.trim()).filter(Boolean);

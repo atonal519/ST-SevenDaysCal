@@ -15,8 +15,6 @@ const ACTION_PATTERNS = Object.freeze({
 });
 const RESPONSE_WORDS = /(?:主动迎合|主动回应|明确回应|自愿回应|迎合|回握|张开双腿|呻吟|喘息|主动配合|引导节奏|缠住.*手腕)/i;
 const CONSENT_WORDS = /(?:自愿|同意|允许|主动回应|明确回应|双方愿意|没有拒绝|引导节奏|缠住.*手腕)/i;
-const VETO_WORDS = /(?:不含性意味|没有性意味|未发生|没有发生|并未|尚未|拒绝|不愿|否认|沉默|回忆|回想|昨夜|曾经|计划|今晚|明晚|准备|打算|将要|即将|如果|假设|比较|事后|之后喂|喂水|换药|照料|采购|补给|审讯|拷问)/i;
-
 export function normalizePointAdultMode(mode) {
     return POINT_ADULT_MODES.includes(mode) ? mode : 'off';
 }

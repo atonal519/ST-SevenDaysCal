@@ -43,7 +43,7 @@ export function createDateDetectionController(options = {}) {
             if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请先配置 API', null, true);
             return { status: 'failed', error };
         }
-        const chatId = ctx.chatId; const ownerIdentity = identity(); const ctrl = new AbortController(); abortController = ctrl; busy = true;
+        const ownerIdentity = identity(); const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
             const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT);

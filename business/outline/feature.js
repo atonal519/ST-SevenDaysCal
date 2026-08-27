@@ -35,6 +35,7 @@ export function createOutlineFeature(env = {}) {
         cleanText: env.cleanText,
         makeInjectButton: ui.makeInjectButton,
         makeCopyButton: ui.makeCopyButton,
+        beginRender: ui.resetTextMaps,
     });
     const injection = createOutlineInjection({
         repository,

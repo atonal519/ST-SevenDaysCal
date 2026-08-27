@@ -55,7 +55,6 @@ export function createLedgerJudgeController(options = {}) {
                 return { status: 'failed', reason: reconcile.error.saveResult?.reason || reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult };
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
-            const summary = reconcile?.summary || {};
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
             const judgeable = (env.listJudgeable?.() || []).filter(entry => entry?.来源状态 !== '待确认' && entry?.来源状态 !== '来源已删除');

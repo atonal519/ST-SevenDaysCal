@@ -33,7 +33,7 @@ export function createSpaceRenderer(env = {}) {
             const lineRow = rows.find(item => /^Line\s*:/i.test(item)) || '';
             const descRow = rows.find(item => /^Desc\s*:/i.test(item)) || '';
             const nextRow = rows.find(item => /^Next\s*:/i.test(item)) || '';
-            const [name, lineType, stage, level, when, agency, stall] = lineRow.replace(/^Line\s*:\s*/i, '').split('|').map(item => item.trim());
+            const [name, lineType, stage, , when, agency, stall] = lineRow.replace(/^Line\s*:\s*/i, '').split('|').map(item => item.trim());
             const desc = descRow.replace(/^Desc\s*:\s*/i, '').trim();
             const next = nextRow.replace(/^Next\s*:\s*/i, '').trim();
             const stalled = String(stall).toLowerCase() === 'true';

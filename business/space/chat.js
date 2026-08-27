@@ -43,7 +43,10 @@ export function createSpaceChat(env = {}) {
             if (abortController !== controller || controller.signal.aborted || !repository.isCurrent(target)) {
                 return Object.freeze({ status: 'cancelled' });
             }
-            repository.replace(target, appendSpaceAssistant(history(), reply));
+            if (!repository.replace(target, appendSpaceAssistant(history(), reply))) {
+                env.ui?.appendMessage?.('system', '发送失败：回复保存失败，请重试');
+                return Object.freeze({ status: 'failed', error: new Error('space reply persistence failed') });
+            }
             env.ui?.endThinking?.(thinking);
             env.ui?.appendMessage?.('ai', reply, history().length - 1);
             return Object.freeze({ status: 'updated', reply });

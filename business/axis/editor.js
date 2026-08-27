@@ -18,11 +18,6 @@ export function setAxisSheet(sheet, render, resetBatch) {
     render();
 }
 
-export function selectAxisDay(day, render) {
-    axisState._almanacCalDay = axisState._almanacCalDay === day ? null : day;
-    render();
-}
-
 export function navigateAxisMonth(delta, monthCount, currentMonth, render) {
     const mc = monthCount();
     axisState._almanacCalMonth = (currentMonth() + delta + mc) % mc;

@@ -29,10 +29,8 @@ const SCHEMA_VERSION = 1;
 //   到期锚   : 仅「约定待办/周期」，{ 历日期 }（下次该发生的历日期；约定未定档可留空）
 const TYPES  = ['持续状态', '约定待办', '周期'];
 const STATES = ['活跃', '已了结'];
-let activeWrites = 0;
 let fixedMetadataPersistence = null;
 const cloneState = value => JSON.parse(JSON.stringify(value));
-import { reconcileLedgerEntries } from './reconcile.js';
 import { reconcileStateAtomic as reconcileStateAtomicCore, handleUnknownPersistence } from './repository-transaction.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -73,7 +71,6 @@ function persist() {
     const ctx = getContext?.();
     if (!ctx) return;
     const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
-    if (result?.then) { activeWrites++; Promise.resolve(result).finally(() => { activeWrites = Math.max(0, activeWrites - 1); }); }
     // 旧同步 API 不改变签名；若宿主返回 Promise，吞掉其异步 reject，避免制造未处理 Promise。
     result?.catch?.(() => {});
 }
@@ -85,7 +82,6 @@ function persistAwaitable(boundContext = null, options = {}) {
     if (!ctx) return Promise.resolve();
     try {
         const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
-        if (result?.then) { activeWrites++; return Promise.resolve(result).finally(() => { activeWrites = Math.max(0, activeWrites - 1); }); }
         return Promise.resolve(result);
     } catch (error) {
         return Promise.reject(error);
@@ -95,37 +91,6 @@ function persistAwaitable(boundContext = null, options = {}) {
 // 生产事务由 index.js 绑定固定聊天目标的 integrity/commitState saver；测试可不绑定并注入 runtime.save。
 export function bindLedgerMetadataPersistence(adapter = null) {
     fixedMetadataPersistence = adapter && typeof adapter.commit === 'function' ? adapter : null;
-}
-
-export function readState() {
-    const m = ledger(false);
-    return m ? cloneState({ version: m.version, entries: m.entries, seq: m.seq }) : { version: SCHEMA_VERSION, entries: [], seq: 0 };
-}
-
-export function whenIdle() {
-    if (!activeWrites) return Promise.resolve();
-    return new Promise(resolve => { const poll = () => activeWrites ? setTimeout(poll, 0) : resolve(); poll(); });
-}
-
-export function stageReplaceState(nextState, { expectedChatId } = {}) {
-    const ctx = getContext?.(); if (!expectedChatId || ctx?.chatId !== expectedChatId || !nextState) return null;
-    const m = ledger(true); if (!m) return null;
-    const before = readState(); const next = cloneState(nextState);
-    if (!Array.isArray(next.entries) || !Number.isInteger(next.seq)) return null;
-    m.version = next.version; m.entries = next.entries; m.seq = next.seq;
-    return { token: `ledger-${Date.now()}-${Math.random()}`, chatId: expectedChatId, before, next, staged: true };
-}
-
-export function verifyReplace(token) {
-    if (!token?.staged || getContext?.()?.chatId !== token.chatId) return false;
-    return JSON.stringify(readState()) === JSON.stringify(token.next);
-}
-
-export function restoreReplace(token) {
-    if (!token?.staged || getContext?.()?.chatId !== token.chatId) return { ok: false, reason: 'chat-mismatch' };
-    if (!verifyReplace({ ...token, next: token.next })) return { ok: false, reason: 'content-mismatch' };
-    const m = ledger(true); if (!m) return { ok: false, reason: 'no-ledger' };
-    m.version = token.before.version; m.entries = cloneState(token.before.entries); m.seq = token.before.seq; return { ok: true };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

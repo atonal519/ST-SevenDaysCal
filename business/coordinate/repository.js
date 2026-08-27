@@ -1,4 +1,4 @@
-import { INDEX_NAME, emptyIndex, normalizeIndex, fileNameOf, toMeta, itemBytes, formatBytes, SIZE_WARN_BYTES } from './schema.js';
+import { INDEX_NAME, emptyIndex, normalizeIndex, fileNameOf, toMeta, formatBytes, SIZE_WARN_BYTES } from './schema.js';
 import { uploadJson, readJson, deleteJson, createCoordinateHostPorts } from '../../runtime/coordinate-host-ports.js';
 
 function strHash(input) {

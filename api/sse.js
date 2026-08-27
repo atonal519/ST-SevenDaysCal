@@ -25,10 +25,6 @@ export function emptyContentMessage(finishReason = '') {
     return `模型没有返回正文${tail}。若使用 GLM 等推理模型，多是思维链占满了输出预算；可换非推理模型、或稍后重试。`;
 }
 
-export function truncatedContentMessage() {
-    return '模型输出达到上限，未保存部分结果；请提高输出上限或缩短提示词后重试。';
-}
-
 function normalizedFinishReason(value) {
     return String(value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
 }
@@ -90,11 +86,6 @@ export function mapApiError(status, raw) {
     if (status === 404) return '接口地址不对（404）。请检查 Base URL，或试试补/去掉结尾的 /v1。';
     if (status === 429) return '触发限流（429）。请求太频繁或额度用尽，稍后再试。';
     if (status >= 500) return `上游服务异常（${status}）。通常是中转站或模型服务临时故障，稍后重试。`;
-    if (status === 400) return diagnosticMessage({ diagnosticCode: 'http-400' });
-    if (status === 401 || status === 403) return diagnosticMessage({ diagnosticCode: 'auth' });
-    if (status === 404) return diagnosticMessage({ diagnosticCode: 'not-found' });
-    if (status === 429) return diagnosticMessage({ diagnosticCode: 'rate-limit' });
-    if (status >= 500) return diagnosticMessage({ diagnosticCode: 'server' });
     return diagnosticMessage({ diagnosticCode: 'unknown' });
 }
 

@@ -1,7 +1,5 @@
 import { loadAlmanac, loadCalDesc, almDayOfYear } from './data.js';
 import { almTodayAnchor, almWeekdayRef, sortAlmanacUpcoming } from './anchor.js';
-import { axisState } from './state.js';
-
 export function renderAxisUpcoming(env) {
     const items = loadAlmanac();
     if (!items.length) return env.renderAlmanacEmpty();

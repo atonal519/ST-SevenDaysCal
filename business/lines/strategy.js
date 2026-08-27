@@ -15,13 +15,6 @@ export function createAdvanceStrategy({ mode = 'turns', interval = 1, dayAnchor 
     return { shouldAdvance: nextCounter >= step, counter: nextCounter >= step ? 0 : nextCounter };
 }
 
-export function classifyRenderedFloor({ messageId, lastSeen = -1, type, pendingReroll = false, contentChanged = false, pendingSwipe = false } = {}) {
-    const id = Number(messageId);
-    const isNewFloor = Number.isFinite(id) && id > Number(lastSeen);
-    const isReroll = type === 'regenerate' || type === 'swipe' || pendingReroll || contentChanged;
-    return { isNewFloor, isReroll, shouldRebuild: false, id };
-}
-
 export function chooseSwipeLayer({ pendingGeneration = false, swipeId = 0, stored = null, baseline = '' } = {}) {
     if (pendingGeneration) return { action: 'wait', swipeId: Number(swipeId) || 0 };
     const raw = stored?.swipes?.[String(Number(swipeId) || 0)];

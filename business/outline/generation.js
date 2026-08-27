@@ -1,4 +1,5 @@
 import { buildOutlinePrompt } from './prompts.js';
+import { parseOutline } from './schema.js';
 
 export function createOutlineGeneration({
     repository,
@@ -77,6 +78,7 @@ export function createOutlineGeneration({
             });
             if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!String(raw || '').trim()) throw new Error('AI 未返回可保存的面内容');
+            if (parseOutline(raw).length === 0) throw new Error('AI 返回内容未解析出有效剧情节点');
             if (!repository.commitOutline(target, { raw, ts: now(), cursor: 1 }, baseline)) return { status: 'cancelled' };
             finish(task);
             injection?.refresh(target);

@@ -12,7 +12,7 @@ import { stripInternalLineLines } from './vectors/codec.js';
 import { vectorGlyphSvg } from './vectors/glyph.js';
 import { linesViewModel } from './render.js';
 import { inlineState, prefixNext } from './inline.js';
-import { classifyRenderedFloor, chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
+import { chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
 import { renderActionMenu } from '../utils/action-menu.js';
 
 const LINE_EDGE_COLORS = Object.freeze({
@@ -129,7 +129,7 @@ export function createLinesFeature(env = {}) {
     const commitGenerationResult = (raw, { silent, swipeCtx, travelContext, commitBaseline } = {}) => {
         const chatId = env.chatId?.();
         const key = env.cacheKey?.();
-        const html = runtime.cache(raw);
+        runtime.cache(raw);
         env.writeStore?.(key, { raw, ts: Date.now() });
         if (swipeCtx?.mesId != null) {
             const rec = swipeStore.read(chatId, swipeCtx.mesId) || { baseline: swipeCtx.baselineRaw ?? commitBaseline?.raw ?? '', swipes: {}, view: 'user', charName: '' };

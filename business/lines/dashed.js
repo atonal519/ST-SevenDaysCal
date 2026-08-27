@@ -62,7 +62,7 @@ export function mergeDashedItems(newTexts, currentItems, createdAt = Date.now(),
     return { added, items: [...added, ...current] };
 }
 export function buildDashedPrompt(userName, charName, avoidItems = [], options = {}) {
-    const topics = (options.topics || []).map(String).filter(Boolean), count = dashedTargetCount(options.count || topics.length || 2);
+    const topics = (options.topics || []).map(String).filter(Boolean);
     const broad = `取材面要开阔——世界观设定、历史与传说、势力/组织、地点/风物、物品/造物的隐藏特性、未被明说的规则或因果、习俗与禁忌都可以写；${userName} 和 ${charName} 只是世界里的成员之一，可以偶尔涉及，但不要每条都围着他们转。`;
     let focus = broad; if (topics.length === 1) focus = `本次只围绕「${topics[0]}」取材，写出若干条角度不同、互不重复的冷知识，数量随有效素材浮动。`; else if (topics.length > 1) focus = `本次依次围绕以下主题取材，每个主题至少考虑一条，数量随有效素材浮动，不要凑数：\n${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
     let prompt = `请暂停角色扮演，跳出正文叙事，以设定考据者的身份回答。这是设定考据、不是续写正文：不要输出任何剧情场景、对话、动作或第一/第二人称叙述，不要推进故事，也不要复述记忆库/世界书里已发生的事件经过。\n请无视上文里的状态栏、数值面板、表格等格式化内容，绝对不要复述或模仿它们。\n完全遵循当前世界的设定与世界观。${focus}\n优先挖容易被忽略、却让世界更立体的角落；每条都要展开讲清来龙去脉、背景和细节，不要只丢一句结论，绝对禁止 OOC 和脱离当前背景。\n直接从第一条写起，不要开场白或旁白。输出所有非空有效条目即可，数量随素材浮动，不要凑数；每行一条，每条 50 到 100 个汉字；绝对不得超过 300 个 Unicode 字符。纯中文叙述，不要序号、状态栏或任何格式符号。`;

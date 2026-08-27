@@ -1,4 +1,4 @@
-import { diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
+import { classifyGenerationError, diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 // 点任务控制器的宿主边界：owner/lifecycle 由宿主提供，模块只负责统一清理与中止。
 export function splitAbortController(controller) {
     if (!controller || typeof controller.abort !== 'function' || !controller.signal || typeof controller.signal.addEventListener !== 'function') throw new TypeError('需要原生 AbortController');
@@ -79,7 +79,7 @@ export function createPointController(env) {
             if (error?.name === 'AbortError') { restoreManualOwner(owner); return; }
             const restored = restoreManualOwner(owner);
             if (restored && owner.previousCachedSchedule) env.toast(`点生成失败：${diagnosticMessage(error)}；已保留原存档`, null, true);
-            else { const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${env.escape(diagnosticMessage(error))}</p></div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true); }
+            else { const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button>'; const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${env.escape(diagnosticMessage(error))}</p>${retry}</div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast('点生成失败，请重试', null, true); }
         } finally { cleanupManualOwner(owner); }
     }
     async function syncPointToToday(auto = false, travelContext = null) {
@@ -87,7 +87,7 @@ export function createPointController(env) {
         if (env.syncing()) { if (allowPending) env.owners.setPending('point-auto', { chatId: env.chatId(), chatRevision: env.owners.currentChatRevision(), targetDate: travelContext?.targetDate }); return { status: 'skipped' }; }
         if (env.state.isGenerating || env.editing?.()) { if (!auto) env.toast('点正在生成或编辑中，稍候再同步', null, true); return { status: 'skipped' }; }
         const view = env.view(), char = env.char(), key = env.key(view, char), saved = key && env.read(key), previous = saved?.raw || ''; if (!key || !previous) return { status: 'skipped' };
-        env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); owner.canonical = { key, raw: previous, ts: Number(saved?.ts) || null, chatId, view, char }; const { controller, signal } = splitAbortController(env.setAuto(owner.controller)); env.setSyncing(true);
+        env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); owner.canonical = { key, raw: previous, ts: Number(saved?.ts) || null, chatId, view, char }; const { signal } = splitAbortController(env.setAuto(owner.controller)); env.setSyncing(true);
         owner.adultMode = env.adultMode?.() || 'off';
         try {
             const ctx = env.context(), cfg = env.config(); if (!cfg.url || !cfg.key) { const error = makeDiagnosticError('config-missing'); env.logDiagnostic?.(safeDiagnosticLog('point', 'request', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(diagnosticMessage(error), null, true); return { status: 'failed', error }; }

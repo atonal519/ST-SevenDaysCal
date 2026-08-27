@@ -1,4 +1,5 @@
 import { renderTheaterPieceHtml } from './render.js';
+import { classifyGenerationError } from '../../api/diagnostics.js';
 
 // 棱 UI 只编排注入的宿主能力；它不读取 SillyTavern 全局对象，也不拥有生成状态。
 export function createTheaterUi({ repository, templates, resolveRegen, draftCap = 10, feature, host = {} } = {}) {
@@ -6,7 +7,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
     host.captureTarget ||= injectedCapture;
     const esc = host.escapeHtml || (value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])));
     const attr = host.escapeAttr || esc;
-    const state = { current: null, templates: [], source: null, lastRandom: null, bound: false, mountRoot: null, fsEsc: null, imageCleanup: null, settingsRoots: [], generationSeq: 0, templateSeq: 0, abortPending: false };
+    const state = { current: null, templates: [], source: null, retry: null, lastRandom: null, bound: false, mountRoot: null, fsEsc: null, imageCleanup: null, settingsRoots: [], generationSeq: 0, templateSeq: 0, abortPending: false };
     const currentChat = () => host.getChatId?.() ?? '';
     const isCurrent = target => target?.isCurrent ? target.isCurrent() : true;
     const body = html => host.setBody?.(html);
@@ -47,7 +48,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         const source = piece?.templateSource?.input ? `<div class="sp-theater-source-wrap"><button type="button" class="sp-theater-source-toggle" aria-expanded="false" title="查看本次实际使用内容"><i class="fa-solid fa-file-lines"></i><span>模板 · ${esc(piece.templateSource.title || '(无标题)')}</span><i class="fa-solid fa-chevron-down sp-theater-source-chevron"></i></button><div id="sp-theater-source-detail" class="sp-theater-source-detail" style="display:none"><div class="sp-theater-source-caption">本次实际使用内容</div><pre>${esc(piece.templateSource.input)}</pre></div></div>` : '';
         const op = piece ? `<div class="sp-theater-opbar"><button class="sp-btn sp-theater-regen">重新生成</button><input type="text" id="sp-theater-title" class="sp-input" placeholder="标题（可选）" value="${attr(piece.title || '')}"><button class="sp-btn sp-btn-primary sp-theater-save">永久保存</button></div>` : '';
         const resultBlock = piece ? `<div class="sp-theater-result-wrap"><button class="sp-theater-fullscreen-btn" type="button" title="全屏浏览小剧场"><i class="fa-solid fa-expand"></i></button><button class="sp-theater-fold-toggle" type="button" style="display:none"><i class="fa-solid fa-chevron-down"></i><span class="sp-theater-fold-label">展开全文</span></button><div class="sp-theater-result sp-theater-result-collapsible" id="sp-theater-result">${result}</div></div>` : `<div class="sp-theater-result" id="sp-theater-result">${result}</div>`;
-        body(`<div class="sp-theater-input-area"><details class="sp-theater-tpl-picker" id="sp-theater-tpl-picker"><summary class="sp-theater-tpl-picker-summary"><i class="fa-solid fa-chevron-right sp-theater-tpl-picker-chevron"></i><span>选择模板起草（可选）</span></summary><div class="sp-theater-tpl-picker-body" id="sp-theater-tpl-picker-list"><div class="sp-theater-list-empty">加载中…</div></div></details><textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…">${esc(piece?.request || piece?.templateSource?.input || '')}</textarea><div class="sp-theater-btn-row"><button class="sp-btn sp-theater-random" title="从模板库随机抽一个模板直接生成"><i class="fa-solid fa-shuffle"></i> 随机</button><button class="sp-btn sp-btn-primary sp-theater-generate">生成小剧场</button></div></div><hr class="sp-theater-divider">${resultBlock}${source}${op}<hr class="sp-theater-divider"><div class="sp-theater-lists"><details class="sp-theater-list-group" open><summary>草稿（最多 ${draftCap} 条，新挤旧）</summary><div class="sp-theater-list">${drafts.length ? drafts.map(p => renderCard(p, false)).join('') : '<div class="sp-theater-list-empty">暂无草稿</div>'}</div></details><details class="sp-theater-list-group"${saved.length ? ' open' : ''}><summary>已永久保存（本对话）</summary><div class="sp-theater-list">${saved.length ? saved.map(p => renderCard(p, true)).join('') : '<div class="sp-theater-list-empty">暂无永久保存</div>'}</div></details></div>`);
+        body(`<div class="sp-theater-input-area"><details class="sp-theater-tpl-picker" id="sp-theater-tpl-picker"><summary class="sp-theater-tpl-picker-summary"><i class="fa-solid fa-chevron-right sp-theater-tpl-picker-chevron"></i><span>选择模板起草（可选）</span></summary><div class="sp-theater-tpl-picker-body" id="sp-theater-tpl-picker-list"><div class="sp-theater-list-empty">加载中…</div></div></details><textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…">${esc(piece?.request || piece?.templateSource?.input || '')}</textarea><div class="sp-theater-btn-row"><button class="sp-btn sp-theater-random" title="从模板库随机填入一个模板，确认后再生成"><i class="fa-solid fa-shuffle"></i> 随机</button><button class="sp-btn sp-btn-primary sp-theater-generate">生成小剧场</button></div></div><hr class="sp-theater-divider">${resultBlock}${source}${op}<hr class="sp-theater-divider"><div class="sp-theater-lists"><details class="sp-theater-list-group" open><summary>草稿（最多 ${draftCap} 条，新挤旧）</summary><div class="sp-theater-list">${drafts.length ? drafts.map(p => renderCard(p, false)).join('') : '<div class="sp-theater-list-empty">暂无草稿</div>'}</div></details><details class="sp-theater-list-group"${saved.length ? ' open' : ''}><summary>已永久保存（本对话）</summary><div class="sp-theater-list">${saved.length ? saved.map(p => renderCard(p, true)).join('') : '<div class="sp-theater-list-empty">暂无永久保存</div>'}</div></details></div>`);
         measureFold();
         void refreshTemplates();
     };
@@ -75,6 +76,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         if (!inputSnapshot) { host.toast?.('请先填写小剧场需求', null, true); return { status: 'invalid' }; }
         const requestSeq = ++state.generationSeq;
         const requestChatId = currentChat();
+        state.retry = null;
         state.abortPending = false;
         const selectedSource = state.source ? { ...state.source } : null;
         const requestSource = selectedSource ? { ...selectedSource, input: inputSnapshot } : null;
@@ -92,7 +94,10 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
             else host.closedSuccess?.();
         } else if (result?.status === 'failed') {
             if (currentChat() !== requestChatId) return result;
-            if (host.isOpen?.()) host.showError?.(result.error); else host.closedFailure?.();
+            const retryable = classifyGenerationError(result.error) !== 'config-missing';
+            state.retry = retryable ? { chatId: requestChatId, input: inputSnapshot, templateSource: requestSource } : null;
+            state.source = null;
+            if (host.isOpen?.()) host.showError?.(result.error, { retryable }); else host.closedFailure?.();
         } else if (result?.status === 'cancelled' || result?.status === 'stale') {
             // Only an explicit user abort in the same still-open chat restores the
             // panel. CHAT_CHANGED/plugin shutdown/stale owners stay silent.
@@ -108,6 +113,14 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         if (!aborted) state.abortPending = false;
         return aborted;
     };
+    const retry = () => {
+        const capsule = state.retry;
+        if (!capsule || feature.busy || currentChat() !== capsule.chatId) return false;
+        state.source = capsule.templateSource ? { ...capsule.templateSource } : null;
+        host.val?.('#sp-theater-input', capsule.input);
+        void generate(capsule.input);
+        return true;
+    };
     const bind = root => {
         if (state.bound) return; state.bound = true; state.mountRoot = root;
         root.on('click.sp-theater-ui', '.sp-theater-tpl-pick', function () { const tpl = state.templates.find(item => String(item.uid) === String(host.data?.(this, 'uid'))); if (!tpl) return; host.val?.('#sp-theater-input', tpl.text); state.source = { uid: tpl.uid, title: tpl.title, input: tpl.text }; host.closePicker?.(); host.focus?.('#sp-theater-input'); });
@@ -120,7 +133,8 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         root.on('click.sp-theater-ui', '.sp-theater-save', async function () { if (!state.current) return; const target = host.captureTarget?.(currentChat()); const title = String(host.val?.('#sp-theater-title') || '').trim(); const piece = { ...state.current, title }; const draftBaseline = repository.draftBaseline?.(target.chatId, piece.id); const draftResult = repository.updateDraft?.(target.chatId, piece.id, { title }, draftBaseline); if (draftResult?.ok === false) { if (isCurrent(target)) host.toast?.(draftResult.conflict ? '草稿已变化，请重试' : '永久保存失败，请重试', null, true); return; } const updatedDraftBaseline = repository.draftBaseline?.(target.chatId, piece.id); try { const result = await repository.promoteToSaved(target, piece, { draftBaseline: updatedDraftBaseline }); if (result?.ok && isCurrent(target)) { state.current = piece; host.toast?.('已永久保存到本对话'); render(); } else if (result?.ok === false && isCurrent(target)) host.toast?.(result.conflict ? '内容已变化，请重试' : '永久保存失败，请重试', null, true); } catch { if (isCurrent(target)) host.toast?.('永久保存失败，请重试', null, true); } });
         // resolveTheaterRegen(state.current, textarea) is supplied by the feature boundary.
         root.on('click.sp-theater-ui', '.sp-theater-regen', function () { if (feature.busy || !state.current) return; const regen = resolveRegen(state.current, host.val?.('#sp-theater-input') || ''); if (!regen.input) { host.toast?.('旧草稿未记录原主题，请先填写输入', null, true); host.focus?.('#sp-theater-input'); return; } state.source = regen.templateSource; host.val?.('#sp-theater-input', regen.input); generate(regen.input); });
-        root.on('click.sp-theater-ui', '.sp-theater-back', () => render());
+        root.on('click.sp-theater-ui', '.sp-theater-retry', retry);
+        root.on('click.sp-theater-ui', '.sp-theater-back', () => { state.retry = null; render(); });
         root.on('click.sp-theater-ui', '.sp-theater-source-toggle', () => toggleSource());
         root.on('click.sp-theater-ui', '.sp-theater-fullscreen-btn', () => toggleFullscreen());
         root.on('click.sp-theater-ui', '.sp-theater-fold-toggle', () => toggleFold());
@@ -189,8 +203,9 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         if (collapsed) host.scrollFoldTop?.();
     };
     const closeVisual = () => exitFullscreen();
+    const clearRetry = () => { state.retry = null; };
     const clearTransient = () => { state.imageCleanup?.(); state.imageCleanup = null; removeFullscreenEsc(); host.setFullscreen?.(false); host.setSheetFlat?.(false); host.setBodyFullscreenLock?.(false); };
-    const resetForChat = () => { closeVisual(); state.generationSeq++; state.templateSeq++; state.abortPending = false; state.current = null; state.source = null; state.templates = []; };
+    const resetForChat = () => { closeVisual(); state.generationSeq++; state.templateSeq++; state.abortPending = false; state.current = null; state.source = null; state.retry = null; state.templates = []; };
     const cleanup = root => {
         (root || state.mountRoot)?.off?.('.sp-theater-ui');
         for (const entry of state.settingsRoots) entry.root?.off?.('.sp-theater-ui');
@@ -203,7 +218,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         (state.mountRoot)?.off?.('.sp-theater-ui');
         for (const entry of state.settingsRoots) entry.root?.off?.('.sp-theater-ui');
         state.settingsRoots = []; state.mountRoot = null; state.bound = false;
-        removeFullscreenEsc(); state.generationSeq++; state.templateSeq++; state.abortPending = false; state.current = null; state.source = null; state.templates = [];
+        removeFullscreenEsc(); state.generationSeq++; state.templateSeq++; state.abortPending = false; state.current = null; state.source = null; state.retry = null; state.templates = [];
     };
-    return { render, bind, bindSettings, refreshTemplates, generate, closeVisual, clearTransient, resetForChat, cleanup, destroy, get state() { return state; } };
+    return { render, bind, bindSettings, refreshTemplates, generate, closeVisual, clearRetry, clearTransient, resetForChat, cleanup, destroy, get state() { return state; } };
 }

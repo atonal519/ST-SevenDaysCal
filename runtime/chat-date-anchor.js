@@ -1,7 +1,5 @@
 export const DATE_ANCHOR_SCHEMA = 1;
 export const DATE_ANCHOR_STORE_KEY = 'date-anchor-user';
-export const CALENDAR_FALLBACK_SCHEMA = 1;
-export const CALENDAR_FALLBACK_MARKER = 'calendar-fallback-v1';
 import { validateCalendarDescriptor as formalCalendarValidator } from '../business/calendar/validator.js';
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
 
@@ -39,7 +37,7 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         const p = legacyPending(); if (!p) return { ok: false, reason: 'no-pending-legacy' };
         if (options.confirmed === false) return { ok: false, reason: 'cancelled', wrote: false };
         const a = makeChatAnchor(id(), month ?? p.month, day ?? p.day, 'explicit'); if (!a) return { ok: false, reason: 'invalid-anchor' };
-        const before = localRecord(); const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
+        const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
         if (!persist(record)) return { ok: false, reason: 'write-failed' };
         return { ok: true, anchor: a, claimed: true, identity: p.identity, marker: record.claimMarker, memoryUpdated: true, durability: 'unconfirmed' };
     };
@@ -48,7 +46,7 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         const a = makeChatAnchor(id(), month ?? p.month, day ?? p.day, 'calibration');
         if (!a || !Number.isInteger(+options.weekday)) return { ok: false, reason: 'invalid-calibration' };
         a.calibration = { refMonth: options.refMonth != null && Number.isInteger(+options.refMonth) ? +options.refMonth : +a.month, refDay: options.refDay != null && Number.isInteger(+options.refDay) ? +options.refDay : +a.day, weekday: +options.weekday, floor: options.floor != null && Number.isInteger(+options.floor) ? +options.floor : null, sourceFloor: options.sourceFloor != null && Number.isInteger(+options.sourceFloor) ? +options.sourceFloor : null, swipe: options.swipe == null ? null : String(options.swipe) };
-        const before = localRecord(); const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
+        const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
         return persist(record) ? { ok: true, anchor: a, claimed: true, identity: p.identity, marker: record.claimMarker } : { ok: false, reason: 'write-failed' };
     };
     return { get: () => local() || legacyPending() || null, pending: legacyPending, set, auto: (m, d) => set(m, d, 'auto'), clear, claim, claimCalibration, cancel: () => ({ ok: true, wrote: false }) };
@@ -56,13 +54,6 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
 
 export function isValidCalendarDescriptor(c) {
     return !formalCalendarValidator(c).error;
-}
-export function writeOnceCalendarFallback(read, write, calendar, { establishedAt = Date.now(), compatibilityPolicy = 'first-valid' } = {}) {
-    const current = read?.();
-    if (current != null) { if (current.marker !== CALENDAR_FALLBACK_MARKER || !isValidCalendarDescriptor(current.calendar)) return { ok: false, reason: 'invalid-existing-fallback' }; return { ok: true, value: clone(current.calendar), record: clone(current), wrote: false }; }
-    if (!isValidCalendarDescriptor(calendar)) return { ok: false, reason: 'invalid-calendar' };
-    const record = { schemaVersion: CALENDAR_FALLBACK_SCHEMA, marker: CALENDAR_FALLBACK_MARKER, generation: 1, establishedAt, compatibilityPolicy, calendar: clone(calendar) }; let ok = false; try { ok = write?.(record) === true; } catch { ok = false; }
-    return ok ? { ok: true, value: clone(calendar), record, wrote: true } : { ok: false, reason: 'write-failed' };
 }
 export function resolveSnapshotCalendar(snapshot, { fallback = null, marker = false, current = null } = {}) {
     const v = Number(snapshot?.v ?? snapshot?.schemaVersion ?? 0);

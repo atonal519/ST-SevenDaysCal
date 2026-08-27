@@ -52,7 +52,6 @@ export function createInlineFeature(env = {}) {
     const axisInlineRenderer = env.axisInlineRenderer;
     const $ = env.$;
     const _buildLedgerBlockHtml = env._buildLedgerBlockHtml;
-    const buildUserRecall = env.buildUserRecall;
 
     // ─── 历·楼内七天条（只读，反映历+锚点，无生成）─────────────────────────────────
     // 与线块平行、共存于最新 AI 楼。外壳（标题条）仿线：一个 <details>，收起时是扁扁的
@@ -94,17 +93,6 @@ export function createInlineFeature(env = {}) {
         });
     }
 
-    // 清掉所有 AI 楼里的历七天条（维持「只挂最新楼」的单副本）。
-    function _removeAllAlmanacBlocks() {
-        doc.querySelectorAll('#chat .sp-almanac-inline').forEach(el => el.remove());
-    }
-
-    // 历改动 / 新楼 / swipe / 切聊天 都汇流到这。渲染改由 refresh() 统一负责（最新楼冻快照+重挂）。
-    function syncLatestAlmanacBlock(expectedChatId = null) {
-        if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
-        refresh(true);
-    }
-
     // ─── 点·楼内日程条（只读，反映当前视角的点，无生成）──────────────────────────────
     // 与线块/历条平行、共存于最新 AI 楼。收起态是扁扁的「点 · N件待办」条，点整条展开是「日程条」：
     // 每个 Day 一格（周X + 日期 + 天气图标 + 待办数），Future 另起一格；点某格就地展开当天事件（标题+时间）。
@@ -119,16 +107,10 @@ export function createInlineFeature(env = {}) {
     // dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
     // readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
 
-    const _scheduleStripDayHtml = (...args) => pointInlineRenderer.buildScheduleDay(...args);
-
     // 日程条 per-day tap：点某格 → 下方就地展开当天事件（再点同格收起、点别格切换）。委托到 document、
     // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-sch-strip-live 生效。
     function initScheduleStripDelegation() {
         pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: inlineTapContext });
-    }
-
-    function _removeAllScheduleBlocks() {
-        doc.querySelectorAll('#chat .sp-schedule-inline').forEach(el => el.remove());
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

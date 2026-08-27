@@ -1,5 +1,3 @@
-import { axisState } from './state.js';
-
 export function createAxisActions(env = {}) {
     const togglePin = id => {
         const list = env.load?.() || [], item = list.find(x => x.id === id); if (!item) return null;

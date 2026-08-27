@@ -159,34 +159,10 @@ export function writeBatch(entries) {
     return true;
 }
 
-function _clone(value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); }
 function _applyBatch(list) {
     const s = store(true); if (!s) return false;
     for (const it of list) { const key = subKey(it.kind, it.view, it.charName); if (it.value == null) delete s.data[key]; else s.data[key] = it.value; }
     return true;
-}
-
-export function stageBatch(entries, { expectedChatId } = {}) {
-    if (expectedChatId == null || getContext?.()?.chatId !== expectedChatId) return null;
-    const list = Array.isArray(entries) ? entries.filter(it => it?.kind) : [];
-    const s = store(true); if (!s || !list.length) return null;
-    const before = list.map(it => { const key = subKey(it.kind, it.view, it.charName); return { key, existed: Object.prototype.hasOwnProperty.call(s.data, key), value: _clone(s.data[key]) }; });
-    if (!_applyBatch(list)) return null;
-    return { token: `store-${Date.now()}-${Math.random()}`, chatId: expectedChatId, before, entries: list.map(it => ({ ...it })), staged: true };
-}
-
-export function verifyBatch(token) {
-    if (!token?.staged || getContext?.()?.chatId !== token.chatId) return false;
-    const s = store(false); if (!s) return false;
-    return token.entries.every(it => { const key = subKey(it.kind, it.view, it.charName); return JSON.stringify(s.data[key] ?? null) === JSON.stringify(it.value ?? null); });
-}
-
-export function restoreBatch(token) {
-    if (!token?.staged || getContext?.()?.chatId !== token.chatId) return { ok: false, reason: 'chat-mismatch' };
-    const s = store(false); if (!s) return { ok: false, reason: 'no-store' };
-    for (const item of token.before) { if (JSON.stringify(s.data[item.key] ?? null) !== JSON.stringify(token.entries.find(it => subKey(it.kind, it.view, it.charName) === item.key)?.value ?? null)) return { ok: false, reason: 'content-mismatch' }; }
-    for (const item of token.before) { if (item.existed) s.data[item.key] = _clone(item.value); else delete s.data[item.key]; }
-    return { ok: true };
 }
 
 export function removeData(kind, view = 'user', charName = '') {

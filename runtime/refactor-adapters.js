@@ -26,13 +26,6 @@ export function filterRerollItems(items, reroll) {
     return reroll ? (items || []).filter(item => item?.locked === true) : (items || []);
 }
 
-export function pickWithoutPrevious(pool, previousUid, random = Math.random) {
-    const list = Array.isArray(pool) ? pool : [];
-    const choices = list.filter(item => String(item?.uid) !== String(previousUid));
-    const source = choices.length ? choices : list;
-    return source.length ? source[Math.floor(random() * source.length)] : null;
-}
-
 export function shouldRunPendingPointFollowup({ pending, allowPendingFollowup = true, signalAborted = false, chatSame = true, pointGenerating = false, needsSync = true } = {}) {
     return !!(pending && allowPendingFollowup && !signalAborted && chatSame && !pointGenerating && needsSync);
 }

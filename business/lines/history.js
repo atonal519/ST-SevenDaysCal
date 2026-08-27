@@ -12,7 +12,6 @@ export function selectVisibleChatHistory(messages = [], historyLimit = 3, { excl
     let visibleAiCount = 0;
     let startIdx = 0;
     for (let i = visible.length - 1; i >= 0; i--) {
-        const message = visible[i].message;
         visibleAiCount++;
         if (visibleAiCount >= Number(historyLimit)) {
             startIdx = i;

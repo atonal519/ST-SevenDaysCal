@@ -1,4 +1,4 @@
-import { diagnosticMessage } from '../../api/diagnostics.js';
+import { classifyGenerationError, diagnosticMessage } from '../../api/diagnostics.js';
 
 export function createOutlineUi(host = {}) {
     let controllers = null;
@@ -14,17 +14,20 @@ export function createOutlineUi(host = {}) {
     const makeInjectButton = text => {
         const id = ++injectSequence;
         injectTexts.set(String(id), text);
-        return `<button class="sp-inject-btn" data-iid="${id}" title="注入到输入框"><i class="fa-solid fa-arrow-right-to-bracket"></i></button>`;
+        return String(id);
     };
     const makeCopyButton = text => {
         const id = ++copySequence;
         copyTexts.set(String(id), text);
-        return `<button class="sp-beat-copy" data-cid="${id}" title="复制这一步"><i class="fa-solid fa-copy"></i></button>`;
+        return String(id);
     };
     const setOutline = html => host.setOutline?.(html);
     const setLoading = () => setOutline(host.loading?.('正在构思面', 'sp-abort-outline') || '');
     const toast = (message, error = false) => host.toast?.(message, error);
-    const showGenerationError = error => setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escape(diagnosticMessage(error))}</p></div>`);
+    const showGenerationError = error => {
+        const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">重新生成面</button>';
+        setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escape(diagnosticMessage(error))}</p>${retry}</div>`);
+    };
     const appendMessage = (role, content, historyIndex = null) => {
         const source = String(content ?? '');
         const display = source.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
@@ -75,6 +78,10 @@ export function createOutlineUi(host = {}) {
         if (messages) messages.scrollTop = messages.scrollHeight;
     };
     const markApplied = button => button?.text?.('✓ 已应用')?.prop?.('disabled', true);
+    const resetTextMaps = () => {
+        injectTexts.clear();
+        copyTexts.clear();
+    };
 
     const startEdit = ($message, index) => {
         const original = controllers?.chat.history?.()[index]?.content ?? '';
@@ -143,32 +150,6 @@ export function createOutlineUi(host = {}) {
         });
         $root.on('click.spOutlineFeature', '#sp-gen-outline-now, .sp-refresh-outline', () => void controllers.generation.trigger({ reroll: true, module: 'outline' }));
         $root.on('click.spOutlineFeature', '#sp-abort-outline', () => controllers.generation.abort());
-        $root.on('click.spOutlineFeature', '.sp-beat-delete', function () {
-            const index = Number(host.$(this).attr('data-idx'));
-            if (Number.isInteger(index)) void controllers.actions.deleteBeat(index);
-        });
-        $root.on('click.spOutlineFeature', '.sp-beat-setcur', function () {
-            const cursor = Number(host.$(this).attr('data-idx'));
-            if (Number.isFinite(cursor) && cursor >= 1) controllers.actions.toggleCursor(cursor);
-        });
-        $root.on('click.spOutlineFeature', '.sp-inject-btn', function () {
-            const text = injectTexts.get(String(host.$(this).data('iid')));
-            if (text) host.injectToInput?.(text);
-        });
-        $root.on('click.spOutlineFeature', '.sp-beat-copy', async function () {
-            const text = copyTexts.get(String(host.$(this).data('cid')));
-            if (text == null) return;
-            const $button = host.$(this);
-            const oldTimer = $button.data('sp-copy-reset');
-            if (oldTimer) clearTimeout(oldTimer);
-            const copied = await host.copyText?.(text);
-            $button.html(copied ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-xmark"></i>')
-                .attr('title', copied ? '已复制' : '复制失败');
-            const timer = setTimeout(() => {
-                $button.html('<i class="fa-solid fa-copy"></i>').attr('title', '复制这一步').removeData('sp-copy-reset');
-            }, 1200);
-            $button.data('sp-copy-reset', timer);
-        });
     };
     const bindControllers = value => { controllers = value; };
     return Object.freeze({
@@ -176,6 +157,7 @@ export function createOutlineUi(host = {}) {
         bind,
         makeInjectButton,
         makeCopyButton,
+        resetTextMaps,
         getInjectText: id => injectTexts.get(String(id)),
         getCopyText: id => copyTexts.get(String(id)),
         setOutline,

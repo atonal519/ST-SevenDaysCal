@@ -170,39 +170,4 @@ export function readSnapshot(mesId) {
 
 export { resolveSnapshotCalendar };
 
-export function scanSnapshotTargets() {
-    const c = ctx(); const chat = c?.chat; const out = [];
-    if (!Array.isArray(chat)) return out;
-    chat.forEach((msg, messageIndex) => {
-        if (msg?.extra?.[SNAP_KEY]) out.push({ messageIndex, swipeIndex: null, value: JSON.parse(JSON.stringify(msg.extra[SNAP_KEY])) });
-        if (Array.isArray(msg?.swipe_info)) msg.swipe_info.forEach((slot, swipeIndex) => { if (slot?.extra?.[SNAP_KEY]) out.push({ messageIndex, swipeIndex, value: JSON.parse(JSON.stringify(slot.extra[SNAP_KEY])) }); });
-    }); return out;
-}
-
-function targetValue(target) { const msg = ctx()?.chat?.[target.messageIndex]; return target.swipeIndex == null ? msg?.extra?.[SNAP_KEY] : msg?.swipe_info?.[target.swipeIndex]?.extra?.[SNAP_KEY]; }
-function setTargetValue(target, value) { const msg = ctx()?.chat?.[target.messageIndex]; if (!msg) return false; const holder = target.swipeIndex == null ? msg : (msg.swipe_info?.[target.swipeIndex] || null); if (!holder) return false; if (!holder.extra) holder.extra = {}; if (value == null) delete holder.extra[SNAP_KEY]; else holder.extra[SNAP_KEY] = JSON.parse(JSON.stringify(value)); return true; }
-
-export function stageSnapshotPatches(patches, { expectedChatId } = {}) {
-    if (!expectedChatId || ctx()?.chatId !== expectedChatId || !Array.isArray(patches)) return null;
-    const before = patches.map(p => ({ ...p, existed: targetValue(p) != null, value: targetValue(p) == null ? undefined : JSON.parse(JSON.stringify(targetValue(p))) }));
-    for (let i = 0; i < patches.length; i++) {
-        if (setTargetValue(patches[i], patches[i].value)) continue;
-        for (let j = i - 1; j >= 0; j--) { const old = before[j]; setTargetValue(old, old.existed ? old.value : null); }
-        return null;
-    }
-    return { token: `snapshot-${Date.now()}-${Math.random()}`, chatId: expectedChatId, before, patches, staged: true };
-}
-export function verifySnapshotPatches(token) { return !!token?.staged && ctx()?.chatId === token.chatId && token.patches.every(p => JSON.stringify(targetValue(p) ?? null) === JSON.stringify(p.value ?? null)); }
-export function restoreSnapshotPatches(token) {
-    if (!token?.staged || ctx()?.chatId !== token.chatId) return { ok: false, reason: 'chat-mismatch' };
-    if (!verifySnapshotPatches(token)) return { ok: false, reason: 'content-mismatch' };
-    token.before.forEach(p => setTargetValue(p, p.existed ? p.value : null)); return { ok: true };
-}
-export async function flushAwaitable({ expectedChatId } = {}) {
-    if (!expectedChatId || ctx()?.chatId !== expectedChatId) return { ok: false, reason: 'chat-mismatch', durability: 'unknown' };
-    const save = ctx()?.saveChat; if (typeof save !== 'function') return { ok: false, reason: 'saveChat-unavailable', durability: 'unknown' };
-    try { const result = save(); if (result?.then) await result; return { ok: ctx()?.chatId === expectedChatId, durability: 'host-returned-unconfirmed' }; }
-    catch (error) { return { ok: false, error, durability: 'unknown' }; }
-}
-
 export { SNAP_KEY, SNAP_VERSION };

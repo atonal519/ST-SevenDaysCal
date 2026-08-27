@@ -37,7 +37,6 @@ export function createLinesGenerationController(env = {}) {
             const adultMode = typeof env.adultMode === 'function' ? env.adultMode() : env.adultMode;
             const isInitial = sourceLines.length === 0;
             const intent = isReroll ? 'reroll' : isInitial ? 'initial' : 'advance';
-            const isDominantPoolRun = adultMode === 'dominant' && (isReroll || isInitial);
             const ticketCount = Math.min(capacity, AUTO_LINE_SEED_CAPACITY);
             const freshTickets = await drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision });
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };

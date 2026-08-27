@@ -43,7 +43,6 @@ export async function reconcileStateAtomic(state, sources, chatLength, save, nor
     if (!guard()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' });
     const before = clone(state.entries);
     const beforeSeq = state.seq;
-    const beforeIds = before.map(entry => String(entry?.id || ''));
     if (!validateLedgerIdentity(before, beforeSeq)) throw Object.assign(new Error('source-state-invalid'), { phase: 'source-state-invalid' });
     const result = reconcileLedgerEntries(state.entries, sources, chatLength);
     const planSummary = numericPlanSummary({ ...result.summary, kept: result.entries.length });

@@ -2,12 +2,11 @@ import { createCoordinateRuntime } from './runtime.js';
 import { captureMesText, sanitizeSnapshot, makePreview } from './capture.js';
 import { SIZE_WARN_BYTES } from './schema.js';
 
-let settings = () => ({});
 let repository = null;
 let initialized = false;
 function repo() { return repository || (repository = createCoordinateRuntime().repository); }
 
-export function initAnchor({ getSettings } = {}) { if (getSettings) settings = getSettings; if (!initialized) { initialized = true; repository = createCoordinateRuntime({ warnBytes: SIZE_WARN_BYTES }).repository; repo().loadIndex().then(() => migrateFromIndexedDB()).catch(() => {}); } }
+export function initAnchor() { if (!initialized) { initialized = true; repository = createCoordinateRuntime({ warnBytes: SIZE_WARN_BYTES }).repository; repo().loadIndex().then(() => migrateFromIndexedDB()).catch(() => {}); } }
 export const addItem = item => repo().addItem(item);
 export const getItem = id => repo().getItem(id);
 export const getAllItems = () => repo().getAllItems();

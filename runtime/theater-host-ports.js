@@ -1,4 +1,4 @@
-import { diagnosticMessage } from '../api/diagnostics.js';
+import { classifyGenerationError, diagnosticMessage } from '../api/diagnostics.js';
 
 // 棱宿主端口：所有 theater 专属 DOM/jQuery 操作集中于此。
 export function createTheaterHostPorts(d = {}) {
@@ -8,7 +8,7 @@ export function createTheaterHostPorts(d = {}) {
         htmlOptions: () => ({ purifier: globalThis.DOMPurify, documentRef }), escapeHtml, escapeAttr, setBody, loading,
         isOpen: () => theaterMode() && $(`#${modalId()}`).is(':visible'), notifyEnabled: () => settings().notifyMode !== 'off', toast: showToast,
         focus: selector => $in(selector).trigger('focus'), closedSuccess: () => showToast('棱已生成，点击查看', () => { $in('.sp-view-btn[data-view="theater"]').trigger('click'); showPanel(); }), closedFailure: () => showToast('棱生成失败，请重试', null, true),
-        showError: error => setBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(diagnosticMessage(error))}</p><button class="sp-btn sp-theater-back">返回</button></div>`),
+        showError: (error, options = {}) => { const retryable = options.retryable ?? classifyGenerationError(error) !== 'config-missing'; const retry = retryable ? '<button class="sp-gen-btn sp-theater-retry">重新生成</button>' : ''; setBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(diagnosticMessage(error))}</p>${retry}<button class="sp-btn sp-theater-back">返回</button></div>`); },
         data: (element, key) => $(element).data(key), val: (selector, value) => value === undefined ? $in(selector).val() : $in(selector).val(value), closePicker: () => $in('#sp-theater-tpl-picker').removeAttr('open'), confirm: spConfirm || confirm,
         scrollTop: () => $in('#sp-theater-body').scrollTop(0), setTemplateListHtml: html => $in('#sp-theater-tpl-picker-list').html(html), getManagerOpen: () => $in('#sp-theater-tpl-mgr').find('.sp-theater-tpl-library').prop('open'), setManagerHtml: html => { const mgr = $in('#sp-theater-tpl-mgr'); if (mgr.length) mgr.html(html); }, setStylePrompt: value => { settings().theaterStylePrompt = value; saveSettingsDebounced(); },
         setAbortPending: () => { $in('#sp-abort-theater').prop('disabled', true).attr('aria-disabled', 'true').html('<i class="fa-solid fa-spinner fa-spin"></i>正在中止…'); $in('.sp-loading-text').text('正在中止…'); }, triggerFileInput: () => $in('#sp-theater-tpl-import-file').trigger('click'),

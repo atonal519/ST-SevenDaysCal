@@ -12,8 +12,9 @@ export function createSpaceRepository({ captureIdentity, isCurrent, readStore, w
     };
     const replace = (target, next) => {
         if (!current(target) || !Array.isArray(next)) return false;
+        if (writeStore?.(target.historyKey, next) === false) return false;
         history = next;
-        return writeStore?.(target.historyKey, history) !== false;
+        return true;
     };
     const save = (target = capture()) => replace(target, history);
     const clearMemory = () => { history = []; return history; };
