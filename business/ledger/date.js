@@ -29,8 +29,10 @@ export function ledgerDueInfo(entry, today = deps.today()) {
     return to <= since ? { 天数: to, 过期: false } : { 天数: since, 过期: true };
 }
 
-export function listJudgeableLedger() {
-    return deps.listEntries().filter(entry => entry.锁 !== '用户锁' && entry.来源状态 !== '待确认' && entry.来源状态 !== '来源已删除');
+export function listJudgeableLedger({ includePending = false } = {}) {
+    return deps.listEntries().filter(entry => entry.锁 !== '用户锁'
+        && (includePending || entry.来源状态 !== '待确认')
+        && entry.来源状态 !== '来源已删除');
 }
 
 export function fmtLedgerForJudge(entry, today = deps.today()) {
@@ -40,5 +42,6 @@ export function fmtLedgerForJudge(entry, today = deps.today()) {
     const dueText = !due ? '' : (due.天数 === 0 ? '·今天到期' : (due.过期 ? `·已过期 ${due.天数} 天` : `·还有 ${due.天数} 天到期`));
     const cycle = entry.周期长度 ? `·周期 ${entry.周期长度} 天` : '';
     const who = entry.牵扯?.length ? `·涉及 ${entry.牵扯.join('、')}` : '';
-    return `[${entry.id}] ${entry.事由}（${entry.类型}）：现状「${entry.现状 || '—'}」｜${sinceText}${dueText}${cycle}${who}`;
+    const pending = entry.来源状态 === '待确认' ? '·来源待确认，请以最新可见正文校对' : '';
+    return `[${entry.id}] ${entry.事由}（${entry.类型}）：现状「${entry.现状 || '—'}」｜${sinceText}${dueText}${cycle}${who}${pending}`;
 }

@@ -43,7 +43,7 @@ export function createLedgerJudgeController(options = {}) {
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
         const ctx = env.context();
-        const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true;
+        const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true; env.setFabBusy?.(true);
         let reconcile = null;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         env.render?.(); env.refreshInline?.(true);
@@ -57,7 +57,7 @@ export function createLedgerJudgeController(options = {}) {
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
-            const judgeable = (env.listJudgeable?.() || []).filter(entry => entry?.来源状态 !== '待确认' && entry?.来源状态 !== '来源已删除');
+            const judgeable = (env.listJudgeable?.(manual ? { includePending: true } : {}) || []).filter(entry => entry?.来源状态 !== '来源已删除' && (manual || entry?.来源状态 !== '待确认'));
             if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
             if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
             const cfg = env.config?.();
@@ -80,7 +80,7 @@ export function createLedgerJudgeController(options = {}) {
                 const entry = env.getEntry?.(change.id);
                 if (!entry) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
                 if (entry.状态 === '已了结' || entry.锁 === '用户锁') continue;
-                if (entry.来源状态 === '待确认' || entry.来源状态 === '来源已删除') return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
+                if (entry.来源状态 === '来源已删除' || (entry.来源状态 === '待确认' && !manual)) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
                 if (entry.静音 === true && change.动作 === '了结') continue;
                 const patch = { 现状锚: { 楼层: floor, 历日期: date } };
                 if (change.现状) patch.现状 = change.现状;
@@ -111,7 +111,7 @@ export function createLedgerJudgeController(options = {}) {
                 if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.(ledgerFailureText('刻度判定失败', error, { phase: error?.ledgerPhase || 'judge-request' }), null, true);
             }
             return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, applied: [] };
-        } finally { finish(ctrl, owner); removeBridge(); }
+        } finally { finish(ctrl, owner); removeBridge(); env.setFabBusy?.(false); }
     };
     return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }

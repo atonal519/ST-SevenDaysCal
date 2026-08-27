@@ -116,28 +116,28 @@ q::after {
     --sp-chat-bg-legacy: #1e2028;
 }
 .sp-day {
-    --sp-sheet-bg-legacy    : #F6F4E8;
-    --sp-surface-legacy     : #E5EEE4;
-    --sp-surface-high-legacy: #C0E1D2;
-    --sp-primary-legacy     : #DC9B9B;
-    --sp-on-primary   : #3e1f1f;
-    --sp-on-surface-legacy  : #2c2e2a;
-    --sp-subtle-legacy      : #7a8078;
-    --sp-divider-legacy     : rgba(0,0,0,0.08);
+    --sp-sheet-bg-legacy    : #FAF9F6;
+    --sp-surface-legacy     : #F0F3F5;
+    --sp-surface-high-legacy: #DCEAF3;
+    --sp-primary-legacy     : #457892;
+    --sp-on-primary   : #FFFFFF;
+    --sp-on-surface-legacy  : #27323A;
+    --sp-subtle-legacy      : #6E7980;
+    --sp-divider-legacy     : rgba(39,50,58,0.11);
     --sp-shadow       : 0 8px 40px rgba(0,0,0,0.12), 0 2px 10px rgba(0,0,0,0.07);
     --sp-card-shadow  : 0 1px 4px rgba(0,0,0,0.09);
-    --sp-chip-bg      : rgba(220,155,155,0.22);
-    --sp-spinner-color: #DC9B9B;
-    --sp-hover-bg-legacy    : rgba(220,155,155,0.10);
-    --sp-char-color   : #5C9EA0;
-    --sp-chip-char-bg : rgba(92,158,160,0.15);
+    --sp-chip-bg      : rgba(69,120,146,0.16);
+    --sp-spinner-color: #457892;
+    --sp-hover-bg-legacy    : rgba(69,120,146,0.09);
+    --sp-char-color   : #6F8794;
+    --sp-chip-char-bg : rgba(111,135,148,0.14);
     /* Day mode: bubbles stay close to surface tokens (they already contrast
        fine with dark text) */
-    --sp-chat-user-bg : #C0E1D2;
-    --sp-chat-ai-bg   : #E5EEE4;
+    --sp-chat-user-bg : #DCEAF3;
+    --sp-chat-ai-bg   : #ECEFF1;
     /* Chat scroll-area background — same warm cream ST usually gives us,
        hard-coded so transparent-ST-theme users don't fall through to blank. */
-    --sp-chat-bg-legacy: #D2C1B6;
+    --sp-chat-bg-legacy: #F7F8F8;
 }
 
 /* ─── ST theme cascade — ST var 优先，fallback 到上面的 -legacy 值 ──────────── */
@@ -185,6 +185,9 @@ q::after {
     --sp-divider     : var(--sp-divider-legacy);
     --sp-hover-bg    : var(--sp-hover-bg-legacy);
     --sp-chat-bg     : var(--sp-chat-bg-legacy);
+}
+.sp-forced-day {
+    --sp-sheet-bg-legacy: #FBFCFC;
 }
 
 /* 只跟随酒馆「配色」，不继承酒馆的「文字阴影」。酒馆核心 style.css 在全局 *
@@ -4053,6 +4056,19 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-line-card.sp-line-pinned .sp-line-pin-toggle,
 .sp-lines-dashed-item.sp-lines-dashed-pinned .sp-lines-dashed-lock { opacity: 0.85; color: var(--sp-primary); }
 
+/* 日间主题的重点态使用低饱和蓝灰；未命中这些日间作用域时，保留夜间基线紫色。 */
+.sp-day .sp-beat-current { background: color-mix(in oklab, var(--sp-primary) 10%, transparent); }
+.sp-day .sp-beat-current:hover { background: color-mix(in oklab, var(--sp-primary) 14%, transparent); }
+.sp-day .sp-beat-next { box-shadow: inset 3px 0 0 color-mix(in oklab, var(--sp-primary) 35%, transparent); }
+.sp-day .sp-beat-badge-next { background: color-mix(in oklab, var(--sp-primary) 16%, transparent); border-color: color-mix(in oklab, var(--sp-primary) 50%, transparent); }
+.sp-day .sp-beat-type { background: color-mix(in oklab, var(--sp-primary) 15%, transparent); }
+.sp-day .sp-inline-ledger-lock:hover { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
+.sp-day .sp-ledger-inline-row.sp-line-pinned { background: color-mix(in oklab, var(--sp-primary) 5%, transparent); }
+.sp-day .sp-line-pin-toggle:hover,
+.sp-day .sp-lines-dashed-lock:hover { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
+.sp-day .sp-line-card.sp-line-pinned { background: color-mix(in oklab, var(--sp-primary) 5%, transparent); }
+.sp-day .sp-event.sp-event-pinned { background: color-mix(in oklab, var(--sp-primary) 6%, transparent); }
+
 /* 锁定态卡片：左边框改用主色调、轻微底色区分，一眼看出"保命线" */
 .sp-line-card.sp-line-pinned {
     background       : rgba(125, 125, 235, 0.05);
@@ -4425,6 +4441,7 @@ body.sp-theater-fs-lock { overflow: hidden; }
     background-color: var(--sp-sheet-bg-legacy);
     background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
 }
+#sp-anchor-body.sp-anchor-fs-on .sp-anchor-back { display: none; }
 body.sp-anchor-fs-lock { overflow: hidden; }
 /* 缩放角标：仅坐标全屏态 + 桌面显示（手机全屏不允许拖拽，靠媒体查询天然隐藏）。 */
 .sp-anchor-fs-resize { display: none; }
@@ -5180,7 +5197,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     width        : max-content;
     max-width    : calc(100vw - 24px);
     padding      : 5px;
-    background   : var(--sp-sheet-bg);
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border       : 1px solid var(--sp-divider);
     border-radius: 8px;
     box-shadow   : var(--sp-shadow);
@@ -5383,7 +5401,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-ledger-ctrl {
     display      : flex;
     align-items  : center;
+    justify-content: flex-end;
     gap          : 8px;
+    flex-wrap    : nowrap;
     padding-bottom: 10px;
     margin-bottom: 10px;
     border-bottom: 1px solid var(--sp-divider);
@@ -5391,6 +5411,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-ledger-ctrl-wrap { padding: 10px 12px 10px; }
 .sp-ledger-ctrl-wrap .sp-ledger-ctrl { margin-bottom: 0; }
 .sp-alm-body-ledger { padding-top: 0; }
+.sp-alm-body > .sp-batch-bar:not(.sp-batch-active) { padding-top: 0; }
 .sp-ledger-auto {
     display    : flex;
     align-items: center;
@@ -5400,7 +5421,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     cursor     : pointer;
 }
 .sp-ledger-auto input[type="checkbox"] { cursor: pointer; }
-.sp-ledger-capture-now { margin-left: auto; flex-shrink: 0; }
+.sp-ledger-capture-now { flex-shrink: 0; }
+.sp-ledger-ctrl > .sp-batch-bar { padding: 0; flex-shrink: 0; }
+.sp-ledger-ctrl > .sp-batch-bar.sp-batch-active { margin-left: auto; }
+.sp-ledger-ctrl > .sp-batch-bar .sp-batch-enter { white-space: nowrap; }
+@media (max-width: 480px) {
+    .sp-ledger-ctrl { flex-wrap: wrap; }
+    .sp-ledger-ctrl > .sp-batch-bar.sp-batch-active { margin-left: auto; }
+}
 .sp-ledger-capture-busy {
     cursor: progress;
     opacity: 0.72;
