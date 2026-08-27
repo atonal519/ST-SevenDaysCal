@@ -30,6 +30,7 @@ export function createLinesGenerationController(env = {}) {
             const liveCandidates = sourceLines.filter(line => line.pin || !TERMINAL_LINE_STAGES.has(line.stage));
             const identityLines = isReroll ? liveCandidates.filter(line => line.pin) : liveCandidates;
             const previousRaw = isReroll || liveCandidates.length !== sourceLines.length ? serializeLines(identityLines) : sourceRaw;
+            const promptRaw = isReroll ? '' : previousRaw;
             let drawer = env.drawTickets; let capacity = Number(env.vectorCapacity);
             if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
@@ -52,8 +53,8 @@ export function createLinesGenerationController(env = {}) {
                 return Object.freeze({ ...ticket, ticketId: `TICKET-${index + 1}`, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) });
             });
             owner.vectorTickets = adultTickets;
-            const vectorContext = { intent, retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets: adultTickets, adultSelections };
-            const prompt = env.buildPrompt(previousRaw, travelContext, vectorContext);
+            const vectorContext = { intent, retained: isReroll ? [] : identityLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : identityLines.filter(line => !line.cue).map(line => line.name), pinnedBackground: isReroll ? identityLines.filter(line => line.pin) : [], freshTickets: adultTickets, adultSelections };
+            const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext);
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const beforeCall = env.readSaved() || {};
             if (String(beforeCall.raw || '') !== commitBaseline.raw || (Number(beforeCall.ts) || null) !== commitBaseline.ts) return { status: 'cancelled', reason: 'stale-baseline' };
@@ -69,7 +70,7 @@ export function createLinesGenerationController(env = {}) {
             const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId }) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
             if (!decision.ok) return { status: 'cancelled', reason: decision.reason };
             const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
-            const merged = mergePinned(previousRaw, serializeLines(bound));
+            const merged = mergePinned(isReroll ? sourceRaw : previousRaw, serializeLines(bound), { preferPinnedSource: isReroll });
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
             const resultModel = intent === 'advance'
                 ? merged.model

@@ -111,9 +111,10 @@ test('dominant pool accepts free output order but enforces ticket set and strips
     const bound = bindVectorTickets({ generatedLines: generated, freshTickets: tickets });
     assert.deepEqual(bound.map(line => line.adult), [true, false, true, false, true, true, true]);
     assert.ok(bound.every(line => !Object.hasOwn(line, 'ticketId')));
-    for (const bad of [[1, 2, 3, 4, 5, 6], [0, 1, 2, 4, 5, 6], [0, 1, 2, 3, 4, 6]]) {
-        const invalid = bad.map((index, lineIndex) => ({ ...generated[lineIndex], ticketId: tickets[index].ticketId }));
-        assert.throws(() => bindVectorTickets({ generatedLines: invalid, freshTickets: tickets }));
+    for (const selected of [[1], [0, 3], [3, 1]]) {
+        const subset = selected.map((index, lineIndex) => ({ ...generated[lineIndex], ticketId: tickets[index].ticketId }));
+        const subsetBound = bindVectorTickets({ generatedLines: subset, freshTickets: tickets });
+        assert.deepEqual(subsetBound.map(line => line.cue), selected.map(index => serializeVectorCue(tickets[index])));
     }
 });
 test('ticket protocol rejects missing duplicate unknown and old-line IDs without committing', async () => {
@@ -147,7 +148,7 @@ test('adult line modes keep off unchanged and reserve explicit adult candidates'
     const mixed = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'mixed');
     const dominant = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'dominant');
     assert.doesNotMatch(off, /成人剧情素材|实际性行为/);
-    assert.match(mixed, /严格按 Ticket 原始签发顺序使用前 K 张/);
+    assert.match(mixed, /从本轮真实唯一票据中选择合适子集/);
     assert.match(mixed, /成人选材票上的具体驱动力/);
     assert.match(dominant, /NSFW 新线必须由成人欲望、成人场景或成人互动本身驱动/);
     assert.match(dominant, /具体玩法\/行为/);
@@ -208,7 +209,7 @@ test('dominant initial/reroll uses a temporary 2 SFW plus 5 NSFW pool in one req
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 3);
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 3);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /票据必须严格等于前 K 张/);
+    assert.match(prompt, /选择任意不重复子集/);
     assert.match(prompt, /同一主角或同一组参与者可以重复/);
     assert.match(prompt, /场景、关系结构、互动机制、节奏或即时身体\/关系后果之一有实质差异/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
@@ -245,8 +246,9 @@ test('dominant pinned reroll retains pinned identity then applies the ratio pool
     const pinned = '<storylines_widget>\nLine: 锁线|推进|萌芽|1|今天|world|false|true\nDesc: 已锁定\nNext: 继续\n</storylines_widget>';
     const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'pin-chat', cacheKey: () => 'pin-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: pinned, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'pin-pool' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', pinned, 'auto', context, 'dominant'); }, callApi: async () => responseWithCount(4), commit: () => {}, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
-    assert.equal(captured.retained.length, 0, '无 Cue 的 pinned 线仍应进入 legacy 身份区');
-    assert.equal(captured.legacyWithoutCue[0], '锁线');
+    assert.equal(captured.retained.length, 0);
+    assert.deepEqual(captured.legacyWithoutCue, []);
+    assert.equal(captured.pinnedBackground[0].name, '锁线');
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 3);
 });
 

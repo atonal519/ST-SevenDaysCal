@@ -28,15 +28,18 @@ export function togglePin(raw, index) {
     const model = parseLines(raw); if (!Number.isInteger(index) || index < 0 || index >= model.length) return { ok: false, reason: 'not-found', raw };
     model[index].pin = !model[index].pin; return { ok: true, raw: serializeLines(model), model };
 }
-export function mergePinned(oldRaw, aiRaw) {
+export function mergePinned(oldRaw, aiRaw, options = {}) {
     const old = parseLines(oldRaw), fresh = parseLines(aiRaw);
     const queues = new Map();
     for (const line of fresh) if (line.name) { const queue = queues.get(line.name) || []; queue.push(line); queues.set(line.name, queue); }
     for (const pinned of old.filter(line => line.pin)) {
         const queue = queues.get(pinned.name);
-        const pinnedIndex = queue?.findIndex(item => item?.pin === true) ?? -1;
+        const pinnedIndex = queue?.findIndex(item => options.preferPinnedSource || item?.pin === true) ?? -1;
         const same = pinnedIndex >= 0 ? queue.splice(pinnedIndex, 1)[0] : undefined;
-        if (same) { same.pin = true; same.adult = pinned.adult === true || same.adult === true; same.cue = pinned.cue ?? null; } else fresh.push({ ...pinned });
+        if (same) {
+            if (options.preferPinnedSource) Object.assign(same, pinned);
+            else { same.pin = true; same.adult = pinned.adult === true || same.adult === true; same.cue = pinned.cue ?? null; }
+        } else fresh.push({ ...pinned });
     }
     return { ok: true, raw: serializeLines(fresh), model: fresh };
 }

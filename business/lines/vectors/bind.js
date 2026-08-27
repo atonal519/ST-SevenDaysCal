@@ -20,11 +20,5 @@ export function bindVectorTickets({ previousLines = [], generatedLines = [], fre
         const { ticketId: _ticketId, ...withoutTicket } = line;
         return { ...withoutTicket, adult: Boolean(ticket.adultSelection), cue: serializeVectorCue(ticket) };
     }).filter(Boolean);
-    let closed = false;
-    for (const ticket of freshTickets) {
-        const present = used.has(ticket.ticketId);
-        if (!present) closed = true;
-        else if (closed) throw new Error('non-contiguous-ticket-prefix');
-    }
     return bound;
 }
