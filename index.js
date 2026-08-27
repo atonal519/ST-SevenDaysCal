@@ -142,7 +142,7 @@ const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
 // point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
 import { pointState } from './business/point/state.js';
-import { parseCalendar, validateGeneratedCalendar, parsePointEventRecord, firstPointEventBlock, replacePointEventBlock, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate, serializeCalendar } from './business/point/parse.js';
+import { parseCalendar, validateGeneratedCalendar, bindPointAdultTickets, parsePointEventRecord, firstPointEventBlock, replacePointEventBlock, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate, serializeCalendar } from './business/point/parse.js';
 import { isGregorian as isGregorianCalendar } from './business/calendar/date.js';
 import { buildPrompt } from './business/point/prompt.js';
 import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
@@ -152,6 +152,7 @@ import { createPointActions } from './business/point/actions.js';
 import { createPointWidgetActions } from './business/point/widget.js';
 import { createPointController } from './business/point/controller.js';
 import { createPointInlineRenderer } from './business/point/inline.js';
+import { pointTicketPlan } from './business/point/adult.js';
 // ledger 检索前置选择器（纯逻辑三件套）已抽出到 business/ledger/select.js；到期/距今口径经 bindLedgerSelect 注入。
 import { bindLedgerSelect, scoreLedgerEntry, isLedgerSalient, selectLedgerForInject } from './business/ledger/select.js';
 import { bindLedgerDate, ledgerDaysSince, ledgerDueInfo, listJudgeableLedger, fmtLedgerForJudge } from './business/ledger/date.js';
@@ -395,6 +396,8 @@ const pointController = createPointController({
     notify: () => getSettings().notifyMode,
     canCommit: (owner, travel) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), signal: travel?.signal, pluginEnabled: pluginEnabled() }).canCommit,
     editing: () => manualEditing.point,
+    adultMode: () => getAdultMode(charStableKey(getContext())),
+    bindAdult: bindPointAdultTickets,
     logDiagnostic: diagnostic => console.warn('[SP point failure]', diagnostic),
     canCallback: owner => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback,
     setView,
@@ -2701,7 +2704,7 @@ function injectModal() {
                             <details class="sp-settings-section" id="sp-wi-section">
                                 <summary class="sp-settings-section-title">世界书</summary>
                                 <div class="sp-settings-section-body" id="sp-wi-body">
-                                    <p class="sp-cfg-hint">勾选表示允许构画使用；实际注入遵循酒馆 🔵常驻／🟢关键词激活（及宿主支持的其他激活规则）；取消勾选/整本排除仍优先跳过。</p>
+                                    <p class="sp-cfg-hint">勾选表示允许构画使用；选择按当前聊天保存；实际注入遵循酒馆 🔵常驻／🟢关键词激活（及宿主支持的其他激活规则）；取消勾选/整本排除仍优先跳过。</p>
                                     <div id="sp-wi-list" class="sp-wi-list">
                                         <span class="sp-cfg-hint">（打开设置时自动加载）</span>
                                     </div>
@@ -4618,13 +4621,13 @@ function abortAlmanacGen() {
     if (axisState.almanacMode) renderAlmanacPanel();
 }
 
-async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null, travelContext = null) {
+async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null, travelContext = null, adultMode = 'off') {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) {
         if (!settingsOpen) toggleSettings();
         throw new Error('请先在设置中填写自定义 API 的 URL 和 Key');
     }
-    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc()), travelContext);
+    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 11) }), travelContext);
     const apiOpts = travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {});
     apiOpts.pointView = perspective;
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 3, apiOpts);
@@ -4651,23 +4654,59 @@ function getWiFilter() {
     return s.wiFilter;
 }
 
-function getDisabledKeys(charKey) {
-    if (!charKey) return new Set();
-    return new Set(getWiFilter()[charKey] || []);
+function chatStableKey(ctx) {
+    const hash = String(ctx?.chatMetadata?.chat_id_hash || '').trim();
+    if (hash) return `hash:${hash}`;
+    const chatId = String(ctx?.chatId || '').trim();
+    const avatar = String(charStableKey(ctx) || '').trim();
+    return chatId && avatar ? `legacy:${avatar}:${chatId}` : null;
 }
 
-function setDisabledKeys(charKey, disabledSet) {
-    if (!charKey) return;
-    getWiFilter()[charKey] = [...disabledSet];
+function getWiFilterByChat() {
+    const s = getSettings();
+    if (!s.wiFilterByChat || typeof s.wiFilterByChat !== 'object' || Array.isArray(s.wiFilterByChat)) s.wiFilterByChat = {};
+    return s.wiFilterByChat;
+}
+
+function getDisabledKeys(ctx) {
+    const chatKey = chatStableKey(ctx);
+    if (!chatKey) {
+        const charKey = charStableKey(ctx);
+        return charKey ? new Set(getWiFilter()[charKey] || []) : new Set();
+    }
+    const byChat = getWiFilterByChat();
+    if (!Object.prototype.hasOwnProperty.call(byChat, chatKey)) {
+        const charKey = charStableKey(ctx);
+        byChat[chatKey] = charKey ? [...(getWiFilter()[charKey] || [])] : [];
+        saveSettingsDebounced();
+    }
+    return new Set(Array.isArray(byChat[chatKey]) ? byChat[chatKey] : []);
+}
+
+function setDisabledKeys(ctx, disabledSet) {
+    const chatKey = chatStableKey(ctx);
+    if (!chatKey) return;
+    getWiFilterByChat()[chatKey] = [...disabledSet];
     saveSettingsDebounced();
 }
 
+function mergeDisabledWiKeys(existing, visibleStates) {
+    const disabled = new Set(existing || []);
+    for (const state of visibleStates || []) {
+        const key = state?.key;
+        if (!key) continue;
+        if (state.checked) disabled.delete(key); else disabled.add(key);
+    }
+    return disabled;
+}
+
 function saveCurrentWiSelection() {
-    const charKey = charStableKey(getContext());
-    if (!charKey) return;
-    const disabled = new Set();
-    $inAll('#sp-wi-list .sp-wi-cb').each(function () { if (!this.checked) disabled.add($(this).data('key')); });
-    setDisabledKeys(charKey, disabled);
+    const ctx = getContext();
+    const chatKey = chatStableKey(ctx);
+    if (!chatKey) return;
+    const visible = [];
+    $inAll('#sp-wi-list .sp-wi-cb').each(function () { visible.push({ key: $(this).data('key'), checked: this.checked }); });
+    setDisabledKeys(ctx, mergeDisabledWiKeys(getDisabledKeys(ctx), visible));
 }
 
 // ─── World-book global exclusion (B方案) ─────────────────────────────────────
@@ -5137,7 +5176,7 @@ async function resolveWorldInfoActivation(ctx, coreChat) {
 }
 
 async function buildWorldInfoContext(ctx) {
-    const disabledKeys = getDisabledKeys(charStableKey(ctx));
+    const disabledKeys = getDisabledKeys(ctx);
     const entries = await getCharBookEntries(ctx);
     const coreChat = Array.isArray(ctx?.chat) ? ctx.chat.filter(message => {
         if (!message || message.is_system) return false;
@@ -6744,18 +6783,17 @@ async function renderWiList() {
     // Cache entries for the eye-button popup
     _wiEntryCache = new Map(entries.map(e => [e.key, e]));
 
-    const charKey = charStableKey(ctx);
-    const disabledKeys = getDisabledKeys(charKey);
+    const disabledKeys = getDisabledKeys(ctx);
 
     // Two-level group: scope (char / persona / global) → source (book name) → entries.
     // Preserves entry order within each source; char first, then persona, then global.
-    const scopes = new Map([['char', new Map()], ['persona', new Map()], ['global', new Map()]]);
+    const scopes = new Map([['char', new Map()], ['chat', new Map()], ['persona', new Map()], ['global', new Map()]]);
     for (const e of entries) {
         const scopeGroup = scopes.get(e.scope) || scopes.get('char');
         if (!scopeGroup.has(e.source)) scopeGroup.set(e.source, []);
         scopeGroup.get(e.source).push(e);
     }
-    const SCOPE_LABELS = { char: '角色卡世界书', persona: '用户世界书', global: '全局世界书' };
+    const SCOPE_LABELS = { char: '角色卡世界书', chat: '当前聊天世界书', persona: '用户世界书', global: '全局世界书' };
 
     // Build HTML in one pass.
     const parts = [];

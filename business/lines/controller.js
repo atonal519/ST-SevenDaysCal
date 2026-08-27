@@ -3,8 +3,9 @@ import { mergePinned } from './mutations.js';
 import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
 import { makeDiagnosticError } from '../../api/diagnostics.js';
-import { drawAdultSelections } from './adult.js';
-import { enforceLineCapacity } from './capacity.js';
+import { drawAdultSelections, allocateAdultPools } from './adult.js';
+import { enforceLineCapacity, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
+import { auditLineEvolution } from './evolution.js';
 
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
@@ -33,21 +34,25 @@ export function createLinesGenerationController(env = {}) {
             if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const adultMode = typeof env.adultMode === 'function' ? env.adultMode() : env.adultMode;
-            const isInitial = identityLines.length === 0;
+            const isInitial = sourceLines.length === 0;
+            const intent = isReroll ? 'reroll' : isInitial ? 'initial' : 'advance';
             const isDominantPoolRun = adultMode === 'dominant' && (isReroll || isInitial);
-            const ticketCount = Math.min(capacity, isDominantPoolRun ? 7 : Math.max(8, sourceLines.filter(line => line.name).length + 2));
+            const ticketCount = Math.min(capacity, AUTO_LINE_SEED_CAPACITY);
             const freshTickets = await drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision });
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
-            const selectionCount = isDominantPoolRun ? 5 : (adultMode === 'dominant' ? freshTickets.length : (adultMode === 'mixed' ? 1 : 0));
+            const activeLines = sourceLines.filter(line => line.name && !line.pin && !TERMINAL_LINE_STAGES.has(line.stage));
+            const allocatorBase = isReroll ? { activeCount: 0, activeAdultCount: 0 } : { activeCount: activeLines.length, activeAdultCount: activeLines.filter(line => line.adult).length };
+            const pools = adultMode === 'off' ? null : allocateAdultPools(adultMode, freshTickets.length, allocatorBase);
+            const selectionCount = pools ? pools.filter(pool => pool === 'nsfw').length : 0;
             const adultSelections = drawAdultSelections(adultMode, selectionCount, { random: env.random || (() => Math.random()), seed: owner.id });
-            const adultStart = isDominantPoolRun ? 2 : 0;
+            let selectionIndex = 0;
             const adultTickets = freshTickets.map((ticket, index) => {
-                const selection = adultSelections[index - adultStart];
-                const pool = isDominantPoolRun ? (index < 2 ? 'sfw' : 'nsfw') : null;
+                const pool = pools?.[index] || null;
+                const selection = pool === 'nsfw' ? adultSelections[selectionIndex++] : null;
                 return Object.freeze({ ...ticket, ticketId: `TICKET-${index + 1}`, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) });
             });
             owner.vectorTickets = adultTickets;
-            const vectorContext = { intent: isDominantPoolRun ? (isReroll ? 'reroll' : 'initial') : 'advance', retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets: adultTickets, adultSelections };
+            const vectorContext = { intent, retained: identityLines.filter(line => line.cue), legacyWithoutCue: identityLines.filter(line => !line.cue).map(line => line.name), freshTickets: adultTickets, adultSelections };
             const prompt = env.buildPrompt(previousRaw, travelContext, vectorContext);
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const beforeCall = env.readSaved() || {};
@@ -57,6 +62,8 @@ export function createLinesGenerationController(env = {}) {
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
             if (!checked.ok) { env.fail?.(makeDiagnosticError('invalid-structure', { phase: 'parse' }), { silent }); return { status: 'failed', reason: checked.reason }; }
+            const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets, intent });
+            if (!audit.ok) { env.fail?.(makeDiagnosticError(audit.reason, { phase: 'evolution' }), { silent }); return { status: 'failed', reason: audit.reason }; }
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
             const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId }) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
@@ -64,8 +71,10 @@ export function createLinesGenerationController(env = {}) {
             const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             const merged = mergePinned(previousRaw, serializeLines(bound));
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
-            const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model });
-            env.commit(serializeLines(capacityResult.model), { silent, owner, swipeCtx, travelContext, commitBaseline });
+            const resultModel = intent === 'advance'
+                ? merged.model
+                : enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_SEED_CAPACITY }).model;
+            env.commit(serializeLines(resultModel), { silent, owner, swipeCtx, travelContext, commitBaseline });
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };

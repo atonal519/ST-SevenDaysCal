@@ -2,9 +2,14 @@
 // 从 index.js 机械搬移。全部为 <calendar_widget>「七天条」的 文本↔对象 互转与读写辅助，
 // 无 DOM / store / 历法(axis) 依赖。渲染层（renderSchedule 等）见 ./render.js，生成 prompt 见 ./prompt.js。
 import { calendarDate, formatCalendarDate, isGregorian, parseCalendarDate, validateCalendarDate } from '../calendar/date.js';
+import { normalizePointAdultMode, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
 
 export function parsePointEventRecord(text) {
-    const parts = String(text || '').replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
+    const source = String(text || '');
+    const adult = /^\s*Adult\s*:\s*true\s*$/im.test(source);
+    const ticketId = source.match(/^\s*Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/im)?.[1]?.toUpperCase() || undefined;
+    const proof = [...source.matchAll(/^\s*AdultProof\s*:\s*([^\n]*)$/gim)][0]?.[0];
+    const parts = source.split('\n').filter(line => !/^\s*(?:Adult|Ticket|AdultProof)\s*:/i.test(line)).join('\n').replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
     if (parts.length < 4) return null;
     const tail = parts.slice(5);
     const hasPin = tail.length > 0 && /^(true|false)$/i.test(tail[tail.length - 1]);
@@ -12,6 +17,9 @@ export function parsePointEventRecord(text) {
         type: (parts[0] || 'user').toLowerCase(), title: parts[1] || '', desc: parts[2] || '', time: parts[3] || '',
         location: parts[4] || '', npcAction: tail.slice(0, hasPin ? -1 : undefined).join('|'),
         pin: hasPin && tail[tail.length - 1].toLowerCase() === 'true',
+        adult,
+        ...(proof ? { adultProof: parsePointAdultProof(proof) } : {}),
+        ...(ticketId ? { ticketId } : {}),
     };
 }
 
@@ -62,7 +70,14 @@ export function replacePointEventBlock(raw, idx0, newEventText) {
     const block = blocks[idx0];
     if (!block) return null;
     const indent = (lines[block.start].match(/^\s*/) || [''])[0];
-    const replacement = String(newEventText || '').split('\n').map((line, i) => i ? line : indent + line.trim());
+    const originalMetadata = lines.slice(block.start + 1, block.end).filter(line => /^\s*Adult\s*:\s*true\s*$/i.test(line));
+    const originalEvent = parsePointEventRecord(lines[block.start]);
+    const replacement = String(newEventText || '').split('\n').map((line, i) => {
+        if (i || !/^\s*Event\s*:/i.test(line) || !originalEvent?.pin) return i ? line : indent + line.trim();
+        const clean = line.trim().replace(/^Event\s*:\s*/i, '');
+        return `${indent}Event: ${clean}|true`;
+    });
+    if (originalMetadata.length && !replacement.some(line => /^\s*Adult\s*:/i.test(line))) replacement.push(...originalMetadata);
     lines.splice(block.start, block.end - block.start, ...replacement);
     const newInner = lines.join('\n');
     return m ? src.replace(m[0], m[0].replace(m[1], newInner)) : newInner;
@@ -79,10 +94,12 @@ export function pointEventLines(raw) {
 // 点 → 编号列表（编辑冲突检测 / 提示词辅助）
 export function numberedPointList(raw) {
     const TYPE_LABEL = { user: '用户线', char: '角色线', main: '明线', hidden: '暗线', bond: '红线' };
-    return pointEventLines(raw).map((l, i) => {
-        const event = parsePointEventRecord(l) || {};
+    const parsed = parseCalendar(String(raw || ''));
+    const events = [...(parsed.days || []).flatMap(day => day.events || []), ...(parsed.future?.events || [])];
+    return events.map((event, i) => {
         const { type, title, desc, time, location, npcAction: dynamic } = event;
         const bits = [`#${i + 1}`, `【${TYPE_LABEL[(type || '').toLowerCase()] || type || '?'}】`, title || '(未命名)'];
+        if (event.adult) bits.push('【成人】');
         if (time)     bits.push(`｜时间:${time}`);
         if (location) bits.push(`｜地点:${location}`);
         if (desc)     bits.push(`｜${desc}`);
@@ -109,17 +126,19 @@ export function parseCalendar(raw, calendar = null) {
         } else if (parsedDate && validateCalendarDate(parsedDate, calendar)) startDate = parsedDate;
     }
 
-    const days = []; let cur = null; let inFuture = false; let future = null; let eventBuffer = '';
+    const days = []; let cur = null; let inFuture = false; let future = null; let eventBuffer = ''; let eventMeta = null; let proofEligible = false;
     const chineseDay = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7 };
     const flushEvent = () => {
         if (!eventBuffer || !cur) { eventBuffer = ''; return; }
         const ev = parsePointEventRecord(eventBuffer);
-        if (ev) cur.events.push(ev);
+        if (ev) cur.events.push(Object.assign(ev, eventMeta || {}));
         eventBuffer = '';
+        eventMeta = null;
     };
     for (const line of content.split('\n')) {
         const t = line.trim();
         if (!t) continue;
+        if (eventBuffer && !/^Ticket\s*:/i.test(t) && !/^AdultProof\s*:/i.test(t)) proofEligible = false;
         const dayHeader = /^(?:Day\s*:?\s*(\d+)|第([一二三四五六七\d]+)天)/i.exec(t);
         if (dayHeader) {
             flushEvent();
@@ -139,8 +158,14 @@ export function parseCalendar(raw, calendar = null) {
             flushEvent();
             if (!cur) cur = { events: [] };
             eventBuffer = t;
+            eventMeta = {};
+            proofEligible = false;
             continue;
         }
+        if (eventBuffer && /^Adult\s*:\s*true\s*$/i.test(t)) { eventMeta.adult = true; continue; }
+        if (eventBuffer && /^Adult\s*:\s*false\s*$/i.test(t)) { eventMeta.adult = false; continue; }
+        if (eventBuffer && /^Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/i.test(t)) { eventMeta.ticketId = t.match(/^Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/i)[1].toUpperCase(); proofEligible = true; continue; }
+        if (eventBuffer && /^AdultProof\s*:/i.test(t)) { if (proofEligible) eventMeta.adultProof = parsePointAdultProof(t); proofEligible = false; continue; }
         if (eventBuffer) eventBuffer += ` ${t}`;
     }
     flushEvent();
@@ -150,13 +175,14 @@ export function parseCalendar(raw, calendar = null) {
 
 // 生成响应写入前的结构闸门：数量是建议，结构与核心事件才是硬门槛。
 // 这是原始模型响应的硬门禁；锁定回并不能替模型补足缺失的 Future。
-export function validateGeneratedCalendar(raw, calendar = null) {
+export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
     const text = String(raw || '');
     const widget = text.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const eventBlocks = widget ? pointEventBlocksFromInner(widget[1]) : [];
     const strictEvents = widget ? eventBlocks.every(block => {
-        const fields = block.join('\n').trim().replace(/^Event\s*:\s*/i, '').split('|');
-        return fields.length === 6 || fields.length === 7;
+        const eventLine = block.find(line => /^\s*Event\s*:/i.test(line));
+        const fields = String(eventLine || '').trim().replace(/^Event\s*:\s*/i, '').split('|');
+        return fields.length === 6 || (!options.generated && fields.length === 7);
     }) : false;
     const parsed = parseCalendar(text, calendar);
     const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));
@@ -171,6 +197,35 @@ export function validateGeneratedCalendar(raw, calendar = null) {
     const dayDuplicate = [1, 2, 3].find(n => counts.get(n) > 1);
     const dayEmpty = coreDays.find(day => [1, 2, 3].includes(day.dayNumber) && !day.events.length);
     const reason = !hasClosing ? 'missing-closing-tag' : !widget ? 'missing-widget' : !strictEvents ? 'invalid-event-fields' : dayMissing ? 'day-missing' : dayDuplicate ? 'day-duplicate' : dayEmpty ? 'day-empty' : !hasFuture ? 'missing-future' : validFutureEvents < 1 ? 'empty-future' : null;
+    if (!reason && options.generated) {
+        const lines = text.match(/(?:^|\n)\s*(?:Ticket\s*:\s*[^\n]+|Adult\s*:\s*[^\n]+)\s*/gi) || [];
+        const proofLines = text.match(/(?:^|\n)\s*AdultProof\s*:[^\n]*/gi) || [];
+        if (normalizePointAdultMode(options.adultMode) === 'off' && (lines.length || proofLines.length)) return { ok: false, code: 'adult-protocol-in-off-mode', reason: 'adult-protocol-in-off-mode', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
+        if (lines.some(line => /^\s*Adult\s*:/i.test(line))) return { ok: false, code: 'ai-adult-metadata', reason: 'ai-adult-metadata', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
+        if (normalizePointAdultMode(options.adultMode) !== 'off') {
+            const pinnedTitles = new Map();
+            for (const event of (options.pinned || [])) { const title = String(event?.title || '').trim(); if (title) pinnedTitles.set(title, (pinnedTitles.get(title) || 0) + 1); }
+            const tickets = [];
+            let generatedIndex = 0;
+            for (const block of eventBlocks) {
+                const eventLine = block.find(value => /^\s*Event\s*:/i.test(value));
+                const title = String(eventLine || '').replace(/^\s*Event\s*:\s*/i, '').split('|')[1]?.trim() || '';
+                const blockTickets = block.filter(value => /^Ticket:\s*(POINT-TICKET-\d+)\s*$/.test(String(value).trim()));
+                const available = pinnedTitles.get(title) || 0;
+                if (available > 0) {
+                    pinnedTitles.set(title, available - 1);
+                    if (blockTickets.length) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
+                    continue;
+                }
+                if (blockTickets.length !== 1 || !/^\s*Ticket\s*:/i.test(block[1] || '')) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
+                const ticket = blockTickets[0].match(/^Ticket:\s*(POINT-TICKET-\d+)\s*$/)?.[1];
+                const expected = `POINT-TICKET-${++generatedIndex}`;
+                if (ticket !== expected) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets: [...tickets, ticket] } };
+                tickets.push(ticket);
+            }
+            if (tickets.length !== generatedIndex || lines.filter(line => /^\s*Ticket\s*:/i.test(line)).length !== tickets.length) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
+        } else if (lines.some(line => /^\s*Ticket\s*:/i.test(line)) || proofLines.length) return { ok: false, code: 'ticket-in-off-mode', reason: 'ticket-in-off-mode', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
+    }
     return {
         ok: !reason,
         code: reason,
@@ -183,6 +238,27 @@ export function validateGeneratedCalendar(raw, calendar = null) {
         strictEvents,
         diagnostics: { eventCount: eventBlocks.length, dayCounts: Object.fromEntries(counts), futureCount: validFutureEvents, dayMissing, dayDuplicate, dayEmpty: dayEmpty?.dayNumber || null },
     };
+}
+
+// 将本轮 Ticket 绑定为本地 Adult 元数据；Ticket 永不进入正式 raw。
+export function bindPointAdultTickets(raw, mode = 'off', calendar = null) {
+    const normalized = normalizePointAdultMode(mode);
+    const text = String(raw || '');
+    if (normalized === 'off') return text;
+    const parsed = parseCalendar(text, calendar);
+    const events = [];
+    for (const day of parsed.allDays || parsed.days) events.push(...(day.events || []));
+    if (parsed.future) events.push(...(parsed.future.events || []));
+    const ticketed = events.filter(event => event.ticketId);
+    const plan = pointTicketPlan(normalized, ticketed.length);
+    if (ticketed.length > plan.length || ticketed.some((event, i) => event.ticketId !== plan[i].id)) throw new Error('点成人票顺序或数量无效');
+    ticketed.forEach((event, i) => { event.adult = plan[i].adult && (normalized === 'dominant' || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event)); delete event.ticketId; delete event.adultProof; });
+    events.forEach(event => { if (!event.ticketId) delete event.ticketId; });
+    return serializeCalendar(parsed.allDays || parsed.days, parsed.future, parsed.startDate, calendar, parsed.startDateToken);
+}
+
+export function stripPointAdultMetadata(raw) {
+    return String(raw || '').replace(/^\s*Adult\s*:\s*(?:true|false)\s*\r?\n?/gim, '');
 }
 
 // ─── 点·锁定（F5，机制对齐「线」）──────────────────────────────────────────────
@@ -200,7 +276,8 @@ export function samePoint(a, b) {
 // Event 行序列化：type|title|desc|time|location|npcAction|pin。pin 是第 7 段（AI 只出前 6
 // 段→解析为 false；仅本函数在用户手动锁定 / 回并后写出 true），与线 linesToRaw 写 pin 同理。
 export function pointEventToRawLine(ev) {
-    return `Event: ${ev.type || 'main'}|${ev.title || ''}|${ev.desc || ''}|${ev.time || ''}|${ev.location || ''}|${ev.npcAction || ''}|${ev.pin ? 'true' : 'false'}`;
+    const line = `Event: ${ev.type || 'main'}|${ev.title || ''}|${ev.desc || ''}|${ev.time || ''}|${ev.location || ''}|${ev.npcAction || ''}|${ev.pin ? 'true' : 'false'}`;
+    return ev.adult ? `${line}\nAdult: true` : line;
 }
 
 // {days, future, startDate} → 规范 <calendar_widget> 文本（锁定回并 / 手动切换后重序列化用）。
@@ -264,6 +341,7 @@ export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
         const hitIndex = all.findIndex((ev, idx) => !used.has(idx) && samePoint(ev, p.ev));
         if (hitIndex >= 0) {
             all[hitIndex].pin = true;
+            all[hitIndex].adult = !!p.ev.adult;
             used.add(hitIndex);
             continue;
         }   // AI 保留 → 采纳推进，重标 pin；同名多锁点按“逐个消耗匹配”保留，不再反复命中同一条
@@ -288,7 +366,7 @@ export function buildPointInjectText(ev, weather = '', temp = '', dateLabel = ''
     const w  = String(weather || '').trim();
     const tp = String(temp || '').trim();
     const dl = String(dateLabel || '').trim();
-    const parts = ['【点参考】'];
+    const parts = [ev?.adult ? '【成人点参考】' : '【点参考】'];
     if (dl)           parts.push(`日期：${dl}`);
     if (w || tp)      parts.push(`天气：${w}${tp ? ' ' + tp : ''}`);
     if (ev.time)      parts.push(`时间：${ev.time}`);

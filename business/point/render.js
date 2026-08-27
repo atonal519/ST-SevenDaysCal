@@ -66,7 +66,7 @@ function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', d
     ], escapeHtml, escapeAttr).replace('data-menu-id="point"', 'data-menu-id="point" data-day="' + escapeAttr(String(dayKey)) + '" data-ev="' + evIdx + '" data-iid="' + iid + '"') : inject;
     return `<div class="sp-event ${meta.cls}${ev.pin ? ' sp-event-pinned' : ''}">
         <div class="sp-event-head">
-            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>
+            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>${ev.adult ? '<span class="sp-point-adult-badge">18+</span>' : ''}
             ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
         <span class="sp-beat-actions">${actions}</span>
         </div>

@@ -42,8 +42,10 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
             <div class="sp-beat-head">
                 <span class="sp-beat-index">${index + 1}</span>
                 ${badge}
-                <span class="sp-beat-time">${esc(beat.time)}</span>
-                ${beat.type ? `<span class="sp-beat-type">${esc(beat.type)}</span>` : ''}
+                <span class="sp-beat-meta">
+                    <span class="sp-beat-time">${esc(beat.time)}</span>
+                    ${beat.type ? `<span class="sp-beat-type">${esc(beat.type)}</span>` : ''}
+                </span>
                 <span class="sp-beat-actions">${actions}</span>
             </div>
             ${beat.line ? `<span class="sp-beat-linerow">${esc(beat.line)}</span>` : ''}

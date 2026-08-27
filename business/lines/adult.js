@@ -12,10 +12,30 @@ export function normalizeAdultMode(value) {
     return ADULT_MODES.includes(value) ? value : 'off';
 }
 
+export function allocateAdultPools(mode, count, { activeCount = 0, activeAdultCount = 0 } = {}) {
+    const normalized = normalizeAdultMode(mode);
+    if (!Number.isInteger(count) || count < 1) return Object.freeze([]);
+    const target = normalized === 'dominant' ? 0.7 : normalized === 'mixed' ? 0.3 : 0;
+    let total = Math.max(0, Number(activeCount) || 0);
+    let adult = Math.max(0, Math.min(total, Number(activeAdultCount) || 0));
+    const result = [];
+    for (let index = 0; index < count; index++) {
+        const choose = candidateAdult => {
+            const ratio = (adult + (candidateAdult ? 1 : 0)) / Math.max(1, total + 1);
+            return Math.abs(ratio - target);
+        };
+        const adultDistance = choose(true); const sfwDistance = choose(false);
+        const useAdult = target > 0 && adultDistance < sfwDistance;
+        result.push(useAdult ? 'nsfw' : 'sfw');
+        total += 1; if (useAdult) adult += 1;
+    }
+    return Object.freeze(result);
+}
+
 export function drawAdultSelections(mode, count = 0, { random = Math.random, seed = 0 } = {}) {
     const normalized = normalizeAdultMode(mode);
     if (normalized === 'off' || !Number.isInteger(count) || count < 1) return Object.freeze([]);
-    const size = normalized === 'mixed' ? Math.min(1, count) : count;
+    const size = count;
     let state = Number.isFinite(Number(seed)) ? Number(seed) >>> 0 : 0;
     const roll = () => {
         if (typeof random === 'function') {
@@ -37,10 +57,10 @@ function baseAdultPromptGuidance(mode) {
     const normalized = normalizeAdultMode(mode);
     if (normalized === 'off') return '';
     if (normalized === 'mixed') return `
-【成人剧情素材·混合模式】仅对明确成年且自愿的虚构角色生效。成人选材票上的具体驱动力、行为、节奏、场景与后果是本轮临时素材；本轮候选必须至少保留一张带成人选材的真实新线，不能只写暧昧气氛或把成人方向全部降为暗示。对带成人选材的新建线和已有成人线，Next 必须写具体玩法/行为、主动方与对方的主动回应、以及即时身体或关系后果；高潮、虚脱、留宿、遣回、依赖加深、关系升温只能作为后果，不能单独构成 Next。普通非成人线继续使用普通 Next。成人素材须结合人物动机与剧情因果，不得凭空改变角色边界。`;
+【成人剧情素材·混合模式】仅对明确成年且自愿的虚构角色生效。成人选材票上的具体驱动力、行为、节奏、场景与后果是本轮临时素材；严格按 Ticket 原始签发顺序使用前 K 张，K 前缀可以没有 NSFW 票，不得跳票凑成人。使用到 NSFW 票时，该新线必须落实对应成人素材；SFW 新线不得成人化。对带成人选材的新建线和已有成人线，Next 必须写具体玩法/行为、主动方与对方的主动回应、以及即时身体或关系后果；高潮、虚脱、留宿、遣回、依赖加深、关系升温只能作为后果，不能单独构成 Next。普通非成人线继续使用普通 Next。成人素材须结合人物动机与剧情因果，不得凭空改变角色边界。`;
     const guidance = `
-【成人剧情素材·成人主导模式】仅对明确成年且自愿的虚构角色生效。成人选材票上的具体驱动力、行为、节奏、场景与后果是本轮临时素材。若本轮标出 SFW/NSFW 分池，旧线先输出，其后先输出 SFW 新线、再输出 NSFW 新线；SFW 新线不得成人化，NSFW 新线必须由成人欲望、成人场景或成人互动本身驱动，所有新建 NSFW 线都必须绑定成人选材；NSFW 池合同要求所有新建线都必须绑定成人选材，SFW 池是明确例外，不得把普通权谋、任务或交易线仅在 Next 尾部强行性化。2+5 是目标配额，证据不足时允许少于目标，不得串味凑数。对带成人选材的新建线和已有成人线，Next 必须写具体玩法/行为、主动方与对方的主动回应、以及即时身体或关系后果；高潮、虚脱、留宿、遣回、依赖加深、关系升温只能作为后果，不能单独构成 Next；不得用暧昧、含糊或淡出回避实际推进。同名保留的已有非成人线继续使用普通 Next，不得强行性化。成人线可使用 1v1、1vN 或 NvN；参与者必须是明确成年、自愿的虚构角色。`;
-    return guidance.replace('2+5 是目标配额，证据不足时允许少于目标，不得串味凑数。', '');
+【成人剧情素材·成人主导模式】仅对明确成年且自愿的虚构角色生效。成人选材票上的具体驱动力、行为、节奏、场景与后果是本轮临时素材。若本轮标出 SFW/NSFW 分池，SFW 新线不得成人化，NSFW 新线必须由成人欲望、成人场景或成人互动本身驱动，所有新建 NSFW 线都必须绑定成人选材；NSFW 池合同要求所有新建线都必须绑定成人选材，SFW 池是明确例外，不得把普通权谋、任务或交易线仅在 Next 尾部强行性化。比例是本地 allocator 的目标，证据不足时允许少于目标，不得串味凑数。对带成人选材的新建线和已有成人线，Next 必须写具体玩法/行为、主动方与对方的主动回应、以及即时身体或关系后果；高潮、虚脱、留宿、遣回、依赖加深、关系升温只能作为后果，不能单独构成 Next；不得用暧昧、含糊或淡出回避实际推进。同名保留的已有非成人线继续使用普通 Next，不得强行性化。成人线可使用 1v1、1vN 或 NvN；参与者必须是明确成年、自愿的虚构角色。`;
+    return guidance;
 }
 
 export function adultPromptGuidance(mode) {

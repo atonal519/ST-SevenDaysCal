@@ -54,16 +54,18 @@ export function createPointController(env) {
         }
         const { controller, signal } = splitAbortController(owner.controller);
         owner.canonical = owner.canonical || canonicalSnapshot(view, char);
+        owner.adultMode = owner.adultMode || (env.adultMode?.() || 'off');
         env.state.scheduleAbortController = controller; env.abortAuto?.();
         try {
             const ctx = env.context(); const user = ctx.name1 || '用户'; const character = view === 'char' ? (char || ctx.name2 || '角色') : (ctx.name2 || '角色'); const subject = view === 'char' ? character : user;
             const key = owner.canonical.key; const previous = owner.canonical.raw; const pinned = [];
             if (previous) { const parsed = env.parse(previous, env.calendar()); for (const day of parsed.days) for (const event of day.events) if (event.pin) pinned.push(event); if (parsed.future) for (const event of parsed.future.events) if (event.pin) pinned.push(event); }
-            const raw = await env.generate(ctx, user, character, view, signal, pinned, travelContext);
+            const raw = await env.generate(ctx, user, character, view, signal, pinned, travelContext, owner.adultMode);
             if (env.editing?.() || !env.canCommit(owner, travelContext) || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
-            const rawCheck = env.validate(raw, env.calendar()); if (!rawCheck.ok) { const error = new Error(`点输出无效（${rawCheck.code || rawCheck.reason || '结构不完整'}）`); error.pointIncomplete = true; error.validation = rawCheck; throw error; }
+            const rawCheck = env.validate(raw, env.calendar(), { generated: true, adultMode: owner.adultMode, pinned }); if (!rawCheck.ok) { const error = new Error(`点输出无效（${rawCheck.code || rawCheck.reason || '结构不完整'}）`); error.pointIncomplete = true; error.validation = rawCheck; throw error; }
             if (env.editing?.() || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
-            let merged = previous ? env.mergePinned(previous, raw, env.calendar()) : raw; const today = env.today(); merged = env.forceStart(merged, today.month, today.day, env.calendar());
+            let bound = env.bindAdult ? env.bindAdult(raw, owner.adultMode, env.calendar()) : raw;
+            let merged = previous ? env.mergePinned(previous, bound, env.calendar()) : bound; const today = env.today(); merged = env.forceStart(merged, today.month, today.day, env.calendar());
             const mergedCheck = env.validate(merged, env.calendar()); if (!mergedCheck.ok) throw new Error(`生成结果结构不完整（${mergedCheck.code || mergedCheck.reason || '未知原因'}）`);
             const html = env.render(merged, subject, view, env.calendar()); if (env.editing?.() || !env.canCommit(owner, travelContext) || !sameOwnerIdentity(owner, view, char) || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
             env.write(key, { raw: merged, userName: subject, ts: Date.now() }); env.sync(); if (!env.canCommit(owner, travelContext)) return;
@@ -86,13 +88,14 @@ export function createPointController(env) {
         if (env.state.isGenerating || env.editing?.()) { if (!auto) env.toast('点正在生成或编辑中，稍候再同步', null, true); return { status: 'skipped' }; }
         const view = env.view(), char = env.char(), key = env.key(view, char), saved = key && env.read(key), previous = saved?.raw || ''; if (!key || !previous) return { status: 'skipped' };
         env.abortAuto?.(); const chatId = env.chatId(); const owner = env.owners.create('point-auto', { chatId, chatRevision: env.owners.currentChatRevision(), view, charName: char, targetDate: travelContext?.targetDate }); owner.canonical = { key, raw: previous, ts: Number(saved?.ts) || null, chatId, view, char }; const { controller, signal } = splitAbortController(env.setAuto(owner.controller)); env.setSyncing(true);
+        owner.adultMode = env.adultMode?.() || 'off';
         try {
             const ctx = env.context(), cfg = env.config(); if (!cfg.url || !cfg.key) { const error = makeDiagnosticError('config-missing'); env.logDiagnostic?.(safeDiagnosticLog('point', 'request', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(diagnosticMessage(error), null, true); return { status: 'failed', error }; }
             const user = ctx.name1 || '用户', character = view === 'char' ? (char || ctx.name2 || '角色') : (ctx.name2 || '角色'), subject = view === 'char' ? character : user, parsed = env.parse(previous, env.calendar()), pinned = [];
             for (const day of parsed.days) for (const event of day.events) if (event.pin) pinned.push(event); if (parsed.future) for (const event of parsed.future.events) if (event.pin) pinned.push(event);
-            const fresh = await env.generate(ctx, user, character, view, signal, pinned, travelContext); if (env.editing?.() || !env.canCommit(owner, travelContext) || env.state.isGenerating || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
-            const today = travelContext?.targetDate || env.today(); const freshCheck = env.validate(fresh, env.calendar()); if (!freshCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
-            const merged = env.forceStart(env.mergePinned(previous, fresh, env.calendar()), today.month, today.day, env.calendar()); const mergedCheck = env.validate(merged, env.calendar()); if (!mergedCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
+            const fresh = await env.generate(ctx, user, character, view, signal, pinned, travelContext, owner.adultMode); if (env.editing?.() || !env.canCommit(owner, travelContext) || env.state.isGenerating || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
+            const today = travelContext?.targetDate || env.today(); const freshCheck = env.validate(fresh, env.calendar(), { generated: true, adultMode: owner.adultMode, pinned }); if (!freshCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
+            const boundFresh = env.bindAdult ? env.bindAdult(fresh, owner.adultMode, env.calendar()) : fresh; const merged = env.forceStart(env.mergePinned(previous, boundFresh, env.calendar()), today.month, today.day, env.calendar()); const mergedCheck = env.validate(merged, env.calendar()); if (!mergedCheck.ok) { const error = makeDiagnosticError('invalid-structure', { phase: 'parse' }); env.logDiagnostic?.(safeDiagnosticLog('point', 'parse', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}；旧点数据未改变，请重试`, null, true); return { status: 'failed', error }; }
             if (env.editing?.() || !canonicalMatches(owner.canonical)) return { status: 'cancelled' };
             env.write(key, { raw: merged, userName: subject, ts: Date.now() }); env.sync(); if (env.view() === view && (view !== 'char' || env.char() === char)) { env.setCached(env.render(merged, subject, view, env.calendar())); if (env.panelVisible()) env.setBody(env.cached()); }
             if (auto ? env.notify() === 'full' : env.notify() !== 'off') env.toast(`点已同步到 ${env.monthName(today.month)}${today.day}日`); return { status: 'updated', targetDate: today };

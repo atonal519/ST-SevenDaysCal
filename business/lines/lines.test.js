@@ -10,7 +10,7 @@ import { createSwipeLinesStore } from './swipe-store.js';
 import { createLinesActions } from './actions.js';
 import { mergePinned, editLineDescription, editLineFields } from './mutations.js';
 import { activeLines, buildLinesInjection } from './strategy.js';
-import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections } from './adult.js';
+import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections, allocateAdultPools } from './adult.js';
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
 
@@ -31,7 +31,8 @@ test('line edit keeps Next inside the selected Line block and handles empty fiel
     assert.match(cleared.raw, /Desc: B desc\nNext: B next/);
 });
 import { bindVectorTickets } from './vectors/bind.js';
-import { enforceLineCapacity } from './capacity.js';
+import { enforceLineCapacity, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
+import { auditLineEvolution } from './evolution.js';
 import { inlineState } from './inline.js';
 
 const raw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
@@ -73,12 +74,36 @@ test('adult Next guidance enforces one adjacent step in every context', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'dominant');
     for (const phrase of ['零身体接触', '互动进行中', '接近结束或刚结束', '不得同条跨越', '不要求一条 Next 全部兑现']) assert.match(prompt, new RegExp(phrase));
 });
-test('controller commits dominant 2+5 adult provenance in output order', async () => {
+test('adult pool allocator follows 0/30/70 targets by slot and current active ratio', () => {
+    assert.equal(allocateAdultPools('off', 10).filter(pool => pool === 'nsfw').length, 0);
+    assert.equal(allocateAdultPools('mixed', 10).filter(pool => pool === 'nsfw').length, 3);
+    assert.equal(allocateAdultPools('dominant', 7).filter(pool => pool === 'nsfw').length, 5);
+    assert.deepEqual(allocateAdultPools('dominant', 2, { activeCount: 6, activeAdultCount: 0 }), ['nsfw', 'nsfw']);
+});
+test('controller commits dominant 70 percent adult provenance in ticket order', async () => {
     const owners = createTaskOwnerManager(); let saved = { raw: '', ts: 1 };
     const response = `<storylines_widget>\n${Array.from({ length: 7 }, (_, index) => `Line: 线${index + 1}|推进|筹备|1|今天|world|false|false\nDesc: d${index + 1}\nNext: n${index + 1}`).join('\n')}\n</storylines_widget>`;
-    const result = await createLinesGenerationController({ owners, chatId: () => 'adult-chat', cacheKey: () => 'adult-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => saved, drawTickets: () => drawTickets(7, { seed: 'adult-controller' }), vectorCapacity: 8, adultMode: () => 'dominant', buildPrompt: (...args) => buildLinesPrompt('用户', '角色', 'user', ...args), callApi: async () => responseWithCount(7), commit: raw => { saved = { raw, ts: 2 }; }, cleanup: owner => { owner.status = 'finished'; }, runtime: { start() {}, finish() {} } }).run();
+    const result = await createLinesGenerationController({ owners, chatId: () => 'adult-chat', cacheKey: () => 'adult-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => saved, drawTickets: () => drawTickets(4, { seed: 'adult-controller' }), vectorCapacity: 8, adultMode: () => 'dominant', buildPrompt: (...args) => buildLinesPrompt('用户', '角色', 'user', ...args), callApi: async () => responseWithCount(4), commit: raw => { saved = { raw, ts: 2 }; }, cleanup: owner => { owner.status = 'finished'; }, runtime: { start() {}, finish() {} } }).run();
     assert.equal(result.status, 'updated');
-    assert.deepEqual(parseLines(saved.raw).map(line => line.adult), [false, false, true, true, true, true, true]);
+    assert.equal(parseLines(saved.raw).filter(line => line.adult).length, 3);
+});
+test('dominant reroll with seven existing adult lines still allocates from an empty pool', async () => {
+    const owners = createTaskOwnerManager(); let captured = null;
+    const old = `<storylines_widget>\n${Array.from({ length: 7 }, (_, index) => `Line: 旧成人${index + 1}|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\nAdult: true`).join('\n')}\n</storylines_widget>`;
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'adult-reroll-chat', cacheKey: () => 'adult-reroll-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: old, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'adult-reroll' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return 'p'; }, callApi: async () => responseWithCount(4), commit: () => {}, runtime: { start() {}, finish() {} } });
+    assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'sfw').length, 1);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 3);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 3);
+});
+test('mixed reroll ignores an overfull adult old pool when allocating new tickets', async () => {
+    const owners = createTaskOwnerManager(); let captured = null;
+    const old = `<storylines_widget>\n${Array.from({ length: 8 }, (_, index) => `Line: 旧成人${index + 1}|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\nAdult: true`).join('\n')}\n</storylines_widget>`;
+    const response = '<storylines_widget>\nLine: 新线|推进|筹备|1|今天|world|false|false\nTicket: TICKET-1\nDesc: d\nNext: n\n</storylines_widget>';
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'mixed', chatId: () => 'mixed-reroll-chat', cacheKey: () => 'mixed-reroll-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: old, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'mixed-reroll' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return 'p'; }, callApi: async () => response, commit: () => {}, runtime: { start() {}, finish() {} } });
+    assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 1);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'sfw').length, 3);
 });
 test('dominant pool accepts free output order but enforces ticket set and strips transient id', () => {
     const tickets = drawTickets(7, { seed: 'pool-binding' }).map((ticket, index) => ({ ...ticket, ticketId: `TICKET-${index + 1}`, adultPool: index < 2 ? 'sfw' : 'nsfw', ...(index >= 2 ? { adultSelection: { behavior: `b${index}` } } : {}) }));
@@ -106,7 +131,7 @@ test('ticket protocol rejects missing duplicate unknown and old-line IDs without
 });
 test('release prompt keeps flexible count, Next contract, and local 6x3 cues', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
-    assert.match(prompt, /条目数量按当前剧情证据灵活决定/);
+    assert.match(prompt, /自然推进不设自动线总数上限/);
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(prompt, /本轮本地预掷影响角度/);
 });
@@ -122,7 +147,7 @@ test('adult line modes keep off unchanged and reserve explicit adult candidates'
     const mixed = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'mixed');
     const dominant = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'dominant');
     assert.doesNotMatch(off, /成人剧情素材|实际性行为/);
-    assert.match(mixed, /至少保留一张.*真实新线/);
+    assert.match(mixed, /严格按 Ticket 原始签发顺序使用前 K 张/);
     assert.match(mixed, /成人选材票上的具体驱动力/);
     assert.match(dominant, /NSFW 新线必须由成人欲望、成人场景或成人互动本身驱动/);
     assert.match(dominant, /具体玩法\/行为/);
@@ -152,12 +177,12 @@ test('controller uses one API call for manual reroll and commits valid output', 
 });
 
 test('controller attaches temporary adult selections to fresh tickets by mode without touching Cue storage', async () => {
-    for (const [mode, expected] of [['off', 0], ['mixed', 1], ['dominant', 5]]) {
+    for (const [mode, expected] of [['off', 0], ['mixed', 1], ['dominant', 3]]) {
         const owners = createTaskOwnerManager(); let captured = null; let calls = 0;
         const controller = createLinesGenerationController({
             owners, adultMode: () => mode, chatId: () => 'adult-chat', cacheKey: () => 'adult-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }),
             drawTickets: async count => drawTickets(count, { seed: mode }), vectorCapacity: 8, buildPrompt: (_previous, _travel, vectorContext) => { captured = vectorContext; return 'p'; },
-            callApi: async () => { calls++; return mode === 'dominant' ? responseWithCount(7) : freshRaw; }, commit: () => {}, runtime: { start() {}, finish() {} },
+            callApi: async () => { calls++; return mode === 'dominant' ? responseWithCount(4) : freshRaw; }, commit: () => {}, runtime: { start() {}, finish() {} },
         });
         const result = await controller.run();
         assert.equal(result.status, 'updated'); assert.equal(calls, 1);
@@ -170,70 +195,69 @@ test('controller attaches temporary adult selections to fresh tickets by mode wi
 
 test('dominant initial/reroll uses a temporary 2 SFW plus 5 NSFW pool in one request', async () => {
     const owners = createTaskOwnerManager(); let captured = null; let drawn = 0; let calls = 0;
-    const seven = drawTickets(7, { seed: 17 });
+    const seven = drawTickets(4, { seed: 17 });
     const controller = createLinesGenerationController({
         owners, adultMode: () => 'dominant', chatId: () => 'pool-chat', cacheKey: () => 'pool-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }),
         drawTickets: async count => { drawn = count; return seven; }, vectorCapacity: 8,
         buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', '', 'auto', context, 'dominant'); },
-        callApi: async () => { calls++; return responseWithCount(7); }, commit: () => {}, runtime: { start() {}, finish() {} },
+        callApi: async () => { calls++; return responseWithCount(4); }, commit: () => {}, runtime: { start() {}, finish() {} },
     });
     const result = await controller.run(false, { reroll: true });
-    assert.equal(result.status, 'updated'); assert.equal(drawn, 7); assert.equal(calls, 1);
-    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'sfw').length, 2);
-    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 5);
-    assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 5);
+    assert.equal(result.status, 'updated'); assert.equal(drawn, 4); assert.equal(calls, 1);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'sfw').length, 1);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 3);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 3);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /输出顺序自由，不要求先 SFW 后 NSFW/);
+    assert.match(prompt, /票据必须严格等于前 K 张/);
     assert.match(prompt, /同一主角或同一组参与者可以重复/);
     assert.match(prompt, /场景、关系结构、互动机制、节奏或即时身体\/关系后果之一有实质差异/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
-    assert.match(prompt, /最多输出 7 条新线/);
+    assert.match(prompt, /最多输出 4 条自动种子线/);
     assert.doesNotMatch(prompt, /超过票数仍可输出/);
 });
 
 test('dominant automatic advance keeps existing ticket sizing and does not force seven new lines', async () => {
     const owners = createTaskOwnerManager(); let drawn = 0; let captured = null;
     const old = '<storylines_widget>\nLine: 旧线|推进|萌芽|1|今天|world|false|false\nDesc: 状态\nNext: 下一步\n</storylines_widget>';
+    const advanceResponse = '<storylines_widget>\nLine: 旧线|推进|萌芽|1|今天|world|false|false\nDesc: 新状态\nNext: 新下一步\nLine: 新线|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-1\nDesc: 新建状态\nNext: 新建下一步\n</storylines_widget>';
     const controller = createLinesGenerationController({
         owners, adultMode: () => 'dominant', chatId: () => 'advance-chat', cacheKey: () => 'advance-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: old, ts: 1 }),
         drawTickets: async count => { drawn = count; return drawTickets(count, { seed: 18 }); }, vectorCapacity: 8,
-        buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', old, 'auto', context, 'dominant'); }, callApi: async () => freshRaw, commit: () => {}, runtime: { start() {}, finish() {} },
+        buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', old, 'auto', context, 'dominant'); }, callApi: async () => advanceResponse, commit: () => {}, runtime: { start() {}, finish() {} },
     });
     const result = await controller.run();
-    assert.equal(result.status, 'updated'); assert.equal(drawn, 8); assert.equal(captured.intent, 'advance');
-    assert.equal(captured.freshTickets.some(ticket => ticket.adultPool), false);
+    assert.equal(result.status, 'updated'); assert.equal(drawn, 4); assert.equal(captured.intent, 'advance');
+    assert.equal(captured.freshTickets.some(ticket => ticket.adultPool), true);
     assert.doesNotMatch(buildLinesPrompt('用户', '角色', 'user', old, 'auto', captured, 'dominant'), /2 条 SFW \+ 5 条 NSFW|2\+5/);
 });
 
-test('mixed production prompt keeps every fresh ticket while attaching only one adult selection', async () => {
+test('mixed production prompt keeps every fresh ticket with local ratio allocation', async () => {
     const owners = createTaskOwnerManager(); let prompt = '';
     const tickets = drawTickets(8, { seed: 'mixed-all' });
     const controller = createLinesGenerationController({ owners, adultMode: () => 'mixed', chatId: () => 'mixed-chat', cacheKey: () => 'mixed-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async () => tickets, vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', context, 'mixed'); return prompt; }, callApi: async () => freshRaw, commit: () => {}, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run()).status, 'updated');
     for (const ticket of tickets) for (const item of ticket.selections) assert.match(prompt, new RegExp(item.label));
-    assert.doesNotMatch(prompt, /SFW 新线|NSFW 新线|2 条 SFW/);
+    assert.match(prompt, /SFW 新线|NSFW 新线/);
 });
 
-test('dominant pinned reroll retains pinned identity then applies the 2+5 pool', async () => {
+test('dominant pinned reroll retains pinned identity then applies the ratio pool', async () => {
     const owners = createTaskOwnerManager(); let captured = null;
     const pinned = '<storylines_widget>\nLine: 锁线|推进|萌芽|1|今天|world|false|true\nDesc: 已锁定\nNext: 继续\n</storylines_widget>';
-    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'pin-chat', cacheKey: () => 'pin-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: pinned, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'pin-pool' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', pinned, 'auto', context, 'dominant'); }, callApi: async () => responseWithCount(7), commit: () => {}, runtime: { start() {}, finish() {} } });
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'pin-chat', cacheKey: () => 'pin-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: pinned, ts: 1 }), drawTickets: async count => drawTickets(count, { seed: 'pin-pool' }), vectorCapacity: 8, buildPrompt: (_previous, _travel, context) => { captured = context; return buildLinesPrompt('用户', '角色', 'user', pinned, 'auto', context, 'dominant'); }, callApi: async () => responseWithCount(4), commit: () => {}, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
     assert.equal(captured.retained.length, 0, '无 Cue 的 pinned 线仍应进入 legacy 身份区');
     assert.equal(captured.legacyWithoutCue[0], '锁线');
-    assert.deepEqual(captured.freshTickets.slice(0, 2).map(ticket => ticket.adultPool), ['sfw', 'sfw']);
-    assert.equal(captured.freshTickets.slice(2).every(ticket => ticket.adultPool === 'nsfw'), true);
+    assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 3);
 });
 
 test('dominant pool allows only trailing NSFW reduction and real binding commits all returned cues', async () => {
-    const owners = createTaskOwnerManager(); let committed = ''; const tickets = drawTickets(7, { seed: 'bind-pool' });
-    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'bind-chat', cacheKey: () => 'bind-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async count => { assert.equal(count, 7); return tickets; }, vectorCapacity: 8, buildPrompt: () => 'p', callApi: async () => responseWithCount(6), commit: value => { committed = value; }, runtime: { start() {}, finish() {} } });
+    const owners = createTaskOwnerManager(); let committed = ''; const tickets = drawTickets(4, { seed: 'bind-pool' });
+    const controller = createLinesGenerationController({ owners, adultMode: () => 'dominant', chatId: () => 'bind-chat', cacheKey: () => 'bind-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: async count => { assert.equal(count, 4); return tickets; }, vectorCapacity: 8, buildPrompt: () => 'p', callApi: async () => responseWithCount(4), commit: value => { committed = value; }, runtime: { start() {}, finish() {} } });
     assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
     const parsed = parseLines(committed);
-    assert.equal(parsed.length, 6);
+    assert.equal(parsed.length, 4);
     assert.equal(parsed.every(line => line.cue), true);
-    for (let index = 0; index < 6; index++) assert.equal(parsed[index].cue, serializeVectorCue(tickets[index]));
-    assert.equal(parsed.some(line => line.cue === serializeVectorCue(tickets[6])), false);
+    for (let index = 0; index < 4; index++) assert.equal(parsed[index].cue, serializeVectorCue(tickets[index]));
 });
 
 test('long-lived lifecycle keeps swipe/reroll ownership and stopped cleanup semantics', () => {
@@ -256,7 +280,7 @@ test('pinned merge retains user locks while AI cannot create a new lock', () => 
     const freshRaw = '<storylines_widget>\nLine: 旧线|推进|发酵|2|明天|world|true|false\nDesc: fresh\nNext: next\nLine: 新线|关系|萌芽|1|今天|world|true|false\nDesc: new\nNext: next\n</storylines_widget>';
     const merged = mergePinned(oldRaw, freshRaw);
     assert.equal(merged.ok, true);
-    assert.equal(merged.model.find(line => line.name === '旧线')?.pin, true);
+    assert.equal(merged.model.filter(line => line.name === '旧线' && line.pin).length, 1);
     assert.equal(merged.model.find(line => line.name === '新线')?.pin, false);
 });
 
@@ -314,6 +338,80 @@ test('capacity keeps prior queue identities before new lines and preserves pinne
     const pinned = enforceLineCapacity({ previousLines: tenOld, mergedLines: [...tenOld, { name: '锁', pin: true }, { name: '锁2', pin: true }] });
     assert.equal(pinned.model.filter(line => !line.pin).length, 10);
     assert.deepEqual(pinned.model.filter(line => line.pin).map(line => line.name), ['锁', '锁2']);
+});
+
+test('evolution audit preserves identities and gates newborns by terminal exits', () => {
+    const old = [{ name: '活线', stage: '萌芽', pin: false }, { name: '锁线', stage: '萌芽', pin: true }];
+    const ticket = id => ({ ticketId: `TICKET-${id}` });
+    const continued = { name: '活线', stage: '执行', ticketId: undefined };
+    const newborn = id => ({ name: `新${id}`, stage: '萌芽', ticketId: `TICKET-${id}` });
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).ok, true);
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).reason, 'evolution-old-line-missing');
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [{ name: '活线', stage: '已完成' }, newborn(1), newborn(2)], freshTickets: [ticket(1), ticket(2)], intent: 'advance' }).ok, true);
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, newborn(1), newborn(2)], freshTickets: [ticket(1), ticket(2)], intent: 'advance' }).reason, 'evolution-newborn-overflow');
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [{ name: '锁线', stage: '已完成' }], freshTickets: [], intent: 'advance' }).reason, 'evolution-pinned-terminal');
+    assert.equal(auditLineEvolution({ previousLines: [], generatedLines: [newborn(1), newborn(2), newborn(3), newborn(4), newborn(5)], freshTickets: [1, 2, 3, 4, 5].map(ticket), intent: 'initial' }).reason, 'evolution-seed-overflow');
+});
+
+test('controller treats terminal-only history as advance and preserves same-name pin queues', async () => {
+    const terminal = serializeLines([{ name: '旧终态', type: '推进', stage: '已完成', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n' }]);
+    let saved = { raw: terminal, ts: 1 }; let captured = null; let drawn = 0;
+    const instance = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'terminal-only', cacheKey: () => 'terminal-only', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => saved, drawTickets: count => { drawn = count; return drawTickets(count, { seed: 'terminal-only' }); }, buildPrompt: (_raw, _travel, context) => { captured = context; return 'p'; }, callApi: async () => responseWithCount(1), commit: raw => { saved = { raw, ts: 2 }; }, runtime: { start() {}, finish() {} } });
+    assert.equal((await instance.run()).status, 'updated'); assert.equal(captured.intent, 'advance'); assert.equal(drawn, AUTO_LINE_SEED_CAPACITY); assert.equal(parseLines(saved.raw).length, 1);
+
+    const sameResponse = '<storylines_widget>\nLine: 同名|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\nLine: 同名|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>';
+    for (const source of [
+        [{ name: '同名', cue: 'lines-vector-v1:relation:mutual-probing|subject:survival-stability|timing:daily-gap', pin: false, adult: false }, { name: '同名', cue: null, pin: true, adult: true }],
+        [{ name: '同名', cue: null, pin: true, adult: true }, { name: '同名', cue: 'lines-vector-v1:relation:mutual-probing|subject:survival-stability|timing:daily-gap', pin: false, adult: false }],
+    ]) {
+        const old = serializeLines(source.map(item => ({ ...item, type: '推进', stage: '筹备', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n' })));
+        let current = { raw: old, ts: 1 };
+        const c = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'same-name', cacheKey: () => 'same-name', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => current, drawTickets: count => drawTickets(count, { seed: 'same-name' }), buildPrompt: () => 'p', callApi: async () => sameResponse, commit: raw => { current = { raw, ts: 2 }; }, runtime: { start() {}, finish() {} } });
+        const resultStatus = await c.run(); assert.equal(resultStatus.status, 'updated', resultStatus.error?.stack || JSON.stringify(resultStatus));
+        const result = parseLines(current.raw); assert.equal(result.length, 2); const expected = [...source].sort((a, b) => Number(a.pin) - Number(b.pin)); assert.deepEqual(result.map(item => [item.pin, item.adult, item.cue]), expected.map(item => [item.pin, item.adult, item.cue]));
+    }
+});
+
+test('controller preserves omitted same-name pinned lines after active identity matching', async () => {
+    const cue = 'lines-vector-v1:relation:mutual-probing|subject:survival-stability|timing:daily-gap';
+    const response = '<storylines_widget>\nLine: 同名|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>';
+    for (const source of [
+        [{ name: '同名', cue, pin: false, adult: false }, { name: '同名', cue: null, pin: true, adult: true }],
+        [{ name: '同名', cue: null, pin: true, adult: true }, { name: '同名', cue, pin: false, adult: false }],
+    ]) {
+        const old = serializeLines(source.map(item => ({ ...item, type: '推进', stage: '筹备', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n' })));
+        let current = { raw: old, ts: 1 };
+        const controller = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'omitted-pin', cacheKey: () => 'omitted-pin', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => current, drawTickets: count => drawTickets(count, { seed: 'omitted-pin' }), buildPrompt: () => 'p', callApi: async () => response, commit: raw => { current = { raw, ts: 2 }; }, runtime: { start() {}, finish() {} } });
+        assert.equal((await controller.run()).status, 'updated');
+        const result = parseLines(current.raw);
+        assert.equal(result.length, 2);
+        assert.deepEqual(result.map(item => [item.name, item.pin, item.adult, item.cue]), [['同名', false, false, cue], ['同名', true, true, null]]);
+    }
+});
+
+test('controller restores distinct active and pinned identities when model omits pinned lines', async () => {
+    const [cueActiveA, cuePinnedA, cueActiveB, cuePinnedB] = drawTickets(4, { seed: 'distinct-identities' }).map(serializeVectorCue);
+    const source = [
+        { name: '重复线', cue: cueActiveA, pin: false, adult: false },
+        { name: '重复线', cue: cuePinnedA, pin: true, adult: true },
+        { name: '重复线', cue: cueActiveB, pin: false, adult: true },
+        { name: '重复线', cue: cuePinnedB, pin: true, adult: false },
+    ];
+    const old = serializeLines(source.map(item => ({ ...item, type: '推进', stage: '筹备', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n' })));
+    const response = '<storylines_widget>\nLine: 重复线|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\nLine: 重复线|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>';
+    let current = { raw: old, ts: 1 };
+    const controller = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'duplicate-pin', cacheKey: () => 'duplicate-pin', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => current, drawTickets: count => drawTickets(count, { seed: 'duplicate-pin' }), buildPrompt: () => 'p', callApi: async () => response, commit: raw => { current = { raw, ts: 2 }; }, runtime: { start() {}, finish() {} } });
+    assert.equal((await controller.run()).status, 'updated');
+    const result = parseLines(current.raw);
+    assert.equal(result.length, 4);
+    assert.equal(result.filter(item => !item.pin).length, 2);
+    assert.equal(result.filter(item => item.pin).length, 2);
+    assert.deepEqual(result.filter(item => !item.pin).map(item => [item.cue, item.adult]), [
+        [source[0].cue, false], [source[2].cue, true],
+    ]);
+    assert.deepEqual(result.filter(item => item.pin).map(item => [item.cue, item.adult]), [
+        [source[1].cue, true], [source[3].cue, false],
+    ]);
 });
 
 test('inline state separates active and settled lines while retaining settled cards', () => {

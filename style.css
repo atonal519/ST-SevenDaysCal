@@ -1999,6 +1999,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-type-world     .sp-type-badge { color: #4fc3f7; }
 .sp-type-major     .sp-type-badge { color: #b08968; }
 .sp-type-character .sp-type-badge { color: #f48fb1; }
+.sp-point-adult-badge { display: inline-flex; align-items: center; padding: 1px 4px; border-radius: 3px; font-size: var(--sp-fs-62); font-weight: 700; color: #8a6500; background: #f4d77a; line-height: 1.1; }
 .sp-event.sp-event-pinned.sp-type-world     { border-left-color: #287fa3; }
 .sp-event.sp-event-pinned.sp-type-major     { border-left-color: #76583f; }
 .sp-event.sp-event-pinned.sp-type-character { border-left-color: #a85f78; }
@@ -2586,13 +2587,34 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-overflow: ellipsis;
     white-space  : nowrap;
 }
-.sp-outline-wrap .sp-beat-head > .sp-beat-type {
-    flex: 0 0 auto;
-    min-width: max-content;
-    max-width: none;
-    overflow: visible;
-    text-overflow: clip;
+.sp-outline-wrap .sp-beat-meta {
+    display    : flex;
+    align-items: center;
+    gap        : 6px;
+    flex       : 0 1 auto;
+    min-width  : 0;
+    max-width  : 100%;
+    overflow   : hidden;
+}
+.sp-outline-wrap .sp-beat-meta .sp-beat-time {
+    flex       : 1 1 auto;
+    width      : max-content;
+    min-width  : 0;
+    max-width  : 100%;
+    overflow   : hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
+}
+.sp-outline-wrap .sp-beat-meta .sp-beat-type {
+    flex       : 0 0 auto;
+    min-width  : 0;
+    max-width  : 100%;
+    overflow   : hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-outline-wrap .sp-beat-meta .sp-beat-time:empty {
+    display: none;
 }
 .sp-line-card .sp-beat-type {
     flex-basis: auto;
@@ -3588,9 +3610,16 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap           : 10px;
 }
 .sp-dialog-editor-sheet {
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     width     : min(680px, calc(100vw - 40px));
     max-height: calc(100dvh - 40px);
     overflow-y: auto;
+}
+.sp-dialog-editor-sheet .sp-dialog-custom-input,
+.sp-dialog-editor-sheet .sp-dialog-input {
+    background-color: var(--sp-sheet-bg-legacy);
+    background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
 }
 .sp-dialog-editor-sheet .sp-dialog-custom-input {
     min-height: 120px;

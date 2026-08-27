@@ -1,6 +1,6 @@
 // ─── 点（日程）域 · 生成 prompt ───────────────────────────────────────────────
 // 从 index.js 机械搬移 buildPrompt：纯字符串拼装，无 DOM / store / 历法依赖。
-export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null) {
+export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null, adultContext = null) {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;
     const pins = Array.isArray(pinned) ? pinned.filter(e => e?.title?.trim()) : [];
@@ -16,6 +16,15 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
     const startDateFormat = calendar && calendar.kind !== 'gregorian' && calendar.id !== 'default-gregorian'
         ? 'MM-DD（自定义历法不填写年份）'
         : 'YYYY-MM-DD';
+    const adultBlock = adultContext?.mode && adultContext.mode !== 'off' ? `
+【成人选材 Ticket（仅本轮有效）】
+以下 Ticket 必须按原始签发顺序逐票使用；实际新 Event 只使用前 K 张，不能跳票、重排或凑成人：
+${(adultContext.tickets || []).map(ticket => `${ticket.id}｜${ticket.pool === 'nsfw' ? 'NSFW' : 'SFW'}${ticket.selection ? `｜素材：${ticket.selection}` : ''}`).join('\n')}
+NSFW 票只适用于明确成年且自愿的虚构角色；使用 NSFW 票的新 Event 必须落实具体行为、主动方、明确回应与当场影响。SFW 票不得成人化。每条 Ticket 后必须紧邻一行 AdultProof：未实际兑现写「AdultProof: NONE」；实际兑现写「AdultProof: kind=sexual-contact; action=原文子串; response=原文子串; impact=原文子串」。三个原文子串必须分别来自该 Event 的 description 或线头动态，不得引用 title；不得输出 Adult 行或其他票。拒绝、沉默、回忆、计划、假设、比较、普通亲昵、留宿、洗澡按摩、单纯裸体、事后照料均写 NONE。
+` : '';
+    const eventTemplate = adultContext?.mode && adultContext.mode !== 'off'
+        ? index => `Event: type|title|description|time|location|线头动态\nTicket: POINT-TICKET-${index}\nAdultProof: NONE`
+        : () => 'Event: type|title|description|time|location|线头动态';
     return `请暂停角色扮演，以旁观者视角根据以上剧情，为 ${subject} 生成日程。
 【重要】所有输出必须使用中文（人名、地名可保留原文）。
 【人称】你是旁观者，不要扮演任何角色。所有文字（含 description 与线头动态）必须以第三人称叙述，直呼 ${subject} 的名字，严禁使用"我""我们"等第一人称，也不要用第二人称"你"。
@@ -27,6 +36,7 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
 
 ${subject} 和 ${companion} 都有各自独立的生活，事件可以涉及任意 NPC 和第三方，不必每条都围绕两人互动。
 ${relationHint}
+${adultBlock}
 输出顺序必须严格为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>，中间不得省略任何块；Day 1-3 每天建议生成 1 到 3 个事件，Future 建议生成若干条（数量随剧情证据浮动），但 Future 不能省略。不要为满足数量凑数；预算紧张时缩短说明文字，也不得省略 Future 或结束标签。
 
 【天气说明】
@@ -36,9 +46,11 @@ ${relationHint}
 
 【字段说明】
 格式：Event: type|title|description|time|location|线头动态
+- title 是单一、可识别的事件身份；同一主体、触发、核心目标和连续时间窗的上下游或互斥结果必须合并为同一 Event，真正独立目标才可并行。
 - type 只能是 main / hidden / bond
-- description：以第三人称客观记述 ${subject} 这天经历的事，生活化口吻，直呼其名，不用第一人称，30字以上
-- 线头动态：与此事件相关的其他角色同期动态，可以是任意 NPC 或第三方，30字以上；若无关联角色可留空
+- description：只写一个连续时间节点内的具体推进，以第三人称客观记述 ${subject} 这天经历的事，生活化口吻，直呼其名，不用第一人称，30字以上
+- 线头动态：与此事件同一时段同步发生的其他角色动作/回应，可以是任意 NPC 或第三方，30字以上；若无关联角色可留空，不要写下一轮清单
+- 成人票不得跨越接触前、互动进行中、事后三个阶段中的多个区间；成人点仍必须遵守明确成年、自愿和当前剧情证据。
 
 【日期说明】
 Day 1 应从剧情当前时间节点开始，向后推演。如剧情中能明确推断出当前日期则填写 StartDate，否则省略。不要回填已经发生过的日期，Day 1 必须是剧情"现在"或之后的时间。
@@ -48,20 +60,20 @@ ${pinnedBlock}
 <calendar_widget>
 StartDate: ${startDateFormat}（可从剧情推断则填写，否则省略此行）
 Day: 1|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
+${eventTemplate(1)}
+${eventTemplate(2)}
 Day: 2|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
+${eventTemplate(3)}
+${eventTemplate(4)}
 Day: 3|天气|温度
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
+${eventTemplate(5)}
+${eventTemplate(6)}
 Future:
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
-Event: type|title|description|time|location|线头动态
+${eventTemplate(7)}
+${eventTemplate(8)}
+${eventTemplate(9)}
+${eventTemplate(10)}
+${eventTemplate(11)}
 </calendar_widget>
 
 【Future 说明】

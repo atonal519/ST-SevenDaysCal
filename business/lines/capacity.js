@@ -1,4 +1,5 @@
 export const AUTO_LINE_CAPACITY = 10;
+export const AUTO_LINE_SEED_CAPACITY = 4;
 
 // 在完整校验、票据绑定和锁线合并之后收敛自动池；不接触尚未验证的 AI 输出。
 // 同名线使用队列逐一匹配，避免用名称 Set 把重复身份错误合并。
