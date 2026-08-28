@@ -1,4 +1,4 @@
-// 6×3 第一阶段词表：只描述影响角度，不预设剧情结果。
+// 6 池×每票 3 项 Cue：只描述影响角度，不预设剧情结果。
 function freeze(value) {
     if (value && typeof value === 'object' && !Object.isFrozen(value)) {
         for (const child of Object.values(value)) freeze(child);

@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS = {
     // API 存储快切：把整套 API 配置存成命名预设，多套之间切换。
     // 每项 {id,name,url,key,model,excludeParams,timeoutSec,stream}——即 loadCfg 的完整快照。
     // 与上面扁平的 apiUrl/apiKey/... 并存：那六个字段仍是「当前生效」的唯一真源，
-    // 预设只是备份仓库；切换 = 把某个预设填回输入框，用户点保存才写进那六个字段。
+    // 预设是命名快照；切换后立即填入并应用。
     apiPresets       : [],
     apiPresetActiveId: '',   // 上次选中的预设 id，纯 UI 高亮/回显用，不代表已生效
     // 机械任务分流：把「记忆摘要 / 大纲推进判定」这类机械调用路由到某个预设（如便宜小模型），
@@ -22,7 +22,7 @@ export const DEFAULT_SETTINGS = {
     // 插件总开关：false = 构画完全隐身（藏悬浮球 / 楼内块 / 锚点收藏入口，停一切后台判定与潜伏注入），如同未安装；
     // 设置面板仍可从酒馆魔杖菜单进入以重新开启。默认开。
     pluginEnabled: true,
-    // 潜伏注入总闸（受 pluginEnabled 统辖）：false = 线 / 面一律不注入主楼 AI（不影响楼内展示与手动生成）。默认开。
+    // 潜伏注入总闸（受 pluginEnabled 统辖）：false = 线 / 面 / 刻度不注入主楼 AI（不影响楼内展示与手动生成）。默认开。
     injectEnabled: true,
     // 时间戳·时间锚点体系（只受 pluginEnabled + 自身开关统辖，独立于线/面注入闸）：强制主楼 AI 每楼正文首尾打时间戳
     // <!-- SDC-start … --> / <!-- SDC-end … -->，构画回读作时间源。默认开——全插件时间地基。
@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS = {
     uiFontUrl   : 'https://fontsapi.zeoseven.com/387/main/result.css',  // 字体 CSS(@font-face) 的 URL：经动态 <link> 引入。默认＝zeoseven 387 有爱圆体(Nowar Rounded TW Wc)，unicode-range 分片、移动端友好。留空=不加载网络字体、只用系统栈
     uiFontFamily: 'Nowar Rounded TW Wc',                                // 生效字体 family 名：写进 --sp-font-user。须与 uiFontUrl 那份 CSS 里 @font-face 声明的 font-family 完全一致，否则加载了也不生效
     notifyMode: 'lite',  // 通知提醒档：'off'=全静音 / 'lite'(默认)=仅你手动生成·刷新时提示 / 'full'=另在后台自动改动点线面历时提示（真改动才弹）
-    linesEnabled : true, // master switch: false disables both auto-advance AND inline block rendering
+    linesEnabled : true, // master switch: false disables line generation/advance and latent injection; inline display is independently controlled
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days' | 'manual'
     linesInject: false,  // 潜伏注入：活跃线隐形注入主楼 AI（IN_CHAT/SYSTEM）；默认关（改 AI 行为+token 成本，opt-in）
@@ -44,14 +44,14 @@ export const DEFAULT_SETTINGS = {
     dashedKeepCount: 15,
     outlineInject: false,       // 大纲自动注入：开启后每 N 楼独立判定剧情推进到哪个节点，把当前/下个节点隐形注入主楼 AI。多判定 API 调用，默认关 opt-in
     outlineJudgeInterval: 3,    // 大纲推进判定节奏：每几条 AI 回复跑一次推进判定（独立于线的 linesInterval，不耦合）
-    almanacInlineEnabled: true, // 历·日程块：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是未来七天（周X+日期，有节日可点开看当天安排）；只读，独立于线主开关；默认开，关掉即不注入聊天
+    almanacInlineEnabled: true, // 历·日程块：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是今天头和往后六天格；只读，独立于线主开关；默认开，关掉即不注入聊天
     linesInlineEnabled  : true, // 线·楼内块：最新 AI 楼底部展示活跃线块（只读展示，独立于线主开关 linesEnabled）；默认开，关掉只隐藏楼内块、不影响线的推进与隐形注入
     scheduleInlineEnabled: true, // 点·楼内日程条：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是每天一格（周X+日期+天气+待办数，可点开看当天事件）；只读，反映当前视角的点，默认开
     ledgerInlineEnabled : true, // 标注池·楼内框开关：AI 楼挂「标注池」（活跃暗历条目 + 打捞/更新/锁定/归档操作）；与注入 ledgerInject 解耦、与用户楼召回(recallInlineEnabled)各自独立；默认开
     recallInlineEnabled : true, // 召回·楼内框开关：用户楼挂「召回」框（本回合注入回显·丰富版：类型+标题+起始+推测应至状态）；与 AI 楼标注池独立、与注入解耦；默认开
     inlineRenderEnabled : true, // 楼内渲染框·主开关：关掉则整框不渲（点/线/轴/标注池/召回子开关一并失效）；默认开。子开关只在主开关开时才起作用
     // 楼内仪表盘：布局固定（今头 + 历/点/线三区），无需配序；旧的 inlineOrder 已随仪表盘重构退役。
-    // 楼内统一框·渲染深度：只在最新 N 层 AI 楼挂 DOM，更早的楼只留 message.extra 快照、滑回再秒重建。
+    // 楼内统一框·渲染深度：按最近 N 个 AI 楼确定窗口，窗口覆盖其间用户楼；最新 AI/用户楼读活态，其余读快照。
     // 0 或缺 = 跟随酒馆助手 render_depth（读不到再退 INLINE_RENDER_DEPTH_FALLBACK）。默认 0=跟随。
     inlineRenderDepth: 0,
     // 剧情日期检测（写共享 dateAnchor[charKey]，见 getDateAnchor）：戳优先——戳开时每楼直读戳落地「今天」，零 API；

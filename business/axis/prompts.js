@@ -131,7 +131,7 @@ Item: 名称|type|month|day|days|displayDate|说明（单行不换行）
 type 只能是 anniversary 或 custom。所有文字用中文（专有名词可保留原文）。`;
 }
 
-// 跑补录：照 runGenerateAlmanac 的骨架（共用 isGeneratingAlmanac / almanacAbortController 互斥同一 store），
+// 补录由 createAxisGenerationController / 现行生成控制器统一管理互斥与状态，
 // 但合并阶段走**纯追加去重**（非 mergeAlmanac）+ pin=true，且补 0 条时给出「没有够格」的正常态提示、不报错。
 
     return { buildAlmanacPrompt, buildAnniversarySupplementPrompt };

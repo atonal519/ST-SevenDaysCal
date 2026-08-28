@@ -178,7 +178,7 @@ import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { createChatAnchorRepository } from './runtime/chat-date-anchor.js';
 
-// 坐标唯一 runtime；旧 anchor facade 继续保留兼容导出。
+// 坐标与楼内框各自持有唯一 runtime 句柄。
 let coordinateRuntime = null;
 let inlineFeature = null;
 
@@ -205,7 +205,7 @@ import {
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
 
-// Ledger 正式事务只走固定聊天目标的 integrity/commitState saver；初始化失败时保持不可用，禁止回退到吞错 saveMetadata。
+// Ledger 优先使用固定聊天目标的 integrity/commitState saver；不支持时回退 best-effort saver，均不支持才保持不可用。
 const ledgerMetadataSaverReady = (() => {
     const advanced = createTargetMetadataSaver({ coreModule: scriptCore });
     return advanced?.supported ? advanced : createBestEffortMetadataSaver({ context: getContext });
@@ -304,7 +304,7 @@ bindApiClient({
     buildMessages,
 });
 
-// 点渲染回调注入：render.js 的 scheduleDayCtx/scheduleDayLabel/renderEvent 需访问本文件的
+// 点渲染回调注入：render.js 的点日期上下文、标签与辅助渲染函数需访问本文件的
 // almTodayAnchor/almWeekdayRef/almWeekdayFor/makeInjectBtn，经 bindPointRender 注入以避免反向依赖（循环引用）。
 bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn, settings: getSettings });
 bindPointRepository({ keyDesc, readStore, renderSchedule, loadCalendar: loadCalDesc });
@@ -560,7 +560,7 @@ bindAxisAnchor({
 });
 
 // ledger 暗账页渲染注入：render.js 的行/编辑/批量需本文件宿主的 shadow 查询/提示/确认/主楼同步/
-// 面板重绘/标注间隔与忙碌态。isCapturingLedger/isJudgingLedger 是实时可变 let，传 getter 以读当前值。
+// 面板重绘/标注间隔与忙碌态。isCapturingLedger/isJudgingLedger 经 controller getter 读取实时状态。
 bindLedgerRender({
     $in,
     showToast,
@@ -1212,7 +1212,7 @@ const MODULE_INTROS = {
 let lastDebugPayload = null;
 
 
-// 存储描述符 {kind, view, charName}：5 个 getXxxKey() 都返回它，喂给 store.readData/writeData/removeData。
+// 存储描述符 {kind, view, charName}：getCacheKey 是 schedule key alias，其余 key 已归入对应模块。
 // 无 chat 时返回 null（保留旧 getter「无 chat → null」语义，各处 if(!key) 守卫照旧生效）。
 
 // view: 'user' | 'char'   charName: confirmed char name
@@ -1467,7 +1467,7 @@ const spaceFeature = createSpaceFeature({
 });
 let theaterMode          = false;
 // 暗历内联编辑态/归档折叠态/批量模式已随 ledger 渲染层迁入 business/ledger/render.js
-// （经 getLedgerEditor/isLedgerArchiveOpen/getBatchScope 等访问器 + resetLedgerRenderState 复位）。
+// （经 getLedgerEditor、归档/批量 actions 与 resetLedgerRenderState 复位）。
 const _injectTexts      = {};
 let   _injectIdSeq      = 0;
 let viewportSyncBound   = false;
@@ -1702,7 +1702,7 @@ jQuery(async () => {
         ledgerLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
         ledgerJudgeCounter = 0;
         ledgerJudgeController.reset();
-        _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的「同步到点」后台生成
+        _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的点后台跟随/时旅点重排任务
         spaceMode = false;
         theaterMode = false;
         // theater 已在插件关闭早退前统一 reset，避免旧 owner 占住 busy。
@@ -1808,7 +1808,7 @@ jQuery(async () => {
         coordinateRuntime?.feature?.onCharacterRendered({ messageId: Number(messageId), type });
         // 锚收藏入口独立于线：不受 linesEnabled 影响，新楼渲染后补按钮
         setTimeout(() => coordinateRuntime?.feature?.scanButtons(), 150);
-        // 历·七天条：独立于线主开关，每次楼层渲染都把七天条补挂到最新 AI 楼（只读，无生成）
+        // 轴日历块：独立于线主开关，刷新当前渲染窗口（最新 AI 楼读活态，历史楼读快照；只读，无生成）
         syncLatestAlmanacBlock();
         syncLatestScheduleBlock();   // 点·日程条：同上，随新楼补挂（只读）
         // Master switch: linesEnabled=false disables auto-advance + inline block
@@ -1836,7 +1836,7 @@ jQuery(async () => {
     if (_stListeners.swiped) eventSource.removeListener?.(event_types.MESSAGE_SWIPED, _stListeners.swiped);
     _stListeners.swiped = async (mesId, info) => {
         if (!pluginEnabled()) return;   // 插件总关
-        // 历·七天条：swipe 可能改动剧情内时间锚点 → 按现锚点重建（只读，无生成，独立于线主开关）
+        // 轴日历块：swipe 可能改动剧情内时间锚点 → 按现锚点刷新当前渲染窗口（只读，无生成）
         // 戳优先·先落地：滑到的变体戳可能不同（如 920→919），先把锚点追到活戳再重建，否则轴仍读旧锚。
         // pendingGeneration 的 swipe 此刻新回复还没好、正文无新戳，跳过（等它的 CMR 再落地）。
         if (!info?.pendingGeneration) relandStoryClockAnchor();
@@ -1863,7 +1863,7 @@ jQuery(async () => {
         linesFeature.onSent({ insertAt });
     };
     eventSource.on(event_types.MESSAGE_SENT, _stListeners.sent);
-    // 生成态闸（防楼内块流式频闪）：ST 流式每 token 重写末楼 .mes_text 会冲掉线块/七天条，observer 若在流式间隙补块就「补→被冲→再补」肉眼频闪。
+    // 生成态闸（防楼内块流式频闪）：ST 流式每 token 重写末楼 .mes_text 会冲掉线块/轴日历块，observer 若在流式间隙补块就「补→被冲→再补」肉眼频闪。
     // 用「流式活跃截止时间戳」自愈闸而非布尔闸：GENERATION_ENDED 只在停止按钮显示过时才发（script.js hideStopButton），
     // quiet/后台生成不显示停止按钮却照发 GENERATION_STARTED —— 布尔闸会被这类生成置真后永不清零、observer 从此罢工、楼内块全失。
     // 时间戳闸靠「最近流式 token 时间」续期、到点自动失效，绝不卡死。
@@ -1916,7 +1916,7 @@ jQuery(async () => {
         dateCoordinator.runOnce(renderKey, ({ signal }) => runJudgeDateStep({ messageId, signal }));   // fire-and-forget；runOnce 兼并发去重
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.almanacJudge);
-    // 点不再独立判定日期、也无独立跟随开关：任何一处改「今天」锚点都经 runAnchorAftermath → 顺手把点重排到今天，点纯下游连带跟随。
+    // 点不单独判定日期；共享善后刷新楼内窗口/轴面板/线日期，只有 scheduleAutoDetect 开启且未被时旅抑制时才后台重排点。
     // 暗账·标注：每 N 楼从正文捞新事件写库。独立开关(ledgerCaptureEnabled)/间隔/单调闸；默认关。
     if (_stListeners.ledgerCapture) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.ledgerCapture);
     _stListeners.ledgerCapture = async (messageId) => {
@@ -2022,12 +2022,11 @@ jQuery(async () => {
 
 // 机械任务分流用 cfg：仅供「记忆摘要 / 大纲推进判定」这类机械调用。
 // 设了 utilityPresetId 且该预设有 url+key → 用该预设快照；否则退回主 cfg（loadCfg）。
-// 生成类调用不走这里，始终 loadCfg()。空/无效即与旧版完全一致。
+// 其他生成类调用按各自调用方读取配置；空/无效时遵循现行默认路径。
 
 
 // ─── API 存储快切：预设仓库 ────────────────────────────────────────────────────
-// 预设是「整套 API 配置的命名快照」。存的是当前输入框里的这套（含未点保存的改动），
-// 切换只把某个预设填回输入框，不直接改生效配置——用户核对后点「保存设置」才落地。
+// 预设是「整套 API 配置的命名快照」。切换后立即填入并应用该快照。
 
 
 // 把一套 cfg（loadCfg 形状）存成预设。有 id 且已存在→覆盖(改名+更新内容)，否则新建。
@@ -2038,9 +2037,9 @@ jQuery(async () => {
 
 
 // ─── 插件总开关（③）───────────────────────────────────────────────────────────
-// pluginEnabled 关 = 全隐身；injectEnabled 关 = 只掐线/面潜伏注入（受 pluginEnabled 统辖）。
+// pluginEnabled 关 = 全隐身；injectEnabled 关 = 掐线/面/刻度潜伏注入（受 pluginEnabled 统辖）。
 
-// 一键中断所有在飞的后台判定与生成（点/线/虚线/面/间/棱/历 + 三路日期判定 + 同步到点），并清 re-entry 闸，
+// 一键中断所有在飞的后台判定与生成（各域 controller 及日期检测/点后台任务），并清 re-entry 闸，
 // 让重新开启后能干净重跑。照 CHAT_CHANGED 的中断序列集中一处。
 function _abortAllBackground() {
     memory.abortAll();
@@ -2069,8 +2068,8 @@ function _abortAllBackground() {
 }
 
 // 插件总开关落地。关：藏悬浮球、清所有楼内块与坐标入口（由各 feature 内部闸兜底）、
-// 断所有后台任务、撤两路潜伏注入。不关面板——用户往往正站在设置里切它，留着好即时切回。
-// 开：按各子开关恢复——显示悬浮球、重挂楼内块与两路注入、补锚点入口。事件监听不注销，靠各 listener 的 pluginEnabled() 闸空转。
+// 断所有后台任务、撤各域潜伏注入。不关面板——用户往往正站在设置里切它，留着好即时切回。
+// 开：按各子开关恢复——显示悬浮球、重挂楼内块与线/面/故事时钟/刻度注入、补锚点入口。事件监听不注销，靠各 listener 的 pluginEnabled() 闸空转。
 function applyPluginEnabled(on) {
     const ctx = getContext();
     if (on) {
@@ -2106,7 +2105,7 @@ function applyPluginEnabled(on) {
 // ─── In-game day-change detection (桥接到历·almTodayAnchor) ───────────────────
 // days 模式（跟随局内时间）的推进检测：从历的权威「今天」取 {月-日}，变化即推进。
 // 历史上这里读柏宝书 state.time，现已改为桥接 almTodayAnchor
-// 六层兜底源——柏宝书没装也能靠记忆/线/点/正文推进，且与历共用同一个「今天」。
+// 兜底来源按现行 anchor 优先级解析；柏宝书未安装时仍可由其他可用上下文推进，并与历共用同一个「今天」。
 // extractDayFromTime / _cnToNumber / _CN_* 仍被 almTodayAnchor、parseJudgedDate 复用，保留。
 
 
@@ -2130,7 +2129,7 @@ function applyPluginEnabled(on) {
 // readOnly=false（最新楼）：summary 带「标注/更新」两文字胶囊、每条带「锁定/归档了结」；true（历史楼）：纯只读。
 // 空池 → 返回 ''（该楼不挂此段；与线/点/历子块空态、及旧「空回显不挂」一致，默认开关下不冒空条）。
 // 字段照标注池闭环：类型胶囊(上色) + 事由 + 起始/周期/终止 + 标签；不显现状（现状归「召回」框）。
-// Remove inline lines block from ALL AI messages — enforces "only the latest floor holds it".
+// 统一楼内块由当前渲染窗口控制；历史楼保留各自快照，最新楼读活态。
 // 虚线冷知识已折进 .sp-lines-inline 的 body（合并成一个楼内块），清线块即连虚线一并清；
 // 仍带上 .sp-dashed-inline 兜底，扫掉合并前旧版本残留在 DOM 里的独立虚线块。
 // 新楼层挂线块 + （可选）首次推进生成。渲染改由 refreshInlineWindow() 统一负责；
@@ -2153,7 +2152,7 @@ function syncLatestInlineBlock(expectedChatId = null) {
     refreshInlineWindow(true);  // 线数据变 → 立即重算渲染窗口（最新楼会冻快照+全功能重挂，历史楼各自快照）
 }
 
-// ─── 历·楼内七天条（只读，反映历+锚点，无生成）─────────────────────────────────
+// ─── 历·楼内日历块（只读，反映历+锚点，无生成）─────────────────────────────────
 // 与线块平行、共存于最新 AI 楼。外壳（标题条）仿线：一个 <details>，收起时是扁扁的
 // 「历 · N个日程」条，点整条即展开——配色/圆角/边框全走线的 .sp-inline-* 类。
 // 展开后的内容是历自己的「往后六天」条：6 格（周X + M/D，从明天起，今天已在大头日期块里、
@@ -2245,7 +2244,7 @@ function getLedgerJudgeInterval() {
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 4;
 }
 
-// ─── 时间戳·时间锚点体系（第一片：注入 + 回读 + 只读显示）─────────────────────────
+// ─── 时间戳·时间锚点体系（注入 + 结构化回读 + 只读显示）─────────────────────────
 // 目标：给整个构画一个「跟着剧情走」的坚固时间源。做法＝强制注入一段提示词，让主楼 AI
 // 每楼正文首尾各打一个 HTML 注释时间戳（<!-- SDC-start … --> / <!-- SDC-end … -->），
 // 我们再从 chat 末尾往回扫读回。HTML 注释酒馆天然不渲染，无需像柏宝书那样加隐藏正则；
@@ -2254,21 +2253,20 @@ function getLedgerJudgeInterval() {
 //   ① 起止双界——一楼是一段区间不是一个点，故首尾两个戳；
 //   ② 标签留正文——绝不删，靠它让下楼继承基准，增量在模型脑内、输出成绝对值；
 //   ③ 往回扫 + 兜底——读「当前时间」从末楼往前扫第一条可解析的（end 优先），漏了也不崩。
-// 本片只做「注入 + 回读 + 历面板只读显示一行」，**不**改 almTodayAnchor 的 {month,day}
-// 数据形状、**不**解析成结构、**不**接权威今天——那是后续片（数据结构扩年/时）的活。
-// 首尾注释的正则（宽松容错：允许注释内外多余空白；内容自由，不强制格式，本片只回显原文）。
+// 当前链路会将时间戳注入、解析为结构化日期，并在完整戳存在时优先落入共享锚；缺失时按设置走 API 兜底。
+// 首尾注释的正则（宽松容错：允许注释内外多余空白；内容自由，不强制格式）。
 
 // 时间戳总开关（不受 injectEnabled 统辖，只受 pluginEnabled + 本开关；见 refreshStoryClockInjection）。默认开——用户定：这是全插件时间地基，值得常驻。
-// storyClockEnabled 已迁至轴控制器；保留旧注释位置以便阅读历史分片。
+// storyClockEnabled 已迁至轴控制器。
 
 // 自写提示词（吸收柏宝书三套路：拔高到系统强制 / 以上楼 end 为基准推进 / 禁用「某天」敷衍；
-// 措辞、示例、标签名全原创，绝不照搬）。粒度到小时，年份可写可略（本片不校验、不解析）。
+// 措辞、示例、标签名全原创，绝不照搬）。粒度到小时，年份可写可略。
 
 // 取生效的强注词：用户在设置里二改了(非空)就整段用他的；留空用内置默认（默认词随插件更新）。
 // 重设时间戳注入。关闭时清空。幂等，可随处多调。照 refreshLinesInjection 套路。
 // refreshStoryClockInjection 已迁至 storyClockController。
 
-// 从单楼正文解析首尾戳。返回 { start, end }（各为去空白后的原文字符串，缺失=null）。本片不解析成结构。
+// 从单楼正文解析首尾戳，并供结构化日期解析使用。返回 { start, end }（各为去空白后的原文字符串，缺失=null）。
 // 从 chat 末尾往回扫，取最近一楼「可解析出至少一个戳」的 AI 楼。end 优先作「当前时间」。
 // 漏了/坏了不崩：某楼无戳就继续往上找；全无 → 返回 null（显示层据此不显示这一行）。
 // latestStoryClock 已迁至 story-clock.js。
@@ -2281,8 +2279,8 @@ function getLedgerJudgeInterval() {
 
 // ═══ 暗账·标注 ═════════════════════════════════════════════════════════════════
 // 构画 AI 从最近正文里捞「需按时间追踪」的新事件，标注入 sp-ledger（此时·此物·此状态）。
-// 起始锚 = 此刻楼层 + 历「今天」(almTodayAnchor)，钉死不改；判定/注入是后续切片。
-// 触发：每 N 楼自动车(runLedgerCaptureStep 无参) + 历面板「暗账」页手动「立即标注」(manual=true)。
+// 起始锚 = 此刻楼层 + 历「今天」(almTodayAnchor)，钉死不改；判定与注入由同域流程负责。
+// 触发：每 N 楼自动车(runLedgerCaptureStep 无参) + 轴面板「刻度」页手动「立即标注」(manual=true)。
 // capture 窗口与来源批次大小由 business/ledger/capture.js 统一提供。
 
 // ═══ 暗历③·判定·刷现状 ═══════════════════════════════════════════════════════
@@ -2298,9 +2296,9 @@ function getLedgerJudgeInterval() {
 // 最近 N 楼 AI 正文拼成一段（去标记）。供场景加权命中判断；只读、无副作用。
 // ─── 共享锚点善后 ───────────────────────────────────────────────────────────
 // 任何一处改「今天」锚点（自动判定 applyDetectedDate / 历面板 ±1天·改·恢复自动）后都走这里，统一善后：
-//   1) 刷楼内历条 / 点条、历面板；2) 点恒跟随今天——把点重排到今天（点纯下游连带，无独立开关）。
+//   1) 刷当前渲染窗口与轴面板；2) 仅在 scheduleAutoDetect 开启且未被时旅抑制时后台重排点。
 // 点连带走 syncPointToToday(true)：其自带「点没生成过就 no-op」「_almSyncingPoint 重入合并」「pointState.isGenerating/
-// chatId/abort」守卫，fire-and-forget 安全；不占前台 pointState.isGenerating 锁。故这里无脑调、由它自己判断要不要真重生成。
+// chatId/abort」守卫，fire-and-forget 安全；不占前台 pointState.isGenerating 锁。外层仅在 scheduleAutoDetect 开启且未被时旅抑制时调用。
 function runAnchorAftermath() {
     syncLatestAlmanacBlock();
     syncLatestScheduleBlock();
@@ -2318,11 +2316,7 @@ function runAnchorAftermath() {
     }
 }
 
-// 方案 B·点随「今天」按钮同步（历面板「同步到点」键触发，非自动）：
-// schedulePointNeedsSync() —— 判定当前视角的点是否落后于共享「今天」，历面板据此决定要不要在今天条冒出「同步到点」键。
-//   条件：当前视角已生成过点 + 点的 StartDate 月/日 ≠ 今天。refresh-only：空白页不算「需同步」。
-//   与「点·自动检测」开关解耦：不论点自动检测开没开，只要点落后今天就给这枚手动补的入口——
-//   点关+历开时历自己推进今天、点原地不动，正是靠它手动追上；点开时它作为自动跟随的兜底也会短暂出现。
+// schedulePointNeedsSync() —— 判断后台跟随/时旅流程是否仍有 pending follow-up 需要补同步。
 function schedulePointNeedsSync() {
     const cacheKey = getCacheKey(currentView, charViewName);
     if (!cacheKey) return false;
@@ -2335,8 +2329,7 @@ function schedulePointNeedsSync() {
     return !(parseInt(sdMatch[1], 10) === today.month && parseInt(sdMatch[2], 10) === today.day);
 }
 
-// syncPointToToday() —— 用户在历面板点「同步到点」触发：后台把当前视角的点重生成，StartDate 强钉到「今天」，
-// 让「点」从今天起排 7 天、与「历」同一天。反馈全在历（按钮态「同步中…」+ toast），结果落在点。
+// syncPointToToday() —— 自动跟随、时旅及 pending follow-up 共用的控制器 facade；将当前视角点重排到共享「今天」。
 // 绝不占用 pointState.isGenerating（前台 UI 锁，sidebar 切换靠它挡）——后台占了会把整个面板卡死；防 race 靠自带 abort + 落地前重查。
 let _autoRegenSchedAbort = null;
 async function syncPointToToday(auto = false, travelContext = null) { return pointController.syncPointToToday(auto, travelContext); }
@@ -2412,7 +2405,7 @@ function setExtBtnState(state) {
     const $fab = $(`#${FAB_ID} .sp-fab-btn`);
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
-    // 点生成中只锁「我/TA」子切换（本次生成绑定当前视角，中途换视角无意义，另有 .sp-view-btn 里 3207 JS 守卫兜底）；
+    // 点生成中只锁「我/TA」子切换（本次生成绑定当前视角，中途换视角无意义，另有 .sp-view-btn 守卫兜底）；
     // 侧栏模块 tab(历/线/面/棱/锚) 绝不锁——切模块随时可用（点正文按状态重建，见 .sp-view-btn 处理器 schedule 分支）。
     $in('.sp-sub-toggle').toggleClass('sp-locked', state === 'generating');
 }
@@ -3155,8 +3148,8 @@ function injectModal() {
         const t = ev.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) ev.stopPropagation();
     });
-    // shadow 内第一层 wrapper 必须带 sp-root + 主题类：style.css 里 13 处 `.sp-root ...`
-    // 前缀选择器、.sp-night/.sp-day 色板、.sp-forced-* 强制主题覆盖全靠它匹配
+    // shadow 内第一层 wrapper 必须带 sp-root + 主题类：style.css 的 `.sp-root ...` 前缀选择器、
+    // .sp-night/.sp-day 色板、.sp-forced-* 强制主题覆盖全靠它匹配
     // （applyTheme 同步它的主题类）。display:contents 不产生布局盒子，fixed 语义
     // 仍由 .sp-sheet 承担；host 无 transform/filter，内部 position:fixed 相对视口不变。
     root.innerHTML = `
@@ -3385,8 +3378,8 @@ function injectModal() {
         batch: { scopes: BATCH_SCOPES, scope: getBatchScope, setScope: setBatchScope, selected: getBatchSelected, reset: batchReset, ids: batchScopeIds, exec: execBatch },
         toast: showToast, resetCapture: () => { ledgerCaptureCounter = 0; },
     });
-    // 历面板「今天」栏：±1天 / 改（内联月日） / 自动（清锚） / 同步到点。前三者经 runAnchorAftermath 共享善后
-    // （刷两条只读条 + 历面板）；改今天不再自动烧点，点要跟随由「同步到点」键显式触发（历点共用这枚今天锚点）。
+    // 轴面板「今天」栏：±1天 / 改（内联月日） / 自动（清锚）等操作经 runAnchorAftermath 共享善后；
+    // 点后台是否重排由 scheduleAutoDetect 决定。
     $almanac.on('click', '.sp-alm-today-prev', function () { almNudgeToday(-1); });
     $almanac.on('click', '.sp-alm-today-next', function () { almNudgeToday(1); });
     $almanac.on('click', '.sp-alm-today-edit', function () {
@@ -3839,7 +3832,7 @@ function injectModal() {
         saveSettingsDebounced();
         refreshInlineWindow(true);
     });
-    // 历·七天条开关：立刻生效。段开关变 → 重算所有窗内楼（每层楼的历段随之显/隐）。
+    // 轴日历块开关：立刻生效。段开关变 → 刷新当前渲染窗口（每层楼的轴日历段随之显/隐）。
     $in('#sp-almanac-inline-enabled').on('change', function () {
         getSettings().almanacInlineEnabled = this.checked;
         saveSettingsDebounced();
@@ -4314,8 +4307,8 @@ function refreshCharPinIcon() {
 
 // ─── Open / close ─────────────────────────────────────────────────────────────
 
-// 面板每次打开都回到「点」首页：清掉上次残留的子视图（历/线/面/间/棱/坐标）+ 内联编辑器，
-// 避免换聊天后重开还停在旧窗、内容残留。只复位视图，不 abort 生成、不动数据缓存。
+// 面板打开时先重置到点首页作为干净基线，再恢复同聊天上次的 lastMainView；切聊天时该值已复位为点。
+// 清掉上次残留的子视图（历/线/面/间/棱/坐标）+ 内联编辑器，不 abort 生成、不动数据缓存。
 // 无条件隐藏所有非点 wrap（不靠 mode 标志守卫）：CHAT_CHANGED 在面板隐藏时会把标志清成
 // false 却不动 DOM，若这里再按标志判断就会漏隐藏 → 出现「点 + 坐标」同屏。故一律硬隐藏。
 function resetPanelToScheduleHome() {
@@ -4756,12 +4749,8 @@ function setWiExcluded(bookName, excluded) {
     saveSettingsDebounced();
 }
 
-// Manual/auto "today" anchor for 历 + 点 (per-character). Stores {month, day}
-// (year is meaningless in RP). Two writers: the user pinning a date by hand, and
-// the auto-confirm judge writing the date it detected from recent floors. Read as
-// the highest-priority tier in almTodayAnchor (before 柏宝书) so a pinned/confirmed
-// date always wins over the slower passive sources. Keyed by card avatar like
-// wiFilter (reason see charStableKey). Clearing (null) reverts to full auto.
+// 当前聊天共享的历/点日期锚（{month, day}），可含人工校准；pending/unresolved 不是有效锚。
+// 完整故事时间戳在恢复自动后可重新接管日期来源。
 function getDateAnchor(charKey) {
     if (!charKey) return null;
     const local = chatAnchorRepository.get();
@@ -4800,7 +4789,7 @@ function setDateAnchor(charKey, month, day, source = 'explicit', options = {}) {
 // ─── Per-character narrative scale ──────────────────────────────────────────
 // Controls the granularity of storyline events. 'auto' means the LLM decides
 // from card context; explicit values override that.
-// Stored: extension_settings[PLUGIN_ID].scale = { [characterId]: 'auto'|'macro'|'meso'|'micro' }
+// Stored: extension_settings[PLUGIN_ID].scale = { [charStableKey/avatar]: 'auto'|'macro'|'meso'|'micro' }
 const SCALE_VALUES = ['auto', 'macro', 'meso', 'micro'];
 const SCALE_LABELS = {
     auto : '自动（由 AI 依据剧情判断）',
@@ -4917,8 +4906,7 @@ function getChatWorldNames(ctx) {
 // (the live editable copy), NOT ctx.characters[].data.character_book (stale snapshot).
 // Fallback to character_book if no linked world book exists.
 // Each item: { key, uid, label, preview, content, source, embedded, scope }
-//   scope = 'char'  → came from card's linked/embedded book
-//         = 'global' → came from ST's global world info selection
+//   scope = 'char'/'chat'/'persona'/'global' → 角色卡、当前聊天、用户 persona 或全局世界书来源
 async function getCharBookEntries(ctx) {
     const items = [];
     const seen = new Set();
@@ -5031,7 +5019,7 @@ async function getCharBookEntries(ctx) {
         } catch { /* ignore individual load failure */ }
     }
 
-    // 4. 用户/persona 世界书：ST「人物设定」页给当前 persona 链接的世界书（power_user.persona_description_lorebook）。
+    // 5. 用户/persona 世界书：ST「人物设定」页给当前 persona 链接的世界书（power_user.persona_description_lorebook）。
     //    与角色卡书同源读法（loadWorldInfo 取活状态），scope='persona' 供设置面板单列一栏、可逐条开关。
     //    已作为角色卡书 / 全局书收录过的同名书跳过，避免重复。
     const personaBook = String(ctx.powerUserSettings?.persona_description_lorebook || '').trim();
@@ -5559,13 +5547,13 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         ? `【故事记忆库】以下由本插件在对话过程中自动生成的客观摘要，反映从最早到近期的关键事件与伏笔。请**优先信任记忆库描述**，即使它与角色卡/世界书中较早的描述冲突（因为记忆库记录了事件后的最新状态）。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
         : '';
 
-    // 历（本世界观重要日期）：历自己不进主楼，只在这里作为数据源反哺点/线/大纲。
+    // 历（本世界观重要日期）：供构画生成与讨论上下文使用，不做主楼常驻注入。
     const almanacText = resolveAlmanacContextText(opts, getAlmanacInjectText);
     const almanacBlock = almanacText
         ? `【本世界观·重要日期（历）】以下是这个世界的既定节日、生日、纪念日等重要日子，已按「当前剧情日期」标注倒计时；每条冒号后的「说明」是该日子的既定设定（由来、涉及人物阵营、习俗活动、持续天数等），是背景事实。\n${almanacText}\n\n★ 推演点/线/大纲时：凡列在【近期将至】里的日子（未来数日内或进行中），应**主动**把它纳入近期剧情——依据其「说明」里的设定生成与之相关的铺垫、筹备、事件或人物动向，让故事顺着该世界的历法自然推进；【全年其他重要日子】作为背景，时间线接近时再纳入考量。\n★ 务必尊重每条「说明」里的既定设定，据此展开合理、可延续的剧情；说明里没写到的细节可以合理补完，但**不得编造与既定设定冲突的内容**。`
         : '';
 
-    // 历法（纪年/月份结构）：内置公历返回空、无需告知；自定义历法则反哺点/线/大纲，免得套用公历月份/天数。
+    // 历法（纪年/月份结构）：供构画生成与讨论上下文使用，不做主楼常驻注入；避免自定义历法被公历月份/天数覆盖。
     const calDescText = getCalDescInjectText();
     const calDescBlock = calDescText
         ? `【本世界观·现行历法（纪年）】${calDescText}\n推演点/线/大纲涉及日期时，一律以此历法为准（月份数、每月天数、纪年名），不要默认套用公历的 12 月 / 31 日。`
@@ -5848,7 +5836,7 @@ function storageRow(label, bytesText, btnHtml = '', extraClass = '') {
     </div>`;
 }
 
-// 渲染四层用量到 #sp-storage-body。异步（坐标要读服务器索引）。
+// 渲染三层用量到 #sp-storage-body。异步（坐标要读服务器索引）。
 async function renderStorageUsage() {
     const $body = $in('#sp-storage-body');
     if (!$body.length) return;
@@ -6174,15 +6162,14 @@ const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<butt
 // ─── 历（日历 / 历法）─────────────────────────────────────────────────────────
 // 独立模块，与点/线/面共通但存储隔离：点是 AI 每轮重算的易失数据，历要稳，
 // 单独存 chat_metadata（kind='almanac'，不分我/TA，固定 user scope，抄 dashed）。
-// 历自己不注入主楼——只在 buildMessages 里作为「本世界观重要日期」喂点/线/大纲，
-// 跟随它们已有的注入进主楼。数据形状：{ items:[{id,name,type,month,day,displayDate,note,pin,source}], ts }
+// 历数据供构画生成与讨论上下文使用，不作为主楼常驻注入。数据形状：{ items:[{id,name,type,month,day,displayDate,note,pin,source}], ts }
 
 
 
 
 
 
-// 历「当前日期」锚点体系（almTodayAnchor/almDaysUntil/almWeekdayRef/almWeekdayFor/sortAlmanacUpcoming）
+// 历「当前日期」锚点体系（almTodayAnchor/almDaysUntil/almWeekdayRef/almWeekdayFor 及日期差 helpers）
 // 已抽出到 business/axis/anchor.js（纯数据层从 data.js/叶子模块 import，跨域读取器经 bindAxisAnchor 注入）。
 
 // 历注入文本构造 getAlmanacInjectText 已抽出到 business/axis/inject.js（纯函数，仅依赖 data.js/anchor.js）。
@@ -6192,7 +6179,7 @@ const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<butt
 // AI 输出解析：<almanac_widget> 内 Item: name|type|month|day|days|displayDate|note
 
 // 解析间落地的 <era_widget>（纪年/历法描述符）：一行可选 Era: 纪年名 + N 行 Month: 月名|天数。
-// 交给 normalizeCalDesc 统一校验裁剪（月名≤12字、天数1-60、月数≤60、年长≤2000），无 Month 行/校验不过 → null。
+// 交给现行历法 parse/validate/manager/actions 链校验；无有效月份描述时返回空结果。
 
 // 重算合并：保留所有已锁 + 所有自填(user)，丢弃未锁 AI 项，再并入新 AI 项（按名+月日去重）。
 
@@ -6268,7 +6255,7 @@ function almNavMonth(delta) {
 // ── 生成 ──
 async function triggerGenerateAlmanac() { return axisGenerationController.trigger(false); }
 
-// 跑补录：照 runGenerateAlmanac 的骨架（共用 isGeneratingAlmanac / almanacAbortController 互斥同一 store），
+// 跑补录：复用 axisGenerationController（由 axisState.isGeneratingAlmanac 维护互斥），
 // 但合并阶段走**纯追加去重**（非 mergeAlmanac）+ pin=true，且补 0 条时给出「没有够格」的正常态提示、不报错。
 async function triggerSupplementAnniversary() { return axisGenerationController.trigger(true); }
 // ── 手动新增 / 编辑（内联窗，不用弹窗）──
@@ -6402,7 +6389,7 @@ function toggleSettings() {
         renderAdultRow();
         renderMemorySection();   // memory status + settings sync
         renderTheaterSection();  // 棱 settings + cache usage + template manager
-        renderStorageUsage();    // 存储管理面板：四层用量统计（含坐标收藏占用）
+        renderStorageUsage();    // 存储管理面板：本聊天、坐标收藏、本机缓存三层用量统计
         $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
     } else {
         $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
@@ -6661,7 +6648,7 @@ function bindMemoryHandlers() {
         return normalizeTagNames(cleaned.join(',')).join(',');
     }
     function bindTagField(sel, key) {
-        // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内，同 11820 的 $in 读取）→ 必须 $in 绑定，否则不落存
+        // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内）→ 必须 $in 绑定，否则不落存
         $in(sel).on('input', function () {
             getSettings()[key] = sanitizeTagList(this.value);
             saveSettingsDebounced();
@@ -6873,8 +6860,8 @@ async function renderWiList() {
 
     const disabledKeys = getDisabledKeys(ctx);
 
-    // Two-level group: scope (char / persona / global) → source (book name) → entries.
-    // Preserves entry order within each source; char first, then persona, then global.
+    // Two-level group: scope (char / chat / persona / global) → source (book name) → entries.
+    // Preserves entry order within each source: char, chat, persona, then global.
     const scopes = new Map([['char', new Map()], ['chat', new Map()], ['persona', new Map()], ['global', new Map()]]);
     for (const e of entries) {
         const scopeGroup = scopes.get(e.scope) || scopes.get('char');

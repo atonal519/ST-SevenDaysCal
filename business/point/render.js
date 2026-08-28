@@ -90,7 +90,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
     const totalTabs = days.length + (hasFuture ? 1 : 0);
     const chipCls   = perspective === 'char' ? 'sp-char-chip' : 'sp-user-chip';
 
-    // 历「同步到点」在飞时，点刷新圆圈置灰禁点（同步会后台重写点，此刻手动刷新会跟它抢 store）
+    // 点后台同步在飞时，点刷新圆圈置灰禁点（同步会后台重写点，此刻手动刷新会跟它抢 store）
     const refreshBusy = axisState._almSyncingPoint ? ' sp-refresh-busy' : '';
     // char 视角头部多一个 📌：把当前 char 固定/取消固定到 TA▾ 抽屉（查看与固定解耦，此为唯一固定动作）。
     const isPinned = perspective === 'char' && store.isPinnedChar(String(userName || '').trim());

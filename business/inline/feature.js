@@ -53,7 +53,7 @@ export function createInlineFeature(env = {}) {
     const $ = env.$;
     const _buildLedgerBlockHtml = env._buildLedgerBlockHtml;
 
-    // ─── 历·楼内七天条（只读，反映历+锚点，无生成）─────────────────────────────────
+    // ─── 历·楼内日历块（只读，反映历+锚点，无生成）─────────────────────────────────
     // 与线块平行、共存于最新 AI 楼。外壳（标题条）仿线：一个 <details>，收起时是扁扁的
     // 「历 · N个日程」条，点整条即展开——配色/圆角/边框全走线的 .sp-inline-* 类。
     // 展开后的内容是历自己的「往后六天」条：6 格（周X + M/D，从明天起，今天已在大头日期块里、
@@ -67,7 +67,7 @@ export function createInlineFeature(env = {}) {
     const _buildAlmanacBlockHtml = (...args) => axisInlineRenderer.buildAlmanacBlock(...args);
     const _almanacStripDayHtml = (...args) => axisInlineRenderer.buildAlmanacDay(...args);
 
-    // 七天条 per-day tap：点某格 → 下方就地展开当天安排（再点同格收起、点别格切换）。委托到 document、
+    // 日历块 per-day tap：点某格 → 下方就地展开当天安排（再点同格收起、点别格切换）。委托到 document、
     // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-alm-strip-live 可交互条生效。
     // 注：格子在 <details> 的 body 内，点它不触发 summary 的展开/收起，两套交互互不打架。
     function initAlmanacStripDelegation() {
@@ -99,7 +99,7 @@ export function createInlineFeature(env = {}) {
     // 纯读楼内 canonical 点 raw（schedule-user），不请求 API、不受 linesEnabled 影响，只受 scheduleInlineEnabled 控制。
     // 外壳/标题条走线的 .sp-inline-* 类，与线块/历条一致；只有条内格子用独立的 .sp-sch-* 类。
     // rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
-    // readOnly：true=历史楼，drawer 去掉注入/删除/锁定按钮（在旧楼改点语义矛盾）。
+    // readOnly：true=历史楼，drawer 去掉逐条注入/删除操作（历史楼无可变操作）。
     const _buildScheduleBlockHtml = (...args) => pointInlineRenderer.buildScheduleBlock(...args);
 
     // 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
@@ -119,7 +119,7 @@ export function createInlineFeature(env = {}) {
     //
     // 结构（对齐用户手绘图，不是三段并列）：以「今」为主心骨的一个面板。
     //   ┌─────────────────────────────────────────────┐
-    //   │ ┌───────┐  历区（即将到来 ≡ + 未来七天格）     │  ← 顶行：今头 + 历
+    //   │ ┌───────┐  历区（即将到来 ≡ + 往后六天格）     │  ← 顶行：今头 + 历
     //   │ │今 M/D │                                     │
     //   │ │周X ☀  │                                     │
     //   │ └───────┘                                     │
@@ -376,15 +376,14 @@ export function createInlineFeature(env = {}) {
     //  楼内渲染窗口控制器（render_depth 深度窗 + IntersectionObserver 视口懒挂）
     // ═══════════════════════════════════════════════════════════════════════════
     //
-    // 取代旧的「三套 syncLatest*/ensureLatest*/backfill* + anchor #chat MutationObserver 打地鼠」：
-    // 只在「深度窗口 ∩ 视口」内的 AI 楼挂统一框，超窗只留 message.extra 快照、不挂 DOM，滑回秒重建。
+    // 当前窗口由深度与视口共同决定；超窗只留 message.extra 快照，不挂 DOM，滑回再重建。
     //
     // 深度窗口：最新 N 层 AI 楼（N=有效 render_depth）。N=0（跟随酒馆助手且它设 0=全渲）→ 不设上限、全挂。
     //   inlineRenderDepth>0 → 用它；=0 → 跟随酒馆助手 render.depth；读不到/为 0 → 用兜底常量。
     // 视口：IntersectionObserver 观察每层 AI 楼，进视口才真正 build DOM、离开视口卸 DOM（省重排）。
     //   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
     //
-    // 最新楼（chat 里最后一条 AI 楼）= 全功能、读活缓存；其余窗内楼 = 只读、读各自快照。
+    // 深度按最近 N 个 AI 楼确定，但窗口覆盖其间用户楼；最新 AI 楼与最新用户楼读活态出口，其余读快照。
 
 
 

@@ -1,6 +1,6 @@
 // ─── 刻度（ledger）域 · 渲染 / 编辑 / 批量交互 ────────────────────────────────
-// 从 index.js 迁入「暗账页」（历面板第三 sheet）整套：条目行/内联编辑窗/批量条/暗账列表。
-// 按 Lead 裁定 Option B 独立成 ledger 渲染子模块；ledger 数据层位于同域 repository.js。
+// 从 index.js 迁入「轴面板刻度页」整套：条目行/内联编辑窗/批量条/暗账列表。
+// 按 Option B 独立成 ledger 渲染子模块；ledger 数据层位于同域 repository.js。
 // axis 编排器（axis/panel 的 renderAlmanacPanel）经本模块导出的 renderLedgerSheet/renderLedgerEditor 调用；
 // 本模块反向经 env 调 renderAlmanacPanel（避免与 axis/panel 形成 ESM 循环 import）。
 //

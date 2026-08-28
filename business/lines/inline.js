@@ -13,8 +13,7 @@ export function prefixNext(next, stall = false) {
 
 export function selectInlineLines(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
     const parsed = parseLines(raw);
-    // 新合同仍最多 6 条；旧存档可能有第 7 条及以后，历史展示不再静默截断。
-    // raw 已经落库，超过 6 条即是旧数据；新 AI response 的 6 条上限由 validator 保证。
+    // 展示层不截断已落库的线；旧数据或未来合同扩展都应完整呈现。
     const visible = parsed.slice(0, max);
     return visible.map((line, index) => ({ ...line, index, readOnly, nextText: line.next ? prefixNext(line.next, line.stall) : '' }));
 }

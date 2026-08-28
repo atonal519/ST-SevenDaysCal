@@ -1,4 +1,4 @@
-// 点域局部成人票：不依赖线实验 allocator，保证每次点请求从空自动池独立签发。
+// 点域局部成人票：不依赖线域 allocator，保证每次点请求从空自动池独立签发。
 export const POINT_ADULT_MODES = Object.freeze(['off', 'mixed', 'dominant']);
 const TARGET = Object.freeze({ off: 0, mixed: 0.3, dominant: 0.7 });
 const SELECTIONS = Object.freeze([

@@ -4,8 +4,8 @@
 // 月经上个月来的当成昨天。暗账在点/线/面之外单开一层「时间账」：从正文捞事件 → 打点（此时·此物·此
 // 状态）→ 每 N 楼重算时间差刷现状 → 以强提醒注入主楼，让主楼只表达被嚼碎的结论、不自己算。
 //
-// 本文件只管【存储层】：chat_metadata['sp-ledger'] 的读写与通用 schema。打点/判定/注入/UI/检索
-// 都是后续切片，不在这里。存储照 memory.js / store.js：saveMetadata() 同步落盘（切档 clearChat()
+// 本文件只管【存储层】：chat_metadata['sp-ledger'] 的读写与通用 schema。capture/judge/inject/render/select
+// 等同域模块负责其他职责。存储照 memory.js / store.js：saveMetadata() 同步落盘（切档 clearChat()
 // 会取消防抖保存并清空 chat_metadata，防抖那份会永久丢，故必须同步写）。
 //
 // OWN_KEYS 白名单已含 'sp-ledger' → 存储管理面板经 store.ownKeyBytes / clearOwnKey 自动显示占用/可清，
