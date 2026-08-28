@@ -16,6 +16,9 @@ import { renderActionMenu } from '../utils/action-menu.js';
 
 let env = null;
 export function bindPointRender(e) { env = e; }
+const adultBlurEnabled = () => env?.settings?.().adultBlurEnabled !== false;
+const adultToggle = adult => adult ? '<span class="sp-point-adult-badge">18+</span>' : '';
+const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
 
 // 点类型元数据（icon 只用 FA 免费版实心/半透明图标；label 中文；cls 对应样式）
 export const TYPE_META = {
@@ -52,6 +55,7 @@ export function scheduleDayLabel(i, startDate, ctx) {
 }
 
 function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
+    const adult = ev.adult === true;
     const meta = TYPE_META[ev.type] || TYPE_META.main;
     // F5 锁点：仅面板内渲染（有定位 dayKey）且事件有标题时给锁钮；注入卡/无定位场景不显示
     // 删除钮：仅面板内渲染（有定位 dayKey）才给；注入卡/无定位场景不显示。走 .sp-sch-del-one，
@@ -66,15 +70,15 @@ function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', d
     ], escapeHtml, escapeAttr).replace('data-menu-id="point"', 'data-menu-id="point" data-day="' + escapeAttr(String(dayKey)) + '" data-ev="' + evIdx + '" data-iid="' + iid + '"') : inject;
     return `<div class="sp-event ${meta.cls}${ev.pin ? ' sp-event-pinned' : ''}">
         <div class="sp-event-head">
-            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>${ev.adult ? '<span class="sp-point-adult-badge">18+</span>' : ''}
+            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>${adultToggle(adult)}
             ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
         <span class="sp-beat-actions">${actions}</span>
         </div>
-        <div class="sp-event-title">${escapeHtml(ev.title)}</div>
-        ${ev.desc ? `<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>` : ''}
+        ${sensitive(`<div class="sp-event-title">${escapeHtml(ev.title)}</div>`, adult)}
+        ${ev.desc ? sensitive(`<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>`, adult) : ''}
         <div class="sp-event-meta">
             ${ev.location  ? `<span class="sp-event-loc"><i class="fa-solid fa-location-dot"></i>${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? `<span class="sp-event-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>` : ''}
+            ${ev.npcAction ? sensitive(`<span class="sp-event-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>`, adult) : ''}
         </div>
     </div>`;
 }

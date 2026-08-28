@@ -48,10 +48,13 @@ export function createLinesFeature(env = {}) {
         cleanup: (owner, chatId) => cleanupOwner(owner, chatId),
     }));
     const actions = env.actions || (env.actionsEnv && createLinesActions({ ...env.actionsEnv, isBusy: () => runtime.busy, resetCounter: () => { lifecycle.counter = 0; }, render: raw => renderLines(raw), setCached: html => runtime.setHtml(html), refreshPanel: () => refreshPanel?.(), refreshInline: () => syncInline?.(), runGenerate: (...args) => generation?.run?.(...args) }));
+    const adultBlurEnabled = () => env.getSettings?.().adultBlurEnabled !== false;
+    const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
     const titleHtml = (className, line) => {
         const name = env.escapeHtml?.(line.name) || '';
         const glyph = vectorGlyphSvg(line.cue);
-        return glyph ? `<div class="${className} sp-line-title-with-glyph">${glyph}<span>${name}</span></div>` : `<div class="${className}">${name}</div>`;
+        const body = name;
+        return glyph ? `<div class="${className} sp-line-title-with-glyph">${glyph}${body}</div>` : `<div class="${className}">${body}</div>`;
     };
     const widget = env.widget || (env.widgetEnv && {
         apply(body, editIdx = null, button = null) {
@@ -74,6 +77,7 @@ export function createLinesFeature(env = {}) {
         if (!lines.length) return `${env.jumpHint?.() || ''}<div class="sp-raw">${env.escapeHtml?.(stripInternalLineLines(raw)).replace(/\n/g, '<br>')}</div>`;
         const colors = env.stageColors || {};
         const cards = lines.map((l, i) => {
+            const adult = l.adult === true;
             const level = Math.max(1, Math.min(4, Number.parseInt(l.level, 10) || 1));
             const color = colors[l.stage] || '#9aa6b2';
             const edgeColor = lineEdgeColor(l);
@@ -89,7 +93,10 @@ export function createLinesFeature(env = {}) {
                 { action: 'line-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
                 { action: 'line-delete', icon: 'fa-trash', label: '删除', title: '删除这条线' },
             ], env.escapeHtml, env.escapeAttr).replace('data-menu-id="line"', `data-menu-id="line" data-line-idx="${i}" data-iid="${iid}"`);
-            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${titleHtml('sp-beat-title', l)}${l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : ''}${next}</div>`;
+            const desc = l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : '';
+            const nextText = l.next ? `<div class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</div>` : '';
+            const nextHtml = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span>${sensitive(nextText, adult)}</div>` : '';
+            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${sensitive(titleHtml('sp-beat-title', l), adult)}${sensitive(desc, adult)}${nextHtml}</div>`;
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
@@ -99,12 +106,15 @@ export function createLinesFeature(env = {}) {
         const view = inlineState(value, { readOnly });
         const dashedSub = !readOnly && view.dashed.enabled ? dashed?.inlineHtml?.() || '' : '';
         const body = view.lines.map((line, i) => {
+            const adult = line.adult === true;
             const level = Math.max(1, Math.min(4, Number.parseInt(line.level, 10) || 1));
             const color = (env.stageColors || {})[line.stage] || '#9aa6b2';
             const edgeColor = lineEdgeColor(line);
             const beads = Array.from({ length: 4 }, (_, n) => `<span class="sp-bead${n < level ? ' sp-bead-on' : ''}" style="${n < level ? `background:${color}` : ''}"></span>`).join('');
             const actions = view.hasActions ? `<span class="sp-beat-actions">${env.makeInjectBtn?.([`【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`, line.desc, line.nextText].filter(Boolean).join('\n')) || ''}<button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span>` : '';
-            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}<span class="sp-inline-dots">${beads}</span>${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${titleHtml('sp-inline-name', line)}${line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : ''}${line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span></div>` : ''}</div>`;
+            const desc = line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : '';
+            const next = line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span>${sensitive(`<span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span>`, adult)}</div>` : '';
+            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}<span class="sp-inline-dots">${beads}</span>${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${sensitive(titleHtml('sp-inline-name', line), adult)}${sensitive(desc, adult)}${next}</div>`;
         }).join('');
         const controls = !readOnly && view.hasActions ? '<span class="sp-inline-summary-actions"><button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button><button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button></span>' : '';
         const summaryText = view.empty ? '暂无' : [view.activeCount ? `${view.activeCount} 条活跃` : '', view.settledCount ? `${view.settledCount} 条已收束` : ''].filter(Boolean).join(' · ');

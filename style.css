@@ -1969,6 +1969,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-type-major     .sp-type-badge { color: #b08968; }
 .sp-type-character .sp-type-badge { color: #f48fb1; }
 .sp-point-adult-badge { display: inline-flex; align-items: center; padding: 1px 4px; border-radius: 3px; font-size: var(--sp-fs-62); font-weight: 700; color: #8a6500; background: #f4d77a; line-height: 1.1; }
+.sp-adult-sensitive { display: inline; filter: blur(5px); opacity: 0.62; user-select: none; cursor: pointer; transition: filter 0.15s ease, opacity 0.15s ease; }
+.sp-adult-revealed .sp-adult-sensitive { filter: none; opacity: 1; user-select: text; }
+@media (prefers-reduced-motion: reduce) { .sp-adult-sensitive { transition: none; } }
 .sp-event.sp-event-pinned.sp-type-world     { border-left-color: #287fa3; }
 .sp-event.sp-event-pinned.sp-type-major     { border-left-color: #76583f; }
 .sp-event.sp-event-pinned.sp-type-character { border-left-color: #a85f78; }

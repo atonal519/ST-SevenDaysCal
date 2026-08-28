@@ -306,7 +306,7 @@ bindApiClient({
 
 // 点渲染回调注入：render.js 的 scheduleDayCtx/scheduleDayLabel/renderEvent 需访问本文件的
 // almTodayAnchor/almWeekdayRef/almWeekdayFor/makeInjectBtn，经 bindPointRender 注入以避免反向依赖（循环引用）。
-bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn });
+bindPointRender({ almTodayAnchor, almWeekdayRef, almWeekdayFor, makeInjectBtn, settings: getSettings });
 bindPointRepository({ keyDesc, readStore, renderSchedule, loadCalendar: loadCalDesc });
 const pointActions = createPointActions({
     inShadow: $inAll,
@@ -2822,6 +2822,10 @@ function injectModal() {
                                 <summary class="sp-settings-section-title">显示与通知管理</summary>
                                 <div class="sp-settings-section-body">
                                     <label class="sp-cfg-group">显示</label>
+                                    <label class="sp-mode-opt" style="margin-top:10px">
+                                        <input type="checkbox" id="sp-adult-blur-enabled" ${getSettings().adultBlurEnabled !== false ? 'checked' : ''}>
+                                        <span>默认模糊成人内容</span>
+                                    </label>
                                     <label class="sp-mode-opt">
                                         <input type="checkbox" id="sp-anchor-inline-btn" ${getSettings().anchorInlineBtn !== false ? 'checked' : ''}>
                                         <span>收藏此楼入口</span>
@@ -3292,6 +3296,16 @@ function injectModal() {
         const idx = Number($(this).attr('data-line-idx'));
         if (Number.isInteger(idx)) linesFeature.actions.pin(idx);
     });
+    const revealAdult = function (e) {
+        const node = $(this); const root = node.closest('.sp-line-card, .sp-inline-line, .sp-event, .sp-sch-drawer-item');
+        if (root.hasClass('sp-adult-revealed')) return;
+        e.preventDefault(); e.stopPropagation(); root.addClass('sp-adult-revealed');
+        root.find('.sp-adult-sensitive').removeAttr('role tabindex aria-label title').find('[aria-hidden="true"]').removeAttr('aria-hidden');
+    };
+    const revealAdultKey = function (e) { if (e.key !== 'Enter' && e.key !== ' ') return; revealAdult.call(this, e); };
+    $in('#sp-lines-wrap').off('click.spAdultReveal keydown.spAdultReveal', '.sp-adult-sensitive').on('click.spAdultReveal', '.sp-adult-sensitive', revealAdult).on('keydown.spAdultReveal', '.sp-adult-sensitive', revealAdultKey);
+    $in('#sp-body').off('click.spAdultReveal keydown.spAdultReveal', '.sp-adult-sensitive').on('click.spAdultReveal', '.sp-adult-sensitive', revealAdult).on('keydown.spAdultReveal', '.sp-adult-sensitive', revealAdultKey);
+    $('#chat').off('click.spAdultReveal keydown.spAdultReveal', '.sp-adult-sensitive').on('click.spAdultReveal', '.sp-adult-sensitive', revealAdult).on('keydown.spAdultReveal', '.sp-adult-sensitive', revealAdultKey);
     $inAll('#sp-body, #sp-lines-wrap, #sp-outline-wrap').on('click.spManualActionMenu', '.sp-action-menu-toggle', function (e) {
         e.stopPropagation(); const menu = $(this).closest('.sp-action-menu').get(0); const open = !$(menu).hasClass('sp-action-menu-open'); closeActionMenus(menu); $(menu).toggleClass('sp-action-menu-open', open).find('.sp-action-menu-list').attr('hidden', !open).end().find('.sp-action-menu-toggle').attr('aria-expanded', String(open));
     }).on('click.spManualActionMenu', '.sp-action-menu-item', function (e) {
@@ -3835,6 +3849,17 @@ function injectModal() {
     $in('#sp-schedule-inline-enabled').on('change', function () {
         getSettings().scheduleInlineEnabled = this.checked;
         saveSettingsDebounced();
+        refreshInlineWindow(true);
+    });
+    $in('#sp-adult-blur-enabled').on('change', function () {
+        getSettings().adultBlurEnabled = this.checked;
+        saveSettingsDebounced();
+        if (linesMode) linesFeature.refreshPanel();
+        if (!outlineMode && !linesMode && !spaceMode) {
+            const saved = readStore(getCacheKey());
+            pointState.cachedSchedule = saved?.raw ? renderSchedule(saved.raw, saved.userName || '用户', currentView, loadCalDesc()) : null;
+            if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
+        }
         refreshInlineWindow(true);
     });
     // 标注池·显隐开关（AI 楼）：只控这只读回显框显/隐，与注入 ledgerInject 解耦（关它注入照旧、只是不回显）。

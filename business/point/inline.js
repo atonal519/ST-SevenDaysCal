@@ -1,6 +1,9 @@
 // 点楼内日程条纯渲染：不请求 API、不写 store；宿主注入当前 raw 与公共 HTML helpers。
 import { formatPointDate } from './date-context.js';
 export function createPointInlineRenderer(env) {
+    const adultBlurEnabled = () => env.settings?.().adultBlurEnabled !== false;
+    const adultToggle = adult => adult ? '<span class="sp-point-adult-badge">18+</span>' : '';
+    const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
     function buildScheduleBlock(rawArg = null, readOnly = false, calendarOverride = null, weekdayRefOverride = undefined) {
         if (env.settings().scheduleInlineEnabled === false) return '';
         const raw = rawArg != null ? rawArg : env.readRaw(); if (!raw) return '';
@@ -28,9 +31,10 @@ export function createPointInlineRenderer(env) {
         const head = `<div class="sp-sch-sday-head">${env.escapeHtml(headLabel)}</div>`;
         if (!events.length) return `${head}<div class="sp-sch-sday-empty">这天没有安排</div>`;
         const rows = events.map((event, eventIndex) => {
+            const adult = event.adult === true;
             const meta = env.typeMeta[event.type] || env.typeMeta.main;
             const actions = readOnly ? '' : `<span class="sp-sch-drawer-actions">${env.makeInjectBtn(env.buildPointInjectText(event, weather, temp, dateLabel))}<button class="sp-sch-del-one" data-day="${env.escapeAttr(String(dayKey))}" data-ev="${eventIndex}" title="删除这个点"><i class="fa-solid fa-xmark"></i></button></span>`;
-            return `<div class="sp-sch-drawer-item${event.pin ? ' sp-sch-drawer-pinned' : ''}"><div class="sp-sch-drawer-head"><span class="sp-sch-drawer-badge"><i class="fa-solid ${meta.icon}"></i>${env.escapeHtml(meta.label)}</span>${event.adult ? '<span class="sp-point-adult-badge">18+</span>' : ''}<span class="sp-sch-drawer-title">${env.escapeHtml(event.title || '')}</span>${event.time ? `<span class="sp-sch-drawer-time"><i class="fa-regular fa-clock"></i> ${env.escapeHtml(event.time)}</span>` : ''}${event.pin ? '<i class="fa-solid fa-lock sp-sch-drawer-lock" title="已锁定"></i>' : ''}${actions}</div>${event.desc ? `<div class="sp-sch-drawer-desc">${env.escapeHtml(env.cleanText(event.desc))}</div>` : ''}${(event.location || event.npcAction) ? `<div class="sp-sch-drawer-meta">${event.location ? `<span class="sp-sch-drawer-loc"><i class="fa-solid fa-location-dot"></i>${env.escapeHtml(event.location)}</span>` : ''}${event.npcAction ? `<span class="sp-sch-drawer-npc"><i class="fa-solid fa-link"></i>${env.escapeHtml(event.npcAction)}</span>` : ''}</div>` : ''}</div>`;
+            return `<div class="sp-sch-drawer-item${event.pin ? ' sp-sch-drawer-pinned' : ''}${adult ? ' sp-event-adult' : ''}"><div class="sp-sch-drawer-head"><span class="sp-sch-drawer-badge"><i class="fa-solid ${meta.icon}"></i>${env.escapeHtml(meta.label)}</span>${adultToggle(adult)}${sensitive(`<span class="sp-sch-drawer-title">${env.escapeHtml(event.title || '')}</span>`, adult)}${event.time ? `<span class="sp-sch-drawer-time"><i class="fa-regular fa-clock"></i> ${env.escapeHtml(event.time)}</span>` : ''}${event.pin ? '<i class="fa-solid fa-lock sp-sch-drawer-lock" title="已锁定"></i>' : ''}${actions}</div>${event.desc ? sensitive(`<div class="sp-sch-drawer-desc">${env.escapeHtml(env.cleanText(event.desc))}</div>`, adult) : ''}${(event.location || event.npcAction) ? `<div class="sp-sch-drawer-meta">${event.location ? `<span class="sp-sch-drawer-loc"><i class="fa-solid fa-location-dot"></i>${env.escapeHtml(event.location)}</span>` : ''}${event.npcAction ? sensitive(`<span class="sp-sch-drawer-npc"><i class="fa-solid fa-link"></i>${env.escapeHtml(event.npcAction)}</span>`, adult) : ''}</div>` : ''}</div>`;
         }).join('');
         return `${head}<div class="sp-sch-sday-list">${rows}</div>`;
     }

@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS = {
     storyClockPromptVersion: 0,  // 0/缺省=旧版基础正文+机器合同；2=用户编辑的完整文本，按原样注入
     themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
     uiScale: 1.0,        // 界面字号缩放倍率：--sp-scale 的持久值（设置里 −/＋ 步进，默认 1.0＝100%），脱钩酒馆 Font Scale
+    adultBlurEnabled: true, // 成人点线默认模糊（纯显示偏好）
     uiFontUrl   : 'https://fontsapi.zeoseven.com/387/main/result.css',  // 字体 CSS(@font-face) 的 URL：经动态 <link> 引入。默认＝zeoseven 387 有爱圆体(Nowar Rounded TW Wc)，unicode-range 分片、移动端友好。留空=不加载网络字体、只用系统栈
     uiFontFamily: 'Nowar Rounded TW Wc',                                // 生效字体 family 名：写进 --sp-font-user。须与 uiFontUrl 那份 CSS 里 @font-face 声明的 font-family 完全一致，否则加载了也不生效
     notifyMode: 'lite',  // 通知提醒档：'off'=全静音 / 'lite'(默认)=仅你手动生成·刷新时提示 / 'full'=另在后台自动改动点线面历时提示（真改动才弹）
