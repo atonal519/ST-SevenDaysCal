@@ -182,7 +182,7 @@ export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
     const strictEvents = widget ? eventBlocks.every(block => {
         const eventLine = block.find(line => /^\s*Event\s*:/i.test(line));
         const fields = String(eventLine || '').trim().replace(/^Event\s*:\s*/i, '').split('|');
-        return fields.length === 6 || (!options.generated && fields.length === 7);
+        return fields.length === 5 || fields.length === 6 || (!options.generated && fields.length === 7);
     }) : false;
     const parsed = parseCalendar(text, calendar);
     const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));

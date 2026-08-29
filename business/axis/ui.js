@@ -6,12 +6,37 @@ function displayMonthName(calendar, month, monthName) {
     return String(label || `${month}月`);
 }
 
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+function classicalNumber(value) {
+    const n = Number(value); if (!Number.isInteger(n) || n < 0 || n > 9999) return String(value ?? '');
+    if (n < 10) return CN_DIGITS[n];
+    const units = ['', '十', '百', '千']; const digits = String(n).split('').map(Number); let out = '';
+    digits.forEach((digit, index) => {
+        const pos = digits.length - index - 1;
+        if (!digit) { if (out && digits.slice(index + 1).some(Boolean) && !out.endsWith('零')) out += '零'; return; }
+        if (digit === 1 && pos === 1 && !out) out += '十';
+        else out += `${CN_DIGITS[digit]}${units[pos]}`;
+    });
+    return out.replace(/零+/g, '零').replace(/零$/g, '');
+}
+function classicalDay(day) { const n = Number(day); if (n >= 1 && n <= 10) return `初${classicalNumber(n)}`; if (n >= 21 && n <= 29) return `廿${classicalNumber(n - 20)}`; return classicalNumber(n); }
+export function formatCalendarDate({ year = null, eraLabel = '', month, day } = {}, calendar = null, monthName = (_cal, m) => `${m}月`, part = 'full') {
+    const classical = calendar?.displayStyle === 'classical';
+    const era = String(eraLabel || (classical ? calendar?.era || '' : '')).trim();
+    const y = year == null ? '' : `${classical ? classicalNumber(year) : year}年`;
+    const m = displayMonthName(calendar, month, monthName);
+    const d = classical ? classicalDay(day) : `${day}`;
+    if (part === 'year') return `${era}${y}`;
+    if (part === 'monthDay') return `${m}${d}日`;
+    return `${era}${y}${m}${d}日`;
+}
+
 // 纯显示格式化：轴面板只展示人类可读值，不把 date=/time= 等机器字段泄漏给用户。
 // 无法确认结构化值时回退到已转义 raw，保证旧存档仍可读且不会注入 HTML。
 export function formatStoryClockMeta(meta, escape = value => String(value ?? ''), calendar = null, monthName = (_cal, month) => `${month}月`) {
     const m = meta && typeof meta === 'object' ? meta : null;
     if (!m?.valid) return escape(m?.raw || '');
-    const date = m.month != null && m.day != null ? `${displayMonthName(calendar, m.month, monthName)}${m.day}日` : '';
+    const date = m.month != null && m.day != null ? formatCalendarDate(m, calendar, monthName) : '';
     const weekday = m.weekdayText || '';
     const time = m.time || '';
     const human = [date, weekday, time].filter(Boolean).join(' ');
@@ -21,7 +46,7 @@ export function formatStoryClockMeta(meta, escape = value => String(value ?? '')
 // 楼内小时间条的纯组装 seam：index.js 仍负责挑最新楼/解析旧 stamp，本函数只统一最终月名显示。
 export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = null, stampDate = null, rawStamp = '', calendar = null, monthName = (_cal, month) => `${month}月`, escapeHtml = value => String(value ?? ''), tip = '' } = {}) {
     const today = (dateText, weekday = '', title = '') => `<span class="sp-dash-sum-today"${title ? ` title="${escapeHtml(title)}"` : ''}>今 ${escapeHtml(dateText)}${weekday ? ` ${escapeHtml(weekday)}` : ''}</span>`;
-    const dateText = value => `${value?.year ? `${value.year}年` : ''}${displayMonthName(calendar, value?.month, monthName)}${value?.day}日`;
+    const dateText = value => formatCalendarDate(value, calendar, monthName);
     const fallbackWeekday = anchorWeekday || '星期未记录';
     const fallback = { todayHtml: today(dateText(anchor), fallbackWeekday), timeHtml: '' };
     if (clockMeta?.valid && clockMeta.month != null && clockMeta.day != null) {
@@ -59,7 +84,8 @@ export function createAxisUi(env = {}) {
         const key = env.charKey?.(), cal = env.calendar?.(), today = env.today?.();
         const wdIndex = env.weekday?.(today.month, today.day, null, cal);
         const wd = wdIndex == null ? '星期未记录' : env.weekdays?.[wdIndex];
-        if (!key) return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(displayMonthName(cal, today.month, env.monthName))}${today.day}日·${wd}</span><span class="sp-alm-today-hint">无角色卡，无法钉</span></div>`;
+        const todayText = formatCalendarDate(today, cal, env.monthName);
+        if (!key) return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}·${wd}</span><span class="sp-alm-today-hint">无角色卡，无法钉</span></div>`;
         if (env.editing?.()) {
             const maxDim = Math.max(...cal.months.map(month => month.days));
             const selected = env.storyCalibration?.()?.weekday;
@@ -72,7 +98,7 @@ export function createAxisUi(env = {}) {
         }
         const pinned = env.anchor?.(key), calibration = env.storyCalibration?.(), pinTag = calibration ? '<span class="sp-alm-today-pin" title="人工故事时间校准"><i class="fa-solid fa-compass"></i></span>' : pinned ? '<span class="sp-alm-today-pin" title="兼容旧版日期锚点"><i class="fa-solid fa-thumbtack"></i></span>' : '';
         const autoBtn = pinned || calibration ? '<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动"><i class="fa-solid fa-rotate"></i></button>' : '';
-        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(displayMonthName(cal, today.month, env.monthName))}${today.day}日·${wd}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）"><i class="fa-solid fa-chevron-left"></i></button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）"><i class="fa-solid fa-chevron-right"></i></button><button class="sp-icon-btn sp-alm-today-edit" title="校准故事时间"><i class="fa-solid fa-pen"></i></button>${autoBtn}</span></div>`;
+        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}·${wd}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）"><i class="fa-solid fa-chevron-left"></i></button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）"><i class="fa-solid fa-chevron-right"></i></button><button class="sp-icon-btn sp-alm-today-edit" title="校准故事时间"><i class="fa-solid fa-pen"></i></button>${autoBtn}</span></div>`;
     };
     const storyClockBarHtml = () => {
         if (!env.storyClockEnabled?.()) return '';

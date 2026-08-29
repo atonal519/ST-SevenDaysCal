@@ -224,19 +224,86 @@ ${preferenceBlock ? `${preferenceBlock}\n` : ''}${excludedBlock}
 
 【推演规则】
 1. ${planningRule}
-2. 只为上述时间变化后的日期构思方向，严格输出三个方向，每个方向 40—80 字、一行一个；只说明核心冲突、人物选择和发展可能，不展开完整场景和具体动作，不直接续写正文，不要解释或重复。`;
+2. 只为上述时间变化后的日期构思方向，建议输出三个方向，每个方向 40—80 字、一行一个；只说明核心冲突、人物选择和发展可能，不展开完整场景和具体动作，不直接续写正文，不要解释或重复。`;
+}
+
+function isTravelDirectionPreamble(value) {
+    const text = String(value || '').replace(/[*_#\s]/g, '');
+    // 礼貌前缀按“短从句 + 句读”剥离，不维护措辞清单；余下主体仍必须被元语言语法完整消费。
+    const prefixed = text.match(/^[\p{Script=Han}]{1,8}[,，!！。](.+)$/u);
+    const body = prefixed ? prefixed[1] : text;
+    const lead = '(?:以下|下面|这里|这是)?';
+    const recipient = '(?:(?:为|给)(?:你|用户)(?:提供)?的?)?';
+    const scope = '(?:一?共|总共)?';
+    const auxiliary = '(?:将|会)?';
+    const verb = '(?:是|为|有|备有|提供|给出|列出|整理(?:出|了)?|归纳(?:出|了)?|汇总(?:出|了)?|准备(?:了|好)?)?';
+    const qualifier = '(?:建议的?|推荐的?|可选的?|备选的?|不同的?)?';
+    const quantity = '(?:[一二三四五六七八九十两百]|\\d+|几|若干)(?:个|条|种|组)';
+    const modifiers = '(?:(?:可选|备选|候选|建议|推荐|不同|剧情|剧情发展|可供(?:你|用户)?选择)的?)*';
+    const subject = '(?:方向|建议|选项|方案|剧情走向|发展路线)';
+    const suffix = '(?:如下|可供(?:你|用户)?选择|供(?:你|用户)?选择|供(?:你|用户)?参考)?';
+    // 冒号后的任何实质内容、或主体里的任意非元语言成分，都会令完整匹配失败。
+    return new RegExp(`^${lead}${scope}${auxiliary}${recipient}${verb}${recipient}(?:以下|如下)?${qualifier}${quantity}${modifiers}${subject}${suffix}[:：]$`, 'u').test(body);
+}
+
+function isStandaloneTravelCourtesy(value) {
+    const text = String(value || '').replace(/[*_#\s]/g, '');
+    // 独立行只认极窄的完整确认/礼貌语义；陌生短句一律按有效方向保留。
+    return /^(?:好的?|当然可以|可以|没问题|明白了?|收到|遵命|劳您费心|辛苦了|谢谢|多谢)[。.!！]$/u.test(text);
+}
+
+const CIRCLED_TRAVEL_DIRECTION_NUMBERS = Object.freeze([...'①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳']);
+
+function markerWithRequiredSeparator(text, head, ordinal) {
+    if (!head) return null;
+    const separator = text.slice(head[0].length).match(/^(?:\s*[.．、:：)）]\s*|\s+)/u);
+    return separator ? { length: head[0].length + separator[0].length, ordinal } : null;
+}
+
+function parseTravelDirectionMarker(value) {
+    const text = String(value || '');
+    const classified = text.match(/^第\s*(\d+)\s*(?:项|个|条|种|组)/u);
+    const classifiedMarker = markerWithRequiredSeparator(text, classified, Number(classified?.[1]));
+    if (classifiedMarker) return classifiedMarker;
+    const arabic = text.match(/^(\d+)/u);
+    const arabicMarker = markerWithRequiredSeparator(text, arabic, Number(arabic?.[1]));
+    if (arabicMarker) return arabicMarker;
+    const bracketed = text.match(/^[（(【]\s*(\d+)\s*[)）】]\s*[.．、:：]?\s*/u);
+    if (bracketed) return { length: bracketed[0].length, ordinal: Number(bracketed[1]) };
+    const circleIndex = CIRCLED_TRAVEL_DIRECTION_NUMBERS.indexOf(text[0]);
+    if (circleIndex >= 0) {
+        return markerWithRequiredSeparator(text, [text[0]], circleIndex + 1);
+    }
+    return null;
 }
 
 export function parseTravelDirections(raw, excluded = []) {
     const old = new Set((Array.isArray(excluded) ? excluded : []).map(item => String(item || '').trim()).filter(Boolean));
-    const seen = new Set();
-    const out = [];
-    for (const line of String(raw || '').split('\n')) {
-        const text = line.trim().replace(/^[-*•\s]+/, '').replace(/^\d+[.、)）]\s*/, '').trim();
-        if (!text || old.has(text) || seen.has(text)) continue;
+    const numbered = [];
+    const unnumbered = [];
+    const numberedSeen = new Set();
+    const unnumberedSeen = new Set();
+    const lines = String(raw || '').split('\n');
+    for (const [sourceIndex, line] of lines.entries()) {
+        const bare = line.trim().replace(/^[-*•\s]+/, '');
+        const marker = parseTravelDirectionMarker(bare);
+        const text = (marker ? bare.slice(marker.length) : bare).trim();
+        if (!text || /^```/.test(text) || isTravelDirectionPreamble(text) || isStandaloneTravelCourtesy(text) || old.has(text)) continue;
+        const target = marker ? numbered : unnumbered;
+        const seen = marker ? numberedSeen : unnumberedSeen;
+        if (seen.has(text)) continue;
         seen.add(text);
-        out.push(text);
+        target.push({ text, ordinal: marker?.ordinal ?? null, sourceIndex });
+    }
+    if (!numbered.length) return unnumbered.slice(0, 3).map(item => item.text);
+    const out = numbered.slice(0, 3).map(item => item.text);
+    const selected = new Set(out);
+    for (const item of unnumbered) {
         if (out.length >= 3) break;
+        const { text } = item;
+        if (numberedSeen.has(text) || selected.has(text)) continue;
+        selected.add(text);
+        out.push(text);
     }
     return out;
 }

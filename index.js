@@ -92,6 +92,7 @@ import {
 import {
     calendarSummary,
     calendarConflicts,
+    formatCalendarDate,
     formatStoryClockHeadParts,
 } from './business/axis/ui.js';
 // 轴锚点/周几/距今/将至排序已抽出到 business/axis/anchor.js；index.js 内部跨域读取器经 bindAxisAnchor 注入。
@@ -729,6 +730,7 @@ function bridgeAbortSignal(externalSignal, internalController) {
 bindStoryClock({
     loadCalendar: loadCalDesc,
     validMonthDay: almValidMonthDay,
+    validRealDate,
     defaultCalendar: DEFAULT_CAL,
     monthDayFromKey: monthDayFromDayKey,
     extractDay: extractDayFromTime,
@@ -1030,7 +1032,7 @@ async function startTimeTravel(targetDate) {
                     const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE });
                     if (signal?.aborted || !isTimeTravelSelectionCurrent(run)) throw Object.assign(new Error('时旅选择已结束'), { name: 'AbortError' });
                     const directions = parseTravelDirections(raw, excluded);
-                    if (directions.length !== 3) throw new Error('AI 没有返回三个可用方向，请刷新重试');
+                    if (!directions.length) throw new Error('AI 没有返回可用方向，请刷新重试');
                     excluded.push(...directions);
                     return directions.map(value => ({ value, label: value }));
                 },
@@ -2187,7 +2189,7 @@ inlineFeature = createInlineFeature({
     getSettings, extensionSettings: extension_settings, getContext, loadAlmanac, almTodayAnchor, loadCalDesc,
     almWeekdayRef, almDayOfYear, almWeekdayFor, ALM_WEEKDAYS, escapeHtml, calMonthName, getDateAnchor,
     charStableKey, readCacheRaw, getCacheKey, parseCalendar, weatherGlyph, calHasEra, validRealDate,
-    formatStoryClockHeadParts, storyClockEnabled, latestStoryClock, parseJudgedDate, readStore,
+    formatCalendarDate, formatStoryClockHeadParts, storyClockEnabled, latestStoryClock, parseJudgedDate, readStore,
     getLinesCacheKey, parseLines, linesFeature, snapshot, keyDesc, createWeekdayConsumerContext,
     storyWeekdayRefPure, ALM_CHAT_SCAN_LIMIT, pointInlineRenderer, axisInlineRenderer, $, _buildLedgerBlockHtml,
     buildUserRecall: _buildUserRecallBoxHtml,
@@ -4767,7 +4769,7 @@ function getDateAnchor(charKey) {
                 if (!Number.isInteger(calibrationFloor) || current.floor !== calibrationFloor) return null;
             }
         }
-        return local.month >= 1 && local.month <= calMonthCount(cal) && local.day >= 1 && local.day <= calMonthDays(cal, local.month) ? { month: local.month, day: local.day } : null;
+        return local.month >= 1 && local.month <= calMonthCount(cal) && local.day >= 1 && local.day <= calMonthDays(cal, local.month) ? { month: local.month, day: local.day, ...(local.year != null ? { year: local.year } : {}), ...(local.eraLabel ? { eraLabel: local.eraLabel } : {}) } : null;
     }
     return null;
 }
@@ -6230,6 +6232,7 @@ function readCalendarDraftForm() {
     if (!axisCalendarManager.isEditing()) return null;
     return {
         era: String($in('#sp-alm-manager-era').val() || ''),
+        displayStyle: String($in('#sp-alm-manager-display-style').val() || 'numeric') === 'classical' ? 'classical' : 'numeric',
         months: $inAll('#sp-almanac-wrap .sp-alm-manager-month-row').map(function () {
             return { name: String($(this).find('.sp-alm-manager-month-name').val() || ''), days: $(this).find('.sp-alm-manager-month-days').val() };
         }).get(),

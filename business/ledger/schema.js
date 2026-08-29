@@ -41,29 +41,43 @@ export function parseLedgerCapture(raw) {
     }
     return out;
 }
-export function normalizeJudgeAction(raw) {
+function parseJudgeAction(raw) {
     const text = String(raw || '').replace(/\s+/g, '');
-    if (/滚|周期|顺延|续期/.test(text)) return '滚周期';
-    if (/了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复|已了/.test(text)) return '了结';
-    return '维持';
+    if (!text) return null;
+    const terminal = '(?:[。.!！])?';
+    const maintain = new RegExp(`^(?:请)?(?:继续)?(?:维持(?:不变)?|保持不变)(?:即可)?${terminal}$`);
+    const roll = new RegExp(`^(?:请|建议|应当|应|可以|选择)?(?:滚周期|顺延|顺延一个周期|顺延一轮周期|续期|续期一个周期|续期一轮周期)(?:即可)?${terminal}$`);
+    const close = new RegExp(`^(?:请(?:将其)?|建议|应当|应|可以|标记为|将其标记为)?(?:了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复)(?:即可)?${terminal}$`);
+    if (maintain.test(text)) return '维持';
+    if (roll.test(text)) return '滚周期';
+    if (close.test(text)) return '了结';
+    return null;
 }
+export function normalizeJudgeAction(raw) { return parseJudgeAction(raw); }
 export function parseLedgerJudge(raw) {
     const s = String(raw ?? '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
     const none = s.replace(/[。.!！！？?]+$/u, '').trim();
     if (new Set(['无', '无需更新', '无须更新', '无需变更', '无须变更', '本轮无需更新', '没有需要更新的事件']).has(none)) return { status: 'none', changes: [] };
-    if (!s) return { status: 'invalid', changes: [] };
-    const out = []; let invalid = false;
-    for (const line of s.split('\n')) {
+    if (!s) return { status: 'invalid', changes: [], rejected: [] };
+    const out = []; const rejected = [];
+    for (const [index, line] of s.split('\n').entries()) {
         const t = line.trim(); if (!t) continue;
         if (/^编号\s*[｜|]/.test(t)) continue;
-        if (!/[｜|]/.test(t)) { invalid = true; continue; }
+        const reject = reason => rejected.push({ line: index + 1, reason });
+        if (!/[｜|]/.test(t)) { reject('format'); continue; }
         const cols = t.split(/[｜|]/).map(x => x.trim());
-        if (cols.length !== 4) { invalid = true; continue; }
+        if (cols.length !== 4) { reject('format'); continue; }
         const id = cols[0].replace(/[\[\]【】]/g, '').trim().toUpperCase();
-        if (!/^L\d+$/i.test(id) || !cols[1] || !cols[2] || !/(?:维持|滚|周期|顺延|续期|了结|了断|结束|完结|终结|终止|结案|兑现|愈合|痊愈|康复|已了)/.test(cols[2])) { invalid = true; continue; }
-        const change = { id, 现状: normalizeLedgerSentenceTerminal(cols[1]), 动作: normalizeJudgeAction(cols[2]) };
-        const due = parseDate(cols[3] || ''); if (due) change.到期 = due;
+        if (!/^L\d+$/i.test(id)) { reject('id'); continue; }
+        if (!cols[1]) { reject('content'); continue; }
+        const action = parseJudgeAction(cols[2]);
+        if (!action) { reject('action'); continue; }
+        const dueText = cols[3] || '';
+        const due = parseDate(dueText);
+        if (dueText && !due) { reject('date'); continue; }
+        const change = { id, 现状: normalizeLedgerSentenceTerminal(cols[1]), 动作: action };
+        if (due) change.到期 = due;
         out.push(change);
     }
-    return invalid || !out.length ? { status: 'invalid', changes: [] } : { status: 'changes', changes: out };
+    return out.length ? { status: 'changes', changes: out, rejected } : { status: 'invalid', changes: [], rejected };
 }

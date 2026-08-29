@@ -36,6 +36,7 @@ export function createInlineFeature(env = {}) {
     const calHasEra = env.calHasEra;
     const validRealDate = env.validRealDate;
     const formatStoryClockHeadParts = env.formatStoryClockHeadParts;
+    const formatCalendarDate = env.formatCalendarDate;
     const storyClockEnabled = env.storyClockEnabled;
     const latestStoryClock = env.latestStoryClock;
     const parseJudgedDate = env.parseJudgedDate;
@@ -138,7 +139,7 @@ export function createInlineFeature(env = {}) {
     // 今头/摘要共用的锚点解析：快照有合法锚点用快照，否则退活锚点。
     function dashAnchor(snap) {
         return (snap?.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
-            ? { month: +snap.anchor.month, day: +snap.anchor.day }
+            ? { month: +snap.anchor.month, day: +snap.anchor.day, ...(Number.isInteger(+snap.anchor.year) ? { year: +snap.anchor.year } : {}), ...(typeof snap.anchor.eraLabel === 'string' && snap.anchor.eraLabel.trim() ? { eraLabel: snap.anchor.eraLabel.trim() } : {}) }
             : almTodayAnchor();
     }
 
@@ -181,9 +182,16 @@ export function createInlineFeature(env = {}) {
             }
         } catch { /* 天气拿不到就不显 */ }
         // 纪年位：日历描述符带 era（纪年名）时点亮，无则不撑。
-        const eraHtml = calHasEra(cal) ? `<span class="sp-dash-today-era">${escapeHtml(cal.era)}</span>` : '';
+        const storyEra = typeof anchor.eraLabel === 'string' && anchor.eraLabel.trim() ? anchor.eraLabel.trim() : '';
+        const classical = cal?.displayStyle === 'classical';
+        const eraHtml = (!classical || storyEra) && calHasEra(cal) && cal.era !== storyEra ? `<span class="sp-dash-today-era">${escapeHtml(cal.era)}</span>` : '';
+        const storyYearHtml = anchor.year != null ? `<span class="sp-dash-today-year">${escapeHtml(`${cal?.displayStyle === 'classical' ? String(anchor.year) : anchor.year}年`)}</span>` : '';
+        const storyEraHtml = storyEra ? `<span class="sp-dash-today-era">${escapeHtml(storyEra)}</span>` : '';
+        const dateGroups = classical && typeof formatCalendarDate === 'function'
+            ? `<span class="sp-dash-today-year">${escapeHtml(formatCalendarDate({ ...anchor, eraLabel: storyEra }, cal, calMonthName, 'year'))}</span><span class="sp-dash-today-monthday">${escapeHtml(formatCalendarDate(anchor, cal, calMonthName, 'monthDay'))}</span>`
+            : `<span class="sp-dash-today-md">${storyEraHtml}${storyYearHtml}<span class="sp-dash-today-month">${escapeHtml(calMonthName(cal, anchor.month))}</span><span class="sp-dash-today-day">${anchor.day}日</span></span>`;
         return `<div class="sp-dash-today">
-            <span class="sp-dash-today-md"><span class="sp-dash-today-month">${escapeHtml(calMonthName(cal, anchor.month))}</span><span class="sp-dash-today-day">${anchor.day}日</span></span>
+            ${dateGroups}
             <span class="sp-dash-today-wd">${wd}</span>
             ${(wxHtml || eraHtml) ? `<span class="sp-dash-today-meta">${wxHtml}${eraHtml}</span>` : ''}
         </div>`;

@@ -6085,6 +6085,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap         : 8px;
     align-items : center;
     padding     : 6px 8px;
+    min-width   : 0;
 }
 .sp-dash-top .sp-alm-inline-body { flex: 1 1 0; min-width: 0; }
 /* 今头（masthead）：正方形大日期块，整个面板的门面。历 summary 已提为上方通栏头栏，本行右列
@@ -6092,9 +6093,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
    推宽稳，后者可能退回按内容宽算成长方形）；align-self:center 让右列偶尔更高时今头上下居中、
    不在下方留单边空白（呼应之前「大头下方空白」的诉求）。 */
 .sp-dash-today {
-    flex          : 0 0 auto;
-    width         : calc(73.6px * var(--sp-scale));
-    aspect-ratio  : 1;
+    flex          : 0 1 auto;
+    width         : fit-content;
+    min-width     : min(calc(92px * var(--sp-scale)), 38vw);
+    max-width     : min(calc(132px * var(--sp-scale)), 38vw);
+    min-height    : calc(73.6px * var(--sp-scale));
     align-self    : center;
     box-sizing    : border-box;
     display       : flex;
@@ -6110,6 +6113,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-dash-today-month { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--sp-fs-68); }
 .sp-dash-today-day   { font-size: var(--sp-fs-115); white-space: nowrap; }
 .sp-dash-today-wd   { font-size: var(--sp-fs-68); opacity: 0.7; margin-top: 1px; }
+.sp-dash-today-year,
+.sp-dash-today-monthday,
+.sp-dash-today-wd { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; line-height: 1.05; }
+.sp-dash-today-year { font-size: var(--sp-fs-68); font-weight: 800; }
+.sp-dash-today-monthday { font-size: var(--sp-fs-92); font-weight: 800; margin-top: 1px; }
+.sp-dash-today-wd { margin-top: 2px; }
 .sp-dash-today-meta { font-size: var(--sp-fs-72); margin-top: 2px; opacity: 0.85; display: flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; }
 .sp-dash-today-wx   { flex: 0 0 auto; }
 /* 纪年名（era）：世界自定义历法时点亮在今头方块内，位窄故极小字号 + 溢出省略。 */

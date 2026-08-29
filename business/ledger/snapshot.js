@@ -5,7 +5,7 @@ export function createLedgerSnapshotBridge(options = {}) {
         try { point = options.readPoint?.() || ''; } catch {}
         try { line = options.readLine?.() || ''; } catch {}
         try { almanac = options.loadAlmanac?.() || []; } catch {}
-        try { const a = options.today?.(); if (a && Number.isFinite(+a.month) && Number.isFinite(+a.day)) anchor = { month: +a.month, day: +a.day }; } catch {}
+        try { const a = options.today?.(); if (a && Number.isFinite(+a.month) && Number.isFinite(+a.day)) anchor = { month: +a.month, day: +a.day, ...(Number.isInteger(+a.year) ? { year: +a.year } : {}), ...(a.eraLabel ? { eraLabel: String(a.eraLabel) } : {}) }; } catch {}
         try { pool = (options.entries?.() || []).map(e => ({ id: e.id, 事由: e.事由, 类型: e.类型, 起始锚: cloneAnchor(e.起始锚), 周期长度: e.周期长度, 到期锚: cloneAnchor(e.到期锚), 标签: Array.isArray(e.标签) ? e.标签.slice() : [], 锁: e.锁, 静音: e.静音 })); } catch {}
         const weekdayRef = options.weekdayRef?.();
         const out = { point, line, almanac, anchor, pool, calendar: options.cloneCalendar?.(options.calendar?.()) };

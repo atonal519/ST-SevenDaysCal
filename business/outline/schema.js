@@ -109,7 +109,28 @@ export function shouldAdvanceOutline(answer) {
 }
 
 export function parseOutlineRelocationAnswer(answer, beatCount) {
-    const match = String(answer || '').trim().match(/^\s*(\d+)\s*[。.！!?]?\s*$/);
-    const value = match ? Number(match[1]) : NaN;
-    return Number.isInteger(value) && value >= 1 && value <= beatCount ? value : null;
+    const text = String(answer || '').trim();
+    const count = Math.floor(Number(beatCount));
+    if (!text || !Number.isInteger(count) || count < 1) return null;
+    const compact = text.replace(/\s+/g, '');
+    // 先拒绝整句层面的疑问、反悔、否定与不确定语义；这些语义不能被后面的肯定动词抵消。
+    const unsafeDecision = /(?:[?？]|(?:吗|么|嘛|呢|可好)(?:[。.!！])?$|是否|可否|好不好|行不行|反悔|收回|撤回|取消|撤销|作废|算了|放弃|改(?:选|为|变(?:主意|决定))|换成|排除|除了|除去|跳过|[不没未无否非]|请勿|勿|别|待定|可能|也许|或许|大概|如果|假如|若是)/u;
+    if (unsafeDecision.test(compact)) return null;
+    // 数值形态先于编号语法处理，避免小数、百分比、负数或范围退化成一个普通编号。
+    if (/\d+\s*[.．]\s*\d+/u.test(text) || /(?:百分之\s*\d+|\d+\s*[%％])/u.test(text)) return null;
+    if (/(?:^|[^\d])(?:负|[-−—–])\s*\d/u.test(text) || /\d\s*(?:[-−—–~～至到/／])\s*\d/u.test(text)) return null;
+    const values = [...text.matchAll(/\d+/g)].map(match => Number(match[0]));
+    const unique = [...new Set(values)];
+    if (unique.length !== 1) return null;
+    const value = unique[0];
+    if (!Number.isInteger(value) || value < 1 || value > count) return null;
+    // 编号槽只允许节点/序号/个/项分类；任何未知单位都会让完整语句匹配失败。
+    const ordinal = '(?:(?:节点|序号)(?:第)?\\d+(?:个|项)?|第\\d+(?:个|项)?(?:节点)?|\\d+(?:个|项)?)';
+    const answerHead = '(?:答案(?:是|为)|就是|应为)[:：]?';
+    const selectHead = '(?:我)?(?:会|决定|明确)?(?:选择|选|采用)[:：]?';
+    const moveHead = '(?:请)?(?:定位到|移动到|重定位到|调整到|改到|回到|前往)[:：]?';
+    const affirmativeClause = `(?:${answerHead}|${selectHead}|${moveHead})${ordinal}`;
+    const standalone = /^(?:第)?\d+(?:个|项)?[。.!！、]?$/u.test(compact);
+    const affirmative = new RegExp(`^${affirmativeClause}[。.!！]?$`, 'u').test(compact);
+    return standalone || affirmative ? value : null;
 }

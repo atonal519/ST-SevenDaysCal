@@ -75,12 +75,17 @@ export function createLedgerJudgeController(options = {}) {
             if (parsed?.status === 'none') return { status: 'unchanged', reason: 'none', reconcile, applied: [] };
             if (parsed?.status === 'invalid') return { status: 'invalid', reason: 'format', reconcile, applied: [] };
             const cal = env.calendar?.(); const applied = [];
+            const judgeableIds = new Set(judgeable.map(entry => entry?.id).filter(id => /^L\d+$/.test(String(id || ''))));
+            let rejectedFormat = false;
+            let rejectedSource = false;
             for (const change of parsed?.changes || []) {
                 if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+                if (!change || !/^L\d+$/.test(String(change.id || '')) || !['维持', '滚周期', '了结'].includes(change.动作)) { rejectedFormat = true; continue; }
+                if (!judgeableIds.has(change.id)) { rejectedSource = true; continue; }
                 const entry = env.getEntry?.(change.id);
-                if (!entry) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
+                if (!entry) { rejectedSource = true; continue; }
                 if (entry.状态 === '已了结' || entry.锁 === '用户锁') continue;
-                if (entry.来源状态 === '来源已删除' || (entry.来源状态 === '待确认' && !manual)) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
+                if (entry.来源状态 === '来源已删除' || (entry.来源状态 === '待确认' && !manual)) { rejectedSource = true; continue; }
                 if (entry.静音 === true && change.动作 === '了结') continue;
                 const patch = { 现状锚: { 楼层: floor, 历日期: date } };
                 if (change.现状) patch.现状 = change.现状;
@@ -91,7 +96,11 @@ export function createLedgerJudgeController(options = {}) {
                 applied.push({ id: entry.id, patch, close: change.动作 === '了结',事由: entry.事由 });
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
-            if (!applied.length) return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
+            if (!applied.length) {
+                if (rejectedSource) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
+                if (rejectedFormat) return { status: 'invalid', reason: 'format', reconcile, applied: [] };
+                return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
+            }
             let saved = null;
             if (env.applyAtomic) { try { saved = await env.applyAtomic(applied, owner); } catch (error) { error.phase ||= 'judge-save-failed'; throw error; } }
             if (env.applyAtomic && !saved?.ok) return { status: 'failed', reason: 'judge-save-failed', reconcile, applied: [] };

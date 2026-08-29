@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitAbortController } from './controller.js';
+import { createPointController, splitAbortController } from './controller.js';
 import { editPointDescription, editPointFields } from './mutations.js';
 import { allocatePointAdultPools, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
-import { bindPointAdultTickets, parseCalendar, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
+import { bindPointAdultTickets, parseCalendar, parsePointEventRecord, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
 import { createPointWidgetActions } from './widget.js';
 import { buildPrompt } from './prompt.js';
 
@@ -265,6 +265,18 @@ test('point generated protocol rejects AI pin/Adult and malformed tickets', () =
     assert.equal(validateGeneratedCalendar(base.replace('动\nDay: 2', '动\nAdult: true\nDay: 2'), null, { generated: true, adultMode: 'off' }).ok, false);
 });
 
+test('point generated validation accepts five or six Event fields but rejects four or seven', () => {
+    const makeRaw = event => `<calendar_widget>\nDay: 1\nEvent: main|一|描述|早|地|动\nDay: 2\nEvent: main|二|描述|午|地|动\nDay: 3\nEvent: main|三|描述|晚|地|动\nFuture:\nEvent: ${event}\n</calendar_widget>`;
+    const futureFive = 'main|未来五字段|描述|夜|地';
+    const parsedFive = parsePointEventRecord(`Event: ${futureFive}`);
+    assert.equal(parsedFive.npcAction, '');
+    assert.equal(validateGeneratedCalendar(makeRaw(futureFive), null, { generated: true, adultMode: 'off' }).ok, true);
+    assert.equal(validateGeneratedCalendar(makeRaw('main|六字段|描述|夜|地|动态'), null, { generated: true, adultMode: 'off' }).ok, true);
+    assert.equal(validateGeneratedCalendar(makeRaw('main|四字段|描述|夜'), null, { generated: true, adultMode: 'off' }).code, 'invalid-event-fields');
+    assert.equal(validateGeneratedCalendar(makeRaw('main|七字段|描述|夜|地|动态|false'), null, { generated: true, adultMode: 'off' }).code, 'invalid-event-fields');
+    assert.equal(validateGeneratedCalendar(makeRaw('main|本地锁点|描述|夜|地|动态|true'), null, { generated: false, adultMode: 'off' }).ok, true);
+});
+
 test('point description edit normalizes, clears, rejects ASCII pipe, and preserves surrounding raw text', () => {
     const raw = '前言\n<calendar_widget>\nDay: 1\nEvent: main|标题|旧描述|早晨|地点|动态|true\nUnknown: keep\nDay: 2\nEvent: char|另一个|二号|夜晚|房间|线头|false\n</calendar_widget>\n尾注';
     const edited = editPointDescription(raw, 1, 0, ' 新描述\n  多空白 ');
@@ -288,6 +300,58 @@ test('point generation separates AbortController state from native AbortSignal A
 
 test('point controller rejects a controller-shaped signal before API invocation', () => {
     assert.throws(() => splitAbortController({ abort() {}, signal: {} }), /原生 AbortController/);
+});
+
+function pointControllerTestEnv({ validation, cachedSchedule = null } = {}) {
+    const savedRaw = '<calendar_widget>\nDay: 1\nEvent: main|旧|描述|早|地|动\nDay: 2\nEvent: main|二|描述|午|地|动\nDay: 3\nEvent: main|三|描述|晚|地|动\nFuture:\nEvent: main|未来|描述|夜|地|动\n</calendar_widget>';
+    const state = { cachedSchedule, isGenerating: false, scheduleAbortController: null };
+    const toasts = []; const bodies = [];
+    const saved = { raw: savedRaw, ts: 1 };
+    const owners = {
+        create: (_kind, details) => ({ ...details, controller: new AbortController() }),
+        currentChatRevision: () => 1,
+        evaluate: () => ({ canCleanup: true, canCommit: true }),
+        finish: () => {}, peekPending: () => null, discardPending: () => {}, setPending: () => {},
+    };
+    const env = {
+        state, owners, chatId: () => 'chat', view: () => 'user', char: () => '', key: () => 'point', read: () => saved,
+        context: () => ({ name1: '用户', name2: '角色' }), config: () => ({ url: 'https://example.test', key: 'test-key' }), calendar: () => null, adultMode: () => 'off', editing: () => false,
+        canCommit: () => true, parse: () => ({ days: [], future: null }), generate: async () => 'raw', validate: () => validation,
+        bindAdult: raw => raw, mergePinned: (_old, fresh) => fresh, today: () => ({ month: 1, day: 1 }), forceStart: raw => raw,
+        render: () => '', write: () => {}, sync: () => {}, setButton: () => {}, panelVisible: () => false, showPanel: () => {},
+        setBody: value => bodies.push(value), loading: () => '', setCached: value => { state.cachedSchedule = value; },
+        cached: () => state.cachedSchedule, toast: value => toasts.push(value), notify: () => 'full', escape: value => value,
+        enabled: () => true, syncing: () => false, abortAuto: () => {}, setAuto: controller => controller, setSyncing: () => {}, evaluate: () => ({ canCleanup: true, canCommit: true }),
+        clearBusy: () => {}, followupState: () => ({ canCleanup: true, canFollowup: false }), shouldFollowup: () => false,
+    };
+    return { env, state, saved, toasts, bodies };
+}
+
+test('point controller maps generated field and structure failures while preserving validation metadata', async () => {
+    const fieldValidation = { ok: false, code: 'invalid-event-fields' };
+    const fieldCase = pointControllerTestEnv({ validation: fieldValidation, cachedSchedule: 'OLD CACHE' });
+    const fieldController = createPointController(fieldCase.env);
+    const fieldResult = await fieldController.syncPointToToday(false);
+    assert.equal(fieldResult.error.diagnosticCode, 'invalid-fields');
+    assert.equal(fieldResult.error.validation, fieldValidation);
+    assert.equal(fieldResult.error.pointIncomplete, true);
+    assert.match(fieldCase.toasts[0], /AI 返回内容字段不完整/);
+
+    const structureValidation = { ok: false, code: 'day-missing' };
+    const structureCase = pointControllerTestEnv({ validation: structureValidation });
+    const structureController = createPointController(structureCase.env);
+    const structureResult = await structureController.syncPointToToday(false);
+    assert.equal(structureResult.error.diagnosticCode, 'invalid-structure');
+    assert.equal(structureResult.error.validation, structureValidation);
+});
+
+test('point controller manual generation exposes field diagnostic and restores cached content', async () => {
+    const validation = { ok: false, code: 'invalid-event-fields' };
+    const testCase = pointControllerTestEnv({ validation, cachedSchedule: 'OLD CACHE' });
+    const controller = createPointController(testCase.env);
+    await controller.runGenerate();
+    assert.equal(testCase.state.cachedSchedule, 'OLD CACHE');
+    assert.match(testCase.toasts[0], /AI 返回内容字段不完整/);
 });
 
 test('point combined edit updates desc and npcAction atomically', () => {

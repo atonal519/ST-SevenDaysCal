@@ -65,7 +65,7 @@ function messageAt(mesId) {
 //     point   : 点 raw 字符串（<calendar_widget>…）
 //     line    : 线 raw 字符串（含 <line_widget>… 或线缓存 raw）
 //     almanac : 历条目数组（loadAlmanac() 的归一化结果）
-//     anchor  : { month, day } 当时的「今天」锚点
+//     anchor  : { month, day, year?, eraLabel? } 当时的「今天」锚点
 //     pool    : 【AI 楼】当时的暗账「标注池」精简条目 [{id,事由,类型,起始锚,周期长度,到期锚,标签,锁,静音}]（新字段·末尾·可选）
 //     recall  : 【用户楼】当轮召回注入回显 [{id,事由,类型,起始锚,现状}]（丰富版；新字段·末尾·可选）
 //   （旧字段 ledger＝早期只读回显，已退役；老快照的 ledger 读取端直接忽略，孤立无害。）
@@ -88,7 +88,9 @@ export function writeSnapshot(mesId, snap) {
         line:    snap?.line    || '',
         almanac: Array.isArray(snap?.almanac) ? snap.almanac : [],
         anchor:  (snap?.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
-            ? { month: +snap.anchor.month, day: +snap.anchor.day }
+            ? { month: +snap.anchor.month, day: +snap.anchor.day,
+                ...(Number.isInteger(+snap.anchor.year) && +snap.anchor.year >= 1 && +snap.anchor.year <= 9999 ? { year: +snap.anchor.year } : {}),
+                ...(typeof snap.anchor.eraLabel === 'string' && snap.anchor.eraLabel.trim() ? { eraLabel: snap.anchor.eraLabel.trim() } : {}) }
             : null,
         pool:    Array.isArray(snap?.pool)   ? snap.pool   : [],
         recall:  Array.isArray(snap?.recall) ? snap.recall : [],
@@ -116,7 +118,7 @@ function _sameSnapContent(a, b) {
     if (a.line !== b.line) return false;
     const am = a.anchor, bm = b.anchor;
     if (!!am !== !!bm) return false;
-    if (am && bm && (am.month !== bm.month || am.day !== bm.day)) return false;
+    if (am && bm && (am.month !== bm.month || am.day !== bm.day || am.year !== bm.year || am.eraLabel !== bm.eraLabel)) return false;
     // 历条目：粗比 JSON（数组，量小；顺序由 loadAlmanac 稳定给出）。
     try {
         if (JSON.stringify(a.almanac || []) !== JSON.stringify(b.almanac || [])) return false;
@@ -158,7 +160,9 @@ export function readSnapshot(mesId) {
         line:    typeof snap.line  === 'string' ? snap.line  : '',
         almanac: Array.isArray(snap.almanac) ? snap.almanac : [],
         anchor:  (snap.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
-            ? { month: +snap.anchor.month, day: +snap.anchor.day }
+            ? { month: +snap.anchor.month, day: +snap.anchor.day,
+                ...(Number.isInteger(+snap.anchor.year) && +snap.anchor.year >= 1 && +snap.anchor.year <= 9999 ? { year: +snap.anchor.year } : {}),
+                ...(typeof snap.anchor.eraLabel === 'string' && snap.anchor.eraLabel.trim() ? { eraLabel: snap.anchor.eraLabel.trim() } : {}) }
             : null,
         pool:    Array.isArray(snap.pool)   ? snap.pool   : [],
         recall:  Array.isArray(snap.recall) ? snap.recall : [],

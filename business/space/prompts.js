@@ -76,6 +76,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         `\n④ 历法卡片（历法/纪年/月份结构），用 <era_widget> 包裹，一行可选纪年名 + 每月一行：`,
         `<era_widget>`,
         `Era: 纪年名`,
+        `Style: numeric 或 classical（用户明确要求古典/传统中文日期时才用 classical，默认 numeric）`,
         `Month: 月名|天数`,
         `</era_widget>`,
         `- Era：这个世界的纪年/年号名（如"天启""帝国历""精灵历"），没有就把整行省略`,

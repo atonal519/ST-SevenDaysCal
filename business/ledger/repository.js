@@ -210,7 +210,7 @@ export async function applyCapturePlanAtomic({ additions = [], patches = [] } = 
         const gist = value => String(value || '').replace(/\s+/g, '');
         const sameEpisode = (old, item) => {
             const a = old?.起始锚, b = item?.起始锚;
-            const date = a?.历日期 && b?.历日期 && a.历日期.month === b.历日期.month && a.历日期.day === b.历日期.day;
+            const date = a?.历日期 && b?.历日期 && a.历日期.month === b.历日期.month && a.历日期.day === b.历日期.day && (a.历日期.year == null || b.历日期.year == null || a.历日期.year === b.历日期.year) && (a.历日期.eraLabel == null || b.历日期.eraLabel == null || a.历日期.eraLabel === b.历日期.eraLabel);
             const floor = a?.楼层 != null && b?.楼层 != null && Number(a.楼层) === Number(b.楼层);
             const people = (item?.牵扯 || []).some(x => (old?.牵扯 || []).includes(x));
             const words = `${old?.事由 || ''} ${(old?.标签 || []).join(' ')}`.split(/[\s、，,]/).filter(x => x.length >= 2);

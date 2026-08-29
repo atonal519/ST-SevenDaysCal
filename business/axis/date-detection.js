@@ -18,8 +18,8 @@ export function createDateDetectionController(options = {}) {
         const calibration = options.getCalibration?.(charKey);
         if (mode === 'sdc' && calibration && ownerIdentity && Number.isInteger(calibration.floor) && calibration.floor === ownerIdentity.floor) return { status: 'calibration-held', date: md };
         const prev = options.getAnchor?.(charKey);
-        if (prev && prev.month === md.month && prev.day === md.day) return { status: 'unchanged', date: md };
-        const stored = options.setAnchor?.(charKey, md.month, md.day, 'detected', mode === 'api' && calibration ? { calibration } : {});
+        if (prev && prev.month === md.month && prev.day === md.day && prev.year === md.year && prev.eraLabel === md.eraLabel) return { status: 'unchanged', date: md };
+        const stored = options.setAnchor?.(charKey, md.month, md.day, 'detected', { ...(mode === 'api' && calibration ? { calibration } : {}), year: md.year, eraLabel: md.eraLabel });
         if (!stored?.ok) { if (notify) options.toast?.('剧情日期自动保存失败，请重试', null, true); return { status: 'failed', reason: stored?.reason }; }
         if (notify && options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期已自动更新为 ${options.monthName?.(md.month)}${md.day}日 · 请注意查看`);
         options.aftermath?.();

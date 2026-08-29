@@ -184,9 +184,8 @@ function almItemCoversDoy(it, doy, cal = loadCalDesc()) {
 
 function getCalDescInjectText() {
     const cal = loadCalDesc();
-    if (cal === DEFAULT_CAL) return '';
     const months = cal.months.map((m, i) => `${i + 1}=${m.name}(${m.days}天)`).join('、');
-    return `${cal.era ? '纪年：' + cal.era + '；' : ''}一年 ${calMonthCount(cal)} 个月、共 ${calYearLen(cal)} 天；各月：${months}`;
+    return `${cal.era ? '纪年：' + cal.era + '；' : ''}Style: ${cal.displayStyle}；一年 ${calMonthCount(cal)} 个月、共 ${calYearLen(cal)} 天；各月：${months}`;
 }
 
 function almMapType(t) {
@@ -241,16 +240,19 @@ function parseEraWidget(raw) {
     const m = s.match(/<era_widget>([\s\S]*?)<\/era_widget>/i);
     const body = m ? m[1] : s;
     let era = '';
+    let displayStyle = 'numeric';
     const months = [];
     for (const line of body.split('\n')) {
         const em = line.match(/^\s*Era\s*:\s*(.+)$/i);
         if (em) { era = em[1].trim(); continue; }
+        const sm = line.match(/^\s*Style\s*:\s*(numeric|classical)\s*$/i);
+        if (sm) { displayStyle = sm[1].toLowerCase(); continue; }
         const mm = line.match(/^\s*Month\s*:\s*(.+)$/i);
         if (!mm) continue;
         const [name, days] = mm[1].split('|').map(x => x.trim());
         months.push({ name, days });
     }
-    return normalizeCalDesc({ era, months });
+    return normalizeCalDesc({ era, displayStyle, months });
 }
 
 function almDedupKey(it) { return `${it.name.toLowerCase()}|${it.month}|${it.day}`; }
@@ -290,7 +292,8 @@ function normalizeCalDesc(raw) {
     const epoch = {};
     for (const key of ['epochYear', 'epochOrdinal', 'epochWeekday']) if (Number.isInteger(raw[key])) epoch[key] = raw[key];
     if (raw.absoluteCycle === true) epoch.absoluteCycle = true;
-    return { kind: explicitKind, id, revision, weekdayCycle, era, months, ...epoch };
+    const displayStyle = raw.displayStyle === 'classical' ? 'classical' : 'numeric';
+    return { kind: explicitKind, id, revision, weekdayCycle, era, displayStyle, months, ...epoch };
 }
 
 function saveCalDesc(desc) {
@@ -307,6 +310,7 @@ const DEFAULT_CAL = Object.freeze({
     id    : 'default-gregorian',
     revision: 1,
     weekdayCycle: 7,
+    displayStyle: 'numeric',
     era   : '',
     months: Object.freeze(ALM_DAYS_IN_MONTH.map((d, i) => Object.freeze({ name: `${i + 1}月`, days: d }))),
 });
@@ -346,6 +350,7 @@ function cloneCalDesc(cal) {
         revision: Number.isInteger(src.revision) && src.revision > 0 ? src.revision : 1,
         weekdayCycle: Number.isInteger(src.weekdayCycle) && src.weekdayCycle > 0 ? src.weekdayCycle : 7,
         era: String(src.era || ''),
+        displayStyle: src.displayStyle === 'classical' ? 'classical' : 'numeric',
         months: (src.months || []).map(month => ({ name: String(month.name), days: Number(month.days) })),
         ...epoch,
     };
@@ -398,6 +403,7 @@ function saveCalendarTemplates(list) {
         kind: item.kind,
         revision: item.revision,
         weekdayCycle: item.weekdayCycle,
+        displayStyle: item.displayStyle === 'classical' ? 'classical' : 'numeric',
         epochYear: item.epochYear,
         epochOrdinal: item.epochOrdinal,
         epochWeekday: item.epochWeekday,
