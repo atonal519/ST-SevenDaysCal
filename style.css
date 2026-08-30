@@ -6444,9 +6444,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding    : 1px 8px 5px;
 }
 .sp-inline-box.sp-dash .sp-dash-today {
-    width         : auto;
+    flex          : 0 1 max-content;
+    width         : max-content;
     min-width     : min(calc(78px * var(--sp-scale)), 34vw);
-    max-width     : min(calc(112px * var(--sp-scale)), 38vw);
+    max-width     : 58%;
     min-height    : 0;
     align-items   : flex-start;
     padding       : 3px 9px 3px 0;
@@ -6462,6 +6463,17 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-inline-box.sp-dash .sp-dash-today-meta {
     align-items: flex-start;
     text-align : left;
+}
+.sp-inline-box.sp-dash .sp-dash-today-month,
+.sp-inline-box.sp-dash .sp-dash-today-year,
+.sp-inline-box.sp-dash .sp-dash-today-monthday,
+.sp-inline-box.sp-dash .sp-dash-today-wd,
+.sp-inline-box.sp-dash .sp-dash-today-era {
+    max-width    : none;
+    overflow     : visible;
+    white-space  : normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
 }
 .sp-inline-box.sp-dash .sp-dash-today-day { font-size: var(--sp-fs-96); }
 .sp-inline-box.sp-dash .sp-dash-today-monthday { font-size: var(--sp-fs-86); }
