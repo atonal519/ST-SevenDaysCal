@@ -45,7 +45,7 @@ export function formatStoryClockMeta(meta, escape = value => String(value ?? '')
 
 // 楼内小时间条的纯组装 seam：index.js 仍负责挑最新楼/解析旧 stamp，本函数只统一最终月名显示。
 export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = null, stampDate = null, rawStamp = '', calendar = null, monthName = (_cal, month) => `${month}月`, escapeHtml = value => String(value ?? ''), tip = '' } = {}) {
-    const today = (dateText, weekday = '', title = '') => `<span class="sp-dash-sum-today"${title ? ` title="${escapeHtml(title)}"` : ''}>今 ${escapeHtml(dateText)}${weekday ? ` ${escapeHtml(weekday)}` : ''}</span>`;
+    const today = (dateText, weekday = '', title = '') => `<span class="sp-dash-sum-today"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(dateText)}${weekday ? ` ${escapeHtml(weekday)}` : ''}</span>`;
     const dateText = value => formatCalendarDate(value, calendar, monthName);
     const fallbackWeekday = anchorWeekday || '星期未记录';
     const fallback = { todayHtml: today(dateText(anchor), fallbackWeekday), timeHtml: '' };

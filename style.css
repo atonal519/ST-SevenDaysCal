@@ -6312,6 +6312,181 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-jump-link { border: 0; padding: 0; background: transparent; color: var(--sp-primary); cursor: pointer; font: inherit; }
 .sp-jump-link:hover { text-decoration: underline; }
 
+/* ── 楼内渲染框实验：剧情脚注 / 插拔式脉络线 ────────────────────────────────
+   每个实际存在的区块都是独立节点；不假定轴、点、线同时存在，也不依赖固定顺序。
+   外壳不再模拟第二张卡片，而是作为正文下方的一段页边批注。 */
+.sp-inline-box.sp-dash {
+    --sp-inline-thread: var(--SmartThemeQuoteColor, #6bb6d6);
+    position      : relative;
+    margin        : 9px 0 2px;
+    overflow      : visible;
+    border        : 0;
+    border-radius : 0;
+    background    : transparent;
+    box-shadow    : none;
+}
+.sp-inline-box.sp-dash::before {
+    content       : '';
+    position      : absolute;
+    z-index       : 0;
+    left          : 4px;
+    top           : 8px;
+    bottom        : 8px;
+    width         : 1px;
+    background    : color-mix(in oklab, var(--sp-inline-thread) 52%, transparent);
+    pointer-events: none;
+}
+
+/* 总摘要是脉络线的起点。日期负责身份，数量只是低声量索引。 */
+.sp-inline-box.sp-dash > .sp-dash-summary {
+    position   : relative;
+    z-index    : 1;
+    min-height : 22px;
+    gap        : 7px;
+    padding    : 4px 6px 4px 17px;
+    border     : 0;
+    background : transparent;
+    line-height: 1.25;
+}
+.sp-inline-box.sp-dash > .sp-dash-summary::before {
+    content      : '';
+    position     : absolute;
+    left         : 1px;
+    top          : 50%;
+    width        : 7px;
+    height       : 7px;
+    box-sizing   : border-box;
+    border       : 1px solid color-mix(in oklab, var(--sp-inline-thread) 78%, transparent);
+    background   : color-mix(in oklab, var(--sp-inline-thread) 28%, transparent);
+    transform    : translateY(-50%) rotate(45deg);
+}
+.sp-inline-box.sp-dash > .sp-dash-summary-flat::before {
+    border-radius: 50%;
+    transform    : translateY(-50%);
+}
+.sp-inline-box.sp-dash .sp-dash-sum-today {
+    flex          : 0 1 auto;
+    min-width     : 0;
+    overflow      : hidden;
+    white-space   : nowrap;
+    text-overflow : ellipsis;
+    font-weight   : 650;
+    letter-spacing: .01em;
+    opacity       : .92;
+}
+.sp-inline-box.sp-dash .sp-dash-sum-chips {
+    flex-shrink         : 0;
+    margin-left         : auto;
+    gap                 : 7px;
+    opacity             : .56;
+    font-variant-numeric: tabular-nums;
+}
+.sp-inline-box.sp-dash .sp-dash-sum-wx { flex-shrink: 0; }
+.sp-inline-box.sp-dash .sp-dash-sum-time { opacity: .68; }
+.sp-inline-box.sp-dash .sp-dash-sum-caret {
+    margin-left: 0;
+    opacity    : .38;
+}
+.sp-inline-box.sp-dash[open] > .sp-dash-summary { border-bottom: 0; }
+
+/* 只有真实渲染出来的直属模块才生成分支；模块增删后脉络自然重排。 */
+.sp-inline-box.sp-dash > .sp-dash-body {
+    position: relative;
+    z-index : 1;
+    padding : 1px 0 3px 17px;
+}
+.sp-inline-box.sp-dash > .sp-dash-body > * {
+    position  : relative;
+    border-top: 0;
+}
+.sp-inline-box.sp-dash > .sp-dash-body > *::before {
+    content       : '';
+    position      : absolute;
+    z-index       : 2;
+    left          : -13px;
+    top           : 14px;
+    width         : 10px;
+    height        : 1px;
+    background    : color-mix(in oklab, var(--sp-inline-thread) 44%, transparent);
+    pointer-events: none;
+}
+.sp-inline-box.sp-dash .sp-dash-body > * + * { border-top: 0; }
+.sp-inline-box.sp-dash .sp-dash-region {
+    border    : 0;
+    background: transparent;
+    box-shadow: none;
+}
+.sp-inline-box.sp-dash .sp-inline-summary {
+    min-height : 20px;
+    padding    : 5px 8px;
+    gap        : 6px;
+    opacity    : .78;
+    border     : 0;
+    background : transparent;
+    line-height: 1.2;
+}
+.sp-inline-box.sp-dash .sp-inline-title {
+    color         : var(--sp-inline-thread);
+    font-size     : var(--sp-fs-68);
+    font-weight   : 700;
+    letter-spacing: .08em;
+    opacity       : .82;
+}
+.sp-inline-box.sp-dash .sp-inline-count {
+    font-variant-numeric: tabular-nums;
+    opacity             : .42;
+}
+
+/* 展开内容继续保留原数据结构，但去掉日期方卡和格子卡片的仪表盘观感。 */
+.sp-inline-box.sp-dash .sp-dash-top {
+    align-items: stretch;
+    gap        : 9px;
+    padding    : 1px 8px 5px;
+}
+.sp-inline-box.sp-dash .sp-dash-today {
+    width         : auto;
+    min-width     : min(calc(78px * var(--sp-scale)), 34vw);
+    max-width     : min(calc(112px * var(--sp-scale)), 38vw);
+    min-height    : 0;
+    align-items   : flex-start;
+    padding       : 3px 9px 3px 0;
+    border        : 0;
+    border-right  : 1px solid rgba(128,128,128,.16);
+    border-radius : 0;
+    background    : transparent;
+}
+.sp-inline-box.sp-dash .sp-dash-today-md,
+.sp-inline-box.sp-dash .sp-dash-today-year,
+.sp-inline-box.sp-dash .sp-dash-today-monthday,
+.sp-inline-box.sp-dash .sp-dash-today-wd,
+.sp-inline-box.sp-dash .sp-dash-today-meta {
+    align-items: flex-start;
+    text-align : left;
+}
+.sp-inline-box.sp-dash .sp-dash-today-day { font-size: var(--sp-fs-96); }
+.sp-inline-box.sp-dash .sp-dash-today-monthday { font-size: var(--sp-fs-86); }
+.sp-inline-box.sp-dash .sp-alm-up { padding: 1px 2px 4px; }
+.sp-inline-box.sp-dash .sp-alm-strip-region { padding: 0 8px 6px; }
+.sp-inline-box.sp-dash .sp-alm-scell,
+.sp-inline-box.sp-dash .sp-sch-scell {
+    border-radius: 0;
+    background   : transparent;
+}
+.sp-inline-box.sp-dash .sp-alm-scell + .sp-alm-scell,
+.sp-inline-box.sp-dash .sp-sch-scell + .sp-sch-scell {
+    border-left: 1px solid rgba(128,128,128,.12);
+}
+
+/* 历史楼仍清晰可读，只把脉络线降为普通墨色，不再整框压暗。 */
+.sp-inline-box.sp-dash.sp-inline-box-ro {
+    opacity    : 1;
+    border-left: 0;
+}
+.sp-inline-box.sp-dash.sp-inline-box-ro::before {
+    background: rgba(128,128,128,.24);
+}
+.sp-inline-box.sp-dash.sp-inline-box-ro > .sp-dash-summary { opacity: .78; }
+
 /* ── 无障碍：尊重系统「减弱动态效果」──────────────────────────────────────────
    用户在 iOS/Android/桌面开启 reduce-motion 后，关掉本插件的按压缩放与过渡（含入场/
    循环动画），避免眩晕。限定 .sp-root（面板/弹层）与几个根级注入子树，不动酒馆自身。
