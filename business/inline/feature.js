@@ -114,6 +114,22 @@ export function createInlineFeature(env = {}) {
         pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: inlineTapContext });
     }
 
+    // 每个实际渲染出的顶层子模块在末尾提供同一枚原生收起按钮。事件委托挂在 document，
+    // 因此楼层重绘后无需逐节点重绑；历史只读楼也允许执行这项纯显示操作。
+    function initRegionCollapseDelegation() {
+        $(doc).on('click.spinlineregioncollapse', '.sp-inline-box.sp-dash > .sp-dash-body > details.sp-dash-region > .sp-inline-region-collapse', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const region = this.closest?.('details.sp-dash-region');
+            if (!region) return;
+            region.open = false;
+            const summary = region.querySelector?.(':scope > summary');
+            if (!summary?.focus) return;
+            try { summary.focus({ preventScroll: true }); }
+            catch { summary.focus(); }
+        });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  楼内仪表盘（今头 + 历/点/线三区·融进一个面板·最新楼全功能 / 历史楼只读）
     // ═══════════════════════════════════════════════════════════════════════════
@@ -325,8 +341,9 @@ export function createInlineFeature(env = {}) {
         // 展开面板里的大头 masthead：仅当有「历/点」区在场时出现（线独存时不显大头——edge case A）。
         const hasDateRegion = !!alm || !!schInner;
 
-        const region = (cls, seg, inner) => inner
-            ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}</details>`
+        const collapseControl = label => `<button type="button" class="sp-inline-region-collapse" aria-label="收起${label}" title="收起${label}"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i><span>收起</span></button>`;
+        const region = (cls, seg, label, inner) => inner
+            ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}${collapseControl(label)}</details>`
             : '';
 
         // 顶行 + 历满宽条：历在场 → 顶行 [方形今头 + 历(summary+即将到来清单)]，六格条满宽落在顶行下方。
@@ -338,13 +355,13 @@ export function createInlineFeature(env = {}) {
             // 挂在 details 内，随历折叠一并收起——原生 <details> 折叠即隐藏，不再需要 :has() 联动隐藏六格条。
             const dashTop  = `<div class="sp-dash-top">${dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
             const stripRow = alm.stripHtml ? `<div class="sp-alm-strip-region">${alm.stripHtml}</div>` : '';
-            top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}</details>`;
+            top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}${collapseControl('历模块')}</details>`;
         } else if (hasDateRegion) {
             top = `<div class="sp-dash-top sp-dash-top-noalm">${dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}</div>`;
         }
-        const schRegion   = region('sp-schedule-inline', 'schedule', schInner);
-        const linesRegion = region('sp-lines-inline', 'lines', linesInner);
-        const ledgerRegion = region('sp-ledger-inline', 'ledger', ledgerInner);
+        const schRegion   = region('sp-schedule-inline', 'schedule', '点模块', schInner);
+        const linesRegion = region('sp-lines-inline', 'lines', '线模块', linesInner);
+        const ledgerRegion = region('sp-ledger-inline', 'ledger', '标注池模块', ledgerInner);
 
         // 段序：轴(top) → 标注池 → 点 → 线。标注池与日历同属「轴」范畴，紧贴轴放；点/线在其下。
         const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
@@ -539,7 +556,7 @@ export function createInlineFeature(env = {}) {
         ensureInlineObserver();
         bindChatObserver();
         if (!delegated) {
-            if ($) { initAlmanacStripDelegation(); initScheduleStripDelegation(); }
+            if ($) { initAlmanacStripDelegation(); initScheduleStripDelegation(); initRegionCollapseDelegation(); }
             delegated = true;
         }
     };
@@ -551,7 +568,7 @@ export function createInlineFeature(env = {}) {
         chatObserver = null;
         clearTimer(refreshTimer); clearTimer(chatMutationTimer); clearTimer(chatRetryTimer);
         refreshTimer = chatMutationTimer = chatRetryTimer = null;
-        if ($) $(doc).off('.spalmstrip').off('.spschstrip');
+        if ($) $(doc).off('.spalmstrip').off('.spschstrip').off('.spinlineregioncollapse');
         delegated = false;
         clear();
     };

@@ -5290,9 +5290,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-time-context .sp-alm-today-lbl,
 .sp-alm-time-context .sp-alm-clock-lbl {
-    flex         : 0 0 52px;
     font-size    : var(--sp-fs-76);
 }
+.sp-alm-time-context .sp-alm-today:not(.sp-alm-today-editing) > .sp-alm-today-lbl,
+.sp-alm-time-context .sp-alm-clock > .sp-alm-clock-lbl { flex: 0 0 52px; }
+.sp-alm-time-context .sp-alm-today-editing > .sp-alm-today-lbl { flex: 0 0 auto; }
 .sp-alm-today-lbl  { color: var(--sp-subtle); font-size: var(--sp-fs-78); }
 .sp-alm-today-date { color: var(--sp-on-surface); font-weight: 600; }
 .sp-alm-today-pin  { color: var(--sp-primary); font-size: var(--sp-fs-72); }
@@ -5305,7 +5307,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-today-weekday { width: 78px !important; max-width: 78px; flex: 0 1 78px; }
 @media (max-width: 520px) {
     .sp-alm-today-editing { flex-wrap: wrap; row-gap: 4px; }
-    .sp-alm-today-calibration-title { flex-basis: 100%; }
+    .sp-alm-time-context .sp-alm-today-editing > .sp-alm-today-calibration-title { flex: 0 0 100%; }
     .sp-alm-today-editing .sp-alm-today-acts { margin-left: auto; }
 }
  /* 时间戳·只读行：今天条下方一行，回显主楼 AI 每楼隐形时间戳（起→止），比今天条更素 */
@@ -6317,6 +6319,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
    外壳不再模拟第二张卡片，而是作为正文下方的一段页边批注。 */
 .sp-inline-box.sp-dash {
     --sp-inline-thread: var(--SmartThemeQuoteColor, #6bb6d6);
+    --sp-inline-thread-line: color-mix(in oklab, var(--sp-inline-thread) 52%, transparent);
     position      : relative;
     margin        : 9px 0 2px;
     overflow      : visible;
@@ -6324,17 +6327,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius : 0;
     background    : transparent;
     box-shadow    : none;
-}
-.sp-inline-box.sp-dash::before {
-    content       : '';
-    position      : absolute;
-    z-index       : 0;
-    left          : 4px;
-    top           : 8px;
-    bottom        : 8px;
-    width         : 1px;
-    background    : color-mix(in oklab, var(--sp-inline-thread) 52%, transparent);
-    pointer-events: none;
 }
 
 /* 总摘要是脉络线的起点。日期负责身份，数量只是低声量索引。 */
@@ -6359,6 +6351,19 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border       : 1px solid color-mix(in oklab, var(--sp-inline-thread) 78%, transparent);
     background   : color-mix(in oklab, var(--sp-inline-thread) 28%, transparent);
     transform    : translateY(-50%) rotate(45deg);
+}
+/* 只在外框实际展开时，从菱形下尖角外约 1px 处接向内容区；
+   纯日期 flat 没有内容区，收起状态也不留半截线。 */
+.sp-inline-box.sp-dash[open] > .sp-dash-summary:not(.sp-dash-summary-flat)::after {
+    content       : '';
+    position      : absolute;
+    z-index       : 0;
+    left          : 4px;
+    top           : calc(50% + 6px);
+    bottom        : -1px;
+    width         : 1px;
+    background    : var(--sp-inline-thread-line);
+    pointer-events: none;
 }
 .sp-inline-box.sp-dash > .sp-dash-summary-flat::before {
     border-radius: 50%;
@@ -6394,6 +6399,17 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     position: relative;
     z-index : 1;
     padding : 1px 0 3px 17px;
+}
+.sp-inline-box.sp-dash > .sp-dash-body::before {
+    content       : '';
+    position      : absolute;
+    z-index       : 0;
+    left          : 4px;
+    top           : 0;
+    bottom        : 8px;
+    width         : 1px;
+    background    : var(--sp-inline-thread-line);
+    pointer-events: none;
 }
 .sp-inline-box.sp-dash > .sp-dash-body > * {
     position  : relative;
@@ -6435,6 +6451,27 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-inline-box.sp-dash .sp-inline-count {
     font-variant-numeric: tabular-nums;
     opacity             : .42;
+}
+.sp-inline-box.sp-dash .sp-inline-region-collapse {
+    display        : flex;
+    align-items    : center;
+    justify-content: center;
+    gap            : 4px;
+    width          : 100%;
+    padding        : 4px 8px 6px;
+    border         : 0;
+    background     : transparent;
+    color          : var(--sp-inline-thread);
+    font           : inherit;
+    font-size      : var(--sp-fs-68);
+    line-height    : 1.2;
+    opacity        : .48;
+    cursor         : pointer;
+}
+.sp-inline-box.sp-dash .sp-inline-region-collapse:hover { opacity: .78; }
+.sp-inline-box.sp-dash .sp-inline-region-collapse:focus-visible {
+    outline       : 1px solid color-mix(in oklab, var(--sp-inline-thread) 72%, transparent);
+    outline-offset: -2px;
 }
 
 /* 展开内容继续保留原数据结构，但去掉日期方卡和格子卡片的仪表盘观感。 */
@@ -6491,11 +6528,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
 /* 历史楼仍清晰可读，只把脉络线降为普通墨色，不再整框压暗。 */
 .sp-inline-box.sp-dash.sp-inline-box-ro {
-    opacity    : 1;
-    border-left: 0;
-}
-.sp-inline-box.sp-dash.sp-inline-box-ro::before {
-    background: rgba(128,128,128,.24);
+    --sp-inline-thread-line: rgba(128,128,128,.24);
+    opacity                 : 1;
+    border-left             : 0;
 }
 .sp-inline-box.sp-dash.sp-inline-box-ro > .sp-dash-summary { opacity: .78; }
 
