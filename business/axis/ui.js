@@ -107,7 +107,7 @@ export function createAxisUi(env = {}) {
         if (!clock || (!clock.start && !clock.end)) value = '<span class="sp-alm-clock-wait">等待主楼 AI 打点…（发几楼后自动出现）</span>';
         else if (clock.start && clock.end && clock.start !== clock.end) value = `${formatStoryClockMeta(clock.startMeta, env.escapeHtml, env.calendar?.(), env.monthName)} <span class="sp-alm-clock-arrow">→</span> ${formatStoryClockMeta(clock.endMeta, env.escapeHtml, env.calendar?.(), env.monthName)}`;
         else value = formatStoryClockMeta(clock.endMeta || clock.startMeta, env.escapeHtml, env.calendar?.(), env.monthName);
-        return `<div class="sp-alm-clock" title="由主楼 AI 每楼打的隐形时间戳读回，精确到小时"><span class="sp-alm-clock-lbl"><i class="fa-regular fa-clock"></i>时间戳</span><span class="sp-alm-clock-val">${value}</span></div>`;
+        return `<div class="sp-alm-clock" title="由主楼 AI 每楼打的隐形时间戳读回，精确到小时"><span class="sp-alm-clock-lbl">当下时间</span><span class="sp-alm-clock-val">${value}</span></div>`;
     };
     return { actionMenuHtml, todayBarHtml, storyClockBarHtml };
 }

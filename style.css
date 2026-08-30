@@ -1849,6 +1849,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius : 99px;
 }
 .sp-schedule-label { color: var(--sp-subtle); font-size: var(--sp-fs-85); }
+.sp-outline-title {
+    color      : var(--sp-on-surface);
+    font-size  : var(--sp-fs-88);
+    font-weight: 600;
+}
 
 /* ─── Panel toolbar / per-panel refresh ──────────────────────────────────────── */
 .sp-panel-toolbar {
@@ -1878,6 +1883,19 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity       : 0.4;
     pointer-events: none;
     cursor        : default;
+}
+
+/* 主面板滚动区始终预留滚动条槽位，避免内容刚好溢出时整列横向跳动。
+   只覆盖占据整页宽度的主滚动容器；下拉框、弹窗内小列表仍按需使用宽度。 */
+.sp-settings-body,
+.sp-day-panel,
+.sp-lines-list,
+.sp-outline-beats,
+.sp-chat-msgs,
+.sp-theater-body,
+.sp-anchor-scroll,
+.sp-alm-body {
+    scrollbar-gutter: stable;
 }
 
 /* ─── Tab bar ────────────────────────────────────────────────────────────────── */
@@ -2981,8 +2999,16 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-chat-msg-actions.sp-chat-msg-editing {
     opacity   : 1;
-    align-self: flex-end;
-    flex-direction: column;
+    align-self: stretch;
+    width     : 100%;
+    gap       : 8px;
+    flex-direction: row;
+    box-sizing: border-box;
+}
+.sp-chat-msg-actions.sp-chat-msg-editing button {
+    flex       : 1 1 0;
+    min-height : 30px;
+    padding    : 5px 10px;
 }
 .sp-chat-msg-edit-save,
 .sp-chat-msg-edit-cancel {
@@ -5254,6 +5280,19 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-shrink  : 0;
     font-size    : var(--sp-fs-80);
 }
+.sp-alm-time-context {
+    flex-shrink  : 0;
+    border-bottom: 1px solid var(--sp-divider);
+}
+.sp-alm-time-context .sp-alm-today {
+    padding      : 4px 12px 1px;
+    border-bottom: 0;
+}
+.sp-alm-time-context .sp-alm-today-lbl,
+.sp-alm-time-context .sp-alm-clock-lbl {
+    flex         : 0 0 52px;
+    font-size    : var(--sp-fs-76);
+}
 .sp-alm-today-lbl  { color: var(--sp-subtle); font-size: var(--sp-fs-78); }
 .sp-alm-today-date { color: var(--sp-on-surface); font-weight: 600; }
 .sp-alm-today-pin  { color: var(--sp-primary); font-size: var(--sp-fs-72); }
@@ -5279,8 +5318,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-shrink  : 0;
     font-size    : var(--sp-fs-76);
 }
-.sp-alm-clock-lbl   { display: inline-flex; align-items: center; gap: 4px; color: var(--sp-subtle); flex-shrink: 0; }
-.sp-alm-clock-val   { min-width: 0; color: var(--sp-on-surface); font-weight: 600; overflow-wrap: anywhere; }
+.sp-alm-time-context .sp-alm-clock {
+    padding      : 2px 12px 5px;
+    border-bottom: 0;
+}
+.sp-alm-clock-lbl   { display: inline-flex; align-items: center; color: var(--sp-subtle); flex-shrink: 0; }
+.sp-alm-clock-val   { min-width: 0; color: var(--sp-on-surface); opacity: .72; font-weight: 400; overflow-wrap: anywhere; }
 .sp-alm-clock-arrow { color: var(--sp-subtle); font-weight: 400; margin: 0 1px; }
 .sp-alm-clock-wait  { color: var(--sp-subtle); font-weight: 400; font-size: var(--sp-fs-72); }
 /* 「同步到点」CTA：改了今天后点落后时在今天条冒出的醒目胶囊；点一下后台把点重生成到今天。busy 态换成静默灰胶囊 */

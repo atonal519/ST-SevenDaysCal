@@ -11,8 +11,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
     const render = (raw, cursor = 0) => {
         beginRender?.();
         const beats = parseOutline(raw);
-        const toolbar = `<div class="sp-panel-toolbar"><button class="sp-panel-refresh sp-refresh-outline" title="重新生成面"><i class="fa-solid fa-rotate-right"></i></button></div>`;
-        if (!beats.length) return toolbar + `<div class="sp-raw">${esc(raw).replace(/\n/g, '<br>')}</div>`;
+        if (!beats.length) return `<div class="sp-raw">${esc(raw).replace(/\n/g, '<br>')}</div>`;
         const cards = beats.map((beat, index) => {
             const injectParts = [
                 '【剧情节点参考】',
@@ -62,7 +61,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
         const rawDebug = beats.length < 3
             ? `<details class="sp-debug"><summary>⚠ 仅解析到 ${beats.length} 个节点</summary><pre class="sp-debug-raw">${esc(raw)}</pre></details>`
             : '';
-        return toolbar + cards + rawDebug;
+        return cards + rawDebug;
     };
     return Object.freeze({ render, empty });
 }

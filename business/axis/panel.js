@@ -161,7 +161,8 @@ export function createAxisPanel(env) {
         const ledgerCtrl = axisState._almanacSheet === 'ledger' ? (env.renderLedgerControls?.() || '') : '';
         const ledgerCtrlWrap = axisState._almanacSheet === 'ledger' ? `<div class="sp-ledger-ctrl-wrap">${ledgerCtrl}</div>` : '';
         const bodyClass = axisState._almanacSheet === 'ledger' ? 'sp-alm-body sp-alm-body-ledger' : 'sp-alm-body';
-        $wrap.html(env.almToolbarHtml() + env.almTodayBarHtml() + env.storyClockBarHtml() + ledgerCtrlWrap + `<div class="${bodyClass}">${bodyHtml}</div>`);
+        const timeContextHtml = `<div class="sp-alm-time-context">${env.almTodayBarHtml()}${env.storyClockBarHtml()}</div>`;
+        $wrap.html(env.almToolbarHtml() + timeContextHtml + ledgerCtrlWrap + `<div class="${bodyClass}">${bodyHtml}</div>`);
         finish();
     };
 }

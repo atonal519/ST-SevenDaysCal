@@ -3074,6 +3074,11 @@ function injectModal() {
                         </div>
 
                         <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
+                            <div class="sp-schedule-header sp-outline-header">
+                                <span class="sp-outline-title">故事面</span>
+                                <span class="sp-schedule-label" id="sp-outline-node-count">0 个节点</span>
+                                <button class="sp-panel-refresh sp-refresh-outline" title="重新生成面" aria-label="重新生成面"><i class="fa-solid fa-rotate-right"></i></button>
+                            </div>
                             <div class="sp-outline-beats" id="sp-outline-beats">
                                 <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
                             </div>
@@ -5745,7 +5750,10 @@ async function copyPlainText(text) {
 function setTheaterBody(html) { $in('#sp-theater-body').html(html); }
 
 // 预览折叠：内容超过阈值才折叠并露出「展开全文」按钮，短内容不折。
-function setOutlineBody(html) { $in('#sp-outline-beats').html(html); }
+function setOutlineBody(html) {
+    const $beats = $in('#sp-outline-beats').html(html);
+    $in('#sp-outline-node-count').text(`${$beats.children('.sp-beat').length} 个节点`);
+}
 
 // ─── Storylines (事件线) ─────────────────────────────────────────────────────
 
