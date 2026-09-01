@@ -155,8 +155,6 @@ export function stripTags(raw, opts = {}) {
 
     const keep  = parseTagList(opts.keepTags  ?? '');
     const extra = parseTagList(opts.extraTags ?? '');
-    // keep 为空（M0/M1）时收尾须保配对标记；M2/M3 配对已被强删除清空，直接剥标记。
-    const preservePairs = !keep.length;
     const keepStash = [];
 
     // 1. 移除 HTML/XML 注释（通用）
