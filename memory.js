@@ -163,7 +163,7 @@ export function stripTags(raw, opts = {}) {
     // 2. 删除 extra 列表标签及其内容（M1/M3；先于 keep，extra 恒优先）
     for (const name of extra) {
         const safeName = escapeTagName(name);
-        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'gi');
+        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'giu');
         let prev;
         do {
             prev = s;
@@ -176,7 +176,7 @@ export function stripTags(raw, opts = {}) {
     if (keep.length) {
         for (const name of keep) {
             const safeName = escapeTagName(name);
-            const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'gi');
+            const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'giu');
             s = s.replace(rx, (_m, inner) => {
                 keepStash.push(inner);
                 return ` KEEP${keepStash.length - 1} `;
@@ -186,11 +186,11 @@ export function stripTags(raw, opts = {}) {
     } else {
         // M0/M1：轻量卫生 —— 删注释（上步已做）、孤立/自闭合标记；配对标签原样保留。
         const pairs = [];
-        s = s.replace(/<([a-zA-Z][\w~-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi, m => {
+        s = s.replace(/<([\p{L}][\p{L}\p{N}_~-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/giu, m => {
             pairs.push(m);
             return `\u0000P${pairs.length - 1}\u0000`;
         });
-        s = s.replace(/<\/?[a-zA-Z][\w~-]*(?:\s[^>]*)?\/?>/g, '');
+        s = s.replace(/<\/?[\p{L}][\p{L}\p{N}_~-]*(?:\s[^>]*)?\/?>/gu, '');
         s = s.replace(/\u0000P(\d+)\u0000/g, (_m, i) => pairs[+i] ?? '');
     }
 
