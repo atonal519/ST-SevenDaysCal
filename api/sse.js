@@ -28,6 +28,7 @@ export function emptyContentMessage(finishReason = '') {
 function normalizedFinishReason(value) {
     return String(value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
 }
+export function isNormalEmptyFinishReason(value) { return normalizedFinishReason(value) === 'stop'; }
 
 export function responseFinishReason(data) {
     const choice = data?.choices?.[0];
@@ -51,12 +52,14 @@ export function isPlaceholderContent(s) {
 }
 
 // 从非流式响应里提取正文：优先 content，空则兜底 reasoning_content，仍空则抛可读错误。
-export function extractCompletion(data) {
+export function extractCompletion(data, { allowEmptyOutput = false } = {}) {
     const choice = data?.choices?.[0];
-    if (isTruncationFinishReason(responseFinishReason(data))) {
+    const finishReason = responseFinishReason(data);
+    if (isTruncationFinishReason(finishReason)) {
         throw makeDiagnosticError('truncated', { phase: 'truncated' });
     }
     const msg = choice?.message;
+    const hasToolCall = !!(msg?.tool_calls?.length || msg?.function_call || choice?.tool_calls?.length || choice?.function_call);
     let content = msg?.content ?? choice?.text ?? data?.content ?? '';
     if (typeof content !== 'string') content = String(content ?? '');
     content = content.trim();
@@ -64,6 +67,8 @@ export function extractCompletion(data) {
     // 正文为空：兜底取推理内容（至少有东西可渲染，而非白屏/报错）
     const reasoning = msg?.reasoning_content ?? msg?.reasoning ?? '';
     if (typeof reasoning === 'string' && reasoning.trim()) return reasoning.trim();
+    // 仅供明确声明“空正文具有业务语义”的机械链路使用；占位符 none 仍按异常处理。
+    if (allowEmptyOutput && !content && !hasToolCall && isNormalEmptyFinishReason(finishReason)) return '';
     throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
 }
 
@@ -91,20 +96,21 @@ export function mapApiError(status, raw) {
 
 // 读取 SSE 流（text/event-stream），拼接 delta.content。
 // ST 的 generate 端点在 stream=true 时透传上游 SSE：每行 `data: {json}`，以 `data: [DONE]` 结束。
-export async function readSseContent(resp) {
+export async function readSseContent(resp, { allowEmptyOutput = false } = {}) {
     const reader = resp.body?.getReader();
     if (!reader) {
         const data = await resp.json().catch(() => null);
         if (!data) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
-        return extractCompletion(data);
+        return extractCompletion(data, { allowEmptyOutput });
     }
     const decoder = new TextDecoder();
-    let buf = '', out = '', finishReason = '', eventData = [];
+    let buf = '', out = '', finishReason = '', eventData = [], sawDone = false, sawToolCall = false;
     const handleEvent = () => {
         if (!eventData.length) return;
         const payload = eventData.join('\n').trim();
         eventData = [];
-        if (!payload || payload === '[DONE]') return;
+        if (!payload) return;
+        if (payload === '[DONE]') { sawDone = true; return; }
         let json;
         try { json = JSON.parse(payload); }
         catch { throw makeDiagnosticError('sse-invalid', { phase: 'parse' }); }
@@ -112,6 +118,7 @@ export async function readSseContent(resp) {
         const choice = json?.choices?.[0];
         const reason = responseFinishReason(json);
         if (reason) finishReason = reason;
+        if (choice?.delta?.tool_calls?.length || choice?.delta?.function_call || choice?.message?.tool_calls?.length || choice?.message?.function_call) sawToolCall = true;
         const delta = choice?.delta?.content ?? choice?.message?.content ?? choice?.text;
         if (typeof delta === 'string') out += delta;
     };
@@ -135,7 +142,10 @@ export async function readSseContent(resp) {
         for (const line of lines) handleLine(line);
     }
     if (isTruncationFinishReason(finishReason)) throw makeDiagnosticError('truncated', { phase: 'truncated' });
-    if (!out.trim()) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
+    if (!out.trim()) {
+        if (allowEmptyOutput && !sawToolCall && (isNormalEmptyFinishReason(finishReason) || (!finishReason && sawDone))) return '';
+        throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
+    }
     return out.trim();
 }
 

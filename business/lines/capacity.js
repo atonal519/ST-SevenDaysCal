@@ -1,5 +1,8 @@
-export const AUTO_LINE_CAPACITY = 10;
-export const AUTO_LINE_SEED_CAPACITY = 4;
+import { TERMINAL_LINE_STAGES } from './schema.js';
+
+export const AUTO_LINE_CAPACITY = 8;
+// 每轮签发完整自动池容量的票据，允许旧线集中进入终态后由新线补满空位。
+export const AUTO_LINE_SEED_CAPACITY = AUTO_LINE_CAPACITY;
 
 // 在完整校验、票据绑定和锁线合并之后收敛自动池；不接触尚未验证的 AI 输出。
 // 同名线使用队列逐一匹配，避免用名称 Set 把重复身份错误合并。
@@ -8,11 +11,12 @@ export function enforceLineCapacity({ previousLines = [], mergedLines = [], max 
     const candidates = Array.isArray(mergedLines) ? mergedLines : [];
     const used = new Set();
     const retained = [];
-    const oldAuto = (Array.isArray(previousLines) ? previousLines : []).filter(line => line?.pin !== true);
+    const isActiveAuto = line => line?.pin !== true && !TERMINAL_LINE_STAGES.has(line?.stage);
+    const oldAuto = (Array.isArray(previousLines) ? previousLines : []).filter(isActiveAuto);
     const queues = new Map();
     for (let index = 0; index < candidates.length; index++) {
         const line = candidates[index];
-        if (line?.pin === true) continue;
+        if (!isActiveAuto(line)) continue;
         const queue = queues.get(line?.name) || [];
         queue.push(index);
         queues.set(line?.name, queue);
@@ -27,12 +31,13 @@ export function enforceLineCapacity({ previousLines = [], mergedLines = [], max 
     }
     for (let index = 0; index < candidates.length && retained.length < limit; index++) {
         const line = candidates[index];
-        if (line?.pin === true || used.has(index)) continue;
+        if (!isActiveAuto(line) || used.has(index)) continue;
         used.add(index);
         retained.push(line);
     }
-    // 锁线永远额外保留，并维持其在合并结果中的顺序。
+    // 本轮刚收束的终态线与锁线都不占自动活线池，并维持各自在合并结果中的顺序。
+    const settled = candidates.filter(line => line?.pin !== true && TERMINAL_LINE_STAGES.has(line?.stage));
     const pinned = candidates.filter(line => line?.pin === true);
-    const model = [...retained, ...pinned];
+    const model = [...retained, ...settled, ...pinned];
     return { ok: true, model, dropped: Math.max(0, candidates.length - model.length), rawCount: model.length };
 }

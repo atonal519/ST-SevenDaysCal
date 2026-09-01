@@ -338,7 +338,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
         const source = cleanDate(sourceDate);
         const target = cleanDate(selectedTargetDate);
         if (!chatId || !source || !target) return false;
-        sequenceAbort?.abort();
+        sequenceAbort?.abort('superseded-owner');
         sequenceAbort = null;
         const chat = getChat?.();
         state = {
@@ -356,7 +356,7 @@ export function createTimeTravelController({ getChatId, getChat, resolveDestinat
 
     function clear(reason = 'cleared') {
         const hadState = !!state;
-        sequenceAbort?.abort();
+        sequenceAbort?.abort(reason === 'cancelled' ? 'time-travel-cancel' : reason);
         sequenceAbort = null;
         state = null;
         if (hadState) reportState(reason);

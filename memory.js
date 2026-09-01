@@ -18,7 +18,7 @@
 
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
-import { normalizeTagNames } from './utils/tag-names.js';
+import { normalizeTagNames, TAG_NAME_SOURCE } from './utils/tag-names.js';
 import { diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
 
 const MEMORY_KEY = 'sp-memory';
@@ -67,9 +67,10 @@ function jobSignal() {
     if (b && !a) return b;
     if (a.aborted || b.aborted) return a.aborted ? a : b;
     const combined = new AbortController();
-    const relay = () => combined.abort();
-    a.addEventListener('abort', relay, { once: true });
-    b.addEventListener('abort', relay, { once: true });
+    const relayA = () => combined.abort(a.reason ?? 'external-abort');
+    const relayB = () => combined.abort(b.reason ?? 'external-abort');
+    a.addEventListener('abort', relayA, { once: true });
+    b.addEventListener('abort', relayB, { once: true });
     return combined.signal;
 }
 
@@ -161,7 +162,7 @@ export function stripTags(raw, opts = {}) {
     const keepStash = [];
     for (const name of keep) {
         const safeName = escapeTagName(name);
-        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'gi');
+        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'giu');
         s = s.replace(rx, (_m, inner) => {
             keepStash.push(inner);
             return ` KEEP${keepStash.length - 1} `;
@@ -172,7 +173,7 @@ export function stripTags(raw, opts = {}) {
     //    ever change the default).
     for (const name of extra) {
         const safeName = escapeTagName(name);
-        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'gi');
+        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'giu');
         let prev;
         do { prev = s; s = s.replace(rx, ''); } while (s !== prev);
     }
@@ -181,10 +182,10 @@ export function stripTags(raw, opts = {}) {
     let prev;
     do {
         prev = s;
-        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
+        s = s.replace(new RegExp(`<(${TAG_NAME_SOURCE})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gu'), '');
     } while (s !== prev);
     // 5. Any remaining self-closing / orphan tags
-    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
+    s = s.replace(new RegExp(`<\\/?${TAG_NAME_SOURCE}(?:\\s[^>]*)?\\/?>`, 'gu'), '');
     // 6. Restore keep-list inner content (bare, no tags)
     s = s.replace(/ KEEP(\d+) /g, (_m, idx) => keepStash[+idx] ?? '');
     // 7. Second cleaning pass — restored kept content may itself contain
@@ -193,9 +194,9 @@ export function stripTags(raw, opts = {}) {
     //    here (would re-stash then loop); protection is by design outermost-only.
     do {
         prev = s;
-        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
+        s = s.replace(new RegExp(`<(${TAG_NAME_SOURCE})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gu'), '');
     } while (s !== prev);
-    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
+    s = s.replace(new RegExp(`<\\/?${TAG_NAME_SOURCE}(?:\\s[^>]*)?\\/?>`, 'gu'), '');
     // 8. Collapse the whitespace left behind by removed blocks
     s = s.replace(/\n{3,}/g, '\n\n').trim();
     return s;
@@ -702,13 +703,13 @@ export async function rebuildAll(onProgress) {
     }
 }
 
-export function abortRebuild() { _abortController?.abort(); }
+export function abortRebuild() { _abortController?.abort('manual-abort'); }
 
-export function abortAll() {
+export function abortAll(reason = 'reset') {
     _lifecycleEpoch += 1;
     _queue = [];
-    try { _abortController?.abort(); } catch {}
-    try { _jobAbortController?.abort(); } catch {}
+    try { _abortController?.abort(reason); } catch {}
+    try { _jobAbortController?.abort(reason); } catch {}
     _abortController = null;
     _jobAbortController = new AbortController();
 }
@@ -756,7 +757,7 @@ function onMessageMutated(mesId) {
 }
 
 function onChatChanged() {
-    abortAll();
+    abortAll('chat-boundary');
 }
 
 // ─── Public init ─────────────────────────────────────────────────────────────

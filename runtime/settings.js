@@ -76,10 +76,10 @@ export const DEFAULT_SETTINGS = {
     databaseWorldbookName: '', // empty follows the character primary worldbook; otherwise freeze this exact host book name
     animaRecallCount: 20,
     // Tag sanitizer (used by memory.js:stripTags AND anywhere else that reads
-    // AI floor content). Both are comma-separated bare tag names (no <>).
+    // AI floor content). Both are comma-separated Unicode tag names; optional surrounding <> are normalized away.
     keepTags       : 'content',  // protect list — contents inside these tags survive stripping
     extraTags      : '',         // extra strip list — forcibly delete these tags + their content
-    customPrompt   : '',         // 自定义提示词（破限）：注入到所有链路 system 最前，全局生效
+    customPrompt   : '',         // 创作链自定义写作规范；机械链只使用统一基础处理层
     spacePersona   : '',         // 间·人格覆盖：空=用内置默认语气（ADVISOR_TONE_GUIDE）；非空=换间的语气/行文/人格（顾问身份恒保留、不可覆盖）
     // 棱（小剧场）
     theaterStylePrompt   : '',   // 写作 agent 文风提示词

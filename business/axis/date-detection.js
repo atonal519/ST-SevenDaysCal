@@ -8,33 +8,56 @@ export function buildDateJudgePrompt(calendarText = '') { return calendarText ? 
 只回答「当前剧情日期」，格式为「第M月D日」（M=第几个月的序号，D=该月第几日，例如第3月15日），或直接用上面列出的月名；年份不重要、无需回答。
 若最近对话中并无明确日期线索、无法确定具体月日，就只回答「未知」。
 不要解释，不要输出任何多余文字。` : DATE_JUDGE_PROMPT; }
+export function storyWeekdayDisplaySignature(clock) {
+    const meta = clock?.endMeta;
+    return meta?.complete && Number.isInteger(meta.month) && Number.isInteger(meta.day) && Number.isInteger(meta.weekdayIndex)
+        ? `${meta.month}/${meta.day}:${meta.weekdayIndex}`
+        : null;
+}
 export function createDateDetectionController(options = {}) {
-    let busy = false; let abortController = null;
+    let busy = false; let abortController = null; let lastWeekdayDisplaySignature;
     const identity = () => options.identity?.() || { chatId: options.context()?.chatId || null, floor: null, swipe: null };
     const sameIdentity = (a, b) => !!a && !!b && String(a.chatId || '') === String(b.chatId || '') && a.floor === b.floor && String(a.swipe ?? '') === String(b.swipe ?? '');
-    const current = (ctrl, ownerIdentity, signal) => abortController === ctrl && !ctrl.signal.aborted && !signal?.aborted && sameIdentity(ownerIdentity, identity());
-    const apply = (charKey, md, notify = true, ownerIdentity = null, mode = 'api') => {
+    const participantCurrent = participant => !participant || options.sameParticipantIdentity?.(participant, options.captureParticipantIdentity?.()) !== false;
+    const ownerCurrent = ownerIdentity => !!ownerIdentity && sameIdentity(ownerIdentity, identity()) && participantCurrent(ownerIdentity.participantIdentity);
+    const current = (ctrl, ownerIdentity, signal) => abortController === ctrl && !ctrl.signal.aborted && !signal?.aborted && ownerCurrent(ownerIdentity);
+    const apply = (charKey, md, notify = true, ownerIdentity = null, mode = 'api', { suppressAftermath = false } = {}) => {
         if (!charKey || !md) return { status: 'unresolved' };
+        if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
         const calibration = options.getCalibration?.(charKey);
         if (mode === 'sdc' && calibration && ownerIdentity && Number.isInteger(calibration.floor) && calibration.floor === ownerIdentity.floor) return { status: 'calibration-held', date: md };
         const prev = options.getAnchor?.(charKey);
         if (prev && prev.month === md.month && prev.day === md.day && prev.year === md.year && prev.eraLabel === md.eraLabel) return { status: 'unchanged', date: md };
+        if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
         const stored = options.setAnchor?.(charKey, md.month, md.day, 'detected', { ...(mode === 'api' && calibration ? { calibration } : {}), year: md.year, eraLabel: md.eraLabel });
         if (!stored?.ok) { if (notify) options.toast?.('剧情日期自动保存失败，请重试', null, true); return { status: 'failed', reason: stored?.reason }; }
-        if (notify && options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期已自动更新为 ${options.monthName?.(md.month)}${md.day}日 · 请注意查看`);
-        options.aftermath?.();
+        if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
+        if (notify && options.settings?.().notifyMode === 'full') {
+            if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
+            options.toast?.(`剧情日期已自动更新为 ${options.monthName?.(md.month)}${md.day}日 · 请注意查看`);
+        }
+        if (!suppressAftermath) {
+            if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
+            options.aftermath?.();
+        }
         return { status: 'updated', date: md };
     };
-    const reland = () => {
+    const reland = ({ suppressAftermath = false } = {}) => {
         if (options.storyEnabled?.() !== true) return { status: 'no-date', reason: 'disabled' };
-        const clock = options.storyClock?.(); if (!options.completeStoryClock?.(clock)) return { status: 'no-date', reason: 'missing-complete-sdc' };
+        const clock = options.storyClock?.();
+        const nextWeekdaySignature = options.completeStoryClock?.(clock) ? storyWeekdayDisplaySignature(clock) : null;
+        const weekdayDisplayChanged = lastWeekdayDisplaySignature !== nextWeekdaySignature && (lastWeekdayDisplaySignature !== undefined || nextWeekdaySignature !== null);
+        lastWeekdayDisplaySignature = nextWeekdaySignature;
+        if (!options.completeStoryClock?.(clock)) { if (weekdayDisplayChanged && !suppressAftermath) options.aftermath?.(); return { status: 'no-date', reason: 'missing-complete-sdc' }; }
         const md = options.storyDate?.(); if (!md) return { status: 'no-date', reason: 'missing-date' };
-        const ownerIdentity = { ...identity(), floor: clock.floor };
-        const applied = apply(options.charKey?.(options.context()), md, true, ownerIdentity, 'sdc');
+        const ownerIdentity = { ...identity(), floor: clock.floor, participantIdentity: options.captureParticipantIdentity?.() || null };
+        const applied = apply(options.charKey?.(options.context()), md, true, ownerIdentity, 'sdc', { suppressAftermath });
+        if (weekdayDisplayChanged && !suppressAftermath && (applied.status === 'unchanged' || applied.status === 'calibration-held')) options.aftermath?.();
         return applied.status === 'failed' ? { status: 'write-failed', reason: applied.reason, date: md } : { status: applied.status === 'updated' ? 'updated' : 'handled', date: md };
     };
     const run = async ({ signal: externalSignal = null } = {}) => {
         if (busy) return { status: 'skipped' };
+        const participantIdentity = options.captureParticipantIdentity?.() || null;
         const ctx = options.context(); const charKey = options.charKey?.(ctx); if (!charKey) return { status: 'skipped' };
         const cfg = options.config?.();
         if (!cfg?.url || !cfg?.key) {
@@ -43,19 +66,21 @@ export function createDateDetectionController(options = {}) {
             if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请先配置 API', null, true);
             return { status: 'failed', error };
         }
-        const ownerIdentity = identity(); const ctrl = new AbortController(); abortController = ctrl; busy = true;
+        const ownerIdentity = { ...identity(), participantIdentity }; const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
-            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT);
+            if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
+            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT, { promptMode: 'mechanical', diagnosticModule: 'axis-date' });
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
             const md = options.parse?.(raw); if (!md) return { status: 'unresolved' };
+            if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
             const result = apply(charKey, md, true, ownerIdentity);
             return ctrl.signal.aborted ? { status: 'cancelled' } : { ...result, date: md };
         } catch (error) {
-            if (abortController !== ctrl || error?.name === 'AbortError' || externalSignal?.aborted || !sameIdentity(ownerIdentity, identity())) return { status: 'cancelled' };
+            if (abortController !== ctrl || error?.name === 'AbortError' || externalSignal?.aborted || !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
             options.logDiagnostic?.(safeDiagnosticLog('axis', 'request', error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请检查 API 或网络', null, true); return { status: 'failed', error };
         } finally { if (abortController === ctrl) { busy = false; abortController = null; } remove(); }
     };
-    return { run, reland, apply, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
+    return { run, reland, apply, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; lastWeekdayDisplaySignature = undefined; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }
 import { makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';

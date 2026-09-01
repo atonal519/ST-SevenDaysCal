@@ -47,7 +47,25 @@ export function createLinesFeature(env = {}) {
         onStart: () => { if (env.isPanelActive?.()) refreshPanel?.(); },
         cleanup: (owner, chatId) => cleanupOwner(owner, chatId),
     }));
-    const actions = env.actions || (env.actionsEnv && createLinesActions({ ...env.actionsEnv, isBusy: () => runtime.busy, resetCounter: () => { lifecycle.counter = 0; }, render: raw => renderLines(raw), setCached: html => runtime.setHtml(html), refreshPanel: () => refreshPanel?.(), refreshInline: () => syncInline?.(), runGenerate: (...args) => generation?.run?.(...args) }));
+    const actions = env.actions || (env.actionsEnv && createLinesActions({
+        ...env.actionsEnv,
+        isBusy: () => runtime.busy,
+        resetCounter: () => { lifecycle.counter = 0; },
+        render: raw => renderLines(raw),
+        setCached: html => runtime.setHtml(html),
+        refreshPanel: () => refreshPanel?.(),
+        refreshInline: () => syncInline?.(),
+        beginPreflight: () => {
+            const participantIdentity = env.participantIdentity?.() || null;
+            const owner = owners.create('lines-preflight', { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision(), participantIdentity });
+            owner.contextSnapshot = env.contextSnapshot?.() || null;
+            return owner;
+        },
+        preflightCurrent: owner => owners.isCurrent(owner, { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision() }) && (!owner.participantIdentity || env.sameParticipantIdentity?.(owner.participantIdentity, env.participantIdentity?.()) !== false),
+        finishPreflight: owner => owners.finish(owner),
+        invalidatePreflight: (reason = 'manual-abort') => owners.invalidate('lines-preflight', reason),
+        runGenerate: (...args) => generation?.run?.(...args),
+    }));
     const adultBlurEnabled = () => env.getSettings?.().adultBlurEnabled !== false;
     const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
     const titleHtml = (className, line) => {
@@ -122,14 +140,25 @@ export function createLinesFeature(env = {}) {
         return `${summary}${body || dashedSub ? `<div class="sp-inline-body" data-lines-inject-text="${env.escapeAttr?.(view.injectText) || ''}">${body}${dashedSub}</div>` : ''}`;
     };
     const appendInlineBlock = async (messageId, shouldAdvance) => {
-        env.refreshInlineWindow?.(true);
+        const expectedChatId = env.chatId?.();
+        const expectedEpoch = env.boundaryEpoch?.();
+        const boundaryCurrent = () => env.chatId?.() === expectedChatId && (expectedEpoch === undefined || env.boundaryEpoch?.() === expectedEpoch);
+        if (!shouldAdvance) env.refreshInlineWindow?.(true);
         const cfg = env.loadConfig?.();
+        let result = { status: 'skipped', reason: shouldAdvance ? 'unavailable' : 'not-requested' };
         if (shouldAdvance && !runtime.busy && cfg?.url && cfg?.key) {
             const swipeId = Number(env.swipeId?.(messageId) ?? 0);
-            await generation?.run?.(true, { mesId: Number(messageId), swipeId });
-            env.refreshInlineWindow?.(true);
+            result = await generation?.run?.(true, { mesId: Number(messageId), swipeId }) || result;
+        } else if (shouldAdvance && runtime.busy) {
+            result = { status: 'skipped', reason: 'busy' };
+        } else if (shouldAdvance && (!cfg?.url || !cfg?.key)) {
+            result = { status: 'skipped', reason: 'no-api' };
         }
+        if (!boundaryCurrent()) return result;
+        if (shouldAdvance && result?.status !== 'updated') return result;
+        if (shouldAdvance) env.refreshInlineWindow?.(true);
         env.freezeSnapshot?.(messageId);
+        return result;
     };
     const syncInline = expectedChatId => {
         if (expectedChatId != null && env.chatId?.() !== expectedChatId) return;
@@ -165,9 +194,9 @@ export function createLinesFeature(env = {}) {
         if (!hasSaved && !String(saved.raw || '')) return true;
         return !!baseline && String(saved.raw || '') === String(baseline.raw || '') && (!hasSaved || (Number(saved.ts) || null) === (Number(baseline.ts) || null));
     };
-    const abortGeneration = ({ restore = true } = {}) => {
-        const owner = owners.invalidate('lines-generation');
-        runtime.abort();
+    const abortGeneration = ({ restore = true, reason = 'manual-abort' } = {}) => {
+        const owner = owners.invalidate('lines-generation', reason);
+        runtime.abort(reason);
         if (restore && !env.isEditing?.() && owner?.baseline && owner.baseline.chatId === env.chatId?.() && canonicalMatches(owner.baseline)) env.restoreBaseline?.(owner.baseline);
     };
     const rerunSwipe = async ({ mesId, forceRegen = false } = {}) => {
@@ -185,7 +214,7 @@ export function createLinesFeature(env = {}) {
         if (forceRegen && baseline && typeof baseline === 'object') baseline = { raw: String(baseline.raw || ''), ts: Number(baseline.ts) || null };
         if (forceRegen && !baseline) baseline = null;
         if (baseline == null) return;
-        if (runtime.busy) runtime.abort();
+        if (runtime.busy) runtime.abort('superseded-owner');
         return generation?.run?.(true, { mesId: Number(mesId), swipeId, baselineRaw: typeof baseline === 'object' ? baseline.raw : baseline, forceReroll: true });
     };
     const onMessageReceived = ({ messageId, type } = {}) => {
@@ -221,8 +250,8 @@ export function createLinesFeature(env = {}) {
         const mode = env.getMode?.();
         if (!autoSuppressed && mode === 'days') lifecycle.holdConfirmedFloor(credential);
         else if (!autoSuppressed && mode === 'turns') advance = lifecycle.advanceCounter({ mode, interval: env.getInterval?.() }).shouldAdvance;
-        await appendInlineBlock(mid, advance);
-        if (advance && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+        const result = await appendInlineBlock(mid, advance);
+        if (advance && result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
     };
     const onDateAftermath = async ({ chatId = env.chatId?.(), messageId, day } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false || env.getMode?.() !== 'days') return false;
@@ -231,8 +260,8 @@ export function createLinesFeature(env = {}) {
         if (!credential || day == null) return false;
         const advance = lifecycle.detectInGameDayChange({ day, decide: env.dayAdvance });
         if (!advance) { await appendInlineBlock(mid, false); return false; }
-        await appendInlineBlock(mid, true);
-        if (env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+        const result = await appendInlineBlock(mid, true);
+        if (result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
         return true;
     };
     const onSwiped = async ({ mesId, info } = {}) => {
@@ -260,7 +289,7 @@ export function createLinesFeature(env = {}) {
         lifecycle.markGenerationStarted({ reroll: genType === 'regenerate', excludedAssistant: genType === 'regenerate' ? env.lastAssistant?.() : null });
     };
     const onToken = () => { if (env.pluginEnabled?.()) lifecycle.markToken(); };
-    const onGenerationEnded = ({ stopped = false } = {}) => { if (env.pluginEnabled?.()) { lifecycle.endGeneration({ stopped }); setTimeout(() => env.refreshInlineWindow?.(true), 60); } };
+    const onGenerationEnded = ({ stopped = false } = {}) => { if (env.pluginEnabled?.()) { const epoch = env.boundaryEpoch?.(); lifecycle.endGeneration({ stopped }); setTimeout(() => { if (epoch === undefined || env.boundaryEpoch?.() === epoch) env.refreshInlineWindow?.(true); }, 60); } };
     let sheet = 'events';
     const renderBody = body => {
         env.renderPanelDom?.({ toolbar: dashed?.toolbarHtml?.({ onEvents: sheet === 'events', lineBusy: runtime.busy ? ' sp-refresh-busy' : '', generationBusy: runtime.busy }), body: sheet === 'dashed' ? dashed?.panelHtml?.() : String(body || '') });
@@ -315,7 +344,7 @@ export function createLinesFeature(env = {}) {
         isStreaming: () => Date.now() < lifecycle.streamUntil,
         resetCounter: () => { lifecycle.counter = 0; },
         setLastDay: value => { lifecycle.lastDay = value; },
-        onChatChanged: ({ lastSeen = -1 } = {}) => { abortGeneration({ restore: false }); lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
+        onChatChanged: ({ lastSeen = -1 } = {}) => { actions?.invalidatePreflight?.('chat-boundary'); abortGeneration({ restore: false, reason: 'chat-boundary' }); lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
         renderBody,
         refreshPanel,
     };

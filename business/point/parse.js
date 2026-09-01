@@ -244,16 +244,21 @@ export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
 export function bindPointAdultTickets(raw, mode = 'off', calendar = null) {
     const normalized = normalizePointAdultMode(mode);
     const text = String(raw || '');
-    if (normalized === 'off') return text;
     const parsed = parseCalendar(text, calendar);
     const events = [];
     for (const day of parsed.allDays || parsed.days) events.push(...(day.events || []));
     if (parsed.future) events.push(...(parsed.future.events || []));
     const ticketed = events.filter(event => event.ticketId);
-    const plan = pointTicketPlan(normalized, ticketed.length);
-    if (ticketed.length > plan.length || ticketed.some((event, i) => event.ticketId !== plan[i].id)) throw new Error('点成人票顺序或数量无效');
-    ticketed.forEach((event, i) => { event.adult = plan[i].adult && (normalized === 'dominant' || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event)); delete event.ticketId; delete event.adultProof; });
-    events.forEach(event => { if (!event.ticketId) delete event.ticketId; });
+    const plan = normalized === 'off' ? [] : pointTicketPlan(normalized, ticketed.length);
+    if (normalized !== 'off' && (ticketed.length > plan.length || ticketed.some((event, i) => event.ticketId !== plan[i].id))) throw new Error('点成人票顺序或数量无效');
+    const tickets = new Map(ticketed.map((event, i) => [event, plan[i]]));
+    events.forEach(event => {
+        const ticket = tickets.get(event);
+        const trustedNsfwTicket = Boolean(ticket?.adult);
+        event.adult = Boolean(event.adult || trustedNsfwTicket || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event));
+        delete event.ticketId;
+        delete event.adultProof;
+    });
     return serializeCalendar(parsed.allDays || parsed.days, parsed.future, parsed.startDate, calendar, parsed.startDateToken);
 }
 
@@ -341,7 +346,7 @@ export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
         const hitIndex = all.findIndex((ev, idx) => !used.has(idx) && samePoint(ev, p.ev));
         if (hitIndex >= 0) {
             all[hitIndex].pin = true;
-            all[hitIndex].adult = !!p.ev.adult;
+            all[hitIndex].adult = Boolean(p.ev.adult || all[hitIndex].adult);
             used.add(hitIndex);
             continue;
         }   // AI 保留 → 采纳推进，重标 pin；同名多锁点按“逐个消耗匹配”保留，不再反复命中同一条

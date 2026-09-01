@@ -43,6 +43,7 @@ import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, load
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
 import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
+import { recordChatBoundary, shareRecentDiagnosticTrace, traceDiagnosticEvent } from './runtime/diagnostic-trace.js';
 import { normalizeTagNames } from './utils/tag-names.js';
 import { ADULT_MODES, ADULT_MODE_LABELS, adultModeForCharacter } from './business/lines/adult.js';
 import { axisState } from './business/axis/state.js';
@@ -61,6 +62,7 @@ import {
     ALM_CHAT_SCAN_LIMIT,
     almDayOfYear,
     ALM_WEEKDAYS,
+    weekdayAdjacentDate,
     validRealDate,
     almMonthDayFromDoy,
     almEndMonthDay,
@@ -139,10 +141,10 @@ import { isGregorian as isGregorianCalendar } from './business/calendar/date.js'
 import { buildPrompt } from './business/point/prompt.js';
 import { bindPointRender, renderSchedule, scheduleDayCtx, scheduleDayLabel, TYPE_META } from './business/point/render.js';
 import { togglePointPinRaw, deletePointEventRaw, editPointDescription, editPointFields } from './business/point/mutations.js';
-import { bindPointRepository, getScheduleKey, loadCachedSchedule } from './business/point/repository.js';
+import { bindPointRepository, getScheduleKey, loadCachedSchedule, refreshCachedSchedule } from './business/point/repository.js';
 import { createPointActions } from './business/point/actions.js';
 import { createPointWidgetActions } from './business/point/widget.js';
-import { createPointController } from './business/point/controller.js';
+import { createPointController, pointScheduleNeedsDateSync } from './business/point/controller.js';
 import { createPointInlineRenderer } from './business/point/inline.js';
 import { pointTicketPlan } from './business/point/adult.js';
 // ledger 检索前置选择器（纯逻辑三件套）已抽出到 business/ledger/select.js；到期/距今口径经 bindLedgerSelect 注入。
@@ -178,6 +180,12 @@ import { createOutlineFeature } from './business/outline/feature.js';
 import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { createChatAnchorRepository } from './runtime/chat-date-anchor.js';
+import {
+    initializeWorldInfoSelection,
+    mergeWorldInfoSelection,
+    normalizeWorldInfoSelectionBucket,
+    worldInfoSelectionAllows,
+} from './runtime/world-info-selection.js';
 
 // 坐标与楼内框各自持有唯一 runtime 句柄。
 let coordinateRuntime = null;
@@ -229,6 +237,53 @@ ledger.bindLedgerMetadataPersistence({
 });
 
 const pointTaskOwners = createTaskOwnerManager();
+let chatBoundaryEpoch = 0;
+let pendingDateBootstrap = null;
+let activeChatBoundaryIdentity = null;
+function runtimeIdentityHash(value) {
+    let hash = 2166136261;
+    for (const ch of String(value ?? '')) { hash ^= ch.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+    return (hash >>> 0).toString(16);
+}
+function captureParticipantIdentity(ctx = getContext()) {
+    const character = ctx?.characters?.[ctx?.characterId] || {};
+    const personaDescriptor = ctx?.powerUserSettings?.persona_name ?? ctx?.powerUserSettings?.default_persona ?? ctx?.powerUserSettings?.persona_description ?? '';
+    return Object.freeze({
+        boundaryEpoch: chatBoundaryEpoch,
+        chatId: String(ctx?.chatId ?? ''),
+        characterId: String(ctx?.characterId ?? ''),
+        characterKey: String(character?.avatar || charStableKey(ctx) || ''),
+        personaKey: runtimeIdentityHash(personaDescriptor),
+        userName: String(ctx?.name1 || '用户'),
+        charName: String(ctx?.name2 || '角色'),
+    });
+}
+function sameParticipantIdentity(left, right) {
+    return !!left && !!right && ['boundaryEpoch', 'chatId', 'characterId', 'characterKey', 'personaKey', 'userName', 'charName'].every(key => String(left[key] ?? '') === String(right[key] ?? ''));
+}
+function captureGenerationContext(ctx = getContext()) {
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat.map(message => ({ ...message, extra: message?.extra && typeof message.extra === 'object' ? { ...message.extra } : message?.extra })) : [];
+    return { ...ctx, chat, name1: ctx?.name1 || '用户', name2: ctx?.name2 || '角色' };
+}
+function captureChatBoundary() { return Object.freeze({ epoch: chatBoundaryEpoch, chatId: String(getContext()?.chatId ?? '') }); }
+function isCurrentChatBoundary(boundary) { return !!boundary && boundary.epoch === chatBoundaryEpoch && boundary.chatId === String(getContext()?.chatId ?? ''); }
+function scheduleForChatBoundary(callback, delay) {
+    const boundary = captureChatBoundary();
+    return setTimeout(() => { if (isCurrentChatBoundary(boundary)) callback(boundary); }, delay);
+}
+function latestFloorBoundaryIdentity() {
+    const ctx = getContext(); const messageId = (ctx?.chat?.length ?? 0) - 1;
+    if (messageId < 0) return null;
+    return Object.freeze({ ...captureChatBoundary(), messageId, swipeId: Number(ctx.chat?.[messageId]?.swipe_id ?? 0), contentSignature: _floorSig(messageId) || 'empty' });
+}
+function consumeDateBootstrap(messageId) {
+    const pending = pendingDateBootstrap;
+    if (!pending) return false;
+    const current = buildDateRenderKey(messageId);
+    const matches = isCurrentChatBoundary(pending) && pending.messageId === current.messageId && pending.swipeId === current.swipeId && pending.contentSignature === current.contentSignature;
+    if (matches) pendingDateBootstrap = null;
+    return matches;
+}
 let theaterFeature;
 let memoryPauseNoticeShown = false;
 function createTheaterHostFeature() {
@@ -303,6 +358,17 @@ bindApiClient({
     setFabBusy,
     setLastDebugPayload: (v) => { lastDebugPayload = v; },
     buildMessages,
+    getDiagnosticContext: () => {
+        const ctx = getContext?.() || {};
+        const messageId = Array.isArray(ctx.chat) ? ctx.chat.length - 1 : null;
+        return {
+            chatId: ctx.chatId ?? null,
+            chatRevision: pointTaskOwners.currentChatRevision(),
+            boundaryEpoch: chatBoundaryEpoch,
+            floor: messageId,
+            messageId,
+        };
+    },
 });
 
 // 点渲染回调注入：render.js 的点日期上下文、标签与辅助渲染函数需访问本文件的
@@ -332,6 +398,9 @@ const pointActions = createPointActions({
     syncLatestScheduleBlock,
     showToast,
     confirm: spConfirm,
+    chatId: () => getContext().chatId,
+    captureParticipantIdentity,
+    sameParticipantIdentity,
 });
 const applyPointWidget = createPointWidgetActions({
     firstPointEventBlock,
@@ -367,8 +436,11 @@ const pointController = createPointController({
     showPanel,
     setBody,
     loading: loadingHtml,
-    abortAuto: () => { _autoRegenSchedAbort?.abort(); },
+    abortAuto: () => { _autoRegenSchedAbort?.abort('superseded-owner'); },
     context: getContext,
+    captureContext: captureGenerationContext,
+    captureParticipantIdentity,
+    sameParticipantIdentity,
     key: (...args) => getCacheKey(...args),
     read: readStore,
     write: writeStore,
@@ -386,7 +458,7 @@ const pointController = createPointController({
     notify: () => getSettings().notifyMode,
     canCommit: (owner, travel) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), signal: travel?.signal, pluginEnabled: pluginEnabled() }).canCommit,
     editing: () => manualEditing.point,
-    adultMode: () => getAdultMode(charStableKey(getContext())),
+    adultMode: identity => getAdultMode(identity?.characterKey || charStableKey(getContext())),
     bindAdult: bindPointAdultTickets,
     logDiagnostic: diagnostic => console.warn('[SP point failure]', diagnostic),
     canCallback: owner => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: pointTaskOwners.currentChatRevision(), pluginEnabled: pluginEnabled(), phase: 'callback' }).canCallback,
@@ -400,7 +472,7 @@ const pointController = createPointController({
     cached: () => pointState.cachedSchedule,
     monthName: month => calMonthName(loadCalDesc(), month),
     followupState: (owner, travel, allow, pending) => evaluateTaskLifecycle({ manager: pointTaskOwners, owner, chatId: getContext().chatId, chatRevision: owner.chatRevision, signal: travel?.signal, pluginEnabled: pluginEnabled(), allowPendingFollowup: allow, pending }),
-    shouldFollowup: (life, travel, allow, owner) => shouldRunPendingPointFollowup({ pending: life.canFollowup, allowPendingFollowup: allow, signalAborted: travel?.signal?.aborted, chatSame: getContext().chatId === owner.chatId && pointTaskOwners.currentChatRevision() === owner.chatRevision, pointGenerating: pointState.isGenerating, needsSync: schedulePointNeedsSync() }) && life.canFollowup,
+    shouldFollowup: (life, travel, allow, owner) => shouldRunPendingPointFollowup({ pending: life.canFollowup, allowPendingFollowup: allow, signalAborted: travel?.signal?.aborted, chatSame: getContext().chatId === owner.chatId && pointTaskOwners.currentChatRevision() === owner.chatRevision, pointGenerating: pointState.isGenerating, needsSync: schedulePointNeedsSync(travel?.targetScope || { view: owner.view, charName: owner.charName }, travel?.targetDate) }) && life.canFollowup,
 });
 const pointInlineRenderer = createPointInlineRenderer({
     settings: getSettings,
@@ -441,6 +513,7 @@ const ledgerCaptureController = createLedgerCaptureController({
     target: getLedgerTarget,
     charKey: charStableKey,
     config: loadCfg,
+    provenanceConfig: loadUtilityCfg,
     calendar: loadCalDesc,
     validDate: almValidMonthDay,
     today: almTodayAnchor,
@@ -647,6 +720,7 @@ const axisActions = createAxisActions({
     load: loadAlmanac, save: saveAlmanacItems, confirm: spConfirm, toast: showToast,
     render: deferredRenderAlmanacPanel, sync: syncLatestAlmanacBlock, clear: () => $inAll('#sp-almanac-wrap .sp-alm-cell-linked').removeClass('sp-alm-cell-linked'),
     calendar: loadCalDesc, month: almCalMonth, clamp: almClampInt, yearLength: calYearLen, dayOfYear: almDayOfYear, monthDayFromDoy: almMonthDayFromDoy,
+    chatId: () => getContext().chatId, captureParticipantIdentity, sameParticipantIdentity,
 });
 const axisCalendarActions = createAxisCalendarActions({
     selectedDay: () => axisState._almanacCalDay,
@@ -665,7 +739,7 @@ const axisPromptBuilder = createAxisPromptBuilder({ loadCalDesc, calMonthCount, 
 const buildAlmanacPrompt = axisPromptBuilder.buildAlmanacPrompt;
 const buildAnniversarySupplementPrompt = axisPromptBuilder.buildAnniversarySupplementPrompt;
 const axisGenerationController = createAxisGenerationController({
-    context: getContext, config: loadCfg, callApi: callCustomApi,
+    context: () => captureGenerationContext(), config: loadCfg, callApi: callCustomApi,
     prompt: (user, char) => buildAlmanacPrompt(user, char),
     supplementPrompt: (user, char, existing) => buildAnniversarySupplementPrompt(user, char, existing),
     validate: validateAlmanacResponse, parse: parseAlmanacWidget, merge: mergeAlmanac,
@@ -676,6 +750,8 @@ const axisGenerationController = createAxisGenerationController({
     missingApi: () => { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); },
     missingChat: () => showToast('请先打开一个聊天', null, true),
     confirm: () => spConfirm({ title: '重新生成节日', body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。', confirmText: '生成', cancelText: '取消' }),
+    captureParticipantIdentity,
+    sameParticipantIdentity,
 });
 const axisTransactionController = createAxisTransactionController({
     chatId: () => getContext().chatId, items: loadAlmanac, conflicts: calendarConflicts, charKey: () => charStableKey(getContext()), anchor: key => getSettings().dateAnchor?.[key],
@@ -683,6 +759,7 @@ const axisTransactionController = createAxisTransactionController({
     syncAlmanac: syncLatestAlmanacBlock, syncSchedule: syncLatestScheduleBlock, pluginEnabled, readCal: () => readStore(getCalDescKey()), readItems: () => readStore(getAlmanacKey())?.items,
     bindings: calendarTemplateBindings, bindingKey: calendarBindingKey, cards: currentCharacterCards, templates: loadCalendarTemplates, clone: cloneCalDesc, saveCal: saveCalDesc, saveSettings: saveSettingsDebounced,
     render: () => { if (axisState.almanacMode) renderAlmanacPanel(); }, notifyMode: () => getSettings().notifyMode, toast: showToast,
+    captureParticipantIdentity, sameParticipantIdentity,
 });
 const renderCalendarManager = axisCalendarManager.renderCalendarManager;
 const refreshCalendarManager = axisCalendarManager.refreshCalendarManager;
@@ -721,8 +798,8 @@ const dateCoordinator = createDateCoordinator();
 const AUTOMATION_MODULES = Object.freeze({ LINES: 'lines', OUTLINE: 'outline', POINT: 'point', LEDGER_CAPTURE: 'ledger-capture', LEDGER_JUDGE: 'ledger-judge' });
 function bridgeAbortSignal(externalSignal, internalController) {
     if (!externalSignal) return () => {};
-    const abort = () => internalController.abort();
-    if (externalSignal.aborted) internalController.abort();
+    const abort = () => internalController.abort(externalSignal.reason ?? 'external-abort');
+    if (externalSignal.aborted) internalController.abort(externalSignal.reason ?? 'external-abort');
     else externalSignal.addEventListener('abort', abort, { once: true });
     return () => externalSignal.removeEventListener('abort', abort);
 }
@@ -736,6 +813,7 @@ bindStoryClock({
     extractDay: extractDayFromTime,
     cnToNumber: _cnToNumber,
     monthAlias: _CN_MONTH_ALIAS,
+    explicitWeekdayDate: (text, cal) => weekdayAdjacentDate(text, cal == null || cal === DEFAULT_CAL || cal.kind === 'gregorian' || cal.id === 'default-gregorian'),
     context: getContext,
     dayOfYear: almDayOfYear,
 });
@@ -750,7 +828,7 @@ const refreshStoryClockInjection = () => storyClockController.refresh();
 const latestStoryClock = () => latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT);
 const storyClockDate = () => storyClockDatePure(getContext(), parseJudgedDatePure, ALM_CHAT_SCAN_LIMIT);
 const dateDetectionController = createDateDetectionController({
-    context: getContext,
+    context: () => captureGenerationContext(),
     charKey: ctx => charStableKey(ctx),
     config: loadUtilityCfg,
     storyEnabled: storyClockEnabled,
@@ -770,9 +848,11 @@ const dateDetectionController = createDateDetectionController({
     toast: showToast,
     logDiagnostic: diagnostic => console.warn('[SP axis failure]', diagnostic),
     aftermath: () => runAnchorAftermath(),
+    captureParticipantIdentity,
+    sameParticipantIdentity,
 });
 const applyDetectedDate = (charKey, md, { notify = true } = {}) => dateDetectionController.apply(charKey, md, notify);
-const relandStoryClockAnchor = () => dateDetectionController.reland();
+const relandStoryClockAnchor = options => dateDetectionController.reland(options);
 const runJudgeDateStep = options => dateDetectionController.run(options);
 const timeTravel = createTimeTravelController({
     getChatId: () => getContext().chatId,
@@ -853,7 +933,7 @@ const timeTravel = createTimeTravelController({
         // 线不再被时旅步骤直生；若时旅确实落地正常新 AI 楼，由 MESSAGE_RECEIVED→CMR 统一入口处理。
         { key: AUTOMATION_MODULES.LINES, canRun: () => false, run: async () => ({ status: 'skipped' }) },
         { key: AUTOMATION_MODULES.OUTLINE, canRun: () => outlineFeature.canRelocate(), run: ({ promptAddon, signal }) => outlineFeature.relocate(promptAddon, signal) },
-        { key: AUTOMATION_MODULES.POINT, canRun: () => !!readStore(getCacheKey(currentView, charViewName))?.raw, run: ({ destinationDate, promptAddon, signal }) => syncPointToToday(false, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal, allowPendingFollowup: false }) },
+        { key: AUTOMATION_MODULES.POINT, canRun: () => !!readStore(getCacheKey('user', ''))?.raw, run: ({ destinationDate, promptAddon, signal }) => syncPointToToday(false, { targetDate: destinationDate, targetScope: { view: 'user', charName: '' }, promptAddon, feedback: 'time-travel', signal, allowPendingFollowup: false }) },
         { key: AUTOMATION_MODULES.LEDGER_CAPTURE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
         { key: AUTOMATION_MODULES.LEDGER_JUDGE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerJudgeStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
     ],
@@ -1029,7 +1109,7 @@ async function startTimeTravel(targetDate) {
                     const live = collectTimeTravelContext(run.sourceDate, run.targetDate);
                     const prompt = buildTravelDirectionPrompt({ ...live, preference, excluded });
                     const ctx = getContext();
-                    const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE });
+                    const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE, promptMode: 'creative', diagnosticModule: 'time-travel-direction' });
                     if (signal?.aborted || !isTimeTravelSelectionCurrent(run)) throw Object.assign(new Error('时旅选择已结束'), { name: 'AbortError' });
                     const directions = parseTravelDirections(raw, excluded);
                     if (!directions.length) throw new Error('AI 没有返回可用方向，请刷新重试');
@@ -1053,17 +1133,19 @@ async function startTimeTravel(targetDate) {
 
 function clearTimeTravelSession(active = timeTravel.getState(), { removeWaitingBlock = false, reason = 'cleared' } = {}) {
     if (!active) return false;
+    const abortReason = reason === 'plugin-disabled' ? 'plugin-disabled' : reason === 'chat-boundary' ? 'chat-boundary' : 'time-travel-cancel';
+    traceDiagnosticEvent('abort-boundary', { module: 'time-travel', chatId: active.chatId, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason, status: 'dispatch' });
     timeTravel.clear(reason);
     // clear() 不触发 onSequenceEnd（controller 只在 handleRendered 收尾时发），闸/协调器须随取消显式释放，
     // 否则 token 滞留 → 后续正常自动化被误抑制（同 chatId+messageId 复活场景）或协调器内存滞留。
     clearAutomationClaims();
     dateCoordinator.clear();
-    dateDetectionController.abort();
-    linesFeature.abortGeneration();
-    outlineFeature.judge.abort();
-    _autoRegenSchedAbort?.abort();
-    ledgerCaptureController.abort();
-    ledgerJudgeController.abort();
+    dateDetectionController.abort(abortReason);
+    linesFeature.abortGeneration({ reason: abortReason });
+    outlineFeature.judge.abort(abortReason);
+    _autoRegenSchedAbort?.abort(abortReason);
+    ledgerCaptureController.abort(abortReason);
+    ledgerJudgeController.abort(abortReason);
     if (removeWaitingBlock && active.phase === 'waiting') {
         const input = $('#send_textarea');
         if (input.length) input.val(removeTimeTravelBlocks(String(input.val() || ''))).trigger('input');
@@ -1213,6 +1295,63 @@ const MODULE_INTROS = {
 
 let lastDebugPayload = null;
 
+function lastDebugPayloadJson() {
+    if (lastDebugPayload === null || lastDebugPayload === undefined) return null;
+    try {
+        const json = JSON.stringify(lastDebugPayload, null, 2);
+        return typeof json === 'string' ? json : null;
+    } catch { return null; }
+}
+
+function refreshLastDebugPayloadPreview() {
+    const json = lastDebugPayloadJson();
+    const hasPayload = Boolean(json);
+    const preview = inEl('#sp-diagnostics-ai-input-pre');
+    if (preview) preview.textContent = json || '（尚未发送请求）';
+    $in('#sp-diagnostics-ai-input-preview').toggleClass('sp-diagnostics-preview-empty', !hasPayload);
+    $in('#sp-diagnostics-ai-input-actions').prop('hidden', !hasPayload);
+    $in('#sp-diagnostics-ai-input-copy').prop('disabled', !hasPayload);
+    return json;
+}
+
+async function copyLastDebugPayload({
+    copyText = copyPlainText,
+    promptTextarea = options => customDialog.promptTextarea(options),
+    notify = (message, isError) => showToast(message, null, isError),
+} = {}) {
+    const text = lastDebugPayloadJson();
+    if (!text) {
+        refreshLastDebugPayloadPreview();
+        try { notify?.('尚未发送请求', false); } catch {}
+        return Object.freeze({ status: 'empty' });
+    }
+    let copied = false;
+    try { copied = await copyText?.(text) === true; } catch {}
+    if (copied) {
+        try { notify?.('AI 输入已复制', false); } catch {}
+        return Object.freeze({ status: 'copied' });
+    }
+    if (typeof promptTextarea !== 'function') {
+        try { notify?.('自动复制失败，请在预览区手动选择内容', true); } catch {}
+        return Object.freeze({ status: 'failed' });
+    }
+    try {
+        await promptTextarea({
+            title: '复制 AI 输入',
+            body: '自动复制失败，请长按文本复制。这里可能包含最近聊天、上下文、世界书和提示词等敏感内容，请勿公开分享。',
+            initialValue: text,
+            maxLength: Math.max(1, text.length),
+            rows: 12,
+            confirmText: '关闭',
+            cancelText: '取消',
+        });
+        return Object.freeze({ status: 'manual-copy' });
+    } catch {
+        try { notify?.('自动复制失败，请在预览区手动选择内容', true); } catch {}
+        return Object.freeze({ status: 'failed' });
+    }
+}
+
 
 // 存储描述符 {kind, view, charName}：getCacheKey 是 schedule key alias，其余 key 已归入对应模块。
 // 无 chat 时返回 null（保留旧 getter「无 chat → null」语义，各处 if(!key) 守卫照旧生效）。
@@ -1288,6 +1427,10 @@ const linesFeature = createLinesFeature({
     get stageColors() { return STAGE_COLORS; },
     escapeHtml, escapeAttr, cleanText, makeInjectBtn,
     cacheKey: () => getLinesCacheKey(), chatId: () => getContext().chatId,
+    boundaryEpoch: () => chatBoundaryEpoch,
+    participantIdentity: captureParticipantIdentity,
+    sameParticipantIdentity,
+    contextSnapshot: captureGenerationContext,
     isEditing: () => manualEditing.lines,
     readSaved: () => readStore(getLinesCacheKey()) || {},
     writeStore, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
@@ -1338,11 +1481,14 @@ const linesFeature = createLinesFeature({
     generationEnv: {
         isEditing: () => manualEditing.lines,
         chatId: () => getContext().chatId, loadConfig: loadCfg,
-        adultMode: () => getAdultMode(charStableKey(getContext())),
+        adultMode: identity => getAdultMode(identity?.characterKey || charStableKey(getContext())),
         readSaved: () => readStore(getLinesCacheKey()) || {},
-        buildPrompt: (previousRaw, travelContext, vectorContext) => appendTravelPromptContext(buildLinesPrompt(getContext().name1 || '用户', getContext().name2 || '角色', 'user', previousRaw, getScale(charStableKey(getContext())), vectorContext, getAdultMode(charStableKey(getContext()))), travelContext),
+        participantIdentity: captureParticipantIdentity,
+        sameParticipantIdentity,
+        contextSnapshot: captureGenerationContext,
+        buildPrompt: (previousRaw, travelContext, vectorContext, identity) => appendTravelPromptContext(buildLinesPrompt(identity?.userName || '用户', identity?.charName || '角色', 'user', previousRaw, getScale(identity?.characterKey || charStableKey(getContext())), vectorContext, getAdultMode(identity?.characterKey || charStableKey(getContext()))), travelContext),
         random: () => Math.random(),
-        callApi: (prompt, signal, options) => callCustomApi(getContext(), prompt, loadCfg(), getContext().name1 || '用户', getContext().name2 || '角色', signal, options?.historyLimit ?? 3, options),
+        callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, options),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
         onStart: () => {},
         commit: () => {},
@@ -1649,77 +1795,87 @@ jQuery(async () => {
     coordinateRuntime.feature.bindDelete($in('#sp-anchor-wrap')?.[0] || null);
     coordinateRuntime.feature.bindGestures($in('#sp-anchor-wrap')?.[0] || null);
     coordinateRuntime.feature.refreshSavedKeys();
+    activeChatBoundaryIdentity = captureChatBoundary();
     setTimeout(() => coordinateRuntime.feature.scanButtons(), 900);
     initChatObserver();
     // 首屏补挂：backfill 内部 refreshLinesInjection()（潜伏注入）+ refreshInlineWindow(true)
     // 统一挂线/历/点三段。历/点无独立首屏副作用，全汇流到同一防抖窗口刷新，一次即可。
-    setTimeout(backfillLinesInlineBlocks, 800);
+    scheduleForChatBoundary(backfillLinesInlineBlocks, 800);
     // Reset view state and reload cache on chat switch
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = () => {
-        // 聊天边界先推进 revision 并作废点的全部异步 owner；迟到结果不得触碰新聊天。
-        pointTaskOwners.nextChatRevision();
+        // 切聊是构画的硬失败边界：先统一推进 epoch/revision，再无条件清掉所有聊天态任务。
+        const previousChatId = activeChatBoundaryIdentity?.chatId ?? null;
+        const previousBoundaryEpoch = chatBoundaryEpoch;
+        const previousChatRevision = pointTaskOwners.currentChatRevision();
+        chatBoundaryEpoch++;
+        activeChatBoundaryIdentity = captureChatBoundary();
+        pendingDateBootstrap = latestFloorBoundaryIdentity();
+        const lastSeen = (getContext().chat?.length ?? 0) - 1;
+        const chatRevision = pointTaskOwners.nextChatRevision();
         linesFeature.nextChatRevision();
-        linesFeature.onChatChanged({ lastSeen: (getContext().chat?.length ?? 0) - 1 });
-        pointTaskOwners.invalidate('point-manual');
-        pointTaskOwners.invalidate('point-auto');
+        recordChatBoundary({ previousChatId, currentChatId: activeChatBoundaryIdentity.chatId, previousBoundaryEpoch, boundaryEpoch: chatBoundaryEpoch, previousChatRevision, chatRevision });
+        traceDiagnosticEvent('abort-boundary', { module: 'runtime', chatId: activeChatBoundaryIdentity.chatId, chatRevision, boundaryEpoch: chatBoundaryEpoch, abortReason: 'chat-boundary', status: 'dispatch' });
+        pointTaskOwners.invalidateAll('chat-boundary');
+        pointController.reset('chat-boundary');
+        linesFeature.onChatChanged({ lastSeen });
+        memory.abortAll('chat-boundary');
+        _timeTravelSelectionSeq++;
+        _activeTimeTravelSelection = null;
+        _activeSpConfirmCancel?.();
+        _activeStoreConflictFinish?.('defer');
+        customDialog.cancelActive();
+        removeDialogOverlays();
+        timeTravel.clear('chat-boundary');
+        clearAutomationClaims();
+        dateCoordinator.clear();
+        dateDetectionController.reset('chat-boundary');
+        outlineFeature.onChatChanged({ lastSeen });
+        spaceFeature.onChatChanged({ enabled: pluginEnabled() });
+        linesFeature.dashed.abort('chat-boundary');
+        theaterFeature.onChatChanged();
+        ledgerCaptureController.reset('chat-boundary');
+        ledgerJudgeController.reset('chat-boundary');
+        axisGenerationController.reset('chat-boundary');
+        _autoRegenSchedAbort?.abort('chat-boundary'); _autoRegenSchedAbort = null;
         pointState.isGenerating = false;
         pointState.scheduleAbortController = null;
         axisState._almSyncingPoint = false;
-        // 老用户升级：把本 chat 散在 localStorage 的点线面间**同步**搬进 chat_metadata，
-        // 必须早于下面任何 load（否则读的是空 metadata）。冲突（云端/本机各一份且不同）时
-        // migrate 不动任何数据，稍后异步弹窗让用户决策。
-        const _mig = store.migrateChatFromLocalStorage(getContext().chatId);
-        timeTravel.clear();
-        clearAutomationClaims();
-        dateCoordinator.clear();
-        // 日期判定不属于 timeTravel controller 的步骤时，也必须在切 chat 时立即中止。
-        dateDetectionController.abort();
-        // 插件总关：迁移照做（幂等·防老用户数据漂移），其余全屏隐藏/后台相关一律不跑。
-        // 即使插件当前关闭，切 chat 也必须先失效两路聊天任务，避免旧任务继续占用忙碌状态。
-        outlineFeature.onChatChanged({ lastSeen: (getContext().chat?.length ?? 0) - 1 });
-        spaceFeature.onChatChanged({ enabled: pluginEnabled() });
-        linesFeature.dashed.abort();
-        theaterFeature.onChatChanged();
-        coordinateRuntime?.feature?.onChatChanged({ chatId: getContext()?.chatId ?? null, chatMetadataRef: getContext()?.chatMetadata ?? null, enabled: pluginEnabled() });
-        if (!pluginEnabled()) { coordinateRuntime?.feature?.close?.(); return; }
-        currentView  = 'user';
-        charViewName = null;
-        outlineMode  = false;
-        linesMode    = false;
         linesRuntime.reset();
         linesFeature.setSheet('events');
         linesFeature.dashed.resetError();
-        // 线·swipe：切 chat 复位单调闸到当前末楼（历史楼不误判为新楼），清待重算标记 + 所有临时层。
+        if (previousChatId != null) linesFeature.clearAllSwipe(previousChatId);
         linesFeature.clearAllSwipe(getContext().chatId);
-        // 历·自动确认日期：同理切 chat 复位单调闸到末楼、清计数、中断进行中的判定。
-        almanacLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
+        almanacLastJudgedMsgId = lastSeen;
         almanacJudgeCounter = 0;
-        dateDetectionController.abort();
-        // 暗账标注：切 chat 同理复位单调闸到末楼、清计数、中断进行中的标注。
-        ledgerLastCapturedMsgId = (getContext().chat?.length ?? 0) - 1;
+        ledgerLastCapturedMsgId = lastSeen;
         ledgerCaptureCounter = 0;
-        ledgerCaptureController.reset();
-        // 暗账判定：同理复位。
-        ledgerLastJudgedMsgId = (getContext().chat?.length ?? 0) - 1;
+        ledgerLastJudgedMsgId = lastSeen;
         ledgerJudgeCounter = 0;
-        ledgerJudgeController.reset();
-        _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;   // 中断进行中的点后台跟随/时旅点重排任务
+        currentView = 'user';
+        charViewName = null;
+        outlineMode = false;
+        linesMode = false;
         spaceMode = false;
         theaterMode = false;
-        // theater 已在插件关闭早退前统一 reset，避免旧 owner 占住 busy。
-        coordinateRuntime?.feature?.close?.();
+        manualEditing.point = manualEditing.lines = manualEditing.outline = false;
         axisState.almanacMode = false;
-        axisGenerationController.reset();
         axisState._almanacSheet = 'upcoming';
         axisState._almanacCalMonth = null;
         axisState._almanacCalDay = null;
         axisState._almanacEditor = null;
+        axisState._almTodayEditing = false;
         resetLedgerRenderState();
         axisCalendarManager.close();
-        axisState._almTodayEditing = false;
-        axisState._almSyncingPoint = false;
-        _lastMainView = 'schedule';   // 跨 chat：下次打开面板默认回到点（第一页）
+        _lastMainView = 'schedule';
+        coordinateRuntime?.feature?.onChatChanged({ chatId: getContext()?.chatId ?? null, chatMetadataRef: getContext()?.chatMetadata ?? null, enabled: pluginEnabled() });
+        // 老用户升级：把本 chat 散在 localStorage 的点线面间**同步**搬进 chat_metadata，
+        // 必须早于下面任何 load（否则读的是空 metadata）。冲突（云端/本机各一份且不同）时
+        // migrate 不动任何数据，稍后异步弹窗让用户决策。
+        const _mig = store.migrateChatFromLocalStorage(getContext().chatId);
+        // 插件总关只能截断新聊天初始化，不能截断上面的硬清场。
+        if (!pluginEnabled()) { coordinateRuntime?.feature?.close?.(); return; }
+        coordinateRuntime?.feature?.close?.();
         $inAll('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
         $in('.sp-side-tab.sp-view-btn[data-view="schedule"]').addClass('sp-view-active');
         $inAll('.sp-sub-btn').removeClass('sp-view-active');
@@ -1745,15 +1901,17 @@ jQuery(async () => {
             else setBody(`<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
         }
         // Back-fill inline blocks for newly loaded chat（backfill 内部已含线注入 + 统一窗口刷新）
-        setTimeout(backfillLinesInlineBlocks, 300);
+        scheduleForChatBoundary(backfillLinesInlineBlocks, 300);
         // 锚：换 chat → 重载已收藏键（按钮态跟着新 chat 走）+ 补齐每楼收藏入口
         coordinateRuntime?.feature?.refreshSavedKeys();
-        setTimeout(() => coordinateRuntime?.feature?.scanButtons(), 300);
+        scheduleForChatBoundary(() => coordinateRuntime?.feature?.scanButtons(), 300);
         // Surface memory schema-migration notice, if any (once per upgraded chat)
-        setTimeout(checkMemoryMigrationNotice, 500);
+        scheduleForChatBoundary(checkMemoryMigrationNotice, 500);
         // 跨设备冲突：本机和云端各有一份不同的点线面间 → 弹窗二选一（延后到面板/主题就绪）
-        if (_mig.status === 'conflict') setTimeout(() => showStoreConflictDialog(_mig), 700);
+        if (_mig.status === 'conflict') scheduleForChatBoundary(() => showStoreConflictDialog(_mig), 700);
+        const calendarBoundary = captureChatBoundary();
         maybeApplyBoundCalendarTemplate().catch(error => {
+            if (!isCurrentChatBoundary(calendarBoundary)) return;
             console.error('[SP calendar] 角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
@@ -1771,7 +1929,7 @@ jQuery(async () => {
     // 否则老用户要手动切一次 chat 才触发迁移。同步搬数据，冲突延后弹窗。
     try {
         const _mig0 = store.migrateChatFromLocalStorage(getContext().chatId);
-        if (_mig0.status === 'conflict') setTimeout(() => showStoreConflictDialog(_mig0), 900);
+        if (_mig0.status === 'conflict') scheduleForChatBoundary(() => showStoreConflictDialog(_mig0), 900);
         if (pluginEnabled()) maybeApplyBoundCalendarTemplate().catch(error => {
             console.error('[SP calendar] 首屏角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
@@ -1809,7 +1967,7 @@ jQuery(async () => {
         if (!pluginEnabled()) return;   // 插件总关：不补锚点 / 不挂楼内块 / 不推进 / 不生成
         coordinateRuntime?.feature?.onCharacterRendered({ messageId: Number(messageId), type });
         // 锚收藏入口独立于线：不受 linesEnabled 影响，新楼渲染后补按钮
-        setTimeout(() => coordinateRuntime?.feature?.scanButtons(), 150);
+        scheduleForChatBoundary(() => coordinateRuntime?.feature?.scanButtons(), 150);
         // 轴日历块：独立于线主开关，刷新当前渲染窗口（最新 AI 楼读活态，历史楼读快照；只读，无生成）
         syncLatestAlmanacBlock();
         syncLatestScheduleBlock();   // 点·日程条：同上，随新楼补挂（只读）
@@ -1904,9 +2062,15 @@ jQuery(async () => {
         // 重roll/swipe 复用同 messageId，若被闸挡掉，戳从 919 翻 920 时显示跟了、锚点没跟（论坛 bug）。
         // 结果登记进日期协调器：同 renderKey 的并发渲染共享一次解析，杜绝重复 API。
         const renderKey = buildDateRenderKey(messageId);
-        const clockResult = relandStoryClockAnchor();
+        const bootstrap = consumeDateBootstrap(messageId);
+        const clockResult = relandStoryClockAnchor({ suppressAftermath: bootstrap });
         if (clockResult.status !== 'no-date') {
             dateCoordinator.recordResult(renderKey, { ...clockResult, source: 'story-clock' });
+            return;
+        }
+        // 切聊时已存在的精确 greeting/末楼只负责初始化日期显示；首次 CMR 绝不派发任何生成 API。
+        if (bootstrap) {
+            dateCoordinator.recordResult(renderKey, { ...clockResult, source: 'chat-bootstrap' });
             return;
         }
         // 到这＝戳关，或戳开但本楼读不到戳（漏打 / 「谷雨」无月日）→ API judge 兜底才需单调闸防重放/重算。
@@ -2044,28 +2208,30 @@ jQuery(async () => {
 // 一键中断所有在飞的后台判定与生成（各域 controller 及日期检测/点后台任务），并清 re-entry 闸，
 // 让重新开启后能干净重跑。照 CHAT_CHANGED 的中断序列集中一处。
 function _abortAllBackground() {
-    memory.abortAll();
+    const ctx = getContext?.() || {};
+    traceDiagnosticEvent('abort-boundary', { module: 'runtime', chatId: ctx.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'plugin-disabled', status: 'dispatch' });
+    memory.abortAll('plugin-disabled');
     const activeTravel = timeTravel.getState();
     if (activeTravel) clearTimeTravelSession(activeTravel, { removeWaitingBlock: activeTravel.phase === 'waiting', reason: 'plugin-disabled' });
     _timeTravelSelectionSeq++;
     _activeTimeTravelSelection = null;
     customDialog.cancelActive();
-    linesFeature.abortGeneration();
+    linesFeature.abortGeneration({ reason: 'plugin-disabled' });
     for (const c of [
         linesFeature.runtime.controller,
         pointState.scheduleAbortController,
         dateDetectionController.abortController, _autoRegenSchedAbort,
         ledgerCaptureController.abortController, ledgerJudgeController.abortController,
-    ]) { try { c?.abort(); } catch {} }
-    outlineFeature.abortAll();
-    spaceFeature.abortAll();
-    linesFeature.dashed.abort();
+    ]) { try { c?.abort('plugin-disabled'); } catch {} }
+    outlineFeature.abortAll('plugin-disabled');
+    spaceFeature.abortAll('plugin-disabled');
+    linesFeature.dashed.abort('plugin-disabled');
     pointState.scheduleAbortController = null;
     theaterFeature.onPluginDisabled();
-    axisGenerationController.reset();
+    axisGenerationController.reset('plugin-disabled');
     _autoRegenSchedAbort = null;
-    ledgerJudgeController.reset();
-    ledgerCaptureController.reset();
+    ledgerJudgeController.reset('plugin-disabled');
+    ledgerCaptureController.reset('plugin-disabled');
     if (outlineMode) outlineFeature.chat.load();
 }
 
@@ -2304,6 +2470,14 @@ function getLedgerJudgeInterval() {
 function runAnchorAftermath() {
     syncLatestAlmanacBlock();
     syncLatestScheduleBlock();
+    // 星期锚属于纯显示上下文：锚到位/变化时用现有 raw 重画当前点面板，不写 store、不请求 API。
+    if (!pointState.isGenerating) {
+        refreshCachedSchedule(currentView, charViewName, {
+            setCached: html => { pointState.cachedSchedule = html; },
+            setBody,
+            visible: !outlineMode && !linesMode && !spaceMode && !theaterMode && !axisState.almanacMode && $(`#${MODAL_ID}`).is(':visible'),
+        });
+    }
     const _linesFloorId = (getContext().chat?.length ?? 0) - 1;
     const _linesDay = almTodayAnchor();
     void linesFeature.onDateAftermath({ messageId: _linesFloorId, chatId: getContext().chatId, day: _linesDay ? `${+_linesDay.month}-${+_linesDay.day}` : null });
@@ -2314,21 +2488,20 @@ function runAnchorAftermath() {
     if (getSettings().scheduleAutoDetect === true) {
         const floorId = (getContext().chat?.length ?? 1) - 1;
         const pointSuppressed = Number.isInteger(floorId) && floorId >= 0 && isAutomationSuppressed(floorId, AUTOMATION_MODULES.POINT);
-        if (!pointSuppressed) syncPointToToday(true);
+        if (!pointSuppressed && schedulePointNeedsSync({ view: 'user', charName: '' })) {
+            syncPointToToday(true, { targetScope: { view: 'user', charName: '' } });
+        }
     }
 }
 
 // schedulePointNeedsSync() —— 判断后台跟随/时旅流程是否仍有 pending follow-up 需要补同步。
-function schedulePointNeedsSync() {
-    const cacheKey = getCacheKey(currentView, charViewName);
+function schedulePointNeedsSync(target = { view: 'user', charName: '' }, targetDate = null) {
+    const view = target?.view === 'char' ? 'char' : 'user';
+    const charName = view === 'char' ? String(target?.charName || '').trim() : '';
+    const cacheKey = getCacheKey(view, charName);
     if (!cacheKey) return false;
     const raw = readStore(cacheKey)?.raw || '';
-    if (!raw) return false;                                        // 没生成过点 → 不凭空催
-    // 文本直接比 StartDate 月/日 vs 今天，不经 new Date（避开 UTC 时区漂移）。
-    const sdMatch = raw.match(/StartDate:\s*\d{4}-(\d{2})-(\d{2})/);
-    if (!sdMatch) return false;                                    // 无绝对起始日 → 无从对齐今天
-    const today = almTodayAnchor();
-    return !(parseInt(sdMatch[1], 10) === today.month && parseInt(sdMatch[2], 10) === today.day);
+    return pointScheduleNeedsDateSync(raw, targetDate || almTodayAnchor());
 }
 
 // syncPointToToday() —— 自动跟随、时旅及 pending follow-up 共用的控制器 facade；将当前视角点重排到共享「今天」。
@@ -2712,7 +2885,7 @@ function injectModal() {
                             <details class="sp-settings-section" id="sp-wi-section">
                                 <summary class="sp-settings-section-title">世界书</summary>
                                 <div class="sp-settings-section-body" id="sp-wi-body">
-                                    <p class="sp-cfg-hint">勾选表示允许构画使用；选择按当前聊天保存；实际注入遵循酒馆 🔵常驻／🟢关键词激活（及宿主支持的其他激活规则）；取消勾选/整本排除仍优先跳过。</p>
+                                    <p class="sp-cfg-hint">这里完整显示当前聊天关联来源里的所有条目。条目首次出现时会镜像酒馆开关，之后勾选状态按当前聊天独立保存；实际注入仍须通过酒馆 🔵常驻／🟢关键词等激活规则。构画取消勾选或整本排除只会进一步收窄，不会替酒馆激活条目。</p>
                                     <div id="sp-wi-list" class="sp-wi-list">
                                         <span class="sp-cfg-hint">（打开设置时自动加载）</span>
                                     </div>
@@ -2903,12 +3076,12 @@ function injectModal() {
                             <details class="sp-settings-section" id="sp-prompts-section">
                                 <summary class="sp-settings-section-title">提示词与标签</summary>
                                 <div class="sp-settings-section-body">
-                                    <details class="sp-settings-subsection sp-prompt-global"><summary>全局自定义提示词 / 写作规范</summary>
-                                        <p class="sp-cfg-hint"><strong>已内置一版默认破限词</strong>（不显示、恒定生效）。此处内容<strong>追加在其后</strong>，一同拼到<strong>全部生成链路</strong>系统提示词最前端。适合放全局写作规范：去八股 / 控制文风 / 叙事口吻（可直接贴这类世界书正文）。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
-                                        <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（只用默认破限）。也可在此追加全局写作规范，如：去八股、控制文风、叙事口吻…会叠加在默认破限词之后一起注入。"></textarea>
+                                    <details class="sp-settings-subsection sp-prompt-global"><summary>创作链自定义提示词 / 写作规范</summary>
+                                        <p class="sp-cfg-hint"><strong>已内置一版创作强化提示词</strong>（不显示）。此处内容<strong>只追加到构画的创作链</strong>，例如点 / 线 / 面 / 间 / 棱写作，适合放去八股、文风和叙事口吻等规范。日期判断、刻度、记忆压缩和排版等机械任务不使用它；全部链路仍自带如实处理虚构敏感内容的基础许可。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
+                                        <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（创作链只用内置强化词）。也可追加创作规范，如：去八股、控制文风、叙事口吻…"></textarea>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔，只写标签名（如 <code>content</code>）、不带尖括号。</p>
+                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔，可直接写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效）；支持中文、日文等 Unicode 标签名。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
                                         <p class="sp-cfg-hint">标签本身去掉、<strong>内部文字保留</strong>（如正文被 <code>content</code> 包裹）。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
@@ -3058,6 +3231,28 @@ function injectModal() {
                                             <div class="sp-mem-actions"><button id="sp-storage-refresh" class="sp-mem-btn">刷新用量</button></div>
                                         </div>
                                     </details>
+                                    <details class="sp-settings-section" id="sp-diagnostics-section">
+                                        <summary class="sp-settings-section-title">诊断管理</summary>
+                                        <div class="sp-settings-section-body">
+                                            <div class="sp-diagnostics-block">
+                                                <label class="sp-cfg-group">AI 输入</label>
+                                                <p class="sp-cfg-hint"><strong>仅供本人排查。</strong>这里是最近一次实际发给 AI 的完整输入，可能包含最近聊天、上下文、世界书和提示词等敏感内容，不建议公开分享。</p>
+                                                <details class="sp-diagnostics-preview sp-diagnostics-preview-empty" id="sp-diagnostics-ai-input-preview">
+                                                    <summary class="sp-diagnostics-preview-title">查看最近 AI 输入</summary>
+                                                    <pre class="sp-diagnostics-pre" id="sp-diagnostics-ai-input-pre" aria-live="polite">（尚未发送请求）</pre>
+                                                    <div class="sp-diagnostics-actions" id="sp-diagnostics-ai-input-actions" hidden>
+                                                        <button class="sp-diagnostics-copy-btn" id="sp-diagnostics-ai-input-copy" type="button" disabled><i class="fa-regular fa-copy"></i> 复制 AI 输入</button>
+                                                    </div>
+                                                </details>
+                                            </div>
+                                            <hr class="sp-mem-divider">
+                                            <div class="sp-diagnostics-block">
+                                                <label class="sp-cfg-group">请求诊断</label>
+                                                <p class="sp-cfg-hint"><strong>适合发给开发者。</strong>复制最近 30 条安全诊断日志；不含正文、提示词、API Key 或 URL。</p>
+                                                <button id="sp-diagnostic-export" class="sp-save-btn" type="button"><i class="fa-regular fa-copy"></i> 复制最近诊断日志</button>
+                                            </div>
+                                        </div>
+                                    </details>
                                 </div>
                             </details>
 
@@ -3122,13 +3317,6 @@ function injectModal() {
                         <div class="sp-almanac-wrap" id="sp-almanac-wrap" style="display:none;flex-direction:column;flex:1;min-height:0"></div>
                     </div><!-- /sp-main -->
 
-                    <details class="sp-debug-drawer" id="sp-debug-drawer">
-                        <summary class="sp-debug-summary">🐛 AI 输入</summary>
-                        <pre class="sp-debug-pre" id="sp-debug-pre">（尚未发送请求）</pre>
-                        <div class="sp-debug-actions">
-                            <button class="sp-debug-copy-btn">复制</button>
-                        </div>
-                    </details>
                 </div><!-- /sp-content-col -->
 
                 <div class="sp-resize-handle" id="sp-resize-handle">
@@ -3202,17 +3390,13 @@ function injectModal() {
         if (path.some(el => el instanceof Element && el.matches('#sp-module-intro-pop, .sp-module-intro-btn'))) return;
         $in('#sp-module-intro-pop').hide();
     });
-    inEl('#sp-debug-drawer')?.addEventListener('toggle', function () {
-        if (this.open) {
-            inEl('#sp-debug-pre').textContent =
-                lastDebugPayload ? JSON.stringify(lastDebugPayload, null, 2) : '（尚未发送请求）';
-        }
-    });
-    $in('.sp-debug-copy-btn').on('click', function () {
-        if (!lastDebugPayload) return;
-        navigator.clipboard.writeText(JSON.stringify(lastDebugPayload, null, 2))
-            .then(() => { $(this).text('已复制 ✓'); setTimeout(() => $(this).text('复制'), 2000); })
-            .catch(() => {});
+    for (const id of ['#sp-diagnostics-section', '#sp-diagnostics-ai-input-preview']) {
+        inEl(id)?.addEventListener('toggle', function () {
+            if (this.open) refreshLastDebugPayloadPreview();
+        });
+    }
+    $in('#sp-diagnostics-ai-input-copy').on('click', function () {
+        void copyLastDebugPayload();
     });
 
     outlineFeature.bindUi();
@@ -3794,6 +3978,13 @@ function injectModal() {
     });
     $in('#sp-key-toggle').on('click',    toggleKeyVisibility);
     $in('#sp-fetch-models').on('click',  fetchModels);
+    $in('#sp-diagnostic-export').on('click', function () {
+        void shareRecentDiagnosticTrace({
+            copyText: copyPlainText,
+            promptTextarea: options => customDialog.promptTextarea(options),
+            notify: (message, isError) => showToast(message, null, isError),
+        });
+    });
     bindApiPresetEvents();
     renderApiPresetList();
     renderUtilityPresetList();
@@ -3856,7 +4047,7 @@ function injectModal() {
         saveSettingsDebounced();
         if (linesMode) linesFeature.refreshPanel();
         if (!outlineMode && !linesMode && !spaceMode) {
-            const saved = readStore(getCacheKey());
+            const saved = readStore(getCacheKey(currentView, charViewName));
             pointState.cachedSchedule = saved?.raw ? renderSchedule(saved.raw, saved.userName || '用户', currentView, loadCalDesc()) : null;
             if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
         }
@@ -4293,7 +4484,7 @@ function onCharPinToggle(name) {
     // 固定态活在 store（独立于点 raw），故不重写 raw；但要用当前 raw 重跑 renderSchedule（内部读
     // isPinnedChar 定钉子高亮）刷新 pointState.cachedSchedule——否则重开面板/切视图回放旧字符串，钉态丢失
     // （对齐兄弟 triggerTogglePointPin：改完必更 pointState.cachedSchedule，别只改就地 DOM）。
-    const saved = readStore(getCacheKey());
+    const saved = readStore(getCacheKey(currentView, charViewName));
     if (saved?.raw) {
         pointState.cachedSchedule = renderSchedule(saved.raw, saved.userName || '用户', currentView, loadCalDesc());
         setBody(pointState.cachedSchedule);
@@ -4628,16 +4819,16 @@ async function triggerGenerate() {
 // 前置阶段（世界书组装等）不可打断，若只 abort 不即时复位界面，用户点"中止"会觉得没反应。
 // 被中止的旧管线随后走各自 run* 的身份守卫（controller !== myCtrl）静默丢弃，不覆盖界面。
 function abortScheduleGen() {
-    pointController.abort();
+    pointController.abort('manual-abort');
 }
 function abortLinesGen() {
     if (!linesRuntime.busy) return;
-    linesFeature.abortGeneration();
+    linesFeature.abortGeneration({ reason: 'manual-abort' });
     if (linesMode && linesFeature.sheet === 'events') linesFeature.refreshPanel();
 }
 function abortAlmanacGen() {
     if (!axisState.isGeneratingAlmanac) return;
-    axisGenerationController.reset();
+    axisGenerationController.reset('manual-abort');
     if (axisState.almanacMode) renderAlmanacPanel();
 }
 
@@ -4647,17 +4838,18 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
         if (!settingsOpen) toggleSettings();
         throw makeDiagnosticError('config-missing');
     }
-    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 11) }), travelContext);
-    const apiOpts = travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {});
+    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }), travelContext);
+    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'creative', diagnosticModule: 'point' };
     apiOpts.pointView = perspective;
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 3, apiOpts);
 }
 
 
-// ─── World-info entry filter (per character) ──────────────────────────────────
-// Stores disabled entry uids per character in extension_settings.
-// Structure: extension_settings[PLUGIN_ID].wiFilter = { [charKey]: [key, ...] }
-// where key = "worldName::uid" to survive re-imports and name collisions.
+// ─── World-info entry filter (per chat) ───────────────────────────────────────
+// New model: extension_settings[PLUGIN_ID].wiSelectionByChat[chatKey]
+// = { version: 1, decisions: { ["worldName::uid"]: boolean } }.
+// Every key is initialized exactly once from the host switch, then belongs to this chat.
+// Legacy wiFilter / wiFilterByChat remain read-only migration sources.
 //
 // charKey 用**角色卡文件名 avatar**（如 `坏狗.png`）——它跟着卡文件走、稳定不变。
 // 早期误用 ctx.characterId（= this_chid，characters 数组的**下标索引**）：一旦增删/重排
@@ -4668,7 +4860,7 @@ function charStableKey(ctx) {
     return c?.avatar || null;   // 无角色（群聊/未选卡）→ null，各 getter 守卫返回默认
 }
 
-function getWiFilter() {
+function getLegacyWiFilter() {
     const s = getSettings();
     if (!s.wiFilter) s.wiFilter = {};
     return s.wiFilter;
@@ -4682,42 +4874,53 @@ function chatStableKey(ctx) {
     return chatId && avatar ? `legacy:${avatar}:${chatId}` : null;
 }
 
-function getWiFilterByChat() {
+function getLegacyWiFilterByChat() {
     const s = getSettings();
     if (!s.wiFilterByChat || typeof s.wiFilterByChat !== 'object' || Array.isArray(s.wiFilterByChat)) s.wiFilterByChat = {};
     return s.wiFilterByChat;
 }
 
-function getDisabledKeys(ctx) {
+function getWiSelectionByChat() {
+    const s = getSettings();
+    if (!s.wiSelectionByChat || typeof s.wiSelectionByChat !== 'object' || Array.isArray(s.wiSelectionByChat)) s.wiSelectionByChat = {};
+    return s.wiSelectionByChat;
+}
+
+function getLegacyDisabledKeys(ctx) {
     const chatKey = chatStableKey(ctx);
-    if (!chatKey) {
-        const charKey = charStableKey(ctx);
-        return charKey ? new Set(getWiFilter()[charKey] || []) : new Set();
+    if (chatKey) {
+        const byChat = getLegacyWiFilterByChat();
+        // An explicitly stored empty chat bucket means "all formerly visible entries allowed".
+        if (Object.prototype.hasOwnProperty.call(byChat, chatKey)) {
+            return Array.isArray(byChat[chatKey]) ? byChat[chatKey] : [];
+        }
     }
-    const byChat = getWiFilterByChat();
-    if (!Object.prototype.hasOwnProperty.call(byChat, chatKey)) {
-        const charKey = charStableKey(ctx);
-        byChat[chatKey] = charKey ? [...(getWiFilter()[charKey] || [])] : [];
+    const charKey = charStableKey(ctx);
+    const byCharacter = getLegacyWiFilter();
+    return charKey && Array.isArray(byCharacter[charKey]) ? byCharacter[charKey] : [];
+}
+
+function ensureCurrentWiSelection(ctx, entries) {
+    const chatKey = chatStableKey(ctx);
+    const stored = chatKey ? getWiSelectionByChat()[chatKey] : null;
+    const initialized = initializeWorldInfoSelection({
+        stored,
+        candidates: entries,
+        legacyDisabled: getLegacyDisabledKeys(ctx),
+    });
+    if (chatKey && initialized.changed) {
+        getWiSelectionByChat()[chatKey] = initialized.bucket;
         saveSettingsDebounced();
     }
-    return new Set(Array.isArray(byChat[chatKey]) ? byChat[chatKey] : []);
+    return initialized.bucket;
 }
 
-function setDisabledKeys(ctx, disabledSet) {
+function setCurrentWiSelection(ctx, bucket) {
     const chatKey = chatStableKey(ctx);
-    if (!chatKey) return;
-    getWiFilterByChat()[chatKey] = [...disabledSet];
+    const normalized = normalizeWorldInfoSelectionBucket(bucket);
+    if (!chatKey || !normalized) return;
+    getWiSelectionByChat()[chatKey] = normalized;
     saveSettingsDebounced();
-}
-
-function mergeDisabledWiKeys(existing, visibleStates) {
-    const disabled = new Set(existing || []);
-    for (const state of visibleStates || []) {
-        const key = state?.key;
-        if (!key) continue;
-        if (state.checked) disabled.delete(key); else disabled.add(key);
-    }
-    return disabled;
 }
 
 function saveCurrentWiSelection() {
@@ -4726,7 +4929,9 @@ function saveCurrentWiSelection() {
     if (!chatKey) return;
     const visible = [];
     $inAll('#sp-wi-list .sp-wi-cb').each(function () { visible.push({ key: $(this).data('key'), checked: this.checked }); });
-    setDisabledKeys(ctx, mergeDisabledWiKeys(getDisabledKeys(ctx), visible));
+    const current = ensureCurrentWiSelection(ctx, [..._wiEntryCache.values()]);
+    const merged = mergeWorldInfoSelection(current, visible);
+    if (merged.changed) setCurrentWiSelection(ctx, merged.bucket);
 }
 
 // ─── World-book global exclusion (B方案) ─────────────────────────────────────
@@ -4912,7 +5117,7 @@ function getChatWorldNames(ctx) {
 // Returns live world-info entries for the current character. Uses ctx.loadWorldInfo
 // (the live editable copy), NOT ctx.characters[].data.character_book (stale snapshot).
 // Fallback to character_book if no linked world book exists.
-// Each item: { key, uid, label, preview, content, source, embedded, scope }
+// Each item: { key, uid, label, preview, content, source, embedded, scope, hostEnabled }
 //   scope = 'char'/'chat'/'persona'/'global' → 角色卡、当前聊天、用户 persona 或全局世界书来源
 async function getCharBookEntries(ctx) {
     const items = [];
@@ -4925,7 +5130,6 @@ async function getCharBookEntries(ctx) {
             const data = await ctx.loadWorldInfo(name);
             if (!data?.entries) continue;
             for (const [uid, entry] of Object.entries(data.entries)) {
-                if (entry?.disable) continue;
                 const label = entry.comment
                     || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
                     || `条目 ${uid}`;
@@ -4943,6 +5147,7 @@ async function getCharBookEntries(ctx) {
                     source : name,
                     embedded: false,
                     scope  : 'char',
+                    hostEnabled: entry?.disable !== true,
                 });
             }
         } catch { /* ignore individual load failure */ }
@@ -4955,7 +5160,6 @@ async function getCharBookEntries(ctx) {
         if (charBook?.entries?.length) {
             const bookName = charBook.name || '角色内置世界书';
             for (const e of charBook.entries) {
-                if (e.disabled) continue;
                 const uid = String(e.uid ?? e.id ?? '');
                 const label = e.comment
                     || (Array.isArray(e.key) ? e.key.join(', ') : e.key)
@@ -4974,6 +5178,8 @@ async function getCharBookEntries(ctx) {
                     source : bookName,
                     embedded: true,
                     scope  : 'char',
+                    // V2 card spec uses enabled; tolerate historical disabled-shaped cards too.
+                    hostEnabled: typeof e.enabled === 'boolean' ? e.enabled : e.disabled !== true,
                 });
             }
         }
@@ -4985,12 +5191,11 @@ async function getCharBookEntries(ctx) {
             const data = await ctx.loadWorldInfo(name);
             if (!data?.entries) continue;
             for (const [uid, entry] of Object.entries(data.entries)) {
-                if (entry?.disable) continue;
                 const label = entry.comment || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key) || `条目 ${uid}`;
                 const key = `${name}::${uid}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
-                items.push({ key, uid, label, preview: String(entry.content || '').replace(/\s+/g, ' ').slice(0, 120), content: entry.content || '', source: name, embedded: false, scope: 'chat' });
+                items.push({ key, uid, label, preview: String(entry.content || '').replace(/\s+/g, ' ').slice(0, 120), content: entry.content || '', source: name, embedded: false, scope: 'chat', hostEnabled: entry?.disable !== true });
             }
         } catch {}
     }
@@ -5003,7 +5208,6 @@ async function getCharBookEntries(ctx) {
             const data = await ctx.loadWorldInfo(name);
             if (!data?.entries) continue;
             for (const [uid, entry] of Object.entries(data.entries)) {
-                if (entry?.disable) continue;
                 const label = entry.comment
                     || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
                     || `条目 ${uid}`;
@@ -5021,6 +5225,7 @@ async function getCharBookEntries(ctx) {
                     source : name,
                     embedded: false,
                     scope  : 'global',
+                    hostEnabled: entry?.disable !== true,
                 });
             }
         } catch { /* ignore individual load failure */ }
@@ -5035,7 +5240,6 @@ async function getCharBookEntries(ctx) {
             const data = await ctx.loadWorldInfo(personaBook);
             if (data?.entries) {
                 for (const [uid, entry] of Object.entries(data.entries)) {
-                    if (entry?.disable) continue;
                     const label = entry.comment
                         || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
                         || `条目 ${uid}`;
@@ -5049,6 +5253,7 @@ async function getCharBookEntries(ctx) {
                         source : personaBook,
                         embedded: false,
                         scope  : 'persona',
+                        hostEnabled: entry?.disable !== true,
                     });
                 }
             }
@@ -5066,7 +5271,7 @@ async function getCharBookEntries(ctx) {
 // only outline+wi+memText, so the last few floors of the main chat were
 // invisible to the assistant — feels like it "ignores context".
 // Returns a formatted block or '' when the chat is empty.
-async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 800) {
+async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 2500) {
     const chat = ctx?.chat;
     if (!Array.isArray(chat) || !chat.length) return '';
     const charName = ctx.name2 || '角色';
@@ -5222,8 +5427,8 @@ async function resolveWorldInfoActivation(ctx, coreChat) {
 }
 
 async function buildWorldInfoContext(ctx) {
-    const disabledKeys = getDisabledKeys(ctx);
     const entries = await getCharBookEntries(ctx);
+    const selection = ensureCurrentWiSelection(ctx, entries);
     const coreChat = Array.isArray(ctx?.chat) ? ctx.chat.filter(message => {
         if (!message || message.is_system) return false;
         return String(message.mes ?? message.content ?? '').trim().length > 0;
@@ -5240,7 +5445,7 @@ async function buildWorldInfoContext(ctx) {
         return '';
     }
     const candidates = entries
-        .filter(e => !disabledKeys.has(e.key))
+        .filter(e => worldInfoSelectionAllows(selection, e.key))
         .filter(e => activation.keys.has(worldInfoCandidateKey(e.source, e.uid)))
         .map(e => e.content)
         .filter(Boolean);
@@ -5793,11 +5998,8 @@ function _prevAiFloorLines(mesId) {
     } catch { /* 空 */ }
     return '';
 }
-// swipe 触发的新回复渲染完 → 重算线：先看临时层有没有算过（有则复用），没有就从楼层基线 B0 重推。
-// forceRegen=true（重 roll 专用）：跳过「已算过则复用」的缓存短路，强制从 B0 重算。
-//   原因——重生成按钮🔄 pop 掉旧楼再 push 新楼、新楼没有 swipe_id → 退化成 0，会命中推进时写下的 swipes["0"]
-//   旧缓存、把**重 roll 前**的旧线又贴回去（表现为「按钮重 roll 线不动·必现」）。重 roll = 内容已换新，
-//   必须重算、绝不能复用旧 swipe 缓存；缓存复用只留给「滑回旧 swipe 只看不生成」那条（MESSAGE_SWIPED 分支）。
+// swipe / 重 roll 事件本身不自动请求线 API；滑回旧 swipe 时只复用已有临时层并本地重画。
+// 正常新 AI 楼的线推进仍只走 MESSAGE_RECEIVED → CHARACTER_MESSAGE_RENDERED 的统一入口。
 function loadCachedLinesForCurrentChat(view, charName) {
     const saved = readStore(getLinesCacheKey(view, charName));
     if (saved?.raw) return linesFeature.renderLines(saved.raw);
@@ -5920,8 +6122,9 @@ async function renderStorageUsage() {
 }
 
 function invalidateLedgerTasksForStoreClear() {
-    ledgerCaptureController.reset();
-    ledgerJudgeController.reset();
+    traceDiagnosticEvent('abort-boundary', { module: 'ledger', chatId: getContext?.()?.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'store-clear', status: 'dispatch' });
+    ledgerCaptureController.reset('store-clear');
+    ledgerJudgeController.reset('store-clear');
     resetLedgerRenderState();
 }
 
@@ -5932,7 +6135,8 @@ function refreshLedgerAfterStoreClear() {
 }
 
 function invalidateAlmanacTasksForStoreClear() {
-    axisGenerationController.reset();
+    traceDiagnosticEvent('abort-boundary', { module: 'axis-generation', chatId: getContext?.()?.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'store-clear', status: 'dispatch' });
+    axisGenerationController.reset('store-clear');
     axisState._almanacEditor = null;
     axisCalendarManager.close();
     axisState._almanacCalDay = null;
@@ -5946,20 +6150,21 @@ function refreshAlmanacAfterStoreClear() {
 }
 
 function invalidateKindTasksForStoreClear(kind) {
+    traceDiagnosticEvent('abort-boundary', { module: kind, chatId: getContext?.()?.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'store-clear', status: 'dispatch' });
     if (kind === 'schedule') {
-        pointState.scheduleAbortController?.abort(); pointState.scheduleAbortController = null;
-        _autoRegenSchedAbort?.abort(); _autoRegenSchedAbort = null;
+        pointState.scheduleAbortController?.abort('store-clear'); pointState.scheduleAbortController = null;
+        _autoRegenSchedAbort?.abort('store-clear'); _autoRegenSchedAbort = null;
         pointState.isGenerating = false;
     } else if (kind === 'outline') {
         outlineFeature.invalidateStoreKind(kind);
     } else if (kind === 'lines') {
-        linesFeature.abortGeneration();
+        linesFeature.abortGeneration({ reason: 'store-clear' });
     } else if (kind === 'space-chat') {
         spaceFeature.invalidateStoreKind(kind);
     } else if (kind === 'creative-chat') {
         outlineFeature.invalidateStoreKind(kind);
     } else if (kind === 'dashed') {
-        linesFeature.dashed.abort();
+        linesFeature.dashed.abort('store-clear');
     }
 }
 
@@ -6592,7 +6797,7 @@ function bindMemoryHandlers() {
         s.useBaiBaiBook = this.checked;
         if (this.checked) { s.useAnima = false; s.useDatabase = false; }   // 记忆源互斥
         saveSettingsDebounced();
-        memory.abortAll();
+        memory.abortAll('manual-abort');
         renderMemorySection();
     });
     $in('#sp-mem-source-anima').on('change', function () {
@@ -6600,7 +6805,7 @@ function bindMemoryHandlers() {
         s.useAnima = this.checked;
         if (this.checked) { s.useBaiBaiBook = false; s.useDatabase = false; }   // 记忆源互斥
         saveSettingsDebounced();
-        memory.abortAll();
+        memory.abortAll('manual-abort');
         renderMemorySection();
     });
     $in('#sp-mem-source-database').on('change', function () {
@@ -6608,7 +6813,7 @@ function bindMemoryHandlers() {
         s.useDatabase = this.checked;
         if (this.checked) { s.useBaiBaiBook = false; s.useAnima = false; }
         saveSettingsDebounced();
-        memory.abortAll();
+        memory.abortAll('manual-abort');
         renderMemorySection();
     });
     $in('#sp-mem-database-worldbook').on('change', function () {
@@ -6627,7 +6832,7 @@ function bindMemoryHandlers() {
     $in('#sp-mem-enabled').on('change', function () {
         getSettings().memoryEnabled = this.checked;
         saveSettingsDebounced();
-        if (!this.checked) memory.abortAll();
+        if (!this.checked) memory.abortAll('manual-abort');
     });
     $in('#sp-mem-l0').on('change', function () {
         const v = Math.max(1, Math.min(30, parseInt(this.value, 10) || 5));
@@ -6647,16 +6852,13 @@ function bindMemoryHandlers() {
         this.value = v;
         saveSettingsDebounced();
     });
-    // Tag sanitizer inputs — sanitize (bare tag names, comma-separated), save.
+    // Tag sanitizer inputs — normalize Unicode tag names (optional surrounding <>, comma-separated), save.
     // Applies to future reads; existing L0 summaries built with old rules keep
     // their hash and stay valid — new content read after change uses new rules.
     // input=即打即存（存 sanitize 值但不回写 value，免光标跳）；change=失焦时规范化回写显示。
     // 关键：只用 change 会在「输入框还没失焦就点保存/关面板」时丢掉那次编辑（表现为“动了 API，标签/提示词被重置”）。
     function sanitizeTagList(raw) {
-        const cleaned = String(raw || '')
-            .split(',')
-            .map(s => s.trim().replace(/^<|>$/g, '').replace(/\/$/, ''));
-        return normalizeTagNames(cleaned.join(',')).join(',');
+        return normalizeTagNames(raw).join(',');
     }
     function bindTagField(sel, key) {
         // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内）→ 必须 $in 绑定，否则不落存
@@ -6869,7 +7071,7 @@ async function renderWiList() {
     if (!isCurrent()) return;
     _wiEntryCache = new Map(entries.map(e => [e.key, e]));
 
-    const disabledKeys = getDisabledKeys(ctx);
+    const selection = ensureCurrentWiSelection(ctx, entries);
 
     // Two-level group: scope (char / chat / persona / global) → source (book name) → entries.
     // Preserves entry order within each source: char, chat, persona, then global.
@@ -6902,7 +7104,7 @@ async function renderWiList() {
         for (const [source, group] of groups) {
             // Each book is collapsible; default open. summary shows a
             // per-book "select-all" checkbox (indeterminate when partial).
-            const groupChecked = group.filter(e => !disabledKeys.has(e.key)).length;
+            const groupChecked = group.filter(e => worldInfoSelectionAllows(selection, e.key)).length;
             const groupAllOn   = groupChecked === group.length;
             const groupAllOff  = groupChecked === 0;
             const escSrc       = escapeAttr(source);
@@ -6917,7 +7119,7 @@ async function renderWiList() {
                 </summary>
                 <div class="sp-wi-items">`);
             for (const e of group) {
-                const checked = !disabledKeys.has(e.key);
+                const checked = worldInfoSelectionAllows(selection, e.key);
                 parts.push(`<div class="sp-wi-card${checked ? '' : ' sp-wi-card-off'}" data-key="${escapeAttr(e.key)}" data-source="${escSrc}" role="button" tabindex="0">
                     <div class="sp-wi-card-head">
                         <input type="checkbox" class="sp-wi-cb" data-key="${escapeAttr(e.key)}"${checked ? ' checked' : ''}>

@@ -33,10 +33,11 @@ export function formatLedgerCaptureFeedback(result) {
     const text = {
         busy: '已有刻度标注正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法标注' : r.reason === 'spDisabled' ? '刻度功能已停用' : '本次刻度标注已跳过',
-        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，已恢复本地状态' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，请检查当前聊天数据' : ledgerFailureText('刻度标注失败', r.error, { ledgerPhase: r.error?.ledgerPhase }),
+        failed: r.reason === 'no-api' ? '请先在设置中填写 API' : r.reason === 'completed-source-invalid' ? `${Number.isFinite(r.totalBatches) ? `${r.totalBatches} 批` : '全部批次'}刻度溯源已完成，但最终选中的来源正文已经变化，结果无法安全恢复；本轮未写入，如需继续请重新完整标注。` : r.reason === 'pending-commit-invalid' ? '已保留的刻度结果无法安全提交：聊天、角色、刻度池或来源正文已经变化；本次没有写入，也没有重跑 API。' : r.reason === 'capture-state-invalid' ? '标注保存后状态不一致，已撤销' : r.reason === 'persistence-not-committed' ? '保存未提交，已恢复本地状态' : r.reason === 'persistence-unknown' ? '刻度持久状态无法确认，已恢复本地状态' : r.reason === 'rollback-save-failed' ? '原存档恢复保存失败，请检查当前聊天数据' : ledgerFailureText('刻度标注失败', r.error, { ledgerPhase: r.error?.ledgerPhase }),
         unchanged: r.reason === 'duplicate' ? '没有新事件（都已在刻度上）' : '未发现可登记的新事件',
         'needs-confirmation': '本次标注需要确认后才能继续',
         cancelled: r.reason === 'confirmation-cancelled' ? '已取消本次刻度标注' : '刻度标注已中止',
+        'pending-commit': `${Number.isFinite(r.totalBatches) ? `${r.totalBatches} 批` : '全部批次'}刻度溯源已完成，结果已保留但尚未写入；聊天状态发生变化，请再次点「立即标注」安全提交，不会重跑 API。`,
         updated: `刻度标注已完成${Number.isFinite(r.added) || Number.isFinite(r.patched) ? `：新增 ${r.added || 0} 条、更新 ${r.patched || 0} 条` : ''} · 请注意查看`,
     }[r.status] || '刻度标注已结束';
     return { message: text, error: r.status === 'failed' };
@@ -71,18 +72,21 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         const task = {};
         if (button) button.__spLedgerCaptureTask = task;
         setCaptureBusy(button, true, inline);
+        let outcome = null;
         try {
-            const result = await capture.run(true);
-            if (!current(owner) || staleResult(result)) return result;
+            const result = outcome = await capture.run(true);
+            const completedProvenance = result?.status === 'pending-commit' || result?.reason === 'completed-source-invalid';
+            if ((!current(owner) && !completedProvenance) || staleResult(result)) return result;
             if (result?.feedbackShown !== true) captureFeedback(result);
             return result;
         } catch (error) {
             if (!current(owner)) return { status: 'cancelled', reason: 'source-stale-chat', stale: true, error };
-            const result = { status: 'failed', reason: error?.phase || 'ui-handler-failed', error };
+            const result = outcome = { status: 'failed', reason: error?.phase || 'ui-handler-failed', error };
             captureFeedback(result);
             return result;
         } finally {
-            if (button?.__spLedgerCaptureTask !== task || !current(owner)) return;
+            const completedProvenance = outcome?.status === 'pending-commit' || outcome?.reason === 'completed-source-invalid';
+            if (button?.__spLedgerCaptureTask !== task || (!current(owner) && !completedProvenance)) return;
             setCaptureBusy(button, false, inline);
             refreshInline?.(true);
             redraw();

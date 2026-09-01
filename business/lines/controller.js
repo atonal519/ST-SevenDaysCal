@@ -4,20 +4,46 @@ import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
 import { makeDiagnosticError } from '../../api/diagnostics.js';
 import { drawAdultSelections, allocateAdultPools } from './adult.js';
-import { enforceLineCapacity, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
+import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
+
+const LINES_GENERATION_LEASES = Symbol.for('st-seven-days-cal.lines-generation-leases');
+
+function generationLeases() {
+    const current = globalThis[LINES_GENERATION_LEASES];
+    if (current instanceof Map) return current;
+    const leases = new Map();
+    globalThis[LINES_GENERATION_LEASES] = leases;
+    return leases;
+}
 
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
-    const run = async (silent = false, swipeCtx = null, travelContext = null) => {
+    const participantCurrent = identity => !identity || env.sameParticipantIdentity?.(identity, env.participantIdentity?.()) !== false;
+    const run = async (silent = false, swipeCtx = null, travelContext = null, preflightOwner = null) => {
         if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
         const chatId = env.chatId();
-        const owner = owners.create('lines-generation', { chatId, chatRevision: owners.currentChatRevision(), intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
-        env.runtime?.start(owner.controller); env.onStart?.(owner);
-        const signal = owner.controller.signal; const travelAbort = travelContext?.signal;
-        const abortFromTravel = () => owner.controller.abort();
-        travelAbort?.addEventListener('abort', abortFromTravel, { once: true });
+        const chatRevision = owners.currentChatRevision();
+        if (preflightOwner && !owners.isCurrent(preflightOwner, { chatId, chatRevision })) return { status: 'cancelled', reason: 'stale-preflight' };
+        const participantIdentity = preflightOwner?.participantIdentity || env.participantIdentity?.() || null;
+        const contextSnapshot = preflightOwner?.contextSnapshot || env.contextSnapshot?.() || null;
+        if (!participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-participant' };
+        const leases = generationLeases();
+        const leaseKey = `${String(chatId ?? '')}::${chatRevision}`;
+        if (leases.has(leaseKey)) return { status: 'skipped', reason: 'busy' };
+        const leaseToken = Object.freeze({});
+        leases.set(leaseKey, leaseToken);
+        let owner = null;
+        let travelAbort = null;
+        let abortFromTravel = null;
         try {
+            owner = owners.create('lines-generation', { chatId, chatRevision, participantIdentity, intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
+            owner.contextSnapshot = contextSnapshot;
+            env.runtime?.start(owner.controller); env.onStart?.(owner);
+            const signal = owner.controller.signal;
+            travelAbort = travelContext?.signal;
+            abortFromTravel = () => owner.controller.abort('time-travel-cancel');
+            travelAbort?.addEventListener('abort', abortFromTravel, { once: true });
             if (signal.aborted || travelAbort?.aborted) return { status: 'cancelled', reason: 'aborted' };
             const cfg = env.loadConfig();
             if (!cfg?.url || !cfg?.key) { env.missingApi?.({ silent }); throw makeDiagnosticError('config-missing'); }
@@ -34,7 +60,7 @@ export function createLinesGenerationController(env = {}) {
             let drawer = env.drawTickets; let capacity = Number(env.vectorCapacity);
             if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
-            const adultMode = typeof env.adultMode === 'function' ? env.adultMode() : env.adultMode;
+            const adultMode = typeof env.adultMode === 'function' ? env.adultMode(participantIdentity) : env.adultMode;
             const isInitial = sourceLines.length === 0;
             const intent = isReroll ? 'reroll' : isInitial ? 'initial' : 'advance';
             const ticketCount = Math.min(capacity, AUTO_LINE_SEED_CAPACITY);
@@ -53,35 +79,48 @@ export function createLinesGenerationController(env = {}) {
             });
             owner.vectorTickets = adultTickets;
             const vectorContext = { intent, retained: isReroll ? [] : identityLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : identityLines.filter(line => !line.cue).map(line => line.name), pinnedBackground: isReroll ? identityLines.filter(line => line.pin) : [], freshTickets: adultTickets, adultSelections };
-            const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext);
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
+            const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext, participantIdentity, contextSnapshot);
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
             const beforeCall = env.readSaved() || {};
             if (String(beforeCall.raw || '') !== commitBaseline.raw || (Number(beforeCall.ts) || null) !== commitBaseline.ts) return { status: 'cancelled', reason: 'stale-baseline' };
-            const raw = await env.callApi(prompt, signal, { ...(travelContext || {}), ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}) });
+            const raw = await env.callApi(prompt, signal, {
+                ...(travelContext || {}),
+                ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}),
+                promptMode: 'creative',
+                diagnosticModule: 'lines',
+                diagnosticContext: { owner: owner.token, channel: owner.channel, chatRevision, floor: swipeCtx?.mesId },
+            }, participantIdentity, contextSnapshot);
             if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
             if (!checked.ok) { env.fail?.(makeDiagnosticError('invalid-structure', { phase: 'parse' }), { silent }); return { status: 'failed', reason: checked.reason }; }
             const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets, intent });
             if (!audit.ok) { env.fail?.(makeDiagnosticError(audit.reason, { phase: 'evolution' }), { silent }); return { status: 'failed', reason: audit.reason }; }
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
-            const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId }) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
+            const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId, chatRevision }) && participantCurrent(participantIdentity) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
             if (!decision.ok) return { status: 'cancelled', reason: decision.reason };
             const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             const merged = mergePinned(isReroll ? sourceRaw : previousRaw, serializeLines(bound), { preferPinnedSource: isReroll });
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
-            const resultModel = intent === 'advance'
-                ? merged.model
-                : enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_SEED_CAPACITY }).model;
+            const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_CAPACITY });
+            if (capacityResult.dropped > 0) return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
+            const resultModel = capacityResult.model;
             env.commit(serializeLines(resultModel), { silent, owner, swipeCtx, travelContext, commitBaseline });
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };
-            if (!owners.isCurrent(owner, { chatId })) return { status: 'cancelled', reason: 'stale-owner' };
-            if (env.chatId() === chatId) env.fail?.(error, { silent });
+            if (owner && (!owners.isCurrent(owner, { chatId, chatRevision }) || !participantCurrent(participantIdentity))) return { status: 'cancelled', reason: 'stale-owner' };
+            if (env.chatId() === chatId && participantCurrent(participantIdentity)) env.fail?.(error, { silent });
             return { status: 'failed', error };
-        } finally { travelAbort?.removeEventListener('abort', abortFromTravel); env.runtime?.finish(owner.controller); env.cleanup?.(owner, chatId); }
+        } finally {
+            try {
+                if (abortFromTravel) travelAbort?.removeEventListener('abort', abortFromTravel);
+                if (owner) { env.runtime?.finish(owner.controller); env.cleanup?.(owner, chatId); }
+            } finally {
+                if (leases.get(leaseKey) === leaseToken) leases.delete(leaseKey);
+            }
+        }
     };
     return { run };
 }

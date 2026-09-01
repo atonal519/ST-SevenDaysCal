@@ -21,6 +21,7 @@ import {
     almValidMonthDay, almDateFromChat,
 } from './data.js';
 import { storyWeekdayRef, latestStoryClock } from './story-clock.js';
+import { automaticWeekdayCanReplaceCalibration } from './weekday-coordinator.js';
 import { daysBetweenCalendarDates } from './full-ordinal.js';
 
 let env = null;
@@ -30,8 +31,9 @@ export function bindAxisAnchor(e) { env = e; }
 // 从时间字符串里的 dayKey 派生月/日（依赖 extractDayFromTime + data.monthDayFromDayKey）。
 // 注：monthDayFromDayKey/extractDayFromTime 已在上面 import，此处直接用。
 
-// 今天 = 历上的 {month, day}。多源优先级见下方逐条注释。全拿不到 → 1 月 1 日。
-export function almTodayAnchor() {
+// 今天 = 历上的 {month, day}。多源优先级见下方逐条注释。
+// 内部证据解析保留 null，避免最终 UI 默认值 1/1 被星期浅兜底误当成真实故事日期。
+function almTodayAnchorEvidence() {
     // ①′ 手动/自动确认锚点：最高优先。
     try {
         const pinned = env.getDateAnchor(env.charStableKey(getContext()));
@@ -80,9 +82,11 @@ export function almTodayAnchor() {
         const hit = almDateFromChat();
         if (hit) return hit;
     } catch { /* 往下走 */ }
-    // ⑥ 全拿不到 → 1 月 1 日
-    return { month: 1, day: 1 };
+    return null;
 }
+
+// ⑥ 全拿不到 → 1 月 1 日（只保留既有 UI/日期消费者的最终默认行为）。
+export function almTodayAnchor() { return almTodayAnchorEvidence() || { month: 1, day: 1 }; }
 
 // 从锚点「今天」到下一次 (month, day) 还有几天（按年长环形，不涉年）。
 export function almDaysUntil(month, day, anchor, cal = loadCalDesc()) {
@@ -97,11 +101,11 @@ export function almDaysBetweenFull(from, to, cal = loadCalDesc()) {
     return daysBetweenCalendarDates(from, to, cal);
 }
 
-// 取「参照日→周几」锚：先扫所有来源的显式星期，再允许真实公历推算。返回 {refDoy, refWd}。
+// 取「参照日→周几」锚：完整 SDC、人工校准与保守浅兜底统一在此排序；不做现实公历推算。
 export function almWeekdayRef(cal = loadCalDesc()) {
-    const automatic = storyWeekdayRef(getContext(), cal, 100);
+    const automatic = storyWeekdayRef(getContext(), cal, 100, null, almTodayAnchorEvidence());
     const manual = env.getStoryCalibration?.();
-    if (manual && automatic && Number.isInteger(manual.floor) && automatic.floor === manual.floor) {
+    if (manual && automatic && !automaticWeekdayCanReplaceCalibration(automatic, manual)) {
         const refMonth = manual.refMonth ?? manual.month; const refDay = manual.refDay ?? manual.day;
         return { refDoy: almDayOfYear(refMonth, refDay, cal), refWd: manual.weekday, weekdayText: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][manual.weekday], floor: automatic.floor, source: 'manual' };
     }

@@ -5,7 +5,7 @@ import { adultPromptGuidance } from './adult.js';
 export function prepareLinesInspirationContext(context = {}) { return context; }
 export const LINE_NEXT_RELEASE_CONTRACT = 'Next: 一句前瞻信号或 stall=true 的恢复条件';
 function trackedLinesForPrompt(previousRaw, vectorContext = {}) {
-    if (!previousRaw) return vectorContext.intent === 'initial' ? '（无；本轮按票据比例逐槽选择 SFW / NSFW 新线）' : '（无，基于当前剧情新建 1-4 条）';
+    if (!previousRaw) return '（无）';
     const tracked = parseLines(previousRaw);
     if (!tracked.length) return stripInternalLineLines(previousRaw);
     return serializeLines(tracked.map(line => ({ ...line, pin: false })), { includeCue: false, includeAdult: false });
@@ -24,20 +24,19 @@ function vectorPromptContext(vectorContext = {}) {
     const indexed = freshTickets.map((ticket, index) => ({ ticket, index }));
     const hasPools = indexed.some(({ ticket }) => ticket.adultPool);
     const fresh = indexed.map(({ ticket, index }) => renderFresh(ticket, index, ticket.adultPool === 'nsfw' ? 'NSFW 新线' : ticket.adultPool === 'sfw' ? 'SFW 新线' : '')).join('\n');
-    const poolContract = hasPools ? '\n本轮票据表严格按 allocator 原始签发顺序列出；每张票的 SFW/NSFW 类型不可改写。新线最终输出可从本轮真实票据中选择任意不重复子集并调整顺序；不适合的票据可以不用。SFW 新线不得成人化，NSFW 新线必须以成人欲望、成人场景或成人互动本身为核心，不得把普通权谋、任务或交易线只在 Next 尾部强行性化。同一主角或同一组参与者可以重复；成人线至少在场景、关系结构、互动机制、节奏或即时身体/关系后果之一有实质差异，不得为换人物凭空发明无关角色。' : '';
-    const overflowContract = `最多输出 ${freshTickets.length} 条新线；每条新线都必须携带一张本轮签发且未使用的票据 ID，不得无票输出。`;
+    const poolContract = hasPools ? '票据上的 SFW/NSFW 类型由本地确定，不可改写；具体选材遵守上方成人追加合同。' : '';
     const reroll = vectorContext.intent === 'reroll';
-    const oldLineContract = reroll
-        ? '本轮刷新不要求输出任何旧线；锁线仅作为只读背景，已由本地完整保留。'
-        : '旧线必须先输出；继续旧线必须保持原 Line 名称，改名视为新线；旧线不得输出 Ticket。';
-    return `\n【本轮本地预掷影响角度】\n以下三项已由本地确定，不要自行随机、换票或创造标签；只照抄对应的临时票据 ID。它们只是克制的影响角度，不是确定剧情结果。${poolContract}\n${fresh || '（无）'}\n【已锁定线只读背景】\n${pinnedBackground}\n这些锁线已由本地完整保留；禁止输出、改写、终结或分票，也不要为它们输出 Ticket。\n【有组合的旧线】\n${retained}\n【无组合的旧线】\n${legacy}\n${oldLineContract}每张新票只能使用一次：新线必须在 Line: 后输出 Ticket: <该票据 ID>，可以调整新线最终顺序；不得改写、重复或伪造票据 ID，不适合的票据可以不用；终态新线不得输出 Ticket。${overflowContract}禁止凭空制造人物、阴谋、灾难或极端冲突。`;
+    const rerollNote = reroll ? '本轮刷新不要求返回旧自动线；锁线仍只作背景。' : '';
+    return `\n【机器数据：本轮真实唯一 Ticket 与 6×3 Cue】\n每张票的三项影响角度作用于该线实际选择的主动方与事件，只是影响角度，不是确定结果；不得自行换票、改标签或造票。${poolContract}\n${fresh || '（无）'}\n新建非终态线可从以上 ${freshTickets.length} 张票中选择任意不重复子集并调整输出顺序；每条新线恰好使用一张真实 Ticket，不适合的票可以不用。Ticket 不得缺失、重复、改写或伪造；旧线不得使用 Ticket。${rerollNote}\n【本地锁线只读背景】\n${pinnedBackground}\n锁线已由本地完整保留，不输出、不改写、不终结、不分票。\n【旧线既有 Cue】\n${retained}\n【旧线无 Cue】\n${legacy}`;
 }
 export function buildLinesPrompt(userName = '用户', charName = '角色', perspective = 'user', previousRaw = '', scale = 'auto', vectorContext = {}, adultMode = 'off') {
     const promptContext = prepareLinesInspirationContext({ userName, charName, perspective, previousRaw, scale, vectorContext });
     ({ userName, charName, perspective, previousRaw, scale, vectorContext } = promptContext);
-    const subject = perspective === 'char' ? charName : userName;
     const seedRun = vectorContext.intent === 'initial' || vectorContext.intent === 'reroll';
-    const countContract = seedRun ? '本轮最多输出 4 条自动种子线，按本轮票据与剧情证据灵活决定数量，不要为凑数硬编。' : '自然推进不设自动线总数上限；旧未锁活线必须逐条原名输出，默认最多出生 1 条真正独立的新线，每有 1 条旧未锁活线明确进入终态，额外释放 1 个出生名额，单轮新生最多 4 条；改名、漏写、重复续写均视为违规。';
-    const oldFormatContract = vectorContext.intent === 'reroll' ? '本轮刷新不要求输出旧线；' : '旧线严格输出三行 Line/Desc/Next；';
-    return `请根据当前剧情与记忆提炼平行事件线，叙事主体为${subject}。这是结构化输出，不要输出解释、前言或代码块外文字。\n\n【推进尺度】${scale === 'macro' ? '关注势力、世界与长期局势。' : scale === 'micro' ? '关注人物当下行动、关系与短期催化。' : '兼顾人物、事件与世界局势，保持可推进的粒度。'}${adultPromptGuidance(adultMode)}\n\n【普通线身份收敛】同一主体、同一时间窗、同一现实触发事件、同一核心目标的后续步骤必须合并为同一条线，并把上下游步骤分别写入这条线的 Desc / Next；互斥的可能结果也保留为同一条线的未决走向，不要分别新建。只有核心目标、冲突源或独立生命周期实质不同才另建；Cue 不同本身不构成新线理由。真正独立且可并行成立的目标不必强行合并。\n\n【正式类型】type 只能是冲突或推进。stage 只能是：萌芽、发酵、逼近、已爆发、已消散、筹备、执行、关键、已完成、已失败。level 只能是 1、2、3、4。agency 只能是 player 或 world；stall、pin 只能是 true 或 false。pin 是构画内部保留位，不由 AI 决定，所有条目必须输出 pin=false。\n\n【终态】已爆发、已消散、已完成、已失败均为终态；终态只用于当前输入中已有、且在本轮刚刚收束的线。不要把正文里已经结束的历史事件新建为终态线；新建线必须处于非终态，并且值得后续继续追踪。已终态事件不再推进、不作为潜伏注入候选。\n\n【严格格式】必须输出完整闭合的 <storylines_widget>...</storylines_widget>，${countContract}${oldFormatContract}新线严格输出四行，顺序固定为：\nLine: 名称|类型|阶段|等级|时间锚点|agency|stall|pin\nTicket: <本轮列出的临时票据 ID>\nDesc: 当前状态、背景、人物/势力立场（写现在，不写下一步）\nNext: ${LINE_NEXT_RELEASE_CONTRACT.replace('Next: ', '')}\n旧线保持原名且不得输出 Ticket；新建非终局线必须输出本轮签发且未使用的 Ticket。不必覆盖本轮全部票据；每个实际使用的 Ticket 必须真实、唯一且不可改写。终态新线不得附 Ticket。字段内禁止裸 |，不要省略 Desc/Next，不得截断；Line 字段必须恰好 8 段。\n\n【当前已追踪】\n${trackedLinesForPrompt(previousRaw, vectorContext)}${vectorPromptContext(vectorContext)}`.replace(/\{\{user\}\}/g, userName).replace(/\{\{char\}\}/g, charName);
+    const scaleContract = scale === 'macro' ? '关注势力、世界与长期局势。' : scale === 'micro' ? '关注人物当下行动、关系与短期催化。' : '兼顾人物、事件与世界局势，保持可推进的粒度。';
+    const countContract = seedRun
+        ? '首次生成或刷新可按证据输出 1–8 条自动线；不必用完票据，不为凑数硬编。'
+        : '自然推进必须逐条原名、完整返回每条旧未锁活线（包括本轮刚进入终态者），可按证据自由新建；提交后的未锁非终态自动线不得超过 8 条。旧线进入终态会腾出容量；除此不设主动方、类型或单轮出生配额。';
+    const oldFormatContract = vectorContext.intent === 'reroll' ? '刷新不要求返回旧自动线。' : '旧线保持原名并完整输出 Line、Desc、Next，改名、漏写或重复续写均违规。';
+    return `请依据当前正文、记忆与世界设定推演全局平行事件线。${userName}与${charName}只是既有参与者，不是固定叙事中心。只输出结构化结果，不要解释、前言或代码块外文字。\n\n【一、选材】${scaleContract}只追踪已有证据支持、当前真正活跃且值得后续观察的事件。主动方可以是 ${userName}、${charName}、既有配角、群体、势力、机构，或能自行变化的制度/环境因素；不得凭空创造陌生人物、阴谋、灾难或极端冲突。除非剧情证据确实高度集中于 ${userName}，不要让 ${userName} 成为绝大多数线的主动方或所有线的唯一落点。\n同一主体、时间窗、现实触发事件与核心目标的后续步骤合并为同一条线，上下游分别写入 Desc / Next；互斥结果保留为同一条线的未决走向。只有核心目标、冲突源或独立生命周期实质不同才另建；Cue 不同本身不构成新线理由。\n\n【二、主动方与 agency】每条线选择当下真正掌握推动力的既有主体。agency=player 仅表示下一步必须等待 ${userName} 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 ${userName} 暂不参与也能自行推进。不要因为事件将来可能影响 ${userName} 就标 player。Desc 只写当前状态、背景与有关各方位置；Next 写真正主动方紧邻的下一步，或事件自行发生的下一变化，不强制写成 ${userName} 的反应。\n\n【三、推进与生命周期】${countContract}${oldFormatContract}\n已爆发、已消散、已完成、已失败是终态，只用于输入中已有且本轮刚收束的线；不要把已经结束的历史事件新建为终态线。新线必须是非终态并值得继续追踪。${adultPromptGuidance(adultMode)}\n\n【四、机器格式】必须输出完整闭合的 <storylines_widget>...</storylines_widget>。type 只能是冲突或推进；stage 只能是萌芽、发酵、逼近、已爆发、已消散、筹备、执行、关键、已完成、已失败；level 只能是 1、2、3、4；agency 只能是 player 或 world；stall、pin 只能是 true 或 false。pin 是本地保留位，AI 一律输出 pin=false。\n旧线严格三行，新线严格四行，顺序如下：\nLine: 名称|类型|阶段|等级|时间锚点|agency|stall|pin\nTicket: <本轮列出的临时票据 ID>（仅新线）\nDesc: 当前状态、背景、有关各方位置\nNext: ${LINE_NEXT_RELEASE_CONTRACT.replace('Next: ', '')}\nLine 必须恰好 8 段；字段内禁止裸 |；Desc/Next 不得省略；不得截断。\n\n【当前已追踪】\n${trackedLinesForPrompt(previousRaw, vectorContext)}${vectorPromptContext(vectorContext)}`.replace(/\{\{user\}\}/g, userName).replace(/\{\{char\}\}/g, charName);
 }

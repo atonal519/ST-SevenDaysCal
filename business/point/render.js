@@ -123,8 +123,8 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
             numLabel = formatPointDate(month, day, ctx.cal, true) || '日期未知';
         }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
-            <span class="sp-tab-num">${numLabel}</span>
-            ${wdLabel ? `<span class="sp-tab-wd">${wdLabel}</span>` : ''}
+            <span class="sp-tab-num">${escapeHtml(numLabel)}</span>
+            ${wdLabel ? `<span class="sp-tab-wd">${escapeHtml(wdLabel)}</span>` : ''}
         </button>`;
     });
     if (hasFuture) tabs.push(`<button class="sp-tab${days.length === 0 ? ' sp-tab-active' : ''}" data-day="future">

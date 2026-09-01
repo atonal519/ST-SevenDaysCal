@@ -8,12 +8,12 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
         // snapshot carries its own reversed names.
         const frozenStoryContext = { ...(storyContext || {}), userName, charName };
         onStage?.('折射');
-        const raw = await write(buildWriteMessages(input, { userName, charName, storyContext: frozenStoryContext }, settings), { maxTokens: 30000, signal, userName, charName });
+        const raw = await write(buildWriteMessages(input, { userName, charName, storyContext: frozenStoryContext }, settings), { maxTokens: 30000, signal, userName, charName, promptMode: 'creative', diagnosticModule: 'theater-generation' });
         if (!String(raw || '').trim()) throw new Error('写作 agent 返回为空，请重试或改输入');
         if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
         onStage?.('渲染');
         let htmlRaw = '';
-            try { htmlRaw = await beautify(buildBeautifyMessages(raw, { userName, charName }, settings), { maxTokens: 30000, signal, userName, charName }); }
+            try { htmlRaw = await beautify(buildBeautifyMessages(raw, { userName, charName }, settings), { maxTokens: 30000, signal, userName, charName, promptMode: 'mechanical', diagnosticModule: 'theater-beautify' }); }
             catch (error) { if (error?.name === 'AbortError') throw error; onDiagnostic?.(safeDiagnosticLog('theater', 'recoverable-fallback', error)); }
         if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
         // 宿主回退可能触发额外格式化，只有美化空/失败时才调用，成功 HTML 不应被二次改写。

@@ -1997,7 +1997,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-event-title { font-size: var(--sp-fs-88); font-weight: 500; color: var(--sp-on-surface); line-height: 1.35; }
 .sp-event-time  { font-family: 'Roboto Mono', monospace; font-size: var(--sp-fs-73); color: var(--sp-subtle); min-width: 0; overflow-wrap: anywhere; }
 .sp-event-desc  { font-size: var(--sp-fs-82); color: var(--sp-on-surface); opacity: 0.8; line-height: 1.55; margin: 3px 0 5px; }
-.sp-event-meta  { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.sp-event-meta  { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 2px; }
 .sp-event-loc   {
     display      : inline-flex;
     align-items  : center;
@@ -3080,54 +3080,60 @@ select.sp-input { appearance: none; cursor: pointer; }
     background: rgba(128, 128, 128, 0.15);
 }
 
-/* ─── Debug drawer ───────────────────────────────────────────────────────────── */
-.sp-debug-drawer {
-    border-top     : 1px solid var(--sp-divider);
-    margin-top     : 4px;
-    padding        : 0;
-    flex-shrink    : 0;
+/* ─── Diagnostics settings preview ───────────────────────────────────────────── */
+.sp-diagnostics-block {
+    display       : flex;
+    flex-direction: column;
+    gap           : 6px;
 }
-.sp-debug-summary {
+.sp-diagnostics-preview {
+    border        : 1px solid var(--sp-divider);
+    border-radius : 8px;
+    overflow      : hidden;
+}
+.sp-diagnostics-preview-title {
     display        : flex;
     align-items    : center;
     gap            : 6px;
-    padding        : 5px 10px;
-    font-size      : var(--sp-fs-72);
+    padding        : 7px 10px;
+    font-size      : var(--sp-fs-75);
     color          : var(--sp-subtle);
     cursor         : pointer;
     user-select    : none;
     list-style     : none;
 }
-.sp-debug-summary::-webkit-details-marker { display: none; }
-.sp-debug-summary::before {
+.sp-diagnostics-preview-title::-webkit-details-marker { display: none; }
+.sp-diagnostics-preview-title::before {
     content        : '▶';
     font-size      : var(--sp-fs-60);
     transition     : transform 0.15s;
     display        : inline-block;
 }
-.sp-debug-drawer[open] .sp-debug-summary::before {
+.sp-diagnostics-preview[open] .sp-diagnostics-preview-title::before {
     transform      : rotate(90deg);
 }
-.sp-debug-summary:hover { color: var(--sp-on-surface); }
-.sp-debug-pre {
+.sp-diagnostics-preview-title:hover { color: var(--sp-on-surface); }
+.sp-diagnostics-pre {
     margin         : 0;
     padding        : 8px 10px;
     font-family    : 'Roboto Mono', monospace;
     font-size      : var(--sp-fs-70);
     color          : var(--sp-on-surface);
     background     : rgba(0,0,0,0.25);
-    border-radius  : 0 0 8px 8px;
     max-height     : 260px;
     overflow-y     : auto;
     white-space    : pre-wrap;
     word-break     : break-all;
 }
-.sp-debug-actions {
+.sp-diagnostics-actions {
     display        : flex;
     justify-content: flex-start;
-    padding        : 4px 40px 8px 10px;
+    padding        : 6px 10px 8px;
+    background     : rgba(0,0,0,0.25);
 }
-.sp-debug-copy-btn {
+.sp-diagnostics-preview-empty .sp-diagnostics-actions,
+.sp-diagnostics-preview .sp-diagnostics-actions[hidden] { display: none; }
+.sp-diagnostics-copy-btn {
     padding        : 2px 8px;
     min-width      : 0;
     border         : 1px solid var(--sp-divider);
@@ -3138,7 +3144,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     cursor         : pointer;
     transition     : color 0.15s, border-color 0.15s;
 }
-.sp-debug-copy-btn:hover { color: var(--sp-on-surface); border-color: var(--sp-surface-high); }
+.sp-diagnostics-copy-btn:hover:not(:disabled) { color: var(--sp-on-surface); border-color: var(--sp-surface-high); }
+.sp-diagnostics-copy-btn:disabled { cursor: default; opacity: 0.45; }
 
 /* ─── cfg-hint (shared) ──────────────────────────────────────────────────────── */
 .sp-cfg-hint { font-size: var(--sp-fs-75); color: var(--sp-subtle); margin: 0 0 2px; }
@@ -6281,7 +6288,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-sch-drawer-lock { font-size: var(--sp-fs-70); color: var(--sch-primary); flex-shrink: 0; }
 .sp-sch-drawer-actions { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; margin-left: auto; }
 .sp-sch-drawer-desc { font-size: var(--sp-fs-72); opacity: 0.82; line-height: 1.5; overflow-wrap: anywhere; }
-.sp-sch-drawer-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: var(--sp-fs-66); opacity: 0.7; }
+.sp-sch-drawer-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: var(--sp-fs-66); opacity: 0.7; }
 .sp-sch-drawer-loc, .sp-sch-drawer-npc { display: inline-flex; align-items: center; gap: 3px; overflow-wrap: anywhere; }
 .sp-sch-drawer-loc i, .sp-sch-drawer-npc i { opacity: 0.7; }
 /* 楼内注入/删除按钮：移动端无 hover，默认淡显（对齐线块 0.55 逻辑）；删除 hover 转红 */

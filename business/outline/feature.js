@@ -167,21 +167,21 @@ export function createOutlineFeature(env = {}) {
     const onChatChanged = ({ lastSeen = -1 } = {}) => {
         chatRevision += 1;
         editing = false;
-        generation.abort();
+        generation.abort('chat-boundary');
         judge.onChatChanged({ lastSeen });
         chat.onChatChanged();
     };
-    const abortAll = () => {
-        generation.abort();
-        judge.abort();
-        chat.abort();
+    const abortAll = (reason = 'manual-abort') => {
+        generation.abort(reason);
+        judge.abort(reason);
+        chat.abort(reason);
     };
     const invalidateStoreKind = kind => {
         if (kind === 'outline') {
-            generation.abort();
-            judge.abort();
+            generation.abort('store-clear');
+            judge.abort('store-clear');
         } else if (kind === 'creative-chat') {
-            chat.abort();
+            chat.abort('store-clear');
         }
     };
     const refreshAfterStoreClear = kind => {

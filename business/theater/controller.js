@@ -31,5 +31,5 @@ export function createTheaterController({ owners, repository, generate, current,
         }
         finally { if (active === owner) active = null; owners.finish(owner); }
     }
-    return { run, abort: (reason = 'user-abort') => { if (!active) return false; const owner = active; owner.cancelReason = reason === 'aborted' ? 'user-abort' : reason; owners.invalidate('theater'); reset?.(owner, owner.cancelReason); active = null; return true; }, get owner() { return active; }, get busy() { return !!active; } };
+    return { run, abort: (reason = 'user-abort') => { if (!active) return false; const owner = active; owner.cancelReason = reason === 'aborted' ? 'user-abort' : reason; owners.invalidate('theater', owner.cancelReason); reset?.(owner, owner.cancelReason); active = null; return true; }, get owner() { return active; }, get busy() { return !!active; } };
 }

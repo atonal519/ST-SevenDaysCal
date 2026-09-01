@@ -32,11 +32,11 @@ export function createOutlineChat({
         ui?.renderHistory?.(history);
         return history;
     };
-    const abort = () => {
+    const abort = (reason = 'manual-abort') => {
         const previous = owner;
         owner = null;
         busy = false;
-        try { previous?.controller?.abort(); } catch {}
+        try { previous?.controller?.abort(reason); } catch {}
         ui?.endThinking?.(previous?.thinking);
     };
     const applyRaw = (target, raw, button = null) => {
@@ -81,6 +81,8 @@ export function createOutlineChat({
                 maxTokens,
                 temperature,
                 signal: controller.signal,
+                promptMode: 'creative',
+                diagnosticModule: 'outline-chat',
             });
             if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
             const nextHistory = [...historySnapshot, { role: 'assistant', content: reply }].slice(-repository.historyCap);
@@ -136,7 +138,7 @@ export function createOutlineChat({
         return send(text);
     };
     const onChatChanged = () => {
-        abort();
+        abort('chat-boundary');
         history = [];
     };
     return Object.freeze({

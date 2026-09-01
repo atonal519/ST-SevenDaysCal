@@ -22,7 +22,7 @@ export function buildLedgerInjectionText(picked = []) {
     });
     const blocks = ['【暗线·时间账·仅供你把握角色此刻的身心与待办，切勿直接念出编号或「系统」字样】', '以下是随剧情时间推移、此刻仍牵动角色的事。请把它们自然融进叙事与角色状态，别生硬罗列、别让角色开口谈论这套记录本身。'];
     if (stateLines.length) blocks.push('◆ 正持续的身心状态（按登记至今的天数，表现出它此刻该有的样子）：\n' + stateLines.join('\n'));
-    if (timedLines.length) blocks.push('◆ 临近的约定与周期（按倒计时，该临近就流露惦记、该发生就顺势发生）：\n' + timedLines.join('\n'));
+    if (timedLines.length) blocks.push('◆ 临近的约定与周期（临近时可在当前情境中自然表现准备或惦记；到期也只在当前情境允许时推进，不要为了兑现刻度强行转场，也不要替角色作关键决定）：\n' + timedLines.join('\n'));
     return blocks.join('\n');
 }
 

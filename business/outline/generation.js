@@ -34,12 +34,12 @@ export function createOutlineGeneration({
         const saved = repository.readOutline(target);
         ui?.setOutline(saved?.raw ? renderer.render(saved.raw, repository.cursor(target)) : renderer.empty());
     };
-    const abort = () => {
+    const abort = (reason = 'manual-abort') => {
         if (!busy) return false;
         const previous = owner;
         owner = null;
         busy = false;
-        try { previous?.controller?.abort(); } catch {}
+        try { previous?.controller?.abort(reason); } catch {}
         if (previous?.target) renderCurrent(previous.target);
         return true;
     };
@@ -50,7 +50,7 @@ export function createOutlineGeneration({
         if (!target?.chatId) return { status: 'skipped' };
         if (precheck && !await precheck()) return { status: 'cancelled' };
         if (!repository.isCurrent(target) || busy) return { status: 'cancelled' };
-        judge?.abort();
+        judge?.abort('superseded-owner');
         const baseline = repository.baseline(target);
         const controller = new AbortController();
         const task = Object.freeze({ target, baseline, controller });
@@ -74,7 +74,7 @@ export function createOutlineGeneration({
                 charName,
                 signal: controller.signal,
                 historyLimit: 3,
-                options: apiOptions,
+                options: { ...(apiOptions || {}), promptMode: 'creative', diagnosticModule: 'outline-generation' },
             });
             if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!String(raw || '').trim()) throw new Error('AI 未返回可保存的面内容');

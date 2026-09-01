@@ -31,11 +31,11 @@ export function createOutlineJudge({
         busy = false;
         return true;
     };
-    const abort = () => {
+    const abort = (reason = 'manual-abort') => {
         const previous = owner;
         owner = null;
         busy = false;
-        try { previous?.controller?.abort(); } catch {}
+        try { previous?.controller?.abort(reason); } catch {}
     };
     const makeOwner = (target, baseline) => {
         const controller = new AbortController();
@@ -89,6 +89,7 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
+                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge' },
             });
             if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!shouldAdvanceOutline(answer)) {
@@ -138,6 +139,7 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
+                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge' },
             });
             if (!currentAndOwned(task) || externalSignal?.aborted || !repository.matches(target, baseline)) return { status: 'cancelled' };
             const next = parseOutlineRelocationAnswer(answer, beats.length);

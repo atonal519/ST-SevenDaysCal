@@ -2,8 +2,8 @@ import { ledgerSourceFingerprint, legacyLedgerSourceFingerprint } from './reconc
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 // 刻度捕获纯依赖：只负责正文楼层/来源窗口与稳定性，不执行 API 或落库。
 export const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
-- 持续状态：身体伤情 / 病症、怀孕、显著且会延续的情绪等——会随天数自然演变（如割伤→结痂→愈合）。
-- 约定待办：约好要做的事（哪天见面、答应帮忙），无论有没有定下具体日期都要记。
+- 持续状态：身体伤情 / 病症、怀孕、会持续影响后续行为、关系或状态的情绪／心理影响等——会随天数自然演变（如割伤→结痂→愈合）。单场景的一过性心情不记。
+- 约定待办：明确尚未履行、预期后续仍会回收的承诺或待办（哪天见面、答应帮忙），不要求已经定下具体日期。随口客套、临时意向不记。
 - 周期：规律反复发生的事（月经、发薪、值班），带大致周期天数。
 【主语永远是「人」】每条都登记在某个人物身上——记 TA 的状态，或 TA 牵扯的约定/周期。不要给物品单独立条（如「桌上有把枪」「仓库存着粮」不记）；但物品作用到人身上的状态要记（如「A 中了毒、尚未解」「B 戴着诅咒项链、受其束缚」）。`;
 export const LEDGER_FIELD_SPEC = `- 每个事件一行，用全角竖线「｜」分隔 8 个字段，顺序固定：
@@ -77,6 +77,23 @@ export function ledgerSourcesStable(sources, chatId) { if (env.context().chatId 
 export function ledgerRecordsStable(records, chatId) {
     if (env.context().chatId !== chatId) return false; const chat = env.context().chat || [];
     return (records || []).every(record => { const msg = chat[record.floor]; if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false; const identity = record.identity || {}; if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false; if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false; return (record.sources || []).every(source => { const side = String(source.token || '').endsWith('S') ? 'S' : String(source.token || '').endsWith('E') ? 'E' : ''; if (!side || source.signature !== record.signature) return false; const date = sideClock(env.parseClock(String(msg.mes || '')), side).date; return !!date && date.month === source.date.month && date.day === source.date.day && (date.year == null || source.date.year == null || date.year === source.date.year) && (date.eraLabel == null || source.date.eraLabel == null || date.eraLabel === source.date.eraLabel); }); });
+}
+export function ledgerRecordCollectionStable(records, chatId, limit = null) {
+    if (!ledgerRecordsStable(records, chatId)) return false;
+    const expected = Array.isArray(records) ? records : [], current = ledgerAiFloorRecords(limit);
+    if (current.length !== expected.length) return false;
+    const dateKey = date => JSON.stringify([date?.year ?? null, date?.eraLabel ?? null, date?.month ?? null, date?.day ?? null]);
+    return expected.every((record, index) => {
+        const live = current[index];
+        if (!live || live.floor !== record.floor || live.signature !== record.signature || live.content !== record.content) return false;
+        const identity = record.identity || {}, liveIdentity = live.identity || {};
+        if (!!liveIdentity.is_user !== !!identity.is_user || !!liveIdentity.is_system !== !!identity.is_system || String(liveIdentity.name || '') !== String(identity.name || '') || String(liveIdentity.type || '') !== String(identity.type || '')) return false;
+        const sources = Array.isArray(record.sources) ? record.sources : [], liveSources = Array.isArray(live.sources) ? live.sources : [];
+        return liveSources.length === sources.length && sources.every((source, sourceIndex) => {
+            const liveSource = liveSources[sourceIndex];
+            return !!liveSource && liveSource.token === source.token && liveSource.floor === source.floor && liveSource.stamp === source.stamp && dateKey(liveSource.date) === dateKey(source.date);
+        });
+    });
 }
 export function ledgerLegacyAnchor(sourceList) { const dates = new Map(); for (const source of sourceList || []) dates.set(`${source.date.month}/${source.date.day}`, source.date); return dates.size === 1 ? { 楼层: null, 历日期: [...dates.values()][0] } : { 楼层: null, 历日期: null }; }
 export function ledgerSourceBatches(sources, size = CAPTURE_FLOORS) { const list = Array.isArray(sources) ? sources : []; const batches = []; for (let i = 0; i < list.length; i += size) batches.push(list.slice(i, i + size)); return batches; }
@@ -175,14 +192,56 @@ ${fieldSpec}
 }
 export function buildProvenancePrompt(candidates, batchNo, batchTotal) {
     const list = (candidates || []).map(item => `- ${item._candidateId}｜${item.事由}（${item.类型}）${item.标签?.length ? `｜标签：${item.标签.join('、')}` : ''}`).join('\n');
-    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚；其中「现状」必须是以合适终止标点结束的完整句，句末有闭合引号时标点写在引号内。候选ID 必须原样抄写（只能是清单给出的 C1、C2…）；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据就不要输出。不要输出 SET，不要解释。`;
+    return `请暂停角色扮演，进行「刻度事件来源溯源」。这是第 ${batchNo}/${batchTotal} 批原始剧情楼；每个 AI 楼正文前的 FxxS/FxxE 是系统可信来源令牌，只能从本批正文中选择，不能自行编造楼号、日期或令牌。\n\n【待溯源事项】\n${list || '（无）'}\n\n请只输出本批正文中能明确找到最早发生/确认依据的事项；同一事项若已有更早批次来源，不要重复输出。每条使用 9 字段格式：候选ID｜事由｜类型｜牵扯｜标签｜现状｜到期｜周期｜来源锚；其中「现状」必须是以合适终止标点结束的完整句，句末有闭合引号时标点写在引号内。候选ID 必须原样抄写（只能是清单给出的 C1、C2…）；来源锚只能填本批实际存在且支撑该事项的 FxxS/FxxE；若本批没有依据，只回一个字：无。不要输出 SET，不要解释。`;
+}
+export function selectLedgerProvenanceToken(value, batchMap) {
+    const tokens = [...String(value || '').matchAll(/F\d+[SE]/gi)].map(match => match[0].toUpperCase());
+    const valid = [...new Set(tokens)].map(token => ({ token, source: batchMap?.get?.(token) }))
+        .filter(item => item.source && ledgerSourceAnchor(item.token, batchMap));
+    valid.sort((a, b) => Number(a.source.floor) - Number(b.source.floor) || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
+    return valid[0]?.token || '';
 }
 export function createLedgerCaptureController(options = {}) {
     env = { ...env, ...options };
     let busy = false;
     let progress = null;
     let abortController = null;
+    let provenanceCheckpoint = null;
     const isCurrent = (ctrl, chatId, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && env.context().chatId === chatId;
+    const ledgerBaselineEmpty = () => (env.listEntries?.({ includeClosed: true }) || []).length === 0;
+    const sameTarget = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const progressCheckpointStable = checkpoint => {
+        if (!checkpoint || !ledgerBaselineEmpty()) return false;
+        const ctx = env.context();
+        if (String(env.charKey?.(ctx) || '') !== checkpoint.charKey) return false;
+        return sameLedgerOwner(checkpoint.ownerSnapshot, ledgerOwnerIdentity(ctx)) && ledgerRecordCollectionStable(checkpoint.allRecords, checkpoint.chatId);
+    };
+    const completedCheckpointStable = (checkpoint, { requireBaseline = true } = {}) => {
+        if (!checkpoint || checkpoint.phase !== 'pending-commit' || (requireBaseline && !ledgerBaselineEmpty())) return false;
+        const ctx = env.context();
+        if (ctx.chatId !== checkpoint.chatId || String(env.charKey?.(ctx) || '') !== checkpoint.charKey) return false;
+        if (String(ctx.name1 || '用户') !== checkpoint.userName || String(ctx.name2 || '角色') !== checkpoint.charName) return false;
+        if (!sameTarget(env.target?.(), checkpoint.fixedTarget) || !ledgerRecordsStable(checkpoint.sourceRecords, checkpoint.chatId)) return false;
+        const selectedMap = ledgerSourceMap((checkpoint.sourceRecords || []).flatMap(record => record.sources || []));
+        return (checkpoint.picked || []).every(item => {
+            const token = String(item?._sourceToken || '').trim().toUpperCase();
+            if (item?._provenanceInvalid && !token) return false;
+            return !token || token === 'SET' || (!!selectedMap.get(token) && !!ledgerSourceAnchor(token, selectedMap));
+        });
+    };
+    const checkpointStable = checkpoint => checkpoint?.phase === 'pending-commit' ? completedCheckpointStable(checkpoint) : progressCheckpointStable(checkpoint);
+    const selectedSourceRecords = (picked, records) => {
+        const tokens = new Set((picked || []).map(item => String(item?._sourceToken || '').trim().toUpperCase()).filter(token => /^F\d+[SE]$/.test(token)));
+        return (records || []).map(record => ({ ...record, sources: (record.sources || []).filter(source => tokens.has(String(source.token || '').toUpperCase())) })).filter(record => record.sources.length);
+    };
+    const makeCheckpoint = (phase, values) => ({ phase, ...values });
+    const inspectCheckpoint = () => {
+        if (!provenanceCheckpoint) return { checkpoint: null, invalidCompleted: false };
+        if (checkpointStable(provenanceCheckpoint)) return { checkpoint: provenanceCheckpoint, invalidCompleted: false };
+        const invalidCompleted = provenanceCheckpoint.phase === 'pending-commit';
+        provenanceCheckpoint = null;
+        return { checkpoint: null, invalidCompleted };
+    };
     const clear = ctrl => {
         if (abortController !== ctrl) return false;
         busy = false; progress = null; abortController = null;
@@ -192,93 +251,151 @@ export function createLedgerCaptureController(options = {}) {
     const run = async (manual = false, travel = null) => {
         if (busy) return { status: 'busy', reason: 'busy' };
         const ctx = env.context();
-        const fixedTarget = env.target?.();
         const charKey = env.charKey?.(ctx);
         if (!charKey) { if (manual) env.toast?.('当前没有角色卡，无法标注', null, true); return { status: 'skipped', reason: 'no-character', feedbackShown: manual }; }
+        const inspected = inspectCheckpoint();
+        const checkpoint = inspected.checkpoint;
+        if (inspected.invalidCompleted) {
+            const result = { status: 'failed', reason: 'pending-commit-invalid', feedbackShown: false };
+            if (!manual) { env.toast?.('已保留的刻度结果无法安全提交：聊天、角色、刻度池或来源正文已经变化；本次没有写入，也没有重跑 API。', null, true); result.feedbackShown = true; }
+            return result;
+        }
+        if (checkpoint && !manual) {
+            if (checkpoint.phase === 'pending-commit') {
+                env.toast?.('刻度溯源已全部完成，结果已保留但尚未写入；请再次点「立即标注」安全提交，不会重跑 API。');
+                return { status: 'pending-commit', reason: 'completed-pending-commit', totalBatches: checkpoint.provenanceBatches.length, feedbackShown: true };
+            }
+            env.toast?.(`刻度来源溯源进度已保留（下一批 ${checkpoint.nextBatchIndex + 1}/${checkpoint.provenanceBatches.length}），请点「立即标注」继续。`);
+            return { status: 'needs-confirmation', reason: 'provenance-resume-manual', feedbackShown: true };
+        }
         const cfg = env.config?.();
-        if (!cfg?.url || !cfg?.key) { if (manual) env.toast?.('请先在设置中填写 API', null, true); return { status: 'failed', reason: 'no-api', error: Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' }), feedbackShown: manual }; }
-        const chatId = ctx.chatId;
-        const ownerSnapshot = ledgerOwnerIdentity(ctx);
+        if (!checkpoint && (!cfg?.url || !cfg?.key)) { if (manual) env.toast?.('请先在设置中填写 API', null, true); return { status: 'failed', reason: 'no-api', error: Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' }), feedbackShown: manual }; }
+        const fixedTarget = checkpoint?.fixedTarget ?? env.target?.();
+        const chatId = checkpoint?.chatId ?? ctx.chatId;
+        const ownerSnapshot = checkpoint?.ownerSnapshot ?? ledgerOwnerIdentity(ctx);
         const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const cancellation = (reason = 'cancelled') => {
             const ownerCurrent = sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
             const stale = abortController !== ctrl || !ownerCurrent;
+            if (checkpoint && (stale || ctrl.signal.aborted || travel?.signal?.aborted)) provenanceCheckpoint = null;
             return { status: 'cancelled', reason: stale ? 'source-stale-chat' : reason, ...(stale ? { stale: true } : {}) };
         };
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         try {
-            const userName = ctx.name1 || '用户', charName = ctx.name2 || '角色';
-            const isFirst = (env.listEntries?.({ includeClosed: true }) || []).length === 0;
-            const prompt = env.appendTravel?.(buildCapturePrompt(isFirst), travel) || buildCapturePrompt(isFirst);
-            const targetDate = env.validDate?.(travel?.targetDate, env.calendar?.());
-            const floorContext = ledgerFloorDateContext();
+            const userName = checkpoint?.userName ?? (ctx.name1 || '用户'), charName = checkpoint?.charName ?? (ctx.name2 || '角色');
+            const isFirst = checkpoint ? true : ledgerBaselineEmpty();
+            const targetDate = checkpoint?.targetDate ?? env.validDate?.(travel?.targetDate, env.calendar?.());
+            const floorContext = checkpoint?.floorContext ?? ledgerFloorDateContext();
             const captureFloor = floorContext.floor;
-            const captureDate = targetDate || floorContext.date || env.today?.();
-            const recentRecords = ledgerAiFloorRecords(CAPTURE_FLOORS);
+            const captureDate = checkpoint?.captureDate ?? (targetDate || floorContext.date || env.today?.());
+            const recentRecords = checkpoint?.recentRecords ?? ledgerAiFloorRecords(CAPTURE_FLOORS);
             const recentSources = recentRecords.flatMap(record => record.sources);
             const recentSourceMap = ledgerSourceMap(recentSources);
-            const allRecords = isFirst ? ledgerAiFloorRecords() : null;
+            const allRecords = checkpoint?.allRecords ?? (isFirst ? ledgerAiFloorRecords() : null);
             const aiFloorCount = allRecords?.length || 0;
             const historical = isFirst && aiFloorCount > CAPTURE_FLOORS;
-            const provenanceBatches = historical ? ledgerSourceBatches(allRecords) : [];
-            if (historical) {
+            const provenanceBatches = checkpoint?.provenanceBatches ?? (historical ? ledgerSourceBatches(allRecords) : []);
+            if (historical && !checkpoint) {
                 if (!manual) { clear(ctrl); env.toast?.(`历史较长（${aiFloorCount} 个 AI 楼），自动捕获不会静默启动多批溯源；请点「立即标注」并确认。`); return { status: 'needs-confirmation', reason: 'historical-confirmation', feedbackShown: true }; }
                 const ok = await env.confirm?.({ title: '确认完整溯源刻度', body: `当前 ledger 为空，共 ${aiFloorCount} 个 AI 楼。将先提取清单，再按每批最多 ${CAPTURE_FLOORS} 个 AI 回复溯源，最多调用 ${1 + provenanceBatches.length} 次（1 次清单 + ${provenanceBatches.length} 批）。找到全部来源后会提前结束；过程会增加 API 消耗和等待时间，可随时中止；确认后统一落库。`, note: '取消不会发起请求，也不会写入任何刻度。', confirmText: '开始溯源', cancelText: '取消' });
                 if (!ok) { clear(ctrl); return { status: 'cancelled', reason: 'confirmation-cancelled' }; }
                 if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             }
-            const captureOpts = { ...(travel || {}), noAlmanac: true };
-            // 最终常规请求只喂最近 3 个可见 AI 楼；内部 6 楼记录仍完整保留给来源锚、稳定性与溯源批处理。
-            const recentVisibleRecords = ledgerAiFloorRecords().filter(record => {
-                const message = ctx.chat?.[record.floor];
-                return !message?.is_user && !message?.is_system && ledgerNarrativeMessage(message);
-            });
-            if (recentVisibleRecords.length) captureOpts.ledgerSourceFloors = recentVisibleRecords.slice(-CAPTURE_CONTEXT_FLOORS);
-            let raw;
-            try { raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_CONTEXT_FLOORS, captureOpts); }
-            catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
-            if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-            let picked = env.parseCapture?.(raw) || [];
-            if (!picked.length) { if (manual) env.toast?.('未发现可登记的新事件'); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
-            picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
+            let picked = checkpoint?.picked || null;
+            if (!picked) {
+                const prompt = env.appendTravel?.(buildCapturePrompt(isFirst), travel) || buildCapturePrompt(isFirst);
+                const captureOpts = { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-capture' };
+                // 最终常规请求只喂最近 3 个可见 AI 楼；内部 6 楼记录仍完整保留给来源锚、稳定性与溯源批处理。
+                const recentVisibleRecords = ledgerAiFloorRecords().filter(record => {
+                    const message = ctx.chat?.[record.floor];
+                    return !message?.is_user && !message?.is_system && ledgerNarrativeMessage(message);
+                });
+                if (recentVisibleRecords.length) captureOpts.ledgerSourceFloors = recentVisibleRecords.slice(-CAPTURE_CONTEXT_FLOORS);
+                let raw;
+                try { raw = await env.callApi(ctx, prompt, cfg, userName, charName, ctrl.signal, CAPTURE_CONTEXT_FLOORS, captureOpts); }
+                catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
+                if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
+                picked = env.parseCapture?.(raw) || [];
+                if (!picked.length) { if (manual) env.toast?.('未发现可登记的新事件'); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
+                picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
+            }
             let sourceList = recentSources, sourceMap = recentSourceMap, recordsForCommit = recentRecords;
             if (historical) {
                 sourceList = allRecords.flatMap(record => record.sources); sourceMap = ledgerSourceMap(sourceList); recordsForCommit = allRecords;
                 const candidates = picked.filter(item => String(item._sourceToken || '').trim() !== 'SET');
-                candidates.forEach(item => { item._sourceToken = ''; });
-                progress = { done: 0, total: provenanceBatches.length }; env.setProgress?.(0, provenanceBatches.length, ctrl);
-                for (let i = 0; i < provenanceBatches.length; i++) {
+                if (!checkpoint) candidates.forEach(item => { item._sourceToken = ''; delete item._provenanceInvalid; });
+                const sourceTravel = checkpoint?.sourceTravel || (() => { const value = { ...(travel || {}) }; delete value.signal; return value; })();
+                const startBatchIndex = checkpoint?.nextBatchIndex || 0;
+                progress = { done: startBatchIndex, total: provenanceBatches.length }; env.setProgress?.(startBatchIndex, provenanceBatches.length, ctrl);
+                for (let i = startBatchIndex; i < provenanceBatches.length; i++) {
                     if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
+                    if (!ledgerBaselineEmpty()) { provenanceCheckpoint = null; return { status: 'cancelled', reason: 'ledger-baseline-changed', stale: true }; }
                     const unresolved = candidates.filter(item => !String(item._sourceToken || '').trim());
                     if (!unresolved.length) break;
                     const batch = provenanceBatches[i];
                     let result;
-                    try { result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), cfg, userName, charName, ctrl.signal, 0, { ...(travel || {}), noAlmanac: true, ledgerSourceFloors: batch }); }
-                    catch (error) { markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); throw error; }
+                    try {
+                        const provenanceCfg = env.provenanceConfig?.() || cfg;
+                        if (!provenanceCfg?.url || !provenanceCfg?.key) throw Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' });
+                        result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), provenanceCfg, userName, charName, ctrl.signal, 0, { ...sourceTravel, noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, allowEmptyOutput: true, promptMode: 'mechanical', diagnosticModule: 'ledger-provenance' });
+                    }
+                    catch (error) {
+                        markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length });
+                        const checkpointCurrent = abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && env.context().chatId === chatId && ledgerBaselineEmpty() && ledgerRecordCollectionStable(allRecords, chatId) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
+                        if (checkpointCurrent) {
+                            provenanceCheckpoint = makeCheckpoint('provenance', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: i });
+                        } else provenanceCheckpoint = null;
+                        throw error;
+                    }
                     if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
                     const found = env.parseCapture?.(result) || [], batchMap = ledgerSourceMap(batch.flatMap(record => record.sources)), hits = [];
                     for (const item of found) {
                         const candidate = candidates.find(x => x._candidateId === item._candidateId && !String(x._sourceToken || '').trim());
-                        const token = String(item._sourceToken || '').trim();
+                        const attemptedSource = String(item?._sourceToken || '').trim();
+                        const token = selectLedgerProvenanceToken(item._sourceToken, batchMap);
                         if (candidate && ledgerSourceAnchor(token, batchMap)) hits.push({ candidate, token, source: batchMap.get(token) });
+                        else if (candidate && attemptedSource) candidate._provenanceInvalid = true;
                     }
                     hits.sort((a, b) => a.source.floor - b.source.floor || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
                     hits.forEach(hit => { if (!String(hit.candidate._sourceToken || '').trim()) hit.candidate._sourceToken = hit.token; });
+                    if (checkpoint) provenanceCheckpoint = { ...checkpoint, picked, nextBatchIndex: i + 1 };
                     progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                 }
+                if (!ledgerBaselineEmpty()) { provenanceCheckpoint = null; return { status: 'cancelled', reason: 'ledger-baseline-changed', stale: true }; }
+                const invalidProvenance = candidates.some(item => item._provenanceInvalid && !String(item._sourceToken || '').trim());
+                if (invalidProvenance) {
+                    provenanceCheckpoint = null;
+                    return { status: 'failed', reason: 'completed-source-invalid', totalBatches: provenanceBatches.length, feedbackShown: false };
+                }
+                provenanceCheckpoint = makeCheckpoint('pending-commit', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: provenanceBatches.length, sourceRecords: selectedSourceRecords(picked, allRecords) });
             }
             const entries = env.listEntries?.({ includeClosed: true }) || [];
             const candidates = picked.map(item => ({ ...item, 起始锚: resolveLedgerStartAnchor(item, sourceMap, sourceList) }));
             const capturePlan = planLedgerCapture({ entries, candidates, sourceMap, captureFloor, captureDate, norm: env.normGist || (value => String(value || '').replace(/\s+/g, '')) });
-            if (!capturePlan.additions.length && !capturePlan.patches.length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!capturePlan.additions.length && !capturePlan.patches.length) { provenanceCheckpoint = null; if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-            if (!ledgerRecordsStable(recordsForCommit, chatId)) return { status: 'cancelled', reason: 'source-stale-chat', stale: true };
-            const cleanAdditions = capturePlan.additions.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; return clean; });
-            const owner = { chatId, target: fixedTarget, guard: () => isCurrent(ctrl, chatId, travel) && ledgerRecordsStable(recordsForCommit, chatId) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context())) };
+            const completedRetry = checkpoint?.phase === 'pending-commit';
+            const commitRecordLimit = historical ? null : CAPTURE_FLOORS;
+            const commitSnapshotStable = completedRetry ? completedCheckpointStable(checkpoint) : ledgerRecordCollectionStable(recordsForCommit, chatId, commitRecordLimit);
+            if (!commitSnapshotStable) {
+                if (historical && !completedRetry && completedCheckpointStable(provenanceCheckpoint)) return { status: 'pending-commit', reason: 'completed-stale-pending-commit', totalBatches: provenanceBatches.length, feedbackShown: false };
+                const completedSourceInvalid = historical && !completedRetry && provenanceCheckpoint?.phase === 'pending-commit' && !ledgerRecordsStable(provenanceCheckpoint.sourceRecords, chatId);
+                if (completedSourceInvalid) {
+                    provenanceCheckpoint = null;
+                    return { status: 'failed', reason: 'completed-source-invalid', totalBatches: provenanceBatches.length, feedbackShown: false };
+                }
+                provenanceCheckpoint = null;
+                return { status: 'cancelled', reason: 'source-stale-chat', stale: true };
+            }
+            const cleanAdditions = capturePlan.additions.map(plan => { const clean = { ...plan }; delete clean._sourceToken; delete clean._candidateId; delete clean._provenanceInvalid; return clean; });
+            // baseline 在进入事务前单独验证；事务内存 staging 后 ledger 已非空，owner guard 不能把本次新增误判成外部改动。
+            // 并发 metadata 变更仍由固定目标 saver 的 integrity + owned-path test 拒绝。
+            const owner = { chatId, target: fixedTarget, guard: () => isCurrent(ctrl, chatId, travel) && (completedRetry ? completedCheckpointStable(checkpoint, { requireBaseline: false }) : (ledgerRecordCollectionStable(recordsForCommit, chatId, commitRecordLimit) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context())))) };
             const result = env.applyAtomic ? await env.applyAtomic({ additions: cleanAdditions, patches: capturePlan.patches }, owner) : { added: await env.addAtomic?.(cleanAdditions) || [], patched: [] };
             const added = result?.added || [];
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-            if (!added.length && !(result?.patched || []).length) { if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!added.length && !(result?.patched || []).length) { provenanceCheckpoint = null; if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            provenanceCheckpoint = null;
             if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`);
             env.refresh?.(); env.refreshInline?.(true); env.render?.();
             return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: manual || env.settings?.()?.notifyMode === 'full' };
@@ -299,14 +416,15 @@ export function createLedgerCaptureController(options = {}) {
             markLedgerError(err, { phase: err?.ledgerPhase || 'capture-request' });
             logLedgerFailure(err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal });
             const manualFailure = manual || env.settings?.()?.notifyMode === 'full';
-            if (manualFailure) env.toast?.(ledgerFailureText('刻度标注失败', err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal }), null, true);
+            const resumable = err?.ledgerPhase === 'source-provenance' && progressCheckpointStable(provenanceCheckpoint);
+            if (manualFailure) env.toast?.(`${ledgerFailureText('刻度标注失败', err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal })}${resumable ? '；进度已保留，再次标注将从本批继续' : ''}`, null, true);
             return { status: 'failed', reason: err?.ledgerPhase || err?.phase || 'api-failed', error: err, feedbackShown: manualFailure };
         } finally { clear(ctrl); removeBridge(); }
     };
     return {
         run,
-        abort() { abortController?.abort(); },
-        reset() { abortController?.abort(); busy = false; progress = null; abortController = null; },
+        abort(reason = 'manual-abort') { provenanceCheckpoint = null; abortController?.abort(reason); },
+        reset(reason = 'reset') { provenanceCheckpoint = null; abortController?.abort(reason); busy = false; progress = null; abortController = null; },
         get isBusy() { return busy; }, get progress() { return progress; }, get abortController() { return abortController; },
     };
 }

@@ -1,5 +1,7 @@
 // Shared, deliberately lossy diagnostics for AI generation paths.
 // Never copy upstream response bodies, URLs, prompts, keys, or model output here.
+import { isDiagnosticRequestId } from '../runtime/diagnostic-trace.js';
+
 const CODES = new Set([
     'config-missing', 'http-400', 'auth', 'not-found', 'rate-limit', 'server',
     'timeout', 'network', 'empty-output', 'truncated', 'sse-invalid', 'unknown',
@@ -51,7 +53,17 @@ const MESSAGES = Object.freeze({
 });
 
 export function diagnosticMessage(error, options = {}) {
-    return MESSAGES[classifyGenerationError(error, options)] || MESSAGES.unknown;
+    const code = classifyGenerationError(error, options);
+    const message = MESSAGES[code] || MESSAGES.unknown;
+    const requestId = safeDiagnosticRequestId(error);
+    return code === 'timeout' && requestId ? `${message}（诊断 ID：${requestId}）` : message;
+}
+
+function safeDiagnosticRequestId(error) {
+    const requestId = typeof error?.spDiagnosticRequestId === 'string'
+        ? error.spDiagnosticRequestId.trim()
+        : '';
+    return isDiagnosticRequestId(requestId) ? requestId : '';
 }
 
 export function makeDiagnosticError(code, options = {}) {
@@ -69,10 +81,12 @@ export function shouldNotifyGeneration({ manual = false, notifyMode = 'lite', co
 }
 
 export function safeDiagnosticLog(module, phase, error, extra = {}) {
+    const requestId = safeDiagnosticRequestId(error);
     return Object.freeze({
         module: String(module || 'unknown'),
         phase: String(phase || error?.phase || 'request'),
         code: classifyGenerationError(error, { phase }),
+        ...(requestId ? { requestId } : {}),
         ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
         ...(extra.background !== undefined ? { background: !!extra.background } : {}),
     });

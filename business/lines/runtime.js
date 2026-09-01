@@ -12,7 +12,7 @@ export function createLinesRuntime({ render = value => value } = {}) {
         cache(raw) { cachedRaw = String(raw || ''); cachedHtml = render(cachedRaw); return cachedHtml; },
         setHtml(html) { cachedHtml = String(html || ''); return cachedHtml; },
         finish(ownerController = controller) { if (ownerController && controller !== ownerController) return false; controller = null; busy = false; return true; },
-        abort() { controller?.abort?.(); controller = null; busy = false; },
+        abort(reason = 'manual-abort') { controller?.abort?.(reason); controller = null; busy = false; },
         reset() { controller = null; busy = false; cachedRaw = ''; cachedHtml = ''; },
     };
 }

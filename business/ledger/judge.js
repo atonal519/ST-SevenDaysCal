@@ -13,7 +13,8 @@ ${lines || '（暂无活跃事件）'}
 - 持续状态：随天数自然演变（如割伤：当天流血→两三天结痂→约一周愈合；病症、孕期同理）。到该愈合/该缓解的天数了就更新现状；已彻底痊愈/结束的标「了结」。
 - 约定待办：到期或已过期还没兑现→在现状里点出「今天该…／已过 X 天未…」；正文里已兑现→标「了结」。
 - 周期：到期即本轮该发生（如月经）；正文印证发生了→更新现状并标「滚周期」（系统会把下次到期顺延一个周期）。
-- 退场／翻篇（跨类型通用，务必保守）：某条对应的人物或事件已明显退出当前剧情（角色离场且短期不会回、情节段落翻篇、长期不再牵动剧情）——即便没有明确结果，也标「了结」让它淡出，账只留此刻仍牵动剧情的事。反过来：只是最近几楼碰巧没提、但人物仍在场或事情仍悬着的，一律「维持」，别误清还悬着的事。
+- 退场／翻篇（跨类型通用，务必保守）：只有正文已有明确证据表明人物长期离场、不会在可预见的后续回来，或这条剧情线已经确定结束，才标「了结」。普通转场、最近暂未提及、短期离开、事情仍悬着，都不足以关闭。
+- 完全没有变化的条目不要输出，也不要用「维持」占位。只有现状已有新进展、但条目仍然活跃时，才输出新现状并标「维持」。
 
 【输出格式】只输出状态**有变化**的条目，每条一行，全角竖线「｜」分隔 4 段，顺序固定：
  编号｜新现状｜动作｜新到期
@@ -68,7 +69,7 @@ export function createLedgerJudgeController(options = {}) {
             const date = target || floorContext?.date || env.today?.();
             const judgePrompt = buildJudgePrompt(env, date, judgeable);
             let raw;
-            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true }); }
+            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-judge' }); }
             catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
@@ -122,5 +123,5 @@ export function createLedgerJudgeController(options = {}) {
             return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, applied: [] };
         } finally { finish(ctrl, owner); removeBridge(); env.setFabBusy?.(false); }
     };
-    return { run, abort: () => abortController?.abort(), reset: () => { abortController?.abort(); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
+    return { run, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }

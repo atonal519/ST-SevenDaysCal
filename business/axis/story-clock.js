@@ -1,7 +1,7 @@
 import { _cnToNumber, _CN_MONTH_ALIAS, normalizeCnDateDigits } from '../../utils/cn-date.js';
 const START_RE = /<!--\s*SDC-start\s+([\s\S]*?)\s*-->/i;
 const END_RE = /<!--\s*SDC-end\s+([\s\S]*?)\s*-->/i;
-let deps = { loadCalendar: () => null, validMonthDay: () => null, validRealDate: null, defaultCalendar: null, monthDayFromKey: () => null, extractDay: () => null, cnToNumber: () => 0, monthAlias: {}, context: () => null };
+let deps = { loadCalendar: () => null, validMonthDay: () => null, validRealDate: null, defaultCalendar: null, monthDayFromKey: () => null, extractDay: () => null, cnToNumber: () => 0, monthAlias: {}, explicitWeekdayDate: () => null, context: () => null };
 export function bindStoryClock(next = {}) { deps = { ...deps, ...next }; }
 const WEEKDAY_TEXT = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const WEEKDAY_ALIASES = /(?:周|週|星期|礼拜|禮拜)\s*([一二三四五六日天])|\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i;
@@ -181,20 +181,73 @@ export function latestStoryClock(context, limit = 100) {
     return null;
 }
 export function completeStoryClock(clock) { return !!clock && !clock.duplicate && !!clock.startMeta?.complete && !!clock.endMeta?.complete; }
-export function storyWeekdayRef(context = deps.context?.(), calendar = deps.loadCalendar?.(), limit = 100, floor = null) {
+function storyWeekdayResult(refDoy, refWd, weekdayText, floor, source, sourceFloor = floor) {
+    const out = { refDoy, refWd, weekdayText, floor };
+    Object.defineProperties(out, {
+        source: { value: source, enumerable: false },
+        sourceFloor: { value: sourceFloor, enumerable: false },
+    });
+    return out;
+}
+function sameStoryDate(left, right) {
+    if (!left || !right || left.month !== right.month || left.day !== right.day) return false;
+    if (left.year != null && right.year != null && left.year !== right.year) return false;
+    if (left.eraLabel != null && right.eraLabel != null && left.eraLabel !== right.eraLabel) return false;
+    return true;
+}
+function storyTextWithoutClockMetadata(message) {
+    return String(message || '')
+        .replace(new RegExp(START_RE.source, 'ig'), ' ')
+        .replace(new RegExp(END_RE.source, 'ig'), ' ')
+        // 未闭合的 HTML 注释从标记处直到楼尾都仍属于注释元数据；不能让其中
+        // 的 date/weekday 泄漏成正文显式证据。
+        .replace(/<!--\s*SDC-(?:start|end)\b[\s\S]*$/i, ' ');
+}
+export function storyWeekdayRef(context = deps.context?.(), calendar = deps.loadCalendar?.(), limit = 100, floor = null, currentDate = null) {
     const messages = context?.chat || []; const top = Number.isInteger(floor) ? Math.min(floor, messages.length - 1) : messages.length - 1;
     let aiFloor = null; let scanned = 0;
     for (let i = top; i >= 0 && scanned < limit; i--) {
         const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue;
-        aiFloor = i; break;
+        scanned++; aiFloor = i; break;
     }
     if (!Number.isInteger(aiFloor)) return null;
     const clock = parseStoryClock(messages[aiFloor].mes);
-    if (!completeStoryClock(clock)) return null;
-    const meta = clock.endMeta;
-    if (!meta) return null;
-    const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
-    return Number.isInteger(refDoy) ? { refDoy, refWd: meta.weekdayIndex, weekdayText: meta.weekdayText, floor: aiFloor } : null;
+    if (completeStoryClock(clock)) {
+        const meta = clock.endMeta;
+        const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
+        return Number.isInteger(refDoy) ? storyWeekdayResult(refDoy, meta.weekdayIndex, meta.weekdayText, aiFloor, 'sdc') : null;
+    }
+
+    // 只读当前 AI 楼正文里的显式「日期 + 星期」组合。先剥掉残缺/重复 SDC，
+    // 避免其中单侧 weekday 字段伪装成正文证据；解析能力由既有保守 helper 提供。
+    const explicit = deps.explicitWeekdayDate?.(storyTextWithoutClockMetadata(messages[aiFloor].mes), calendar);
+    if (explicit && Number.isInteger(explicit.wd)) {
+        const md = deps.validMonthDay?.({ month: explicit.month, day: explicit.day }, calendar);
+        const refDoy = md ? deps.dayOfYear?.(md.month, md.day, calendar) : null;
+        if (Number.isInteger(refDoy)) return storyWeekdayResult(refDoy, explicit.wd, WEEKDAY_TEXT[explicit.wd], aiFloor, 'explicit');
+    }
+
+    // 半残 SDC 只能贡献日期相位，不能贡献星期；无可用日期时再使用调用方已经
+    // 确认的当前日期锚。重复 SDC 不作为日期证据，以免两份互相冲突的标签抢占。
+    const clockDate = !clock.duplicate
+        ? (clock.endMeta?.valid ? clock.endMeta.date : (clock.startMeta?.valid ? clock.startMeta.date : null))
+        : null;
+    const effectiveDate = clockDate || currentDate;
+    if (!effectiveDate) return null;
+
+    for (let i = aiFloor - 1; i >= 0 && scanned < limit; i--) {
+        const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue;
+        scanned++;
+        const historical = parseStoryClock(msg.mes);
+        if (!completeStoryClock(historical)) continue;
+        const meta = historical.endMeta;
+        // 只允许最近一份完整历史 SDC 作证；它一旦不同日/纪年不相容，
+        // 就立即未知，不能越过它捞取更老的同日记录。
+        if (!sameStoryDate(effectiveDate, meta?.date)) return null;
+        const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
+        return Number.isInteger(refDoy) ? storyWeekdayResult(refDoy, meta.weekdayIndex, meta.weekdayText, aiFloor, 'history-same-day', i) : null;
+    }
+    return null;
 }
 export function storyClockDate(context, parseDate, limit = 100) { const clock = latestStoryClock(context, limit); return clock ? (clock.endMeta?.date || clock.startMeta?.date || parseDate(clock.end) || parseDate(clock.start)) : null; }
 export function createStoryClockController(options = {}) {

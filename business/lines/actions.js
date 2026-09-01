@@ -2,18 +2,23 @@ import { deleteLine, togglePin, editLineFields } from './mutations.js';
 import { parseLines } from './schema.js';
 
 export function createLinesActions(env = {}) {
-    let preparing = false;
+    let preparing = null;
     let editing = false;
     let editToken = null;
     const refresh = () => { env.setCached?.(env.render?.(env.readRaw?.() || '')); env.refreshPanel?.(); env.refreshInline?.(); };
     const runExclusive = async (silent, options) => {
         if (preparing || editing || env.isBusy?.()) return;
-        preparing = true;
+        const reservation = env.beginPreflight?.() || Object.freeze({ token: Symbol('lines-preflight') });
+        preparing = reservation;
         try {
             if (!await env.precheck?.()) return;
-            return await env.runGenerate?.(silent, options);
+            if (preparing !== reservation || env.preflightCurrent?.(reservation) === false) return { status: 'cancelled', reason: 'stale-preflight' };
+            return await env.runGenerate?.(silent, options, null, reservation);
         } finally {
-            preparing = false;
+            if (preparing === reservation) {
+                preparing = null;
+                env.finishPreflight?.(reservation);
+            }
         }
     };
     return {
@@ -53,5 +58,12 @@ export function createLinesActions(env = {}) {
         async advance() { return runExclusive(env.silent?.(), undefined); },
         async reroll() { return runExclusive(false, { reroll: true }); },
         isEditing: () => editing,
+        invalidatePreflight(reason = 'manual-abort') {
+            const reservation = preparing;
+            preparing = null;
+            if (reservation) env.invalidatePreflight?.(reason, reservation);
+            return !!reservation;
+        },
+        isPreparing: () => !!preparing,
     };
 }

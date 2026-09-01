@@ -12,7 +12,7 @@ export function createTaskOwnerManager() {
 
     function create(channel, identity = {}) {
         const previous = channels.get(channel);
-        if (previous) { previous.controller.abort(); previous.status = 'invalidated'; }
+        if (previous) { previous.controller.abort('superseded-owner'); previous.status = 'invalidated'; }
         const previousFinished = latest.get(channel);
         if (previousFinished) previousFinished.status = 'invalidated';
         const owner = {
@@ -25,6 +25,8 @@ export function createTaskOwnerManager() {
             scheduleRevision: identity.scheduleRevision,
             targetDate: identity.targetDate,
             intent: identity.intent ?? null,
+            boundaryEpoch: identity.boundaryEpoch,
+            participantIdentity: identity.participantIdentity ?? null,
             baselineRaw: identity.baselineRaw ?? '',
             baselineTs: identity.baselineTs ?? null,
             controller: new AbortController(),
@@ -55,9 +57,9 @@ export function createTaskOwnerManager() {
         return true;
     }
 
-    function invalidate(channel) {
+    function invalidate(channel, reason = 'manual-abort') {
         const owner = channels.get(channel);
-        owner?.controller.abort();
+        owner?.controller.abort(reason);
         if (owner) owner.status = 'invalidated';
         if (owner && latest.get(channel) === owner) latest.delete(channel);
         if (owner) channels.delete(channel);
@@ -65,8 +67,8 @@ export function createTaskOwnerManager() {
         return owner || null;
     }
 
-    function invalidateAll() {
-        for (const channel of channels.keys()) invalidate(channel);
+    function invalidateAll(reason = 'manual-abort') {
+        for (const channel of channels.keys()) invalidate(channel, reason);
     }
 
     function finish(owner) {
@@ -84,6 +86,8 @@ export function createTaskOwnerManager() {
             chatId: identity.chatId ?? owner.chatId,
             chatRevision: identity.chatRevision ?? owner.chatRevision,
             targetDate: identity.targetDate,
+            targetScope: identity.targetScope,
+            auto: identity.auto === true,
         });
         return true;
     }

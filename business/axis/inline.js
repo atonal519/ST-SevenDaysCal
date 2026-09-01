@@ -39,7 +39,7 @@ export function createAxisInlineRenderer(env = {}) {
         if (!md) return '<div class="sp-alm-sday-empty">历法未知 / 日期未知</div>';
         const wdIndex = env.weekdayFor(md.month, md.day, ref, cal);
         const wd = wdIndex == null ? '星期未记录' : env.weekdays[wdIndex];
-        const head = `<div class="sp-alm-sday-head">${env.monthName(cal, md.month)}${md.day}日 · ${wd}</div>`;
+        const head = `<div class="sp-alm-sday-head">${env.escapeHtml(env.monthName(cal, md.month))}${md.day}日 · ${wd}</div>`;
         const src = Array.isArray(itemsArg) ? itemsArg : env.loadItems?.() || [];
         const day = src.filter(it => env.itemCoversDoy(it, doy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
         if (!day.length) return `${head}<div class="sp-alm-sday-empty">这天没有安排</div>`;

@@ -7,8 +7,8 @@ export function createSpaceChat(env = {}) {
 
     const history = () => repository.history();
     const load = () => repository.load();
-    const abort = () => {
-        abortController?.abort();
+    const abort = (reason = 'manual-abort') => {
+        abortController?.abort(reason);
         busy = false;
     };
     const send = async userMsg => {
@@ -39,6 +39,8 @@ export function createSpaceChat(env = {}) {
                 maxTokens: env.maxTokens ?? 30000,
                 temperature: env.temperature,
                 signal: controller.signal,
+                promptMode: 'creative',
+                diagnosticModule: 'space',
             });
             if (abortController !== controller || controller.signal.aborted || !repository.isCurrent(target)) {
                 return Object.freeze({ status: 'cancelled' });

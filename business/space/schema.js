@@ -32,6 +32,24 @@ export function extractWidgets(raw) {
     return Object.freeze({ text: source.replace(rx, '').trim(), widgets });
 }
 
+export function latestSpaceWidget(history) {
+    if (!Array.isArray(history)) return null;
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+        const message = history[index];
+        if (message?.role !== 'assistant') continue;
+        const widgets = extractWidgets(message.content).widgets.filter(widget => widget.body);
+        if (!widgets.length) return null;
+        const widget = widgets.at(-1);
+        return Object.freeze({
+            kind: widget.kind,
+            body: widget.body,
+            editIdx: widget.editIdx,
+            historyIndex: index,
+        });
+    }
+    return null;
+}
+
 export function stripWidgetsForApi(history) {
     return history.map(message => {
         if (message.role !== 'assistant') return message;

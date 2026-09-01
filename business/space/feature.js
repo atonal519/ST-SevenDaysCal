@@ -42,17 +42,17 @@ export function createSpaceFeature(env = {}) {
     };
     const onChatChanged = ({ enabled = true } = {}) => {
         chatRevision += 1;
-        chat.abort();
+        chat.abort('chat-boundary');
         if (!enabled) return;
         repository.clearMemory();
         ui.emptyMessages();
     };
-    const abortAll = () => {
-        chat.abort();
+    const abortAll = (reason = 'manual-abort') => {
+        chat.abort(reason);
         if (env.isOpen?.()) ui.renderHistory(chat.history());
     };
     const invalidateStoreKind = kind => {
-        if (kind === 'space-chat') chat.abort();
+        if (kind === 'space-chat') chat.abort('store-clear');
     };
     const refreshAfterStoreClear = kind => {
         if (kind !== 'space-chat') return;
