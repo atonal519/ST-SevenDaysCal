@@ -76,9 +76,10 @@ export const DEFAULT_SETTINGS = {
     databaseWorldbookName: '', // empty follows the character primary worldbook; otherwise freeze this exact host book name
     animaRecallCount: 20,
     // Tag sanitizer (used by memory.js:stripTags AND anywhere else that reads
-    // AI floor content). Both are comma-separated bare tag names (no <>).
-    keepTags       : 'content',  // protect list — contents inside these tags survive stripping
-    extraTags      : '',         // extra strip list — forcibly delete these tags + their content
+    // AI floor content). 逗号分隔的裸标签名，可带或省略首尾 <>。
+    // 两列表皆空 = M0 不清洗（仅轻量卫生）；配任一列表即启用对应过滤。
+keepTags       : '',   // 保活块：剥掉标签标记、内部内容原样保留（内部不再二次清洗）；keep 块之外的一切（其余标签块+裸文本）剔除——M2/M3
+extraTags      : '',   // 强制删除这些标签块及内容（可穿透 keep 内部，恒优先于 keep）——M1/M3
     customPrompt   : '',         // 自定义提示词（破限）：注入到所有链路 system 最前，全局生效
     spacePersona   : '',         // 间·人格覆盖：空=用内置默认语气（ADVISOR_TONE_GUIDE）；非空=换间的语气/行文/人格（顾问身份恒保留、不可覆盖）
     // 棱（小剧场）

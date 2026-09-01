@@ -1616,7 +1616,7 @@ jQuery(async () => {
                 memoryL0Group  : Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5,
                 memoryL1Group  : Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10,
                 memorySkipShort: Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50,
-                keepTags       : typeof s.keepTags  === 'string' ? s.keepTags  : 'content',
+                keepTags       : typeof s.keepTags  === 'string' ? s.keepTags  : '',
                 extraTags      : typeof s.extraTags === 'string' ? s.extraTags : '',
             };
         },
@@ -2908,11 +2908,11 @@ function injectModal() {
                                         <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（只用默认破限）。也可在此追加全局写作规范，如：去八股、控制文风、叙事口吻…会叠加在默认破限词之后一起注入。"></textarea>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔，只写标签名（如 <code>content</code>）、不带尖括号。</p>
+                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。两栏都留空＝<strong>不清洗</strong>（仅做轻量卫生：删注释、孤立标记、折空行）；配了任一栏才启用内容级过滤。多个用英文逗号分隔，可带或省略尖括号（<code>content</code> 与 <code>&lt;content&gt;</code> 等效）。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
-                                        <p class="sp-cfg-hint">标签本身去掉、<strong>内部文字保留</strong>（如正文被 <code>content</code> 包裹）。</p>
+                                        <p class="sp-cfg-hint">列表中标签的配对块<strong>剥掉标签标记、内部内容原样保留</strong>（内部不再二次清洗，如 <code>&lt;content&gt;</code> 里的 <code>&lt;data&gt;</code>/<code>&lt;plan&gt;</code> 会连标记保留）；<strong>keep 块之外的其余一切（其他标签块与标签外裸文本）全部剔除</strong>。只配此栏即只留各 keep 块的内部内容、清掉其余全部噪音。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
-                                        <p class="sp-cfg-hint">标签<strong>连同内部内容一起删除</strong>（如思维链 <code>think</code> / <code>reasoning</code>）。</p>
+                                        <p class="sp-cfg-hint">标签<strong>连同内部内容一起删除</strong>（如思维链 <code>think</code> / <code>reasoning</code>），可穿透进 keep 块内部、恒优先于 keep。</p>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-storyclock"><summary>时间戳提示词</summary>
                                         <p class="sp-cfg-hint"><strong>全部内容均可编辑</strong>；留空＝用内置完整默认（默认词随插件更新走）。删除 SDC 标签或机器合同可能导致时间戳无法识别，风险由你承担。务必让两端各带 date、weekday、time；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
@@ -5066,7 +5066,7 @@ async function getCharBookEntries(ctx) {
 // only outline+wi+memText, so the last few floors of the main chat were
 // invisible to the assistant — feels like it "ignores context".
 // Returns a formatted block or '' when the chat is empty.
-async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 800) {
+async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 2500) {
     const chat = ctx?.chat;
     if (!Array.isArray(chat) || !chat.length) return '';
     const charName = ctx.name2 || '角色';
@@ -6453,7 +6453,7 @@ function renderMemorySection() {
     $in('#sp-mem-database-worldbook-options').toggle(useDatabase);
     $in('#sp-mem-anima-recall').val(getAnimaRecallCount());
     // 标签设置属于全局清洗规则，与记忆源无关；必须在各外部源 early-return 前回填。
-    $in('#sp-mem-keeptags').val(typeof s.keepTags === 'string' ? s.keepTags : 'content');
+    $in('#sp-mem-keeptags').val(typeof s.keepTags === 'string' ? s.keepTags : '');
     $in('#sp-mem-extratags').val(typeof s.extraTags === 'string' ? s.extraTags : '');
     // 自定义提示词是全局设置、与记忆源无关，必须在下面按源分支的 early-return 之前回填，
     // 否则用户选 Anima/柏宝书时函数提前 return，重开面板这框会空白（值其实已存盘）。

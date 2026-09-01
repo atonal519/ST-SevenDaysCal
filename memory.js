@@ -128,20 +128,22 @@ function persist() {
 }
 
 // ─── Content sanitizer ──────────────────────────────────────────────────────
-// Strip all tag-wrapped blocks (thinking, reasoning, outline_widget,
-// calendar_widget, details/summary, HTML markup, etc.) — the summarizer only
-// wants the narrative prose. Both paired blocks and stray tags are removed,
-// plus HTML/XML comments. Applied at getAiFloors() so every downstream
-// consumer (grouping, hashing, prompt building) sees the same clean text.
+// 按「配置驱动四模式」清洗 AI 楼层文本；摘要器（getAiFloors）及生成上下文各处
+// 共用（grouping、hashing、prompt building 看到同一份清洗后文本）。
 //
-// Two user-configurable name lists override the default behavior:
-//   keepTags  → PROTECT list. Contents inside these tags survive stripping;
-//               the tags themselves are removed but their inner text is kept.
-//               Default 'content'. Fixes the "AI wraps narrative in <content>
-//               and default strip nukes it" edge case some cards hit.
-//   extraTags → EXTRA strip list. Explicitly names tags that MUST be removed
-//               with their content. Redundant with default behavior but lets
-//               users document intent (e.g. write 'think,reasoning').
+// 四模式由 keepTags / extraTags 两个列表决定：
+//   M0 直通   ：两列表皆空。不删任何内容，仅轻量卫生（删注释、孤立/自闭合标记、
+//               折叠空行、trim）。配对标签的标记与内容原样保留。
+//   M1 仅extra：只删 extra 列表中的配对块（含内容，可出现在任意位置）；其余
+//               配对标签（标记+内容）原样保留，再做 M0 同款轻量卫生。
+//   M2 仅keep ：keep 列表中的配对块**剥掉标签标记、内部内容原样保留**（内部不做
+//               二次清洗，如 <content> 内的 <data>/<plan> 等保持原样）；keep 块
+//               之外的其余一切（非 keep 标签块与裸文本）全部剔除；包裹保活
+//               （keep 块被非 keep 标签包裹时救回占位符）。
+//   M3 混合   ：先删 extra（可穿透进 keep 块内部，恒优先于 keep）→ 再按 M2。
+//
+// 配置：逗号分隔的裸标签名（可带或省略首尾 <>，normalizeTagNames 自动剥除）。
+// 默认两列表均为空 = M0；配置任一列表即启用对应模式的内容级过滤。
 export function normalizeTagList(csv) {
     return normalizeTagNames(csv);
 }
@@ -150,55 +152,63 @@ const escapeTagName = name => String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 
 export function stripTags(raw, opts = {}) {
     if (!raw) return '';
-    const keep  = parseTagList(opts.keepTags  ?? 'content');
+
+    const keep  = parseTagList(opts.keepTags  ?? '');
     const extra = parseTagList(opts.extraTags ?? '');
-    let s = String(raw);
-    // 1. HTML/XML comments
-    s = s.replace(/<!--[\s\S]*?-->/g, '');
-    // 2. Extract keep-list blocks into placeholders BEFORE any stripping runs,
-    //    so the default "delete paired tags with content" pass won't nuke them.
-    //    Restored (as bare inner text) at the end.
+    // keep 为空（M0/M1）时收尾须保配对标记；M2/M3 配对已被强删除清空，直接剥标记。
+    const preservePairs = !keep.length;
     const keepStash = [];
-    for (const name of keep) {
-        const safeName = escapeTagName(name);
-        const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'gi');
-        s = s.replace(rx, (_m, inner) => {
-            keepStash.push(inner);
-            return ` KEEP${keepStash.length - 1} `;
-        });
-    }
-    // 3. Extra strip list — delete these tags + content entirely (redundant with
-    //    the default pass but explicit for user clarity + future-proofs if we
-    //    ever change the default).
+
+    // 1. 移除 HTML/XML 注释（通用）
+    let s = String(raw).replace(/<!--[\s\S]*?-->/g, '');
+
+    // 2. 删除 extra 列表标签及其内容（M1/M3；先于 keep，extra 恒优先）
     for (const name of extra) {
         const safeName = escapeTagName(name);
         const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'gi');
         let prev;
-        do { prev = s; s = s.replace(rx, ''); } while (s !== prev);
+        do {
+            prev = s;
+            s = s.replace(rx, '');
+        } while (s !== prev);
     }
-    // 4. Default: delete every remaining paired tag WITH its content.
-    //    Multi-pass to handle nested same-name tags.
-    let prev;
-    do {
-        prev = s;
-        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
-    } while (s !== prev);
-    // 5. Any remaining self-closing / orphan tags
-    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
-    // 6. Restore keep-list inner content (bare, no tags)
-    s = s.replace(/ KEEP(\d+) /g, (_m, idx) => keepStash[+idx] ?? '');
-    // 7. Second cleaning pass — restored kept content may itself contain
-    //    noisy tags (e.g. <content><thinking>...</thinking>正文</content>).
-    //    Run the default + orphan strip again. Keep list is NOT re-applied
-    //    here (would re-stash then loop); protection is by design outermost-only.
-    do {
-        prev = s;
-        s = s.replace(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g, '');
-    } while (s !== prev);
-    s = s.replace(/<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?\/?>/g, '');
-    // 8. Collapse the whitespace left behind by removed blocks
-    s = s.replace(/\n{3,}/g, '\n\n').trim();
-    return s;
+
+    // 3. M2/M3：keep 块保活 —— 剥掉 keep 标签的标记，内部内容（原样、不再二次清洗）入仓；
+    //    保活块之外的一切（非 keep 标签块与裸文本）全部剔除，仅拼回占位符。
+    if (keep.length) {
+        for (const name of keep) {
+            const safeName = escapeTagName(name);
+            const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'gi');
+            s = s.replace(rx, (_m, inner) => {
+                keepStash.push(inner);
+                return ` KEEP${keepStash.length - 1} `;
+            });
+        }
+        s = (s.match(/\sKEEP\d+\s/g) || []).join('\n\n');
+    } else {
+        // M0/M1：轻量卫生 —— 删注释（上步已做）、孤立/自闭合标记；配对标签原样保留。
+        const pairs = [];
+        s = s.replace(/<([a-zA-Z][\w~-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi, m => {
+            pairs.push(m);
+            return `\u0000P${pairs.length - 1}\u0000`;
+        });
+        s = s.replace(/<\/?[a-zA-Z][\w~-]*(?:\s[^>]*)?\/?>/g, '');
+        s = s.replace(/\u0000P(\d+)\u0000/g, (_m, i) => pairs[+i] ?? '');
+    }
+
+    // 4. 恢复 keep 占位符。
+    // do-while：兼容「两个 keep 名互相嵌套」时，后存的整块内容里以文本形式嵌着
+    // 先存的占位符（如 konatan 包裹先存的 content）；引用总指向更早创建的索引，必收敛。
+    {
+        let prev;
+        do {
+            prev = s;
+            s = s.replace(/ KEEP(\d+) /g, (_m, idx) => keepStash[+idx] ?? '');
+        } while (s !== prev);
+    }
+
+    // 5. 折叠多余换行并修剪（通用）
+    return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ─── Chat helpers ────────────────────────────────────────────────────────────
