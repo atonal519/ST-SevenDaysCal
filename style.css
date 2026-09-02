@@ -2777,6 +2777,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink: 0;
     align-items: flex-end;   /* textarea 长高时，发送/清空按钮贴底对齐 */
 }
+/* 桌面端右下角的 44px resize 捕捉层保持完整可拖拽；输入行额外保留原有
+   10px 边距，使「面 / 间」发送按钮不落入透明捕捉区域。移动端把手隐藏，
+   因此继续使用上面的常规 10px 内边距，不无谓压缩输入空间。 */
+@media (min-width: 641px) {
+    .sp-outline-chat > .sp-chat-input-row { padding-right: 54px; }
+}
 .sp-chat-input-row .sp-input { flex: 1; font-size: var(--sp-fs-82); padding: 5px 10px; }
 /* 聊天输入框自增高：单行起步，随内容长高（autoGrowTextarea 设 height），
    到 max-height 封顶后转内部滚动，不再撑破面板。 */

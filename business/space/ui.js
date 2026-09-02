@@ -81,13 +81,19 @@ export function createSpaceUi(host = {}) {
         if (!$root?.length) return;
         bound = true;
         $root.off('.spSpaceFeature');
-        $root.on('click.spSpaceFeature', '#sp-space-send', () => {
+        const sendInput = () => {
             const $input = query('#sp-space-input');
             const message = String($input?.val?.() || '').trim();
             if (!message || controllers.chat.busy) return;
             $input.val('');
             host.autoGrow?.($input[0]);
             void controllers.chat.send(message);
+        };
+        $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
+        $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
+            if (event.key !== 'Enter' || !event.shiftKey) return;
+            event.preventDefault();
+            sendInput();
         });
         $root.on('input.spSpaceFeature', '#sp-space-input', function () { host.autoGrow?.(this); });
         $root.on('click.spSpaceFeature', '.sp-chat-msg-delete', function () {
