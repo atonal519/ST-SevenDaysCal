@@ -1,5 +1,6 @@
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnostics.js';
+import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
 export const JUDGE_FLOORS = 3;
 
 export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
@@ -38,10 +39,11 @@ export function createLedgerJudgeController(options = {}) {
     const finish = (ctrl, owner) => {
         if (abortController !== ctrl) return false;
         busy = false; abortController = null;
-        if (sameOwner(owner, ownerOf())) { env.render?.(); env.refreshInline?.(true); }
+        if (sameOwner(owner, ownerOf())) { try { env.render?.(); } catch {} try { env.refreshInline?.(true); } catch {} }
         return true;
     };
     const run = async (manual = false, travel = null) => {
+        const diagnostic = createGenerationDiagnosticScope('ledger-judge', { background: !manual });
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
         const ctx = env.context();
         const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true; env.setFabBusy?.(true);
@@ -53,7 +55,8 @@ export function createLedgerJudgeController(options = {}) {
             if (reconcile?.error) {
                 if ((reconcile.phase || reconcile.error.phase) === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error: reconcile.error };
                 if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
-                return { status: 'failed', reason: reconcile.error.saveResult?.reason || reconcile.phase || reconcile.error.phase || 'source-state-invalid', reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult };
+                const reason = reconcile.error?.saveResult?.reason === 'invalid-operation' ? 'invalid-operation' : reconcile.phase || reconcile.error.phase || 'source-state-invalid';
+                return { status: 'failed', reason, reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult, reconcileCommitted: false };
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
@@ -69,12 +72,12 @@ export function createLedgerJudgeController(options = {}) {
             const date = target || floorContext?.date || env.today?.();
             const judgePrompt = buildJudgePrompt(env, date, judgeable);
             let raw;
-            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-judge' }); }
+            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-judge', diagnosticSink: diagnostic.sink }); }
             catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
-            if (parsed?.status === 'none') return { status: 'unchanged', reason: 'none', reconcile, applied: [] };
-            if (parsed?.status === 'invalid') return { status: 'invalid', reason: 'format', reconcile, applied: [] };
+            if (parsed?.status === 'none') { diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-explicit-none' }); diagnostic.committed({ reasonCode: 'judge-no-change' }); return { status: 'unchanged', reason: 'none', reconcile, applied: [] }; }
+            if (parsed?.status === 'invalid') { const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'judge-format-unrecognized' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
             const cal = env.calendar?.(); const applied = [];
             const judgeableIds = new Set(judgeable.map(entry => entry?.id).filter(id => /^L\d+$/.test(String(id || ''))));
             let rejectedFormat = false;
@@ -98,16 +101,24 @@ export function createLedgerJudgeController(options = {}) {
             }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (!applied.length) {
-                if (rejectedSource) return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [] };
-                if (rejectedFormat) return { status: 'invalid', reason: 'format', reconcile, applied: [] };
-                return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
+                if (rejectedSource) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-source-state-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [], error, feedbackShown: manual }; }
+                if (rejectedFormat) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-fields-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
+                diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-protected' }); diagnostic.committed({ reasonCode: 'judge-no-change' }); return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
             }
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-valid' });
             let saved = null;
-            if (env.applyAtomic) { try { saved = await env.applyAtomic(applied, owner); } catch (error) { error.phase ||= 'judge-save-failed'; throw error; } }
-            if (env.applyAtomic && !saved?.ok) return { status: 'failed', reason: 'judge-save-failed', reconcile, applied: [] };
-            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
-            if (!env.applyAtomic) for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
-            env.refreshInject?.(); env.refreshInline?.(true); env.render?.();
+            if (env.applyAtomic) { try { saved = await env.applyAtomic(applied, owner); } catch (error) { const savePhase = error?.phase || 'judge-save-failed'; const status = Number(error?.saveResult?.status); const saveError = makeDiagnosticError('save', { phase: savePhase, ...(Number.isInteger(status) ? { status } : {}) }); if (error?.saveResult) saveError.saveResult = error.saveResult; markLedgerError(saveError, { phase: savePhase }); diagnostic.rejected(saveError, { phase: 'save', reasonCode: savePhase }); throw saveError; } }
+            if (env.applyAtomic && !saved?.ok) { const status = Number(saved?.status); const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }), { phase: 'save', reasonCode: 'judge-save-failed' }); if (saved && typeof saved === 'object') error.saveResult = saved; if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'failed', reason: 'judge-save-failed', reconcile, applied: [], error, saveResult: saved, feedbackShown: manual }; }
+            if (env.applyAtomic) {
+                diagnostic.committed({ reasonCode: 'judge-saved' });
+                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, reconcile, applied: [] };
+            } else {
+                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+                for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
+                diagnostic.committed({ reasonCode: 'judge-saved' });
+            }
+            try { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
+            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'judge-ui-refresh-failed' }); }
             return { status: 'updated', applied: applied.map(change => change.事由), reconcile };
         } catch (error) {
             if (abortController !== ctrl) return { status: 'cancelled', reason: 'superseded', reconcile, applied: [], error };
@@ -115,12 +126,12 @@ export function createLedgerJudgeController(options = {}) {
             if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
             if (error?.ledgerPhase === 'rollback-save-failed' || error?.phase === 'rollback-save-failed') { logLedgerFailure(error, { ledgerPhase: 'rollback-save-failed' }); if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.('刻度判定失败：保存状态无法确认，请检查当前聊天数据', null, true); return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error }; }
             if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
-            const reason = error?.saveResult?.reason || error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed');
+            const reason = error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed');
             if (reason === 'api-failed' || reason === 'judge-request' || error?.ledgerPhase === 'judge-request') {
                 logLedgerFailure(error, { ledgerPhase: error?.ledgerPhase || 'judge-request' });
                 if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.(ledgerFailureText('刻度判定失败', error, { phase: error?.ledgerPhase || 'judge-request' }), null, true);
             }
-            return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, applied: [] };
+            return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, reconcileCommitted: reconcile?.summary?.changed === true, applied: [] };
         } finally { finish(ctrl, owner); removeBridge(); env.setFabBusy?.(false); }
     };
     return { run, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };

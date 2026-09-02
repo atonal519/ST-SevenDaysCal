@@ -27,6 +27,7 @@ export function createOutlineFeature(env = {}) {
         isCurrent,
         readStore: env.readStore,
         writeStore: env.writeStore,
+        writeStoreConfirmed: env.writeStoreConfirmed,
         removeStore: env.removeStore,
     });
     const ui = createOutlineUi(env.ui);

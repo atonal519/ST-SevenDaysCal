@@ -10,13 +10,13 @@ const MOBILE_PRIVATE_FIELDS = new Set(['chatId', 'previousChatId', 'currentChatI
 
 const STRING_FIELDS = new Set([
     'event', 'module', 'requestId', 'chatId', 'previousChatId', 'currentChatId',
-    'owner', 'channel', 'status', 'errorClass', 'abortReason',
+    'owner', 'channel', 'status', 'errorClass', 'abortReason', 'phase', 'reasonCode',
 ]);
 const INTEGER_FIELDS = new Set([
     'chatRevision', 'previousChatRevision', 'boundaryEpoch', 'previousBoundaryEpoch',
-    'floor', 'messageId', 'httpStatus', 'attempt', 'retryDelayMs', 'durationMs',
+    'floor', 'messageId', 'httpStatus', 'attempt', 'retryDelayMs', 'durationMs', 'timeoutSec',
 ]);
-const BOOLEAN_FIELDS = new Set(['sameChatReload', 'externalSignalAborted']);
+const BOOLEAN_FIELDS = new Set(['sameChatReload', 'externalSignalAborted', 'background']);
 const SAFE_REASON_TOKENS = new Set([
     'chat-boundary', 'plugin-disabled', 'manual-abort', 'store-clear',
     'time-travel-cancel', 'superseded-owner', 'timeout', 'external-abort',

@@ -1,3 +1,5 @@
+import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, runGenerationUiEffect, safeDiagnosticLog } from '../../api/diagnostics.js';
+
 export const DATE_JUDGE_HISTORY_LIMIT = 3;
 export const DATE_JUDGE_PROMPT = `请暂停角色扮演，作为剧情分析助手，只做一件事：判断以上最近的对话里，故事此刻发生在哪一天。
 只回答「当前剧情日期」，格式为 M月D日（例如 3月15日）；年份不重要、无需回答。
@@ -42,6 +44,18 @@ export function createDateDetectionController(options = {}) {
         }
         return { status: 'updated', date: md };
     };
+    const applyConfirmed = async (charKey, md, ownerIdentity) => {
+        if (!charKey || !md) return { status: 'unresolved' };
+        if (!ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
+        const calibration = options.getCalibration?.(charKey);
+        const prev = options.getAnchor?.(charKey);
+        if (prev && prev.month === md.month && prev.day === md.day && prev.year === md.year && prev.eraLabel === md.eraLabel) return { status: 'unchanged', date: md };
+        const anchorOptions = { ...(calibration ? { calibration } : {}), year: md.year, eraLabel: md.eraLabel };
+        const stored = await (options.setAnchorConfirmed || options.setAnchor)?.(charKey, md.month, md.day, 'detected', anchorOptions, { ownerGuard: () => ownerCurrent(ownerIdentity) });
+        if (!(stored === true || stored?.ok === true)) return { status: 'failed', reason: stored?.reason || 'write-failed', saveResult: stored || null };
+        if (stored?.stale || !ownerCurrent(ownerIdentity)) return { status: 'committed-stale', date: md, saveResult: stored };
+        return { status: 'updated', date: md, saveResult: stored };
+    };
     const reland = ({ suppressAftermath = false } = {}) => {
         if (options.storyEnabled?.() !== true) return { status: 'no-date', reason: 'disabled' };
         const clock = options.storyClock?.();
@@ -56,6 +70,8 @@ export function createDateDetectionController(options = {}) {
         return applied.status === 'failed' ? { status: 'write-failed', reason: applied.reason, date: md } : { status: applied.status === 'updated' ? 'updated' : 'handled', date: md };
     };
     const run = async ({ signal: externalSignal = null } = {}) => {
+        const diagnostic = createGenerationDiagnosticScope('axis-date', { background: true });
+        let generationCommitted = false;
         if (busy) return { status: 'skipped' };
         const participantIdentity = options.captureParticipantIdentity?.() || null;
         const ctx = options.context(); const charKey = options.charKey?.(ctx); if (!charKey) return { status: 'skipped' };
@@ -70,17 +86,42 @@ export function createDateDetectionController(options = {}) {
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
-            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT, { promptMode: 'mechanical', diagnosticModule: 'axis-date' });
+            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT, { promptMode: 'mechanical', diagnosticModule: 'axis-date', diagnosticSink: diagnostic.sink });
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
-            const md = options.parse?.(raw); if (!md) return { status: 'unresolved' };
+            const md = options.parse?.(raw);
+            if (!md) {
+                if (/^(?:未知|无法确定)[。.!！]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'date-explicit-unknown' }); diagnostic.committed({ reasonCode: 'date-no-change' }); generationCommitted = true; return { status: 'unresolved' }; }
+                const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'date-format-unrecognized' });
+                options.logDiagnostic?.(safeDiagnosticLog('axis-date', 'parse', error, { background: true }));
+                if (options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期自动确认失败：${diagnosticMessage(error)}`, null, true);
+                return { status: 'failed', error };
+            }
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
-            const result = apply(charKey, md, true, ownerIdentity);
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'date-valid' });
+            let result;
+            try { result = await applyConfirmed(charKey, md, ownerIdentity); }
+            catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'date-save-failed' }); }
+            if (result.status === 'failed') {
+                const status = Number(result.saveResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (result.saveResult) error.saveResult = result.saveResult;
+                throw diagnostic.rejected(error, { phase: 'save', reasonCode: result.reason || 'date-save-failed' });
+            }
+            diagnostic.committed({ reasonCode: result.status === 'updated' ? 'date-saved' : 'date-no-change' });
+            generationCommitted = true;
+            if (result.status === 'committed-stale') return { status: 'cancelled', reason: 'committed-but-stale', committed: true, date: md };
+            if (result.status === 'updated') {
+                if (options.settings?.().notifyMode === 'full') await runGenerationUiEffect(() => options.toast?.(`剧情日期已自动更新为 ${options.monthName?.(md.month)}${md.day}日 · 请注意查看`), { diagnostic, reasonCode: 'date-toast-failed' });
+                await runGenerationUiEffect(() => options.aftermath?.(), { diagnostic, reasonCode: 'date-ui-refresh-failed' });
+            }
             return ctrl.signal.aborted ? { status: 'cancelled' } : { ...result, date: md };
         } catch (error) {
             if (abortController !== ctrl || error?.name === 'AbortError' || externalSignal?.aborted || !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
-            options.logDiagnostic?.(safeDiagnosticLog('axis', 'request', error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请检查 API 或网络', null, true); return { status: 'failed', error };
-        } finally { if (abortController === ctrl) { busy = false; abortController = null; } remove(); }
+            const phase = error?.phase || 'request';
+            options.logDiagnostic?.(safeDiagnosticLog('axis', phase, error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期自动确认失败：${diagnosticMessage(error)}`, null, true); return { status: 'failed', reason: phase === 'save' ? 'save' : undefined, error };
+        } finally {
+            if (abortController === ctrl) { busy = false; abortController = null; }
+            if (generationCommitted) await runGenerationUiEffect(remove, { diagnostic, reasonCode: 'date-cleanup-failed' });
+            else remove();
+        }
     };
-    return { run, reland, apply, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; lastWeekdayDisplaySignature = undefined; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
+    return { run, reland, apply, applyConfirmed, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; lastWeekdayDisplaySignature = undefined; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }
-import { makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';

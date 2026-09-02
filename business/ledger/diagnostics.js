@@ -1,3 +1,5 @@
+import { diagnosticMessage } from '../../api/diagnostics.js';
+
 // 刻度错误只输出有限的安全摘要；不得把原始错误文本送到 UI 或控制台。
 const statusOf = error => {
     const values = [error?.status, error?.statusCode, error?.httpStatus, error?.response?.status, error?.code];
@@ -35,7 +37,8 @@ export function ledgerFailureDiagnostic(error, meta = {}) {
 export function ledgerFailureText(prefix, error, meta = {}) {
     const diagnostic = ledgerFailureDiagnostic(error, meta);
     const phaseText = { 'capture-request': '标注请求', 'source-provenance': diagnostic.batchNo != null && diagnostic.batchTotal != null ? `来源溯源第 ${diagnostic.batchNo}/${diagnostic.batchTotal} 批` : '来源溯源', 'judge-request': '判定请求' }[diagnostic.phase];
-    const detail = diagnostic.reason ? [phaseText, diagnostic.reason].filter(Boolean).join('：') : '';
+    const safeGenerationMessage = error?.diagnosticCode ? diagnosticMessage(error) : '';
+    const detail = safeGenerationMessage ? [phaseText, safeGenerationMessage].filter(Boolean).join('：') : diagnostic.reason ? [phaseText, diagnostic.reason].filter(Boolean).join('：') : '';
     return `${prefix}：${detail || '请检查 API 或网络'}`;
 }
 export function logLedgerFailure(error, meta = {}) { try { console.error('[SP ledger failure]', ledgerFailureDiagnostic(error, meta)); } catch {} }

@@ -97,6 +97,11 @@ function store(create = false) {
     return s;
 }
 
+function persistNow(ctx) {
+    if (ctx.saveMetadata) return ctx.saveMetadata();
+    return ctx.saveMetadataDebounced?.();
+}
+
 function persist() {
     // 立即落盘，而非 saveMetadataDebounced：切档时 ST 的 clearChat() 会
     // cancelDebouncedMetadataSave() 取消还没触发的防抖保存，紧接着 chat_metadata={}，
@@ -104,8 +109,12 @@ function persist() {
     // 走 diff patch（无变化即 no-op），写完当场发出，切档取消不掉。
     const ctx = getContext?.();
     if (!ctx) return;
-    if (ctx.saveMetadata) ctx.saveMetadata();
-    else ctx.saveMetadataDebounced?.();   // 兜底：老版本 ST 无 saveMetadata
+    const metadata = ctx.chatMetadata;
+    if (metadata && confirmedMetadataQueues.get(metadata)) {
+        deferOrdinaryPersist(ctx, metadata);
+        return;
+    }
+    persistNow(ctx);
 }
 
 // 清理等破坏性动作使用可等待版本：ST 旧版可能只返回 undefined；若返回 Promise，
@@ -113,8 +122,140 @@ function persist() {
 async function persistAsync() {
     const ctx = getContext?.();
     if (!ctx) return;
-    const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
+    const metadata = ctx.chatMetadata;
+    for (let pending = metadata && confirmedMetadataQueues.get(metadata); pending; pending = confirmedMetadataQueues.get(metadata)) {
+        try { await pending; } catch {}
+    }
+    const current = getContext?.();
+    if (metadata && current?.chatMetadata !== metadata) return;
+    const result = persistNow(current || ctx);
     if (result && typeof result.then === 'function') await result;
+}
+
+// AI 生成链专用的可确认保存口。普通 UI/迁移仍继续使用同步 writeStore，避免把全插件
+// 存储 API 粗暴异步化。生产宿主绑定固定目标 metadata saver；测试或旧宿主只能在
+// saveMetadata 明确返回 Promise 时，把 Promise resolve 当作本次调用完成确认。
+let confirmedMetadataPersistence = null;
+export function bindStoreMetadataPersistence(adapter = null) {
+    confirmedMetadataPersistence = adapter && typeof adapter.commit === 'function' ? adapter : null;
+}
+
+async function persistConfirmed(boundContext, options = {}) {
+    if (confirmedMetadataPersistence) return confirmedMetadataPersistence.commit(boundContext, options);
+    const ctx = boundContext || getContext?.();
+    if (!ctx?.chatId || typeof ctx.saveMetadata !== 'function') return { ok: false, reason: 'saveMetadata-unavailable', commitState: 'not-dispatched', dispatched: false };
+    // 旧宿主没有固定目标 saver，只能依赖 saveMetadata 在调用时同步抓取 chatMetadata 快照。
+    // confirmed 使用私有 staging root；因此只在这次同步抓取的一瞬间换入，随后立即还原，
+    // 等待 Promise 期间普通 UI 写入口看不到未确认值。
+    const liveMetadata = options.liveMetadata;
+    const stagedMetadata = ctx.chatMetadata;
+    const swapRoot = liveMetadata && stagedMetadata && liveMetadata !== stagedMetadata;
+    const liveRootExisted = swapRoot && Object.prototype.hasOwnProperty.call(liveMetadata, STORE_KEY);
+    const liveRoot = swapRoot ? liveMetadata[STORE_KEY] : undefined;
+    let result;
+    try {
+        if (swapRoot) {
+            if (Object.prototype.hasOwnProperty.call(stagedMetadata, STORE_KEY)) liveMetadata[STORE_KEY] = stagedMetadata[STORE_KEY];
+            else delete liveMetadata[STORE_KEY];
+        }
+        result = ctx.saveMetadata();
+    } finally {
+        if (swapRoot) {
+            if (liveRootExisted) liveMetadata[STORE_KEY] = liveRoot;
+            else delete liveMetadata[STORE_KEY];
+        }
+    }
+    if (!result || typeof result.then !== 'function') return { ok: false, reason: 'saveMetadata-unconfirmed', commitState: 'legacy-unconfirmed', dispatched: true };
+    await result;
+    return { ok: true, reason: 'saveMetadata-promise-resolved', commitState: 'confirmed', dispatched: true };
+}
+
+const cloneStoreValue = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const confirmedMetadataQueues = new WeakMap();
+const deferredOrdinaryPersists = new WeakMap();
+
+// 普通 writeData/writeBatch 等仍立即更新 live root，保持同步读写合同；若同一 root 正有
+// confirmed 保存，只延后宿主抓取整 root 快照。confirmed 成功后保存 A+B，失败后保存 B，
+// 从根上避免后到的普通旧快照覆盖刚确认的 key。连续普通写只需一次最终保存。
+function deferOrdinaryPersist(ctx, metadata) {
+    if (deferredOrdinaryPersists.has(metadata)) return;
+    const state = { ctx };
+    deferredOrdinaryPersists.set(metadata, state);
+    const flush = () => {
+        if (deferredOrdinaryPersists.get(metadata) !== state) return;
+        const pending = confirmedMetadataQueues.get(metadata);
+        if (pending) { pending.then(flush, flush); return; }
+        deferredOrdinaryPersists.delete(metadata);
+        const current = getContext?.();
+        if (current?.chatMetadata === metadata) persistNow(current);
+    };
+    confirmedMetadataQueues.get(metadata)?.then(flush, flush);
+}
+
+// confirmed 写入必须把「私有 staging → 固定目标保存 → 成功结算/失败回滚」作为一个整体
+// 按 metadata root 串行。普通写仍同步更新 live 数据，但它的宿主整 root 快照也要等同一队列
+// settle 后再抓取，避免夹带失败值或用旧快照覆盖刚确认的值。
+function serializeConfirmedMetadata(metadata, operation) {
+    const previous = confirmedMetadataQueues.get(metadata) || Promise.resolve();
+    const queued = previous.then(operation, operation);
+    confirmedMetadataQueues.set(metadata, queued);
+    const clear = () => { if (confirmedMetadataQueues.get(metadata) === queued) confirmedMetadataQueues.delete(metadata); };
+    queued.then(clear, clear);
+    return queued;
+}
+
+export async function writeDataConfirmed(kind, view, charName, value, options = {}) {
+    const ctx = getContext?.();
+    const chatId = String(ctx?.chatId || '');
+    if (!ctx || !chatId || !ctx.chatMetadata) return { ok: false, reason: 'missing-chat', commitState: 'not-dispatched', dispatched: false };
+    const metadata = ctx.chatMetadata;
+    const externalGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => getContext?.()?.chatId === chatId;
+    const ownerGuard = () => getContext?.()?.chatMetadata === metadata && externalGuard();
+    if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+    return serializeConfirmedMetadata(metadata, async () => {
+        if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+        const rootExisted = Object.prototype.hasOwnProperty.call(metadata, STORE_KEY);
+        const liveRoot = metadata[STORE_KEY];
+        const key = subKey(kind, view, charName);
+        const liveData = liveRoot?.data && typeof liveRoot.data === 'object' ? liveRoot.data : {};
+        const beforeHad = Object.prototype.hasOwnProperty.call(liveData, key);
+        const before = beforeHad ? cloneStoreValue(liveData[key]) : undefined;
+        let s = liveRoot && typeof liveRoot === 'object' ? cloneStoreValue(liveRoot) : freshStore();
+        if (!s.data || typeof s.data !== 'object') s.data = {};
+        if (s.version !== SCHEMA_VERSION) s.version = SCHEMA_VERSION;
+        if (value == null) delete s.data[key]; else s.data[key] = value;
+        const stagedMetadata = { ...metadata, [STORE_KEY]: s };
+        const stagedContext = { ...ctx, chatMetadata: stagedMetadata };
+        try {
+            const saved = await persistConfirmed(stagedContext, { ...options, ownerGuard, liveMetadata: metadata });
+            if (saved?.ok !== true || saved?.commitState !== 'confirmed') {
+                const error = Object.assign(new Error(saved?.reason || 'store-save-unconfirmed'), { phase: 'save', saveResult: saved || null });
+                if (Number.isInteger(Number(saved?.status))) error.status = Number(saved.status);
+                throw error;
+            }
+            const currentRoot = metadata[STORE_KEY];
+            const currentData = currentRoot?.data && typeof currentRoot.data === 'object' ? currentRoot.data : {};
+            const currentHad = Object.prototype.hasOwnProperty.call(currentData, key);
+            const keyUnchanged = currentHad === beforeHad && (!currentHad || JSON.stringify(currentData[key]) === JSON.stringify(before));
+            if (keyUnchanged) {
+                let target = currentRoot;
+                if (!target || typeof target !== 'object') target = metadata[STORE_KEY] = freshStore();
+                if (!target.data || typeof target.data !== 'object') target.data = {};
+                target.version = SCHEMA_VERSION;
+                if (value == null) delete target.data[key]; else target.data[key] = value;
+                if (!rootExisted && value == null && Object.keys(target.data).length === 0) delete metadata[STORE_KEY];
+            }
+            if (!ownerGuard() || !keyUnchanged) return { ...saved, stale: true, reason: 'committed-but-stale' };
+            return saved;
+        } catch (error) {
+            if (!error.saveResult) {
+                const status = Number(error?.status ?? error?.statusCode ?? error?.httpStatus);
+                error.saveResult = { ok: false, reason: Number.isInteger(status) ? `http-${status}` : 'saveMetadata-rejected', ...(Number.isInteger(status) ? { status } : {}), commitState: 'not-dispatched', dispatched: false };
+            }
+            error.phase ||= 'save';
+            throw error;
+        }
+    });
 }
 
 // sp-store 顶层 key 是否已存在（不含内容判断，也不实例化）。
@@ -147,7 +288,8 @@ export function writeData(kind, view, charName, value) {
     const s = store(true);
     if (!s) return false;
     if (value == null) { removeData(kind, view, charName); return true; }
-    s.data[subKey(kind, view, charName)] = value;
+    const key = subKey(kind, view, charName);
+    s.data[key] = value;
     persist();
     return true;
 }
@@ -531,4 +673,5 @@ export function keyDesc(kind, view, charName) {
 }
 export function readStore(desc)         { return desc ? readData(desc.kind, desc.view, desc.charName) : null; }
 export function writeStore(desc, value) { return !!(desc && writeData(desc.kind, desc.view, desc.charName, value)); }
+export function writeStoreConfirmed(desc, value, options = {}) { return desc ? writeDataConfirmed(desc.kind, desc.view, desc.charName, value, options) : Promise.resolve({ ok: false, reason: 'missing-key', commitState: 'not-dispatched', dispatched: false }); }
 export function removeStore(desc)       { if (desc) removeData(desc.kind, desc.view, desc.charName); }

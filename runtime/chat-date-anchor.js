@@ -20,7 +20,7 @@ export function normalizeChatAnchor(value, chatId) {
 }
 export function unresolvedLegacyAnchor(identity = null) { return { status: 'unresolved', reason: 'legacy-global-anchor-needs-explicit-claim', identity }; }
 
-export function createChatAnchorRepository({ chatId, read, write, legacy = null, claimMarkerRead = null, claimMarkerWrite = null } = {}) {
+export function createChatAnchorRepository({ chatId, read, write, writeConfirmed, legacy = null, claimMarkerRead = null, claimMarkerWrite = null } = {}) {
     const id = () => String(typeof chatId === 'function' ? chatId() || '' : chatId || '');
     const localRecord = () => { try { return read?.() || null; } catch { return null; } };
     const local = () => { const r = localRecord(); if (r?.state === 'auto') return null; return r?.state === 'set' ? normalizeChatAnchor(r, id()) : normalizeChatAnchor(r?.anchor ? r : null, id()); };
@@ -33,7 +33,28 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         return { status: 'pending', identity, month: +v.month, day: +v.day, source: 'legacy' };
     };
     const persist = record => { try { return write?.(record) === true; } catch { return false; } };
-    const set = (month, day, source = 'explicit', options = {}) => { const a = makeChatAnchor(id(), month, day, source); if (!a) return { ok: false, reason: 'invalid-anchor' }; if (Number.isInteger(+options.year) && +options.year >= 1 && +options.year <= 9999) a.year = +options.year; if (typeof options.eraLabel === 'string' && options.eraLabel.trim()) a.eraLabel = options.eraLabel.trim(); const calibration = options.calibration || (source === 'calibration' ? options : null); if (calibration && Number.isInteger(+calibration.weekday)) a.calibration = { refMonth: calibration.refMonth != null && Number.isInteger(+calibration.refMonth) ? +calibration.refMonth : +month, refDay: calibration.refDay != null && Number.isInteger(+calibration.refDay) ? +calibration.refDay : +day, weekday: calibration.weekday, floor: calibration.floor != null && Number.isInteger(+calibration.floor) ? +calibration.floor : null, sourceFloor: calibration.sourceFloor != null && Number.isInteger(+calibration.sourceFloor) ? +calibration.sourceFloor : null, swipe: calibration.swipe == null ? null : String(calibration.swipe) }; return persist({ schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a }) ? { ok: true, anchor: a } : { ok: false, reason: 'write-failed' }; };
+    const setRecord = (month, day, source = 'explicit', options = {}) => {
+        const a = makeChatAnchor(id(), month, day, source);
+        if (!a) return null;
+        if (Number.isInteger(+options.year) && +options.year >= 1 && +options.year <= 9999) a.year = +options.year;
+        if (typeof options.eraLabel === 'string' && options.eraLabel.trim()) a.eraLabel = options.eraLabel.trim();
+        const calibration = options.calibration || (source === 'calibration' ? options : null);
+        if (calibration && Number.isInteger(+calibration.weekday)) a.calibration = { refMonth: calibration.refMonth != null && Number.isInteger(+calibration.refMonth) ? +calibration.refMonth : +month, refDay: calibration.refDay != null && Number.isInteger(+calibration.refDay) ? +calibration.refDay : +day, weekday: calibration.weekday, floor: calibration.floor != null && Number.isInteger(+calibration.floor) ? +calibration.floor : null, sourceFloor: calibration.sourceFloor != null && Number.isInteger(+calibration.sourceFloor) ? +calibration.sourceFloor : null, swipe: calibration.swipe == null ? null : String(calibration.swipe) };
+        return { anchor: a, record: { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a } };
+    };
+    const set = (month, day, source = 'explicit', options = {}) => {
+        const built = setRecord(month, day, source, options);
+        if (!built) return { ok: false, reason: 'invalid-anchor' };
+        return persist(built.record) ? { ok: true, anchor: built.anchor } : { ok: false, reason: 'write-failed' };
+    };
+    const setConfirmed = async (month, day, source = 'explicit', options = {}, persistenceOptions = {}) => {
+        const built = setRecord(month, day, source, options);
+        if (!built) return { ok: false, reason: 'invalid-anchor' };
+        if (typeof writeConfirmed !== 'function') return set(month, day, source, options);
+        const stored = await writeConfirmed(built.record, persistenceOptions);
+        if (!(stored === true || stored?.ok === true)) return stored || { ok: false, reason: 'write-failed' };
+        return stored === true ? { ok: true, anchor: built.anchor } : { ...stored, anchor: built.anchor };
+    };
     const clear = () => { if (!id()) return { ok: false, reason: 'missing-chat' }; return persist({ schemaVersion: DATE_ANCHOR_SCHEMA, state: 'auto', chatId: id(), anchor: null }) ? { ok: true, tombstone: true } : { ok: false, reason: 'write-failed' }; };
     const claim = (month, day, options = {}) => {
         const p = legacyPending(); if (!p) return { ok: false, reason: 'no-pending-legacy' };
@@ -51,7 +72,7 @@ export function createChatAnchorRepository({ chatId, read, write, legacy = null,
         const record = { schemaVersion: DATE_ANCHOR_SCHEMA, state: 'set', chatId: id(), anchor: a, claimMarker: { schemaVersion: 1, identity: p.identity, ownerChatId: id(), claimedAt: Date.now() } };
         return persist(record) ? { ok: true, anchor: a, claimed: true, identity: p.identity, marker: record.claimMarker } : { ok: false, reason: 'write-failed' };
     };
-    return { get: () => local() || legacyPending() || null, pending: legacyPending, set, auto: (m, d) => set(m, d, 'auto'), clear, claim, claimCalibration, cancel: () => ({ ok: true, wrote: false }) };
+    return { get: () => local() || legacyPending() || null, pending: legacyPending, set, setConfirmed, auto: (m, d) => set(m, d, 'auto'), clear, claim, claimCalibration, cancel: () => ({ ok: true, wrote: false }) };
 }
 
 export function isValidCalendarDescriptor(c) {

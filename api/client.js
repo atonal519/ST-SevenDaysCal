@@ -4,10 +4,8 @@ import { getSettings, pluginEnabled, loadCfg, loadUtilityCfg } from '../runtime/
 import {
     normalizeApiUrl,
     PROTECTED_BODY_KEYS,
-    emptyContentMessage,
     isPlaceholderContent,
     extractCompletion,
-    mapApiError,
     readSseContent,
     retryBackoffMs,
     sleepAbortable,
@@ -56,6 +54,11 @@ function throwIfPreAborted(signal) {
     // Keep the platform error shape so every caller can handle it as a normal
     // user abort, before any request bookkeeping or fetch side effect occurs.
     throw new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function rethrowBodyReadAbort(error, externalSignal, internalSignal) {
+    if (error?.name === 'AbortError') throw error;
+    if (externalSignal?.aborted || internalSignal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
 }
 
 export function expandRequestPlaceholders(value, { userName = '', charName = '' } = {}) {
@@ -135,6 +138,7 @@ export async function postChatCompletion(options = {}) {
         channel: options.diagnosticChannel || options.diagnosticModule || 'api',
         requestId: createDiagnosticRequestId(startedAt),
     };
+    try { options.diagnosticSink?.(Object.freeze({ requestId: base.requestId, module: base.module })); } catch {}
     traceDiagnosticEvent('api-start', {
         ...base,
         status: signal?.aborted ? 'pre-aborted' : 'started',
@@ -145,7 +149,8 @@ export async function postChatCompletion(options = {}) {
         const result = await postChatCompletionCore({ ...options, signal, diagnosticLifecycle: lifecycle, diagnosticTraceBase: base });
         traceDiagnosticEvent('api-success', {
             ...base,
-            status: 'success',
+            status: 'response-extracted',
+            phase: 'response',
             httpStatus: lifecycle.httpStatus,
             attempt: lifecycle.attempt,
             durationMs: Date.now() - startedAt,
@@ -169,6 +174,7 @@ export async function postChatCompletion(options = {}) {
             errorClass: apiTraceErrorClass(error, signal),
             abortReason,
             externalSignalAborted: signal?.aborted === true,
+            timeoutSec: timeout ? error?.timeoutSec : undefined,
             attempt: lifecycle.attempt,
             durationMs: Date.now() - startedAt,
         });
@@ -263,26 +269,32 @@ async function postChatCompletionCore({ cfg, messages, maxTokens, temperature, s
             });
             if (diagnosticLifecycle) diagnosticLifecycle.httpStatus = Number(res?.status) || null;
             if (!res.ok) {
-                const errText = await res.text().catch(() => '');
+                try { await res.text(); }
+                catch (error) { rethrowBodyReadAbort(error, signal, ctrl.signal); }
                 if ((res.status === 429 || res.status >= 500) && attempt < RETRY_MAX && !signal?.aborted) {
                     retryDelay = retryBackoffMs(attempt + 1, res);   // 可重试 → 记下退避时长，出 finally 后再睡
                 } else {
                     throw makeDiagnosticError(
                         res.status === 400 ? 'http-400' : res.status === 401 || res.status === 403 ? 'auth' : res.status === 404 ? 'not-found' : res.status === 429 ? 'rate-limit' : res.status >= 500 ? 'server' : 'unknown',
-                        { status: res.status, phase: 'request', retryable: res.status === 429 || res.status >= 500 },
+                        { status: res.status, phase: 'request', retryable: res.status === 429 || res.status >= 500, attempt: attempt + 1 },
                     );
                 }
             } else if (stream) {
                 const content = await readSseContent(res, { allowEmptyOutput });
-                if ((!content && !allowEmptyOutput) || isPlaceholderContent(content)) throw new Error(emptyContentMessage(''));
+                if ((!content && !allowEmptyOutput) || isPlaceholderContent(content)) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
                 return content;
             } else {
-                const data = await res.json();
-                if (data?.error) throw new Error(mapApiError(0, data.error.message || '返回错误'));
+                let data;
+                try { data = await res.json(); }
+                catch (error) {
+                    rethrowBodyReadAbort(error, signal, ctrl.signal);
+                    throw makeDiagnosticError('invalid-json', { phase: 'response' });
+                }
+                if (data?.error) throw makeDiagnosticError('response-error', { phase: 'response' });
                 return extractCompletion(data, { allowEmptyOutput });
             }
         } catch (err) {
-            if (timedOut) throw makeDiagnosticError('timeout', { phase: 'request' });
+            if (timedOut) throw makeDiagnosticError('timeout', { phase: 'request', timeoutSec, status: Number(diagnosticLifecycle?.httpStatus) || undefined });
             if (err?.name === 'AbortError') throw err;   // 用户主动取消：原样抛出，上层按 AbortError 静默处理
             // fetch 本身抛的网络错误（TypeError: Failed to fetch 等）：也算瞬时抖动，可重试
             if (err instanceof TypeError) {
@@ -319,7 +331,7 @@ export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal
     // 30000：推理模型（GLM 等）会先耗一大段思维链预算，长提示词（尤其「面」）下要留足空间，
     // 否则正文被挤空 → 代理回 <none>。
     // opts.temperature：可选，机械/创作按需覆盖（历生成抬温让次要节日与风味更发散）；未给则跟随预设。
-    return postChatCompletion({ cfg, messages, maxTokens: 30000, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal, userName, charName, allowEmptyOutput: opts.allowEmptyOutput === true, promptMode: opts.promptMode, diagnosticModule: opts.diagnosticModule, diagnosticChannel: opts.diagnosticChannel, diagnosticContext: opts.diagnosticContext });
+    return postChatCompletion({ cfg, messages, maxTokens: 30000, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal, userName, charName, allowEmptyOutput: opts.allowEmptyOutput === true, promptMode: opts.promptMode, diagnosticModule: opts.diagnosticModule, diagnosticChannel: opts.diagnosticChannel, diagnosticContext: opts.diagnosticContext, diagnosticSink: opts.diagnosticSink });
 }
 
 // Called by memory.js — minimal wrapper around user's configured API.
@@ -339,10 +351,10 @@ export async function callMemoryApi(messages, signal = null) {
 // Called by business/theater/generation.js — bare API caller (world info/persona already baked into
 // the messages by the theater generation flow via getTheaterStoryContext). Bare like callMemoryApi;
 // world info is NOT auto-injected here so the beautify pass stays clean.
-export async function callTheaterApi(messages, { maxTokens = 30000, signal = null, userName = null, charName = null, promptMode = PROMPT_MODES.MECHANICAL, diagnosticModule = 'theater' } = {}) {
+export async function callTheaterApi(messages, { maxTokens = 30000, signal = null, userName = null, charName = null, promptMode = PROMPT_MODES.MECHANICAL, diagnosticModule = 'theater', diagnosticSink = null } = {}) {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) throw makeDiagnosticError('config-missing');
     const ctx = getContext();
-    if (!userName && !charName) return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: ctx?.name1 || '用户', charName: ctx?.name2 || '角色', promptMode, diagnosticModule });
-    return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: userName || ctx?.name1 || '用户', charName: charName || ctx?.name2 || '角色', promptMode, diagnosticModule });
+    if (!userName && !charName) return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: ctx?.name1 || '用户', charName: ctx?.name2 || '角色', promptMode, diagnosticModule, diagnosticSink });
+    return postChatCompletion({ cfg, messages, maxTokens, temperature: GEN_TEMPERATURE, signal, userName: userName || ctx?.name1 || '用户', charName: charName || ctx?.name2 || '角色', promptMode, diagnosticModule, diagnosticSink });
 }

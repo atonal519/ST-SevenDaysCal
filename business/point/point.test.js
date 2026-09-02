@@ -714,7 +714,7 @@ function pointControllerTestEnv({ validation, cachedSchedule = null } = {}) {
         context: () => ({ name1: '用户', name2: '角色' }), config: () => ({ url: 'https://example.test', key: 'test-key' }), calendar: () => null, adultMode: () => 'off', editing: () => false,
         canCommit: () => true, parse: () => ({ days: [], future: null }), generate: async () => 'raw', validate: () => validation,
         bindAdult: raw => raw, mergePinned: (_old, fresh) => fresh, today: () => ({ month: 1, day: 1 }), forceStart: raw => raw,
-        render: () => '', write: () => {}, sync: () => {}, setButton: () => {}, panelVisible: () => false, showPanel: () => {},
+        render: () => '', write: () => true, sync: () => {}, setButton: () => {}, panelVisible: () => false, showPanel: () => {},
         setBody: value => bodies.push(value), loading: () => '', setCached: value => { state.cachedSchedule = value; },
         cached: () => state.cachedSchedule, toast: value => toasts.push(value), notify: () => 'full', escape: value => value,
         enabled: () => true, syncing: () => false, abortAuto: () => {}, setAuto: controller => controller, setSyncing: () => {}, evaluate: () => ({ canCleanup: true, canCommit: true }),
@@ -731,7 +731,7 @@ test('point controller maps generated field and structure failures while preserv
     assert.equal(fieldResult.error.diagnosticCode, 'invalid-fields');
     assert.equal(fieldResult.error.validation, fieldValidation);
     assert.equal(fieldResult.error.pointIncomplete, true);
-    assert.match(fieldCase.toasts[0], /AI 返回内容字段不完整/);
+    assert.match(fieldCase.toasts[0], /字段未通过本地校验/);
 
     const structureValidation = { ok: false, code: 'day-missing' };
     const structureCase = pointControllerTestEnv({ validation: structureValidation });
@@ -747,7 +747,7 @@ test('point controller manual generation exposes field diagnostic and restores c
     const controller = createPointController(testCase.env);
     await controller.runGenerate();
     assert.equal(testCase.state.cachedSchedule, 'OLD CACHE');
-    assert.match(testCase.toasts[0], /AI 返回内容字段不完整/);
+    assert.match(testCase.toasts[0], /字段未通过本地校验/);
 });
 
 test('point combined edit updates desc and npcAction atomically', () => {
@@ -775,7 +775,7 @@ function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024
         generate: async () => { apiCalls++; if (generateError) throw generateError; return generated; },
         validate: () => ({ ok: true }), parse: () => ({ days: [], future: null }), bindAdult: value => value,
         mergePinned: (_previous, fresh) => fresh, forceStart: value => value, today: () => ({ month: 8, day: 21 }),
-        canCommit: () => true, render: value => value, write: (key, value) => { records.set(key, value); writes.push([key, value]); }, sync: () => {},
+        canCommit: () => true, render: value => value, write: (key, value) => { records.set(key, value); writes.push([key, value]); return true; }, sync: () => {},
         setCached: value => { state.cachedSchedule = value; }, cached: () => state.cachedSchedule, panelVisible: () => false, setBody: () => {},
         toast: () => {}, notify: () => 'off', monthName: month => `${month}月`, clearBusy: () => {},
         followupState: () => ({ canCleanup: true, canFollowup: false }), shouldFollowup: () => false,
@@ -828,7 +828,7 @@ function pointPreflightBoundaryHarness() {
         view: () => 'user', char: () => '', precheck: () => precheck, setButton: () => {}, toast: () => {}, panelVisible: () => false,
         showPanel: () => {}, setBody: () => {}, loading: () => '', abortAuto: () => {}, context: () => ({ chatId, name1: userName, name2: charName, chat: [] }),
         captureContext: () => ({ chatId, name1: userName, name2: charName, chat: [] }), captureParticipantIdentity: identity, sameParticipantIdentity: same,
-        key: () => 'point', read: () => null, write: () => {}, parse: () => ({ days: [], future: null }), calendar: () => null,
+        key: () => 'point', read: () => null, write: () => true, parse: () => ({ days: [], future: null }), calendar: () => null,
         generate: async () => { apiCalls++; return '<calendar_widget></calendar_widget>'; }, validate: () => ({ ok: true }), mergePinned: (_a, b) => b,
         today: () => ({ month: 1, day: 1 }), forceStart: value => value, render: value => value, sync: () => {}, setCached: () => {}, notify: () => 'off',
         canCommit: owner => owners.isValid(owner, { chatId, chatRevision: owners.currentChatRevision() }) && same(owner.participantIdentity, identity()),
@@ -862,7 +862,7 @@ function pointLateParticipantHarness() {
         view: () => 'user', char: () => '', precheck: async () => true, setButton: () => {}, panelVisible: () => false, showPanel: () => {}, setBody: () => {}, loading: () => '',
         context: () => ({ chatId: 'same-chat', name1: participant.userName, name2: participant.charName, chat: [] }), captureContext: () => ({ chatId: 'same-chat', name1: participant.userName, name2: participant.charName, chat: [] }),
         captureParticipantIdentity: identity, sameParticipantIdentity: (a, b) => JSON.stringify(a) === JSON.stringify(b),
-        key: () => 'point', read: () => saved, write: () => { effects.writes++; }, config: () => ({ url: 'u', key: 'k' }), calendar: () => null,
+        key: () => 'point', read: () => saved, write: () => { effects.writes++; return true; }, config: () => ({ url: 'u', key: 'k' }), calendar: () => null,
         parse: () => ({ days: [], future: null }), generate: () => new Promise(resolve => { release = () => resolve('StartDate: 2024-08-21\n<calendar_widget>\nDay: 1\nEvent: main|新点|描述|早|地点|动态\n</calendar_widget>'); }),
         validate: () => ({ ok: true }), bindAdult: value => value, mergePinned: (_old, fresh) => fresh, today: () => ({ month: 8, day: 21 }), forceStart: value => value,
         render: value => { effects.renders++; return value; }, sync: () => {}, setCached: () => { effects.cached++; }, cached: () => state.cachedSchedule,

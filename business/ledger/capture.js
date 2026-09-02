@@ -1,5 +1,6 @@
 import { ledgerSourceFingerprint, legacyLedgerSourceFingerprint } from './reconcile.js';
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
+import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, runGenerationUiEffect } from '../../api/diagnostics.js';
 // 刻度捕获纯依赖：只负责正文楼层/来源窗口与稳定性，不执行 API 或落库。
 export const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
 - 持续状态：身体伤情 / 病症、怀孕、会持续影响后续行为、关系或状态的情绪／心理影响等——会随天数自然演变（如割伤→结痂→愈合）。单场景的一过性心情不记。
@@ -249,12 +250,16 @@ export function createLedgerCaptureController(options = {}) {
         return true;
     };
     const run = async (manual = false, travel = null) => {
+        const diagnostic = createGenerationDiagnosticScope('ledger-capture', { background: !manual });
+        let generationCommitted = false;
+        const markCommitted = options => { diagnostic.committed(options); generationCommitted = true; };
         if (busy) return { status: 'busy', reason: 'busy' };
         const ctx = env.context();
         const charKey = env.charKey?.(ctx);
         if (!charKey) { if (manual) env.toast?.('当前没有角色卡，无法标注', null, true); return { status: 'skipped', reason: 'no-character', feedbackShown: manual }; }
         const inspected = inspectCheckpoint();
         const checkpoint = inspected.checkpoint;
+        if (checkpoint?.diagnosticRequestId) diagnostic.sink({ requestId: checkpoint.diagnosticRequestId });
         if (inspected.invalidCompleted) {
             const result = { status: 'failed', reason: 'pending-commit-invalid', feedbackShown: false };
             if (!manual) { env.toast?.('已保留的刻度结果无法安全提交：聊天、角色、刻度池或来源正文已经变化；本次没有写入，也没有重跑 API。', null, true); result.feedbackShown = true; }
@@ -304,7 +309,7 @@ export function createLedgerCaptureController(options = {}) {
             let picked = checkpoint?.picked || null;
             if (!picked) {
                 const prompt = env.appendTravel?.(buildCapturePrompt(isFirst), travel) || buildCapturePrompt(isFirst);
-                const captureOpts = { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-capture' };
+                const captureOpts = { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-capture', diagnosticSink: diagnostic.sink };
                 // 最终常规请求只喂最近 3 个可见 AI 楼；内部 6 楼记录仍完整保留给来源锚、稳定性与溯源批处理。
                 const recentVisibleRecords = ledgerAiFloorRecords().filter(record => {
                     const message = ctx.chat?.[record.floor];
@@ -316,7 +321,10 @@ export function createLedgerCaptureController(options = {}) {
                 catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
                 if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
                 picked = env.parseCapture?.(raw) || [];
-                if (!picked.length) { if (manual) env.toast?.('未发现可登记的新事件'); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
+                if (!picked.length) {
+                    if (/^无[。.！!]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-explicit-none' }); markCommitted({ reasonCode: 'capture-no-change' }); if (manual) await runGenerationUiEffect(() => env.toast?.('未发现可登记的新事件'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
+                    throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'capture-format-unrecognized' });
+                }
                 picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
             }
             let sourceList = recentSources, sourceMap = recentSourceMap, recordsForCommit = recentRecords;
@@ -333,31 +341,52 @@ export function createLedgerCaptureController(options = {}) {
                     const unresolved = candidates.filter(item => !String(item._sourceToken || '').trim());
                     if (!unresolved.length) break;
                     const batch = provenanceBatches[i];
+                    const provenanceDiagnostic = createGenerationDiagnosticScope('ledger-provenance', { background: !manual });
+                    const retainProvenanceProgress = () => {
+                        const checkpointCurrent = abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && env.context().chatId === chatId && ledgerBaselineEmpty() && ledgerRecordCollectionStable(allRecords, chatId) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
+                        if (checkpointCurrent) provenanceCheckpoint = makeCheckpoint('provenance', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: i, diagnosticRequestId: diagnostic.metadata().requestId });
+                        else provenanceCheckpoint = null;
+                    };
                     let result;
                     try {
                         const provenanceCfg = env.provenanceConfig?.() || cfg;
                         if (!provenanceCfg?.url || !provenanceCfg?.key) throw Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' });
-                        result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), provenanceCfg, userName, charName, ctrl.signal, 0, { ...sourceTravel, noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, allowEmptyOutput: true, promptMode: 'mechanical', diagnosticModule: 'ledger-provenance' });
+                        result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), provenanceCfg, userName, charName, ctrl.signal, 0, { ...sourceTravel, noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, promptMode: 'mechanical', diagnosticModule: 'ledger-provenance', diagnosticSink: provenanceDiagnostic.sink });
                     }
                     catch (error) {
                         markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length });
-                        const checkpointCurrent = abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && env.context().chatId === chatId && ledgerBaselineEmpty() && ledgerRecordCollectionStable(allRecords, chatId) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
-                        if (checkpointCurrent) {
-                            provenanceCheckpoint = makeCheckpoint('provenance', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: i });
-                        } else provenanceCheckpoint = null;
+                        retainProvenanceProgress();
                         throw error;
                     }
                     if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-                    const found = env.parseCapture?.(result) || [], batchMap = ledgerSourceMap(batch.flatMap(record => record.sources)), hits = [];
+                    if (/^无[。.！!]?$/u.test(String(result || '').trim())) {
+                        provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: 'provenance-explicit-none' });
+                        provenanceDiagnostic.committed({ reasonCode: 'provenance-no-change' });
+                        if (checkpoint) provenanceCheckpoint = { ...checkpoint, picked, nextBatchIndex: i + 1 };
+                        progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
+                        continue;
+                    }
+                    const found = env.parseCapture?.(result) || [];
+                    if (!found.length) {
+                        const error = provenanceDiagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'provenance-format-unrecognized' });
+                        markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); retainProvenanceProgress(); throw error;
+                    }
+                    const batchMap = ledgerSourceMap(batch.flatMap(record => record.sources)), hits = [];
+                    let rejectedRow = false;
                     for (const item of found) {
                         const candidate = candidates.find(x => x._candidateId === item._candidateId && !String(x._sourceToken || '').trim());
-                        const attemptedSource = String(item?._sourceToken || '').trim();
                         const token = selectLedgerProvenanceToken(item._sourceToken, batchMap);
                         if (candidate && ledgerSourceAnchor(token, batchMap)) hits.push({ candidate, token, source: batchMap.get(token) });
-                        else if (candidate && attemptedSource) candidate._provenanceInvalid = true;
+                        else { rejectedRow = true; if (candidate && String(item?._sourceToken || '').trim()) candidate._provenanceInvalid = true; }
+                    }
+                    if (rejectedRow) {
+                        const error = provenanceDiagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'provenance-fields-invalid' });
+                        markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); retainProvenanceProgress(); throw error;
                     }
                     hits.sort((a, b) => a.source.floor - b.source.floor || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
                     hits.forEach(hit => { if (!String(hit.candidate._sourceToken || '').trim()) hit.candidate._sourceToken = hit.token; });
+                    provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: 'provenance-valid' });
+                    provenanceDiagnostic.committed({ reasonCode: 'provenance-applied' });
                     if (checkpoint) provenanceCheckpoint = { ...checkpoint, picked, nextBatchIndex: i + 1 };
                     progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                 }
@@ -367,12 +396,12 @@ export function createLedgerCaptureController(options = {}) {
                     provenanceCheckpoint = null;
                     return { status: 'failed', reason: 'completed-source-invalid', totalBatches: provenanceBatches.length, feedbackShown: false };
                 }
-                provenanceCheckpoint = makeCheckpoint('pending-commit', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: provenanceBatches.length, sourceRecords: selectedSourceRecords(picked, allRecords) });
+                provenanceCheckpoint = makeCheckpoint('pending-commit', { chatId, charKey: String(charKey), ownerSnapshot, fixedTarget, userName, charName, targetDate, floorContext, captureDate, recentRecords, allRecords, provenanceBatches, picked, sourceTravel, nextBatchIndex: provenanceBatches.length, sourceRecords: selectedSourceRecords(picked, allRecords), diagnosticRequestId: diagnostic.metadata().requestId });
             }
             const entries = env.listEntries?.({ includeClosed: true }) || [];
             const candidates = picked.map(item => ({ ...item, 起始锚: resolveLedgerStartAnchor(item, sourceMap, sourceList) }));
             const capturePlan = planLedgerCapture({ entries, candidates, sourceMap, captureFloor, captureDate, norm: env.normGist || (value => String(value || '').replace(/\s+/g, '')) });
-            if (!capturePlan.additions.length && !capturePlan.patches.length) { provenanceCheckpoint = null; if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!capturePlan.additions.length && !capturePlan.patches.length) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-duplicate' }); markCommitted({ reasonCode: 'capture-no-change' }); provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             const completedRetry = checkpoint?.phase === 'pending-commit';
             const commitRecordLimit = historical ? null : CAPTURE_FLOORS;
@@ -391,13 +420,26 @@ export function createLedgerCaptureController(options = {}) {
             // baseline 在进入事务前单独验证；事务内存 staging 后 ledger 已非空，owner guard 不能把本次新增误判成外部改动。
             // 并发 metadata 变更仍由固定目标 saver 的 integrity + owned-path test 拒绝。
             const owner = { chatId, target: fixedTarget, guard: () => isCurrent(ctrl, chatId, travel) && (completedRetry ? completedCheckpointStable(checkpoint, { requireBaseline: false }) : (ledgerRecordCollectionStable(recordsForCommit, chatId, commitRecordLimit) && sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context())))) };
-            const result = env.applyAtomic ? await env.applyAtomic({ additions: cleanAdditions, patches: capturePlan.patches }, owner) : { added: await env.addAtomic?.(cleanAdditions) || [], patched: [] };
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-valid' });
+            let result;
+            try { result = env.applyAtomic ? await env.applyAtomic({ additions: cleanAdditions, patches: capturePlan.patches }, owner) : { added: await env.addAtomic?.(cleanAdditions) || [], patched: [] }; }
+            catch (error) {
+                const savePhase = error?.phase || 'capture-save-failed';
+                const status = Number(error?.saveResult?.status);
+                const saveError = makeDiagnosticError('save', { phase: savePhase, ...(Number.isInteger(status) ? { status } : {}) });
+                if (error?.saveResult) saveError.saveResult = error.saveResult;
+                markLedgerError(saveError, { phase: savePhase });
+                throw diagnostic.rejected(saveError, { phase: 'save', reasonCode: savePhase });
+            }
             const added = result?.added || [];
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-            if (!added.length && !(result?.patched || []).length) { provenanceCheckpoint = null; if (manual) env.toast?.('没有新事件（都已在刻度上）'); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!added.length && !(result?.patched || []).length) { markCommitted({ reasonCode: 'capture-no-change' }); provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             provenanceCheckpoint = null;
-            if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`);
-            env.refresh?.(); env.refreshInline?.(true); env.render?.();
+            markCommitted({ reasonCode: 'capture-saved' });
+            if (manual || env.settings?.()?.notifyMode === 'full') await runGenerationUiEffect(() => env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`), { diagnostic, reasonCode: 'capture-toast-failed' });
+            await runGenerationUiEffect(() => env.refresh?.(), { diagnostic, reasonCode: 'capture-refresh-failed' });
+            await runGenerationUiEffect(() => env.refreshInline?.(true), { diagnostic, reasonCode: 'capture-inline-refresh-failed' });
+            await runGenerationUiEffect(() => env.render?.(), { diagnostic, reasonCode: 'capture-render-failed' });
             return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: manual || env.settings?.()?.notifyMode === 'full' };
         } catch (err) {
             const ownerCurrent = sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
@@ -417,9 +459,14 @@ export function createLedgerCaptureController(options = {}) {
             logLedgerFailure(err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal });
             const manualFailure = manual || env.settings?.()?.notifyMode === 'full';
             const resumable = err?.ledgerPhase === 'source-provenance' && progressCheckpointStable(provenanceCheckpoint);
-            if (manualFailure) env.toast?.(`${ledgerFailureText('刻度标注失败', err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal })}${resumable ? '；进度已保留，再次标注将从本批继续' : ''}`, null, true);
+            if (manualFailure) { const detail = err?.diagnosticCode === 'parse' ? `刻度标注失败：${diagnosticMessage(err)}` : ledgerFailureText('刻度标注失败', err, { phase: err?.ledgerPhase || 'capture-request', batchNo: err?.ledgerBatchNo, batchTotal: err?.ledgerBatchTotal }); env.toast?.(`${detail}${resumable ? '；进度已保留，再次标注将从本批继续' : ''}`, null, true); }
             return { status: 'failed', reason: err?.ledgerPhase || err?.phase || 'api-failed', error: err, feedbackShown: manualFailure };
-        } finally { clear(ctrl); removeBridge(); }
+        } finally {
+            if (generationCommitted) {
+                await runGenerationUiEffect(() => clear(ctrl), { diagnostic, reasonCode: 'capture-cleanup-failed' });
+                await runGenerationUiEffect(() => removeBridge(), { diagnostic, reasonCode: 'capture-cleanup-failed' });
+            } else { clear(ctrl); removeBridge(); }
+        }
     };
     return {
         run,

@@ -1,3 +1,5 @@
+import { createGenerationDiagnosticScope, makeDiagnosticError } from '../../api/diagnostics.js';
+
 export function createTheaterController({ owners, repository, generate, current, chatId, chatRevision, names, settings, storyContext, stage, commit, error, reset } = {}) {
     let active = null;
     const valid = owner => owners.isValid(owner, { chatId: chatId(), chatRevision: chatRevision() }) && !owner.controller.signal.aborted;
@@ -13,15 +15,16 @@ export function createTheaterController({ owners, repository, generate, current,
         owner.charName = frozenNames.charName || '角色';
         owner.templateSource = options.templateSource || null;
         owner.settings = settings?.();
+        const diagnostic = createGenerationDiagnosticScope('theater-generation');
         active = owner;
         try {
             owner.storyContext = await storyContext?.(owner);
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
-            const piece = await generate(owner.input, { ...options, signal: owner.controller.signal, userName: owner.userName, charName: owner.charName, storyContext: owner.storyContext, settings: owner.settings, isCurrent: () => valid(owner), onStage: text => { if (valid(owner)) stage?.(text, owner); } });
+            const piece = await generate(owner.input, { ...options, signal: owner.controller.signal, userName: owner.userName, charName: owner.charName, storyContext: owner.storyContext, settings: owner.settings, diagnosticScope: diagnostic, isCurrent: () => valid(owner), onStage: text => { if (valid(owner)) stage?.(text, owner); } });
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
             const saved = await repository.pushDraft(owner.chatId, piece);
-            if (!saved?.ok) return { status: 'failed', reason: 'draft-save', error: saved?.error || new Error('draft-save-failed') };
-            commit?.(piece, owner); current?.(piece, owner); return { status: 'updated', piece };
+            if (!saved?.ok) { const saveError = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'theater-draft-save-failed' }); error?.(saveError, owner); return { status: 'failed', reason: 'draft-save', error: saveError }; }
+            diagnostic.committed({ reasonCode: 'theater-draft-saved' }); commit?.(piece, owner); current?.(piece, owner); return { status: 'updated', piece };
         } catch (err) {
             // 请求可能不遵守 AbortSignal，并在 owner 已换代后抛普通 Error；先验身份，绝不能把 A 的迟到错误反馈到 B。
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };

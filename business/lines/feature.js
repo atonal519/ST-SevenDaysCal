@@ -4,6 +4,7 @@ import { createLinesRuntime } from './runtime.js';
 import { createLinesInjectionController } from './injection.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesActions } from './actions.js';
+import { runGenerationUiEffect } from '../../api/diagnostics.js';
 import { commitLineWidget } from './widget.js';
 import { createDashedModule } from './dashed.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
@@ -39,9 +40,9 @@ export function createLinesFeature(env = {}) {
         ...env.generationEnv,
         owners,
         runtime,
-        commit: (...args) => {
-            const result = commitGenerationResult(...args);
-            if (env.dashedEnabled?.() === true) dashed?.run?.();
+        commit: async (...args) => {
+            const result = await commitGenerationResult(...args);
+            if ((result === true || result?.ok === true) && !result?.stale && env.dashedEnabled?.() === true) dashed?.run?.();
             return result;
         },
         onStart: () => { if (env.isPanelActive?.()) refreshPanel?.(); },
@@ -165,21 +166,26 @@ export function createLinesFeature(env = {}) {
         injection?.refresh?.();
         env.refreshInlineWindow?.(true);
     };
-    const commitGenerationResult = (raw, { silent, swipeCtx, travelContext, commitBaseline } = {}) => {
+    const commitGenerationResult = async (raw, { silent, owner, swipeCtx, travelContext, commitBaseline } = {}) => {
         const chatId = env.chatId?.();
         const key = env.cacheKey?.();
-        runtime.cache(raw);
-        env.writeStore?.(key, { raw, ts: Date.now() });
-        if (swipeCtx?.mesId != null) {
-            const rec = swipeStore.read(chatId, swipeCtx.mesId) || { baseline: swipeCtx.baselineRaw ?? commitBaseline?.raw ?? '', swipes: {}, view: 'user', charName: '' };
-            if (rec.baseline == null) rec.baseline = swipeCtx.baselineRaw ?? commitBaseline?.raw ?? '';
-            rec.swipes[String(swipeCtx.swipeId ?? 0)] = raw;
-            swipeStore.write(chatId, swipeCtx.mesId, rec);
-        }
-        if (env.isPanelActive?.()) { refreshPanel(true); if (!silent && env.notifyMode?.() !== 'off') env.toast?.('线已生成'); }
-        syncInline(chatId);
-        if (!env.isPanelActive?.() && !silent) env.toast?.('线已生成，点击查看');
-        return travelContext;
+        const writer = env.writeStoreConfirmed || env.writeStore;
+        const stored = await writer?.(key, { raw, ts: Date.now() }, { ownerGuard: () => env.chatId?.() === chatId && (!owner || owners.isCurrent(owner, { chatId, chatRevision: owner.chatRevision })) });
+        if (!(stored === true || stored?.ok === true)) return stored || false;
+        if (stored?.stale) return { ...stored, ok: true };
+        const ui = await runGenerationUiEffect(() => {
+            runtime.cache(raw);
+            if (swipeCtx?.mesId != null) {
+                const rec = swipeStore.read(chatId, swipeCtx.mesId) || { baseline: swipeCtx.baselineRaw ?? commitBaseline?.raw ?? '', swipes: {}, view: 'user', charName: '' };
+                if (rec.baseline == null) rec.baseline = swipeCtx.baselineRaw ?? commitBaseline?.raw ?? '';
+                rec.swipes[String(swipeCtx.swipeId ?? 0)] = raw;
+                swipeStore.write(chatId, swipeCtx.mesId, rec);
+            }
+            if (env.isPanelActive?.()) { refreshPanel(true); if (!silent && env.notifyMode?.() !== 'off') env.toast?.('线已生成'); }
+            syncInline(chatId);
+            if (!env.isPanelActive?.() && !silent) env.toast?.('线已生成，点击查看');
+        });
+        return ui.ok ? true : { ok: true, uiError: ui.error };
     };
     const cleanupOwner = (owner, chatId) => {
         if (!owners.isCurrent(owner, { chatId })) return false;

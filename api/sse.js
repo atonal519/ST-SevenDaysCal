@@ -99,12 +99,18 @@ export function mapApiError(status, raw) {
 export async function readSseContent(resp, { allowEmptyOutput = false } = {}) {
     const reader = resp.body?.getReader();
     if (!reader) {
-        const data = await resp.json().catch(() => null);
-        if (!data) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
+        let data;
+        try { data = await resp.json(); }
+        catch (error) {
+            if (error?.name === 'AbortError') throw error;
+            throw makeDiagnosticError('invalid-json', { phase: 'response' });
+        }
+        if (!data) throw makeDiagnosticError('invalid-json', { phase: 'response' });
+        if (data?.error) throw makeDiagnosticError('response-error', { phase: 'response' });
         return extractCompletion(data, { allowEmptyOutput });
     }
     const decoder = new TextDecoder();
-    let buf = '', out = '', finishReason = '', eventData = [], sawDone = false, sawToolCall = false;
+    let buf = '', out = '', finishReason = '', eventData = [], plainLines = [], sawDone = false, sawToolCall = false, sawSseField = false;
     const handleEvent = () => {
         if (!eventData.length) return;
         const payload = eventData.join('\n').trim();
@@ -114,7 +120,7 @@ export async function readSseContent(resp, { allowEmptyOutput = false } = {}) {
         let json;
         try { json = JSON.parse(payload); }
         catch { throw makeDiagnosticError('sse-invalid', { phase: 'parse' }); }
-        if (json?.error) throw makeDiagnosticError('unknown', { phase: 'request' });
+        if (json?.error) throw makeDiagnosticError('response-error', { phase: 'response' });
         const choice = json?.choices?.[0];
         const reason = responseFinishReason(json);
         if (reason) finishReason = reason;
@@ -125,8 +131,10 @@ export async function readSseContent(resp, { allowEmptyOutput = false } = {}) {
     const handleLine = (line) => {
         const t = String(line || '').replace(/\r$/, '');
         if (!t) { handleEvent(); return; }
-        if (t.startsWith(':')) return; // SSE 注释/心跳
-        if (t.startsWith('data:')) eventData.push(t.slice(5).replace(/^\s/, ''));
+        if (t.startsWith(':')) { sawSseField = true; return; } // SSE 注释/心跳
+        if (t.startsWith('data:')) { sawSseField = true; eventData.push(t.slice(5).replace(/^\s/, '')); }
+        else if (/^(?:event|id|retry):/.test(t)) sawSseField = true;
+        else plainLines.push(t);
     };
     for (;;) {
         const { done, value } = await reader.read();
@@ -141,6 +149,15 @@ export async function readSseContent(resp, { allowEmptyOutput = false } = {}) {
         buf = lines.pop() ?? '';
         for (const line of lines) handleLine(line);
     }
+    if (plainLines.length) {
+        if (sawSseField || out || sawDone || finishReason) throw makeDiagnosticError('sse-invalid', { phase: 'response' });
+        let envelope;
+        try { envelope = JSON.parse(plainLines.join('\n')); }
+        catch { throw makeDiagnosticError('sse-invalid', { phase: 'response' }); }
+        if (envelope?.error) throw makeDiagnosticError('response-error', { phase: 'response' });
+        return extractCompletion(envelope, { allowEmptyOutput });
+    }
+    if (!sawDone && !isNormalEmptyFinishReason(finishReason) && !isTruncationFinishReason(finishReason)) throw makeDiagnosticError('sse-invalid', { phase: 'response' });
     if (isTruncationFinishReason(finishReason)) throw makeDiagnosticError('truncated', { phase: 'truncated' });
     if (!out.trim()) {
         if (allowEmptyOutput && !sawToolCall && (isNormalEmptyFinishReason(finishReason) || (!finishReason && sawDone))) return '';

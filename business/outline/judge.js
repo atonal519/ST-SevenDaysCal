@@ -1,6 +1,6 @@
 import { outlineBaseline, parseOutline, parseOutlineRelocationAnswer, shouldAdvanceOutline } from './schema.js';
 import { buildOutlineJudgePrompt, buildOutlineRelocationPrompt } from './prompts.js';
-import { safeDiagnosticLog } from '../../api/diagnostics.js';
+import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 
 export function createOutlineJudge({
     repository,
@@ -53,6 +53,7 @@ export function createOutlineJudge({
     };
 
     const runAdvance = async () => {
+        const diagnostic = createGenerationDiagnosticScope('outline-judge', { background: true });
         if (busy && owner?.controller?.signal?.aborted) {
             owner = null;
             busy = false;
@@ -89,17 +90,35 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
-                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge' },
+                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
             });
             if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
+            const decision = String(answer || '').replace(/\s+/g, '').replace(/[。.!！]+$/u, '');
+            if (!/^(?:推进|未推进|没推进|不推进|无推进)$/u.test(decision)) {
+                const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-judge-format' });
+                finish(task); logDiagnostic?.(safeDiagnosticLog('outline', 'parse', error, { background: true }));
+                if (settings?.().notifyMode === 'full') toast?.(`面自动推进判定失败：${diagnosticMessage(error)}`, true);
+                return { status: 'failed', error };
+            }
+            diagnostic.accepted({ phase: 'validation', reasonCode: decision === '推进' ? 'advance' : 'no-advance' });
             if (!shouldAdvanceOutline(answer)) {
+                diagnostic.committed({ reasonCode: 'outline-no-change' });
                 finish(task);
                 return { status: 'unchanged' };
             }
-            if (!repository.setCursor(target, cursor + 1, baseline)) return { status: 'cancelled' };
+            let stored;
+            try { stored = await (repository.setCursorConfirmed || repository.setCursor)(target, cursor + 1, baseline, { ownerGuard: () => currentAndOwned(task) }); }
+            catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-cursor-save-failed' }); }
+            if (!(stored === true || stored?.ok === true)) {
+                if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
+                const status = Number(stored?.status); const saveError = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (stored && typeof stored === 'object') saveError.saveResult = stored; const error = diagnostic.rejected(saveError, { phase: 'save', reasonCode: 'outline-cursor-save-rejected' });
+                finish(task); if (settings?.().notifyMode === 'full') toast?.(`面自动推进失败：${diagnosticMessage(error)}`, true); return { status: 'failed', error };
+            }
+            diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
+            if (stored?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true }; }
             finish(task);
-            if (settings?.().notifyMode === 'full') toast?.('面已自动推进到下一节点 · 请注意查看');
-            notifyChanged(task, saved.raw, cursor + 1);
+            try { if (settings?.().notifyMode === 'full') toast?.('面已自动推进到下一节点 · 请注意查看'); notifyChanged(task, saved.raw, cursor + 1); }
+            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
             return { status: 'updated' };
         } catch (error) {
             if (!currentAndOwned(task)) return { status: 'cancelled' };
@@ -107,7 +126,7 @@ export function createOutlineJudge({
             finish(task);
             if (error?.name === 'AbortError' || !repository.isCurrent(target)) return { status: 'cancelled' };
             logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true }));
-            if (settings?.().notifyMode === 'full') toast?.('面自动推进判定失败，请检查 API 或网络', true);
+            if (settings?.().notifyMode === 'full') toast?.(`面自动推进判定失败：${diagnosticMessage(error)}`, true);
             return { status: 'failed', error };
         } finally {
             finish(task);
@@ -115,6 +134,7 @@ export function createOutlineJudge({
     };
 
     const relocate = async (promptAddon = '', externalSignal = null) => {
+        const diagnostic = createGenerationDiagnosticScope('outline-judge', { background: true });
         if (isEditing()) return { status: 'skipped' };
         const target = repository.capture();
         const saved = repository.readOutline(target);
@@ -139,14 +159,24 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
-                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge' },
+                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
             });
             if (!currentAndOwned(task) || externalSignal?.aborted || !repository.matches(target, baseline)) return { status: 'cancelled' };
             const next = parseOutlineRelocationAnswer(answer, beats.length);
-            if (next == null) throw new Error('AI 未返回有效节点编号');
-            if (next === current) return { status: 'unchanged' };
-            if (!repository.setCursor(target, next, baseline)) return { status: 'cancelled' };
-            notifyChanged(task, saved.raw, next);
+            if (next == null) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-relocation-format' });
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'outline-relocation-valid' });
+            if (next === current) { diagnostic.committed({ reasonCode: 'outline-no-change' }); return { status: 'unchanged' }; }
+            let stored;
+            try { stored = await (repository.setCursorConfirmed || repository.setCursor)(target, next, baseline, { ownerGuard: () => currentAndOwned(task) && !externalSignal?.aborted }); }
+            catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-cursor-save-failed' }); }
+            if (!(stored === true || stored?.ok === true)) {
+                if (!currentAndOwned(task) || externalSignal?.aborted || !repository.matches(target, baseline)) return { status: 'cancelled' };
+                const status = Number(stored?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (stored && typeof stored === 'object') error.saveResult = stored; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-cursor-save-rejected' });
+            }
+            diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
+            if (stored?.stale || !currentAndOwned(task) || externalSignal?.aborted) return { status: 'cancelled', reason: 'committed-but-stale', committed: true };
+            try { notifyChanged(task, saved.raw, next); }
+            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
             return { status: 'updated' };
         } catch (error) {
             if (!currentAndOwned(task) || error?.name === 'AbortError' || externalSignal?.aborted) return { status: 'cancelled' };
@@ -198,4 +228,3 @@ export function createOutlineJudge({
         state: () => ({ busy, lastJudgedMessageId, messageCounter }),
     });
 }
-import { makeDiagnosticError } from '../../api/diagnostics.js';

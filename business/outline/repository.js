@@ -2,11 +2,17 @@ import { outlineBaseline, outlineCursor, parseOutline, clampOutlineCursor, sameO
 
 const HISTORY_CAP = 20;
 
-export function createOutlineRepository({ captureIdentity, isCurrent, readStore, writeStore, removeStore } = {}) {
+export function createOutlineRepository({ captureIdentity, isCurrent, readStore, writeStore, writeStoreConfirmed, removeStore } = {}) {
     const current = target => !!target && isCurrent?.(target);
     const keyFor = (target, kind) => kind === 'creative-chat' ? target?.creativeChatKey : target?.outlineKey;
     const readKind = (target, kind) => current(target) ? readStore?.(keyFor(target, kind)) ?? null : null;
     const writeKind = (target, kind, value) => current(target) && !!writeStore?.(keyFor(target, kind), value);
+    const writeKindConfirmed = async (target, kind, value, options = {}) => {
+        if (!current(target)) return false;
+        if (typeof writeStoreConfirmed !== 'function') return writeKind(target, kind, value);
+        const stored = await writeStoreConfirmed(keyFor(target, kind), value, options);
+        return stored === true || stored?.ok === true ? true : stored;
+    };
     const removeKind = (target, kind) => {
         if (!current(target)) return false;
         removeStore?.(keyFor(target, kind));
@@ -21,11 +27,23 @@ export function createOutlineRepository({ captureIdentity, isCurrent, readStore,
         if (expected && !sameOutlineBaseline(saved, expected)) return false;
         return writeKind(target, 'outline', { ...(saved || {}), ...patch });
     };
+    const commitOutlineConfirmed = async (target, patch, expected = null, options = {}) => {
+        if (!current(target)) return false;
+        const saved = readOutline(target);
+        if (expected && !sameOutlineBaseline(saved, expected)) return false;
+        return writeKindConfirmed(target, 'outline', { ...(saved || {}), ...patch }, options);
+    };
     const setCursor = (target, cursor, expected = null) => {
         const saved = readOutline(target);
         if (!saved?.raw || (expected && !sameOutlineBaseline(saved, expected))) return false;
         const count = parseOutline(saved.raw).length || 1;
         return writeKind(target, 'outline', { ...saved, cursor: clampOutlineCursor(cursor, count) });
+    };
+    const setCursorConfirmed = async (target, cursor, expected = null, options = {}) => {
+        const saved = readOutline(target);
+        if (!saved?.raw || (expected && !sameOutlineBaseline(saved, expected))) return false;
+        const count = parseOutline(saved.raw).length || 1;
+        return writeKindConfirmed(target, 'outline', { ...saved, cursor: clampOutlineCursor(cursor, count) }, options);
     };
     const normalizeHistory = value => (Array.isArray(value) ? value : [])
         .filter(item => item?.role && item?.content)
@@ -47,7 +65,9 @@ export function createOutlineRepository({ captureIdentity, isCurrent, readStore,
         matches,
         cursor: target => outlineCursor(readOutline(target)),
         commitOutline,
+        commitOutlineConfirmed,
         setCursor,
+        setCursorConfirmed,
         removeOutline: (target, expected = null) => {
             if (expected && !matches(target, expected)) return false;
             return removeKind(target, 'outline');

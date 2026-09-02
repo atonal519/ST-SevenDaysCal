@@ -22,12 +22,16 @@ export function parseLedgerCapture(raw) {
     const out = [];
     for (const line of s.split('\n')) {
         const t = line.trim();
-        if (!t || !t.includes('｜') || /^(?:事由|候选ID)\s*｜/.test(t)) continue;
-        const cols = t.split('｜').map(x => x.trim());
+        if (!t || !/[｜|]/.test(t)) continue;
+        const cols = t.split(/[｜|]/).map(x => x.trim());
+        if (/^[｜|]/.test(t)) cols.shift();
+        if (/[｜|]$/.test(t)) cols.pop();
+        if (/^(?:事由|候选ID)$/i.test(cols[0] || '') || (cols.length && cols.every(col => /^:?-{3,}:?$/.test(col)))) continue;
         const candidateId = String(cols[0] || '').trim().toUpperCase();
         const provenance = /^C\d+$/.test(candidateId);
         const targetId = /^L\d+$/.test(candidateId) ? candidateId : null;
         const offset = (provenance || targetId) ? 1 : 0;
+        if (cols.length !== (offset ? 9 : 8)) continue;
         if (!cols[offset]) continue;
         const entry = { 事由: cols[offset], 类型: types.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态', 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: normalizeLedgerSentenceTerminal(cols[offset + 4]) };
         const cycle = parseInt(cols[offset + 6], 10);

@@ -1,5 +1,6 @@
 import { buildOutlinePrompt } from './prompts.js';
 import { parseOutline } from './schema.js';
+import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
 
 export function createOutlineGeneration({
     repository,
@@ -45,6 +46,7 @@ export function createOutlineGeneration({
     };
 
     const trigger = async (apiOptions = { reroll: true, module: 'outline' }) => {
+        const diagnostic = createGenerationDiagnosticScope('outline-generation');
         if (busy || isEditing()) return { status: 'skipped' };
         const target = repository.capture();
         if (!target?.chatId) return { status: 'skipped' };
@@ -74,21 +76,30 @@ export function createOutlineGeneration({
                 charName,
                 signal: controller.signal,
                 historyLimit: 3,
-                options: { ...(apiOptions || {}), promptMode: 'creative', diagnosticModule: 'outline-generation' },
+                options: { ...(apiOptions || {}), promptMode: 'creative', diagnosticModule: 'outline-generation', diagnosticSink: diagnostic.sink },
             });
             if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
-            if (!String(raw || '').trim()) throw new Error('AI 未返回可保存的面内容');
-            if (parseOutline(raw).length === 0) throw new Error('AI 返回内容未解析出有效剧情节点');
-            if (!repository.commitOutline(target, { raw, ts: now(), cursor: 1 }, baseline)) return { status: 'cancelled' };
-            finish(task);
-            injection?.refresh(target);
-            const html = renderer.render(raw, 1);
-            if (ui?.isOutlineMode?.()) {
-                ui.setOutline(html);
-                if (settings?.().notifyMode !== 'off') ui.toast?.('面已生成');
-            } else {
-                ui?.closedSuccess?.();
+            if (!String(raw || '').trim()) throw diagnostic.rejected(makeDiagnosticError('empty-output', { phase: 'empty-output' }), { phase: 'parse', reasonCode: 'outline-empty' });
+            if (parseOutline(raw).length === 0) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-no-beats' });
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'outline-valid' });
+            let committed;
+            try { committed = await (repository.commitOutlineConfirmed || repository.commitOutline)(target, { raw, ts: now(), cursor: 1 }, baseline, { ownerGuard: () => currentAndOwned(task) }); }
+            catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-save-failed' }); }
+            if (!(committed === true || committed?.ok === true)) {
+                if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
+                const status = Number(committed?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (committed && typeof committed === 'object') error.saveResult = committed; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-save-rejected' });
             }
+            diagnostic.committed({ reasonCode: committed?.stale ? 'outline-saved-stale' : 'outline-saved' });
+            if (committed?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true, raw }; }
+            finish(task);
+            try {
+                injection?.refresh(target);
+                const html = renderer.render(raw, 1);
+                if (ui?.isOutlineMode?.()) {
+                    ui.setOutline(html);
+                    if (settings?.().notifyMode !== 'off') ui.toast?.('面已生成');
+                } else ui?.closedSuccess?.();
+            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
             return { status: 'updated', raw };
         } catch (error) {
             if (!currentAndOwned(task)) return { status: 'cancelled' };
@@ -100,11 +111,11 @@ export function createOutlineGeneration({
             }
             if (task.baseline.raw) {
                 renderCurrent(target);
-                ui?.toast?.('面生成失败，已保留原存档', true);
+                ui?.toast?.(`面生成失败：${diagnosticMessage(error)}；已保留原存档`, true);
             } else if (ui?.isOutlineMode?.() && ui?.isPanelVisible?.()) {
                 ui?.showGenerationError?.(error);
             } else {
-                ui?.toast?.('面生成失败，请重试', true);
+                ui?.toast?.(`面生成失败：${diagnosticMessage(error)}`, true);
             }
             return { status: 'failed', error };
         } finally {
@@ -119,4 +130,3 @@ export function createOutlineGeneration({
         owner: () => owner,
     });
 }
-import { makeDiagnosticError } from '../../api/diagnostics.js';

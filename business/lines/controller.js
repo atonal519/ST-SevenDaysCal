@@ -2,7 +2,7 @@ import { parseLines, serializeLines, validateLinesResponse, TERMINAL_LINE_STAGES
 import { mergePinned } from './mutations.js';
 import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
-import { makeDiagnosticError } from '../../api/diagnostics.js';
+import { createGenerationDiagnosticScope, makeDiagnosticError, runGenerationUiEffect } from '../../api/diagnostics.js';
 import { drawAdultSelections, allocateAdultPools } from './adult.js';
 import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
@@ -21,6 +21,7 @@ export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
     const participantCurrent = identity => !identity || env.sameParticipantIdentity?.(identity, env.participantIdentity?.()) !== false;
     const run = async (silent = false, swipeCtx = null, travelContext = null, preflightOwner = null) => {
+        const diagnostic = createGenerationDiagnosticScope('lines', { background: silent });
         if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
         const chatId = env.chatId();
         const chatRevision = owners.currentChatRevision();
@@ -36,6 +37,7 @@ export function createLinesGenerationController(env = {}) {
         let owner = null;
         let travelAbort = null;
         let abortFromTravel = null;
+        let generationCommitted = false;
         try {
             owner = owners.create('lines-generation', { chatId, chatRevision, participantIdentity, intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
             owner.contextSnapshot = contextSnapshot;
@@ -88,14 +90,20 @@ export function createLinesGenerationController(env = {}) {
                 ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}),
                 promptMode: 'creative',
                 diagnosticModule: 'lines',
+                diagnosticSink: diagnostic.sink,
                 diagnosticContext: { owner: owner.token, channel: owner.channel, chatRevision, floor: swipeCtx?.mesId },
             }, participantIdentity, contextSnapshot);
             if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
-            if (!checked.ok) { env.fail?.(makeDiagnosticError('invalid-structure', { phase: 'parse' }), { silent }); return { status: 'failed', reason: checked.reason }; }
+            if (!checked.ok) {
+                const parseRejected = ['empty', 'incomplete-or-extraneous', 'text-outside-line', 'no-lines'].includes(checked.reason);
+                const code = parseRejected ? 'parse' : checked.reason === 'invalid-field' ? 'invalid-fields' : 'invalid-structure';
+                const error = diagnostic.rejected(makeDiagnosticError(code, { phase: parseRejected ? 'parse' : 'validation' }), { phase: parseRejected ? 'parse' : 'validation', reasonCode: checked.reason });
+                env.fail?.(error, { silent }); return { status: 'failed', reason: checked.reason };
+            }
             const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets, intent });
-            if (!audit.ok) { env.fail?.(makeDiagnosticError(audit.reason, { phase: 'evolution' }), { silent }); return { status: 'failed', reason: audit.reason }; }
+            if (!audit.ok) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: audit.reason }); env.fail?.(error, { silent }); return { status: 'failed', reason: audit.reason }; }
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
             const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId, chatRevision }) && participantCurrent(participantIdentity) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
@@ -104,9 +112,26 @@ export function createLinesGenerationController(env = {}) {
             const merged = mergePinned(isReroll ? sourceRaw : previousRaw, serializeLines(bound), { preferPinnedSource: isReroll });
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
             const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_CAPACITY });
-            if (capacityResult.dropped > 0) return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
+            if (capacityResult.dropped > 0) {
+                const error = diagnostic.rejected(makeDiagnosticError('invalid-structure', { phase: 'validation' }), { phase: 'validation', reasonCode: 'evolution-auto-capacity-overflow' });
+                env.fail?.(error, { silent }); return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
+            }
             const resultModel = capacityResult.model;
-            env.commit(serializeLines(resultModel), { silent, owner, swipeCtx, travelContext, commitBaseline });
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'lines-valid' });
+            let commitResult;
+            try { commitResult = await env.commit(serializeLines(resultModel), { silent, owner, swipeCtx, travelContext, commitBaseline }); }
+            catch (cause) {
+                if (cause?.diagnosticCode === 'save') throw cause;
+                const status = Number(cause?.saveResult?.status ?? cause?.status);
+                const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) });
+                if (cause?.saveResult) error.saveResult = cause.saveResult;
+                throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'lines-commit-failed' });
+            }
+            if (commitResult === false || commitResult?.ok === false) { const status = Number(commitResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (commitResult && typeof commitResult === 'object') error.saveResult = commitResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'lines-commit-rejected' }); }
+            diagnostic.committed({ reasonCode: commitResult?.stale ? 'lines-saved-stale' : 'lines-saved' });
+            generationCommitted = true;
+            if (commitResult?.uiError) diagnostic.uiFailed(commitResult.uiError, { reasonCode: 'lines-ui-refresh-failed' });
+            if (commitResult?.stale) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, targetDate: travelContext?.targetDate };
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };
@@ -114,9 +139,13 @@ export function createLinesGenerationController(env = {}) {
             if (env.chatId() === chatId && participantCurrent(participantIdentity)) env.fail?.(error, { silent });
             return { status: 'failed', error };
         } finally {
-            try {
+            const cleanup = () => {
                 if (abortFromTravel) travelAbort?.removeEventListener('abort', abortFromTravel);
                 if (owner) { env.runtime?.finish(owner.controller); env.cleanup?.(owner, chatId); }
+            };
+            try {
+                if (generationCommitted) await runGenerationUiEffect(cleanup, { diagnostic, reasonCode: 'lines-cleanup-failed' });
+                else cleanup();
             } finally {
                 if (leases.get(leaseKey) === leaseToken) leases.delete(leaseKey);
             }

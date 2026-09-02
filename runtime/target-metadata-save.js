@@ -178,7 +178,7 @@ export function createTargetMetadataSaver({ coreModule = null, fetchImpl = globa
                 invalidate(captured.target);
                 return { ok: false, dispatched: true, commitState: 'unknown', reason: 'network', error };
             }
-            if (!response?.ok) { invalidate(captured.target); const status = response?.status || 0; return { ok: false, dispatched: true, commitState: status === 409 ? 'not-dispatched' : 'unknown', reason: `http-${status}` }; }
+            if (!response?.ok) { invalidate(captured.target); const status = response?.status || 0; return { ok: false, dispatched: true, commitState: status === 409 ? 'not-dispatched' : 'unknown', reason: `http-${status}`, status }; }
             const payload = await response.json().catch(() => null);
             const nextIntegrity = payload?.integrity;
             if (payload?.created === true || payload?.ok !== true || !validIntegrity(nextIntegrity)) {

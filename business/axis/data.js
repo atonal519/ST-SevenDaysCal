@@ -1,5 +1,5 @@
 // business/axis/data.js — Phase 2b-1: axis 低风险纯数据函数/常量/helper（机械搬移，逻辑零改动）
-import { keyDesc, readStore, writeStore } from '../../store.js';
+import { keyDesc, readStore, writeStore, writeStoreConfirmed } from '../../store.js';
 import { getSettings } from '../../runtime/settings.js';
 import { saveSettingsDebounced } from '../../../../../../script.js';
 import { extractDayFromTime } from '../../utils/cn-date.js';
@@ -44,7 +44,8 @@ function loadAlmanac() {
     return items.map(it => normalizeAlmItem(it)).filter(Boolean);
 }
 
-function saveAlmanacItems(items) { writeStore(getAlmanacKey(), { items, ts: Date.now() }); }
+function saveAlmanacItems(items) { return writeStore(getAlmanacKey(), { items, ts: Date.now() }); }
+function saveAlmanacItemsConfirmed(items, options = {}) { return writeStoreConfirmed(getAlmanacKey(), { items, ts: Date.now() }, options); }
 
 function almTypeMeta(type) {
     switch (type) {
@@ -475,6 +476,7 @@ export {
     normalizeAlmItem,
     loadAlmanac,
     saveAlmanacItems,
+    saveAlmanacItemsConfirmed,
     almTypeMeta,
     almDateLabel,
     monthDayFromDayKey,

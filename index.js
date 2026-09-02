@@ -13,7 +13,7 @@ import { createCoordinateRuntime } from './business/coordinate/runtime.js';
 import { enterCoordinateSidebar } from './business/coordinate/ui.js';
 import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
-import { bindStoreViewFallback, keyDesc, readStore, writeStore, removeStore } from './store.js';
+import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
 import { createBestEffortMetadataSaver, createTargetMetadataSaver, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
@@ -55,6 +55,7 @@ import {
     normalizeAlmItem,
     loadAlmanac,
     saveAlmanacItems,
+    saveAlmanacItemsConfirmed,
     almTypeMeta,
     almDateLabel,
     monthDayFromDayKey,
@@ -235,6 +236,36 @@ ledger.bindLedgerMetadataPersistence({
         return dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata: after, refresh: scriptCore.refreshChatWriteSnapshotsFromServer, isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
     },
 });
+store.bindStoreMetadataPersistence({
+    async commit(ctx, options = {}) {
+        const current = ctx || getContext?.();
+        const ownerGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => true;
+        const target = options.target || getLedgerTarget();
+        if (!current?.chatId || !ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+        if (ledgerMetadataSaverReady?.supported && ledgerMetadataSaverReady.mode !== 'legacy-unconfirmed') {
+            const after = { ...(current.chatMetadata || {}) };
+            if (current.chatMetadata?.['sp-store']) after['sp-store'] = current.chatMetadata['sp-store'];
+            return dispatchTargetMetadataWithRefresh({
+                saver: ledgerMetadataSaverReady,
+                target,
+                afterMetadata: after,
+                refresh: scriptCore.refreshChatWriteSnapshotsFromServer,
+                isCurrent: ownerGuard,
+            });
+        }
+        if (typeof current.saveMetadata !== 'function') return { ok: false, reason: 'saveMetadata-unavailable', commitState: 'not-dispatched', dispatched: false };
+        try {
+            const result = current.saveMetadata();
+            if (!result || typeof result.then !== 'function') return { ok: false, reason: 'saveMetadata-unconfirmed', commitState: 'legacy-unconfirmed', dispatched: true };
+            await result;
+            if (!ownerGuard()) return { ok: false, reason: 'stale-after-save', commitState: 'legacy-unconfirmed', dispatched: true };
+            return { ok: true, reason: 'saveMetadata-promise-resolved', commitState: 'confirmed', dispatched: true };
+        } catch (error) {
+            const status = Number(error?.status ?? error?.statusCode ?? error?.httpStatus);
+            return { ok: false, reason: Number.isInteger(status) ? `http-${status}` : 'saveMetadata-rejected', ...(Number.isInteger(status) ? { status } : {}), commitState: 'not-dispatched', dispatched: false, error };
+        }
+    },
+});
 
 const pointTaskOwners = createTaskOwnerManager();
 let chatBoundaryEpoch = 0;
@@ -323,6 +354,7 @@ const chatAnchorRepository = createChatAnchorRepository({
     chatId: () => getContext()?.chatId,
     read: () => readStore(keyDesc('date-anchor', 'user', '')),
     write: value => writeStore(keyDesc('date-anchor', 'user', ''), value),
+    writeConfirmed: (value, options) => writeStoreConfirmed(keyDesc('date-anchor', 'user', ''), value, options),
     legacy: () => {
         const key = charStableKey(getContext());
         const value = key ? getSettings().dateAnchor?.[key] : null;
@@ -444,6 +476,7 @@ const pointController = createPointController({
     key: (...args) => getCacheKey(...args),
     read: readStore,
     write: writeStore,
+    writeConfirmed: writeStoreConfirmed,
     parse: parseCalendar,
     calendar: loadCalDesc,
     generate,
@@ -711,7 +744,7 @@ const axisEditorController = createAxisEditorController({
     load: loadAlmanac,
     id: almId,
     normalize: normalizeAlmItem,
-    persist: items => { saveAlmanacItems(items); return true; },
+    persist: items => saveAlmanacItems(items),
     render: () => closeAxisEditor(renderAlmanacPanel),
     afterSave: syncLatestAlmanacBlock,
 });
@@ -743,10 +776,10 @@ const axisGenerationController = createAxisGenerationController({
     prompt: (user, char) => buildAlmanacPrompt(user, char),
     supplementPrompt: (user, char, existing) => buildAnniversarySupplementPrompt(user, char, existing),
     validate: validateAlmanacResponse, parse: parseAlmanacWidget, merge: mergeAlmanac,
-    loadItems: loadAlmanac, saveItems: saveAlmanacItems, dedupKey: almDedupKey, dateLabel: almDateLabel,
+    loadItems: loadAlmanac, saveItems: saveAlmanacItemsConfirmed, dedupKey: almDedupKey, dateLabel: almDateLabel,
     sync: syncLatestAlmanacBlock, render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
     notify: (message, generated) => { if (generated) { if (axisState.almanacMode) { if (getSettings().notifyMode !== 'off') showToast(message); } else showToast(message, () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); }); } else if (getSettings().notifyMode !== 'off') showToast(message); },
-    error: (error, supplement) => { if (axisState.almanacMode) showToast(`${supplement ? '补录失败：' : '生成失败：'}${escapeHtml(diagnosticMessage(error))}`, null, true); else showToast(supplement ? '补录纪念日失败，请重试' : '轴生成失败，请重试', null, true); },
+    error: (error, supplement) => showToast(`${supplement ? '补录失败：' : '轴生成失败：'}${diagnosticMessage(error)}`, null, true),
     missingApi: () => { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); },
     missingChat: () => showToast('请先打开一个聊天', null, true),
     confirm: () => spConfirm({ title: '重新生成节日', body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。', confirmText: '生成', cancelText: '取消' }),
@@ -843,6 +876,7 @@ const dateDetectionController = createDateDetectionController({
     bridge: bridgeAbortSignal,
     getAnchor: getDateAnchor,
     setAnchor: setDateAnchor,
+    setAnchorConfirmed: (_charKey, month, day, source, anchorOptions, persistenceOptions) => chatAnchorRepository.setConfirmed(month, day, source, anchorOptions, persistenceOptions),
     settings: getSettings,
     monthName: month => calMonthName(loadCalDesc(), month),
     toast: showToast,
@@ -1433,7 +1467,7 @@ const linesFeature = createLinesFeature({
     contextSnapshot: captureGenerationContext,
     isEditing: () => manualEditing.lines,
     readSaved: () => readStore(getLinesCacheKey()) || {},
-    writeStore, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+    writeStore, writeStoreConfirmed, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
     loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
     refreshInlineWindow: refreshInlineWindow,
@@ -1469,7 +1503,7 @@ const linesFeature = createLinesFeature({
         promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
     },
     dashedEnv: {
-        keyDesc, readStore, writeStore, removeStore, getSettings,
+        keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore, getSettings,
         context: getContext, chatId: () => getContext().chatId, loadConfig: loadCfg,
         callApi: (...args) => callCustomApi(...args), filterRerollItems, dialog: customDialog,
         uuid: () => globalThis.crypto?.randomUUID?.(), now: () => Date.now(), random: () => Math.random(),
@@ -1509,6 +1543,7 @@ const outlineFeature = createOutlineFeature({
     keyDesc,
     readStore,
     writeStore,
+    writeStoreConfirmed,
     removeStore,
     settings: getSettings,
     pluginEnabled,
@@ -2029,6 +2064,7 @@ jQuery(async () => {
     // 时间戳闸靠「最近流式 token 时间」续期、到点自动失效，绝不卡死。
     if (_stListeners.genStart) eventSource.removeListener?.(event_types.GENERATION_STARTED, _stListeners.genStart);
     _stListeners.genStart = (genType, _opts, dryRun) => {
+        refreshStoryClockInjection();
         linesFeature.onGenerationStarted({ genType, dryRun });
     };
     eventSource.on(event_types.GENERATION_STARTED, _stListeners.genStart);
@@ -4832,14 +4868,14 @@ function abortAlmanacGen() {
     if (axisState.almanacMode) renderAlmanacPanel();
 }
 
-async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null, travelContext = null, adultMode = 'off') {
+async function generate(ctx, userName, charName, perspective = 'user', signal = null, pinned = null, travelContext = null, adultMode = 'off', diagnosticSink = null) {
     const cfg = loadCfg();
     if (!cfg.url || !cfg.key) {
         if (!settingsOpen) toggleSettings();
         throw makeDiagnosticError('config-missing');
     }
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }), travelContext);
-    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'creative', diagnosticModule: 'point' };
+    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'creative', diagnosticModule: 'point', diagnosticSink };
     apiOpts.pointView = perspective;
     return callCustomApi(ctx, prompt, cfg, userName, charName, signal, 3, apiOpts);
 }
