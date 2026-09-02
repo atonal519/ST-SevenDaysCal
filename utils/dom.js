@@ -7,6 +7,10 @@ export function escapeAttr(s)  { return String(s).replace(/"/g,'&quot;').replace
 
 export function autoGrowTextarea(el) {
     if (!el) return;
+    if (!el.value) {
+        el.style.height = '';
+        return;
+    }
     el.style.height = 'auto';
     el.style.height = el.scrollHeight + 'px';
 }
