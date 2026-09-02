@@ -4,6 +4,12 @@ export function createSpaceUi(host = {}) {
     const query = host.query || (() => null);
     const element = host.element || (() => null);
     const escape = value => host.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
+    const isMobileViewport = () => {
+        const injected = host.isMobile?.();
+        if (typeof injected === 'boolean') return injected;
+        const width = Number(globalThis.window?.innerWidth ?? globalThis.innerWidth);
+        return Number.isFinite(width) && width <= 640;
+    };
     const widgets = new Map();
     let widgetSeq = 0;
     let controllers = null;
@@ -90,11 +96,13 @@ export function createSpaceUi(host = {}) {
             void controllers.chat.send(message);
         };
         $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
-        $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
-            if (event.key !== 'Enter' || !event.shiftKey) return;
-            event.preventDefault();
-            sendInput();
-        });
+        if (!isMobileViewport()) {
+            $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
+                if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.repeat) return;
+                event.preventDefault();
+                sendInput();
+            });
+        }
         $root.on('input.spSpaceFeature', '#sp-space-input', function () { host.autoGrow?.(this); });
         $root.on('click.spSpaceFeature', '.sp-chat-msg-delete', function () {
             if (controllers.chat.busy) return;
