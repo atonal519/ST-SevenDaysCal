@@ -98,7 +98,8 @@ export function createSpaceUi(host = {}) {
         $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
         if (!isMobileViewport()) {
             $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
-                if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.repeat) return;
+                const nativeEvent = event.originalEvent;
+                if (event.key !== 'Enter' || event.shiftKey || event.isComposing || nativeEvent?.isComposing || event.repeat || nativeEvent?.repeat) return;
                 event.preventDefault();
                 sendInput();
             });
