@@ -5824,10 +5824,11 @@ function injectToST(text) {
     // injection stays visually distinct from prior text.
     const prev = String($ta.val() || '');
     const combined = prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n${text}` : text;
-    $ta.val(combined).trigger('input');
+    const el = $ta.val(combined)[0];
+    // SillyTavern listens with native addEventListener('input') for its autosize path.
+    el?.dispatchEvent(new Event('input', { bubbles: true }));
     // Move caret to end + scroll into view so the newly injected text is
     // visible even if the box already had content.
-    const el = $ta[0];
     if (el && typeof el.setSelectionRange === 'function') {
         el.setSelectionRange(combined.length, combined.length);
     }
