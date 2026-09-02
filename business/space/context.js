@@ -19,8 +19,25 @@ const OPERATION_HELP_RX = /(?:怎么|如何|怎样|在哪|能不能|可以吗|�
 const WHY_OPERATION_RX = /(?:为什么|为何|为啥).{0,16}(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭)|(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭).{0,16}(?:为什么|为何|为啥)/;
 const SETTINGS_HELP_RX = /(?:设置|开关|注入).{0,12}(?:怎么|如何|在哪|没反应|没生效|不生效|找不到)|(?:怎么|如何|在哪|没反应|没生效|不生效|找不到).{0,12}(?:设置|开关|注入)/;
 const CANONICAL_ITEM_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:这个|那个|当前|现有|已有)(?:的)?(?:点|线)|(?:当前|现有|已有).{0,8}(?:日程|日历|待办|事件线|剧情线|线索|伏笔))/;
-const NO_WRITE_RX = /(?:(?:别|不要|不用|无需|不必|不(?:需要|想|打算|要)|请勿|先别|暂(?:时)?不|取消|停止|禁止).{0,12}|不(?:再)?)(?:生成|新增|添加|新建|创建|记录|保存|落地|安排|做|加|改|修改|调整|设置|设|重做|重写)|(?:只|先)(?:分析|讨论|聊聊|说说|解释)/;
+const NO_WRITE_RX = /(?:(?:别|不要|不用|无需|不必|不(?:需要|想|打算|要)|请勿|先别|暂(?:时)?不|取消|停止|禁止)[^，。？！；：,:;!?\n]{0,12}|不(?:再)?)(?:生成|新增|添加|新建|创建|记录|保存|落地|安排|做|写|出|生|插|弄|需要|加|改|修改|调整|设置|设|重做|重写|点|线|历法?|卡片)|(?:只|先)(?:分析|讨论|聊聊|说说|解释)/;
 const CANONICAL_EDIT_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:当前|现有|已有)(?:的)?(?:点|线)).{0,12}(?:改|修改|调整|重做|重写|简短|详细|短些|长些)/;
+const LOOSE_POINT_RX = /(?:^|[^\p{L}\p{N}_])点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const LOOSE_LINE_RX = /(?:^|[^\p{L}\p{N}_])线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const LOOSE_ALMANAC_RX = /(?:^|[^\p{L}\p{N}_])历(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)历(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const DIRECT_POINT_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|点(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
+const DIRECT_LINE_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|线(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
+const DIRECT_ALMANAC_REQUEST_RX = /(?:写|生|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|历(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
+const DESIRED_POINT_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const DESIRED_LINE_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const DESIRED_ALMANAC_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const NEGATED_DISCOURSE_THEN_CARD_RX = /(?:别|不要|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再)?(?:讨论|解释|分析|寒暄|评价|说明|聊聊|说说)(?:[，。？！；：,:;!?\s]*直接)*[，。？！；：,:;!?\s]*(?:给我|帮我|替我|为我|请)?(?:写|出|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?(?:点|线|历法?)(?:卡片)?/;
+const SEMANTIC_CARD_RX = /结构化卡片|(?:历|历法)卡片/;
+const PURE_DISCUSSION_RX = /(?:为什么|为何|为啥|是不是|是否|怎么看|如何理解|什么意思|意味着|象征|合理(?:吗|么)|成立(?:吗|么)|怎么样|怎么回事|[？?]|吗$|呢$)/;
+const REQUEST_LANGUAGE_RX = /(?:给我|帮我|请|我要|我想|想要|需要|替我|为我|生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|来|弄|输出|整理|转成|转换|改|修改|调整|设置|重做|重写)/;
+const DELEGATED_REQUEST_RX = /(?:给我|帮我|替我|为我|我要|我想|想要|我可以要|能不能.{0,4}给我|可以.{0,4}给我)/;
+const QUOTED_CARD_MENTION_RX = /(?:例如|比如|例子|举例|引用)[^"“‘\n]{0,16}["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’]|["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’].{0,32}(?:这句话|这个词|例子|引用|说法|表达|意思|说明|句式|比喻|你觉得|怎么回答|不用执行|不要执行)/;
+const MENTION_ONLY_RX = /(?:只是|仅仅|仅是|不过是).{0,12}(?:提到|提及|说到|谈到|引用)|(?:这里|此处).{0,12}(?:比喻|词语|说法|含义)/;
+const EVALUATION_RX = /(?:写得|做得|设计得|设定得?).{0,10}(?:好|巧|妙|温馨|独特|不错|有趣|自然)|(?:很好|巧妙|温馨|独特|不错|有趣|很自然)[。！!~～]*$/;
 
 const moduleMatches = message => {
     const era = ERA_RX.test(message);
@@ -31,18 +48,34 @@ const moduleMatches = message => {
 export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const message = String(userMsg || '').trim();
     const modules = moduleMatches(message);
+    const semanticModules = Object.freeze({
+        schedule_widget: modules.schedule_widget || LOOSE_POINT_RX.test(message) || DIRECT_POINT_REQUEST_RX.test(message) || DESIRED_POINT_RX.test(message),
+        line_widget: modules.line_widget || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
+        almanac_widget: modules.almanac_widget || LOOSE_ALMANAC_RX.test(message) || DIRECT_ALMANAC_REQUEST_RX.test(message) || DESIRED_ALMANAC_RX.test(message),
+        era_widget: modules.era_widget,
+    });
+    const semanticKinds = Object.keys(semanticModules).filter(kind => semanticModules[kind]);
     const latestWidget = latestSpaceWidget(historySnapshot);
     const operationalQuestion = OPERATION_HELP_RX.test(message) || WHY_OPERATION_RX.test(message);
     const composedModuleHelp = BARE_HELP_MODULE_MENTION_RX.test(message) && HELP_ACTION_RX.test(message) && operationalQuestion;
-    const faq = UNIQUE_HELP_RX.test(message)
+    const faqCandidate = UNIQUE_HELP_RX.test(message)
         || SETTINGS_HELP_RX.test(message)
         || ((HELP_MODULE_RX.test(message) || BARE_HELP_MODULE_RX.test(message) || modules.schedule_widget || modules.line_widget) && operationalQuestion)
         || composedModuleHelp;
-    const helpQuestion = faq && operationalQuestion;
-    const noWrite = NO_WRITE_RX.test(message);
+    const noWrite = NO_WRITE_RX.test(message) && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message);
+    const delegatedCardRequest = !noWrite && semanticKinds.length > 0 && DELEGATED_REQUEST_RX.test(message);
+    const faq = faqCandidate && !delegatedCardRequest;
+    const helpQuestion = faq && operationalQuestion && !delegatedCardRequest;
     const hasWrite = WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
     const writeKinds = !helpQuestion && !noWrite && hasWrite ? Object.keys(modules).filter(kind => modules[kind]) : [];
-    if (writeKinds.length > 1) {
+    const directSemanticRequest = DIRECT_POINT_REQUEST_RX.test(message)
+        || DIRECT_LINE_REQUEST_RX.test(message)
+        || DIRECT_ALMANAC_REQUEST_RX.test(message)
+        || DESIRED_POINT_RX.test(message)
+        || DESIRED_LINE_RX.test(message)
+        || DESIRED_ALMANAC_RX.test(message)
+        || (SEMANTIC_CARD_RX.test(message) && REQUEST_LANGUAGE_RX.test(message));
+    if (writeKinds.length > 1 || (!helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
     }
     if (!helpQuestion && !noWrite && RECENT_EDIT_RX.test(message)) {
@@ -61,7 +94,25 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     }
     const pointContext = modules.schedule_widget && VIEW_RX.test(message);
     const lineContext = modules.line_widget && VIEW_RX.test(message);
-    return Object.freeze({ action: pointContext || lineContext ? 'view' : 'discuss', kind: null, faq, pointContext, lineContext, recentWidget: null, reason: '' });
+    if (pointContext || lineContext) {
+        return Object.freeze({ action: 'view', kind: null, faq, pointContext, lineContext, recentWidget: null, reason: '' });
+    }
+    const semanticCardCandidate = semanticKinds.length > 0 || SEMANTIC_CARD_RX.test(message);
+    const reliableDiscussion = helpQuestion
+        || noWrite
+        || QUOTED_CARD_MENTION_RX.test(message)
+        || MENTION_ONLY_RX.test(message)
+        || EVALUATION_RX.test(message)
+        || (PURE_DISCUSSION_RX.test(message) && !REQUEST_LANGUAGE_RX.test(message) && !directSemanticRequest && !delegatedCardRequest);
+    return Object.freeze({
+        action: semanticCardCandidate && !reliableDiscussion ? 'semantic-route' : 'discuss',
+        kind: null,
+        faq,
+        pointContext: false,
+        lineContext: false,
+        recentWidget: null,
+        reason: '',
+    });
 }
 
 export function numberedSpaceLineList(raw, parseLines) {
