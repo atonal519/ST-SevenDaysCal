@@ -10,6 +10,12 @@ export function createOutlineUi(host = {}) {
     const query = selector => host.query?.(selector);
     const element = selector => host.element?.(selector);
     const escape = value => host.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
+    const isMobileViewport = () => {
+        const injected = host.isMobile?.();
+        if (typeof injected === 'boolean') return injected;
+        const width = Number(globalThis.window?.innerWidth ?? globalThis.innerWidth);
+        return Number.isFinite(width) && width <= 640;
+    };
 
     const makeInjectButton = text => {
         const id = ++injectSequence;
@@ -118,14 +124,23 @@ export function createOutlineUi(host = {}) {
         if (!$root?.length) return;
         bound = true;
         $root.off('.spOutlineFeature');
-        $root.on('click.spOutlineFeature', '#sp-chat-send', () => {
+        const sendInput = () => {
             const $input = query('#sp-chat-input');
             const message = String($input?.val?.() || '').trim();
             if (!message || controllers.chat.busy) return;
             $input.val('');
             host.autoGrow?.($input[0]);
             void controllers.chat.send(message);
-        });
+        };
+        $root.on('click.spOutlineFeature', '#sp-chat-send', sendInput);
+        if (!isMobileViewport()) {
+            $root.on('keydown.spOutlineFeature', '#sp-chat-input', event => {
+                const nativeEvent = event.originalEvent;
+                if (event.key !== 'Enter' || event.shiftKey || event.isComposing || nativeEvent?.isComposing || event.repeat || nativeEvent?.repeat) return;
+                event.preventDefault();
+                sendInput();
+            });
+        }
         $root.on('input.spOutlineFeature', '#sp-chat-input', function () { host.autoGrow?.(this); });
         $root.on('click.spOutlineFeature', '.sp-chat-msg-delete', function () {
             if (controllers.chat.busy) return;
