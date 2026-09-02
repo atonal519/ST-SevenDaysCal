@@ -660,6 +660,20 @@ q::after {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-sizing: border-box;
+    /* 全局底部留白带：所有视图（点/线/面/间/棱/坐标）统一的收尾边距，正文/输入行
+       不再贴死底边，右下角隐形缩放区也落在这条带里。必须 border-box：否则 padding
+       撑高盒子被 sheet 的 overflow:hidden 裁掉（第一版加在 .sp-content-col 上正因
+       content-box 溢出被裁 → 带子不可见）。可调：越大留白越多。 */
+    padding-bottom: 14px;
+}
+/* 桌面端：四周留白带（手机端不碰，维持上面「仅底部留白带」）。上下比左右略薄一点，
+   再配合下面把标题栏分隔线往上抬 → 上下看起来更平衡、不再底重，又不用整体居中挪动模块。
+   可调：第一个值=上下带厚，第二个=左右带厚。 */
+@media (min-width: 641px) {
+    .sp-main { padding: 12px 14px; }
+    /* 标题栏更紧凑，那条分隔线往上抬一点（仅桌面）。可调：越小抬得越高。 */
+    .sp-content-head { padding-top: 7px; padding-bottom: 5px; }
 }
 
 .sp-icon-btn {
@@ -2100,29 +2114,24 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* ─── Resize handle ──────────────────────────────────────────────────────────── */
 .sp-resize-handle {
-    position       : absolute;
-    bottom         : 0;
-    right          : 0;
-    width          : 44px;
-    height         : 44px;
-    display        : flex;
-    align-items    : flex-end;
-    justify-content: flex-end;
-    padding        : 8px;
-    box-sizing     : border-box;
-    cursor         : se-resize;
-    color          : var(--sp-subtle);
-    font-size      : var(--sp-fs-80);
-    opacity        : 0.5;
-    transition     : opacity 0.15s, color 0.15s;
-    border-radius  : 0 0 20px 0;
-    z-index        : 10;
+    position   : absolute;
+    bottom     : 0;
+    right      : 0;
+    width      : 26px;
+    height     : 26px;
+    box-sizing : border-box;
+    cursor     : se-resize;
+    /* 把手完全隐形：不画图标/背景，只把右下角这块三角当缩放命中区。clip-path 同时
+       裁掉视觉与命中区 → 只有角上斜线能拖，其它位置一律穿透、不触发缩放。配合
+       .sp-main 的 padding-bottom，命中区正好落在底部留白带内。可调：加大 width/height
+       更好抓、减小更隐蔽。 */
+    clip-path  : polygon(100% 0, 100% 100%, 0 100%);
+    font-size  : 0;            /* 收掉图标字形 */
+    color      : transparent;
+    /* z:25 让把手压在设置遮罩(z:20)之上，开着设置也能缩放；全文弹窗(z:30)仍会盖住，
+       那是模态，先关它即可。 */
+    z-index    : 25;
 }
-.sp-resize-handle:hover { opacity: 1; color: var(--sp-primary); }
-/* Raise the handle above the settings overlay (z:20) so the sheet stays resizable
-   with settings open. The full-text popup (z:30) still masks it — that's fine,
-   the popup is modal, close it first. */
-.sp-resize-handle { z-index: 25; }
 
 /* ─── Toast (top) ────────────────────────────────────────────────────────────── */
 #sp-toast-wrap {
@@ -2777,12 +2786,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink: 0;
     align-items: flex-end;   /* textarea 长高时，发送/清空按钮贴底对齐 */
 }
-/* 桌面端右下角的 44px resize 捕捉层保持完整可拖拽；输入行额外保留原有
-   10px 边距，使「面 / 间」发送按钮不落入透明捕捉区域。移动端把手隐藏，
-   因此继续使用上面的常规 10px 内边距，不无谓压缩输入空间。 */
-@media (min-width: 641px) {
-    .sp-outline-chat > .sp-chat-input-row { padding-right: 54px; }
-}
+/* （历史）此处曾给桌面输入行加额外右距，用来避开右下角 44px 方形捕捉区。现在缩放
+   把手已隐形、只右下角三角命中，加上 .sp-main 四周等距留白把整个模块内缩，发送键早已
+   不落入命中区 → 取消额外右距，输入行左右对称、正好居中。移动端一直走常规 10px。 */
 .sp-chat-input-row .sp-input { flex: 1; font-size: var(--sp-fs-82); padding: 5px 10px; }
 /* 聊天输入框自增高：单行起步，随内容长高（autoGrowTextarea 设 height），
    到 max-height 封顶后转内部滚动，不再撑破面板。 */
