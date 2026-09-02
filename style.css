@@ -2795,6 +2795,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     white-space: pre-wrap;
     word-break : break-word;
 }
+.sp-chat-input-ta:placeholder-shown {
+    overflow   : hidden;
+    white-space: nowrap;
+    word-break : normal;
+}
 /* Chat message wrap — contains the bubble + external action buttons.
    Bubble handles alignment (user right / ai left), actions align with the
    bubble edge (right side for user, left side for ai) and sit below it. */
