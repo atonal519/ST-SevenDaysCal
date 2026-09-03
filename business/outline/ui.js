@@ -1,4 +1,5 @@
 import { classifyGenerationError, diagnosticMessage } from '../../api/diagnostics.js';
+import { parseOutline } from './schema.js';
 
 export function createOutlineUi(host = {}) {
     let controllers = null;
@@ -9,7 +10,10 @@ export function createOutlineUi(host = {}) {
     let copySequence = 0;
     const query = selector => host.query?.(selector);
     const element = selector => host.element?.(selector);
-    const escape = value => host.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
+    const fallbackEscape = value => String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
+    const escape = value => fallbackEscape(value);
     const isMobileViewport = () => {
         const injected = host.isMobile?.();
         if (typeof injected === 'boolean') return injected;
@@ -34,21 +38,58 @@ export function createOutlineUi(host = {}) {
         const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">重新生成面</button>';
         setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escape(diagnosticMessage(error))}</p>${retry}</div>`);
     };
-    const appendMessage = (role, content, historyIndex = null) => {
+    const draftField = (label, value) => value
+        ? `<div class="sp-outline-draft-field"><span>${label}</span>${escape(value)}</div>`
+        : '';
+    const renderDraftPreview = (beats, historyIndex, state) => {
+        const items = beats.map((beat, index) => `
+            <li class="sp-outline-draft-node">
+                <div class="sp-outline-draft-node-head"><span>${index + 1}</span><strong>${escape(beat.title || '未命名')}</strong>${beat.time ? `<em>${escape(beat.time)}</em>` : ''}</div>
+                ${draftField('类型', beat.type)}
+                ${draftField('故事线', beat.line)}
+                ${draftField('结果', beat.outcome)}
+                ${draftField('场景', beat.scene)}
+                ${draftField('题记', beat.subtext)}
+                ${draftField('思考', beat.think)}
+            </li>`).join('');
+        const action = state?.applied
+            ? '<div class="sp-outline-draft-action"><button class="sp-apply-outline-btn" type="button" disabled>✓ 已应用</button><span>已在上方展示</span></div>'
+            : state
+                ? `<div class="sp-outline-draft-action"><button class="sp-apply-outline-btn" type="button" data-idx="${historyIndex}">应用此面</button></div>`
+                : '<div class="sp-outline-draft-stale">较早的草稿，仅供查看</div>';
+        return `<section class="sp-outline-draft-card">
+            <div class="sp-outline-draft-summary"><strong>大纲草稿</strong><span>${beats.length} 个节点</span></div>
+            <details class="sp-outline-draft-preview"><summary>查看节点预览</summary><ol>${items}</ol></details>
+            ${action}
+        </section>`;
+    };
+    const appendMessage = (role, content, historyIndex = null, candidateState = null) => {
         const source = String(content ?? '');
-        const display = source.replace(/<outline_widget[\s\S]*?<\/outline_widget>/gi, '[↑ 已生成新面]');
+        const beats = role === 'ai' ? parseOutline(source) : [];
+        const widgetPattern = /<outline_widget\b[^>]*>[\s\S]*?<\/outline_widget\s*>/gi;
+        const hasCompleteWidget = beats.length > 0 && widgetPattern.test(source);
+        widgetPattern.lastIndex = 0;
+        const prose = hasCompleteWidget ? source.replace(widgetPattern, '').trim() : '';
+        const display = beats.length ? prose || '[↑ 已生成新面]' : source;
         const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
         const wrapClass = role === 'user' ? 'sp-chat-msg-wrap-user'
             : role === 'ai' ? 'sp-chat-msg-wrap-ai' : 'sp-chat-msg-wrap-system';
         const canAct = role !== 'system' && Number.isInteger(historyIndex);
         const contentHtml = role === 'ai'
-            ? host.formatAi?.(display) ?? escape(display).replace(/\n/g, '<br>')
+            ? (display ? host.formatAi?.(display) ?? escape(display).replace(/\n/g, '<br>') : '')
             : escape(display).replace(/\n/g, '<br>');
+        const draftHtml = beats.length ? renderDraftPreview(beats, historyIndex, candidateState) : '';
         const $wrap = host.$?.('<div>').addClass(`sp-chat-msg-wrap ${wrapClass}`);
         if (!$wrap) return;
         if (canAct) $wrap.attr('data-idx', historyIndex);
         const $message = host.$('<div>').addClass(`sp-chat-msg ${cls}`);
-        $message.html(`<div class="sp-chat-msg-content">${contentHtml}</div>`);
+        $message.html(`<div class="sp-chat-msg-content">${contentHtml}${draftHtml}</div>`);
+        if (candidateState) {
+            $message.find('.sp-apply-outline-btn').on('click', function () {
+                if (controllers.chat.busy || this?.disabled) return;
+                controllers.chat.applyCandidate(historyIndex, this);
+            });
+        }
         $wrap.append($message);
         if (canAct) {
             const edit = role === 'user' ? '<button class="sp-chat-msg-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>' : '';
@@ -61,7 +102,16 @@ export function createOutlineUi(host = {}) {
     const renderHistory = history => {
         const $messages = query('#sp-chat-msgs');
         $messages?.empty?.();
-        history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index));
+        let latestCandidateIndex = -1;
+        history.forEach((message, index) => {
+            if (message.role === 'assistant' && parseOutline(message.content).length > 0) latestCandidateIndex = index;
+        });
+        history.forEach((message, index) => appendMessage(
+            message.role === 'assistant' ? 'ai' : message.role,
+            message.content,
+            index,
+            index === latestCandidateIndex ? controllers?.chat?.candidateState?.(index) : null,
+        ));
     };
     const beginThinking = () => {
         const $dots = host.$?.('<div>')

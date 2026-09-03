@@ -2768,6 +2768,7 @@ select.sp-input { appearance: none; cursor: pointer; }
    so specificity-tie declarations get the correct winner). */
 .sp-chat-msgs {
     flex           : 1;
+    min-height     : 0;
     overflow-y     : auto;
     padding        : 8px 12px;
     display        : flex;
@@ -2963,6 +2964,60 @@ select.sp-input { appearance: none; cursor: pointer; }
     30%           { transform: translateY(-4px); opacity: 0.9;  }
 }
 .sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; display: block; }
+.sp-outline-draft-card {
+    margin-top   : 7px;
+    padding      : 8px 9px;
+    border       : 1px solid var(--sp-divider);
+    border-radius: 8px;
+    background   : var(--sp-sheet-bg);
+    font-style   : normal;
+}
+.sp-outline-draft-summary,
+.sp-outline-draft-node-head,
+.sp-outline-draft-action {
+    display    : flex;
+    align-items: center;
+    gap        : 7px;
+}
+.sp-outline-draft-summary { justify-content: space-between; }
+.sp-outline-draft-summary span,
+.sp-outline-draft-stale,
+.sp-outline-draft-action span { color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-outline-draft-preview { margin-top: 6px; }
+.sp-outline-draft-preview > summary { color: var(--sp-primary); cursor: pointer; user-select: none; }
+.sp-outline-draft-preview ol {
+    margin    : 7px 0 0;
+    padding   : 0 0 0 22px;
+    max-height: min(38vh, 260px);
+    overflow-y: auto;
+}
+.sp-outline-draft-node { padding: 6px 0; border-top: 1px solid var(--sp-divider); }
+.sp-outline-draft-node-head { flex-wrap: wrap; }
+.sp-outline-draft-node-head > span { color: var(--sp-primary); font-weight: 700; }
+.sp-outline-draft-node-head > em { margin-left: auto; color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-outline-draft-field { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-outline-draft-field > span { margin-right: 5px; color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-outline-draft-action { margin-top: 8px; flex-wrap: wrap; }
+.sp-outline-draft-stale { margin-top: 7px; }
+
+@media (max-width: 640px) {
+    #sp-outline-chat {
+        flex-shrink: 1;
+        /* 120px 满高输入框 + 输入行 14px 上下内边距 + 1px 顶边。
+           极矮软键盘视口下 min-height 优先于 50% 上限，避免底边/按钮被裁。 */
+        min-height : 135px;
+        max-height : 50%;
+    }
+    /* 纵向留白放进滚动内容，避免消息区即使 min-height:0 仍被 padding 撑出 16px。 */
+    #sp-outline-chat > .sp-chat-msgs { padding-block: 0; }
+    #sp-outline-chat > .sp-chat-msgs > :first-child { margin-top: 8px; }
+    #sp-outline-chat > .sp-chat-msgs > :last-child { margin-bottom: 8px; }
+    .sp-outline-wrap > .sp-outline-header {
+        align-items: center;
+        padding    : 3px 12px;
+    }
+    .sp-outline-wrap > .sp-outline-divider { height: 8px; }
+}
 
 /* External actions (edit / delete) — sit below bubble, right-aligned relative
    to bubble side. Desktop: hover shows; mobile: half-opacity always visible. */

@@ -12,6 +12,7 @@ export function createOutlineChat({
     now = () => Date.now(),
 } = {}) {
     let history = [];
+    let historyTarget = null;
     let owner = null;
     let busy = false;
 
@@ -29,6 +30,7 @@ export function createOutlineChat({
     const load = (target = repository.capture()) => {
         if (!repository.isCurrent(target)) return [];
         history = repository.readHistory(target);
+        historyTarget = target;
         ui?.renderHistory?.(history);
         return history;
     };
@@ -45,7 +47,29 @@ export function createOutlineChat({
         injection?.refresh(target);
         ui?.setOutline?.(renderer.render(raw, 1));
         ui?.markApplied?.(button);
+        ui?.renderHistory?.(history);
         return true;
+    };
+    const latestCandidateIndex = () => {
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+            const message = history[index];
+            if (message?.role === 'assistant' && parseOutline(message.content).length > 0) return index;
+        }
+        return -1;
+    };
+    const candidateState = index => {
+        if (!Number.isInteger(index) || index !== latestCandidateIndex()) return null;
+        const target = historyTarget;
+        if (!target || !repository.isCurrent(target)) return null;
+        const raw = String(history[index]?.content ?? '');
+        if (!raw || parseOutline(raw).length === 0) return null;
+        return Object.freeze({ applied: String(repository.readOutline(target)?.raw ?? '') === raw });
+    };
+    const applyCandidate = (index, button = null) => {
+        const state = candidateState(index);
+        if (!state || state.applied) return false;
+        const target = historyTarget;
+        return applyRaw(target, String(history[index]?.content ?? ''), button);
     };
 
     const send = async userMessage => {
@@ -60,6 +84,7 @@ export function createOutlineChat({
         );
         if (!repository.writeHistory(target, historySnapshot, before)) return { status: 'cancelled' };
         history = historySnapshot;
+        historyTarget = target;
         if (historySnapshot.length !== before.length + 1) ui?.renderHistory?.(history);
         else ui?.appendMessage?.('user', userMsg, history.length - 1);
         const controller = new AbortController();
@@ -88,11 +113,8 @@ export function createOutlineChat({
             const nextHistory = [...historySnapshot, { role: 'assistant', content: reply }].slice(-repository.historyCap);
             if (!repository.writeHistory(target, nextHistory, historySnapshot)) return { status: 'cancelled' };
             history = nextHistory;
-            if (nextHistory.length !== historySnapshot.length + 1) ui?.renderHistory?.(history);
+            if (nextHistory.length !== historySnapshot.length + 1 || parseOutline(reply).length > 0) ui?.renderHistory?.(history);
             else ui?.appendMessage?.('ai', reply, history.length - 1);
-            if (parseOutline(reply).length > 0) {
-                ui?.showApply?.(button => applyRaw(target, reply, button), target);
-            }
             finish(task);
             return { status: 'updated', reply };
         } catch (error) {
@@ -116,6 +138,7 @@ export function createOutlineChat({
         const next = before.filter((_, itemIndex) => itemIndex !== index);
         if (!repository.writeHistory(target, next, before)) return false;
         history = next;
+        historyTarget = target;
         ui?.renderHistory?.(history);
         return true;
     };
@@ -124,6 +147,7 @@ export function createOutlineChat({
         const target = repository.capture();
         if (!repository.clearHistory(target)) return false;
         history = [];
+        historyTarget = target;
         ui?.renderHistory?.(history);
         return true;
     };
@@ -134,12 +158,14 @@ export function createOutlineChat({
         const truncated = before.slice(0, index);
         if (!repository.writeHistory(target, truncated, before)) return { status: 'cancelled' };
         history = truncated;
+        historyTarget = target;
         ui?.renderHistory?.(history);
         return send(text);
     };
     const onChatChanged = () => {
         abort('chat-boundary');
         history = [];
+        historyTarget = null;
     };
     return Object.freeze({
         load,
@@ -148,6 +174,8 @@ export function createOutlineChat({
         clear,
         resendFrom,
         applyRaw,
+        candidateState,
+        applyCandidate,
         abort,
         onChatChanged,
         get busy() { return busy; },
