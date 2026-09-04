@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateLinesResponse, parseLines, serializeLines } from './schema.js';
+import { validateLinesResponse, parseLineCard, parseLines, serializeLines } from './schema.js';
 import { buildLinesPrompt, LINE_NEXT_RELEASE_CONTRACT } from './prompt.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesFeature } from './feature.js';
@@ -19,6 +19,7 @@ test('line combined edit updates Desc and Next in one raw mutation', () => {
     const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc: 旧描述\nNext: 旧下一步\n</storylines_widget>';
     const result = editLineFields(raw, 0, { desc: ' 新描述 ', next: ' 新下一步 ' });
     assert.equal(result.ok, true); assert.match(result.raw, /Desc: 新描述\nNext: 新下一步/);
+    assert.match(result.raw, /Line: A\|推进\|延展\|今天\|world\|false\|false/);
 });
 test('line edit keeps Next inside the selected Line block and handles empty fields', () => {
     const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc:\nNext:\nLine: B|推进|执行|1|今天|world|false|false\nDesc: B desc\nNext: B next\n</storylines_widget>';
@@ -36,25 +37,25 @@ import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from
 import { auditLineEvolution } from './evolution.js';
 import { inlineState } from './inline.js';
 
-const raw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
-function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
-const freshRaw = '<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
+const raw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
+function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|起线|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
+const freshRaw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 test('line description edit only changes Desc and normalizes whitespace while preserving identity fields', () => {
-    const source = serializeLines([{ name: '线', type: '冲突', stage: '执行', level: '3', when: '今天', agency: 'player', stall: true, pin: true, adult: true, cue: 'bad', desc: '旧', next: '下一步' }]);
+    const source = serializeLines([{ name: '线', type: '冲突', stage: '延展', when: '今天', agency: 'player', stall: true, pin: true, adult: true, cue: 'bad', desc: '旧', next: '下一步' }]);
     const result = editLineDescription(source, 0, ' 新的\n  描述 '); assert.equal(result.ok, true); const line = parseLines(result.raw)[0];
-    assert.equal(line.desc, '新的 描述'); assert.equal(line.name, '线'); assert.equal(line.type, '冲突'); assert.equal(line.stage, '执行'); assert.equal(line.stall, true); assert.equal(line.pin, true); assert.equal(line.adult, true); assert.equal(line.next, '下一步');
+    assert.equal(line.desc, '新的 描述'); assert.equal(line.name, '线'); assert.equal(line.type, '冲突'); assert.equal(line.stage, '延展'); assert.equal(line.stall, true); assert.equal(line.pin, true); assert.equal(line.adult, true); assert.equal(line.next, '下一步');
 });
 test('release schema accepts complete output and preserves uncapped narrative', () => {
     const result = validateLinesResponse(raw);
     assert.equal(result.ok, true);
     assert.equal(result.model[0].desc, '当前状态');
-    const long = `<storylines_widget>\nLine: 长线|推进|萌芽|1|今天|world|false|false\nDesc: ${'甲'.repeat(300)}\nNext: ${'乙'.repeat(240)}\n</storylines_widget>`;
+    const long = `<storylines_widget>\nLine: 长线|推进|起线|今天|world|false|false\nDesc: ${'甲'.repeat(300)}\nNext: ${'乙'.repeat(240)}\n</storylines_widget>`;
     const longResult = validateLinesResponse(long);
     assert.equal(longResult.ok, true);
     assert.equal(longResult.model[0].desc.length, 300);
     assert.equal(longResult.model[0].next.length, 240);
 });
-test('release schema extracts one complete widget from outer response noise without relaxing inner validation', () => {
+test('release schema extracts and normalizes complete records from outer response noise', () => {
     for (const response of [
         `正文状态栏\n${raw}`,
         `${raw}\n以上是生成结果。`,
@@ -68,37 +69,53 @@ test('release schema extracts one complete widget from outer response noise with
         assert.doesNotMatch(result.raw, /正文状态栏|以上是生成结果|```/);
     }
 
-    for (const response of [
-        `${raw}\n${raw}`,
-        `<storylines_widget>\n${raw}\n</storylines_widget>`,
-        `<storylines_widget>\n<storylines_widget>\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>`,
-        `${raw}\n</storylines_widget>`,
-        `<storylines_widget>\n正文状态栏\nLine: 主线|推进|萌芽|1|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>`,
-        `${raw}\n<storylines_widget`,
-    ]) assert.equal(validateLinesResponse(response).ok, false);
-
-    for (const malformedOpen of [
-        '<storylines_widget!garbage>',
-        '<storylines_widget/>',
-        '<storylines_widget=garbage>',
-        '<storylines_widget正文>',
-        '<storylines_widget\n正文状态栏\n>',
-    ]) assert.equal(validateLinesResponse(raw.replace('<storylines_widget>', malformedOpen)).ok, false, malformedOpen);
+    assert.equal(validateLinesResponse(`${raw}\n${raw}`).ok, true, '多余第二张包装不应拖死首张完整结果');
+    assert.equal(validateLinesResponse(`<storylines_widget>\n正文状态栏\nLine: 主线|推进|起线|今天|player|false|false\nNext: 下一步信号\nDesc: 当前状态\n</storylines_widget>`).ok, true);
+    assert.equal(validateLinesResponse(`<storylines_widget>\n${raw}\n</storylines_widget>`).ok, false, '嵌套同名结构仍不能猜编辑目标');
 });
 test('incomplete model output is rejected without placeholder text', () => {
     const result = validateLinesResponse('<storylines_widget>\nLine: 缺失|推进|萌芽|1|今天|world|false|false\nDesc: 只有当前\n</storylines_widget>');
     assert.equal(result.ok, false);
     assert.doesNotMatch(JSON.stringify(result), /当前状态待补充|后续方向待补充/);
 });
+test('space line card reuses tolerant business-field validation', () => {
+    const parsed = parseLineCard('| **Line：** 候选线｜矛盾｜准备｜下周｜用户｜否｜false |\n**Next：** 下一变化\n**Desc：** 当前状态\n备注：忽略');
+    assert.deepEqual([parsed.name, parsed.type, parsed.stage, parsed.when, parsed.agency, parsed.pin], ['候选线', '冲突', '起线', '下周', 'player', false]);
+    assert.equal(Object.hasOwn(parsed, 'level'), false);
+    const oldSpace = parseLineCard('Line: 旧间卡|推进|执行|4|明天|world|true\nDesc: 旧描述\nNext: 旧下一步');
+    assert.deepEqual([oldSpace.name, oldSpace.when, oldSpace.agency, oldSpace.stall, oldSpace.pin], ['旧间卡', '明天', 'world', true, false]);
+    assert.equal(Object.hasOwn(oldSpace, 'level'), false);
+    const oldSpaceAliases = parseLineCard('Line: old7|推进|筹备|4|下周|世界|否\nDesc: 旧描述\nNext: 旧下一步');
+    assert.deepEqual([oldSpaceAliases.when, oldSpaceAliases.agency, oldSpaceAliases.stall, oldSpaceAliases.pin], ['下周', 'world', false, false]);
+    const canonicalNumericWhen = parseLineCard('Line: canonical|推进|筹备|1|world|停滞|false\nDesc: 新描述\nNext: 新下一步');
+    assert.deepEqual([canonicalNumericWhen.when, canonicalNumericWhen.agency, canonicalNumericWhen.stall, canonicalNumericWhen.pin], ['1', 'world', true, false]);
+    assert.equal(parseLineCard('Line: 缺下一步|推进|萌芽|近日|world|false|false\nDesc: 当前状态'), null);
+});
+test('legacy eight-field storage is read-only compatible and rewrites as seven fields', () => {
+    const legacy = '<storylines_widget>\nLine: 旧线|冲突|逼近|4|今晚|player|true|true\nDesc: 旧状态\nNext: 旧下一步\n</storylines_widget>';
+    const parsed = parseLines(legacy)[0];
+    assert.deepEqual([parsed.name, parsed.stage, parsed.when, parsed.agency, parsed.stall, parsed.pin], ['旧线', '成形', '今晚', 'player', true, true]);
+    assert.equal(Object.hasOwn(parsed, 'level'), false);
+    const rewritten = serializeLines([parsed]);
+    assert.match(rewritten, /Line: 旧线\|冲突\|成形\|今晚\|player\|true\|true/);
+    const legacyStages = ['萌芽', '筹备', '发酵', '执行', '逼近', '关键', '已爆发', '已完成', '已消散', '已失败'];
+    const canonicalStages = legacyStages.map(stage => parseLines(`<storylines_widget>\nLine: ${stage}|推进|${stage}|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>`)[0].stage);
+    assert.deepEqual(canonicalStages, ['起线', '起线', '延展', '延展', '成形', '成形', '收束', '收束', '淡出', '淡出']);
+    assert.equal(rewritten.split('\n').find(line => line.startsWith('Line:')).split('|').length, 7);
+    const aliases = parseLines('<storylines_widget>\nLine: old8|推进|筹备|4|下周|world|停滞|false\nDesc: d\nNext: n\n</storylines_widget>')[0];
+    assert.deepEqual([aliases.when, aliases.agency, aliases.stall, aliases.pin], ['下周', 'world', true, false]);
+});
 test('adult provenance is local-only and survives storage round trip', () => {
-    const adult = { name: '成人线', type: '推进', stage: '萌芽', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n', adult: true };
+    const adult = { name: '成人线', type: '推进', stage: '起线', when: '今天', agency: 'world', desc: 'd', next: 'n', adult: true };
     const ordinary = { ...adult, name: '普通线', adult: false };
     const rawStored = serializeLines([adult, ordinary]);
     assert.match(rawStored, /Adult: true/);
     assert.equal(parseLines(rawStored)[0].adult, true);
     assert.equal(parseLines(rawStored)[1].adult, false);
     assert.equal(parseLines(rawStored.replace(/\nAdult: true/g, ''))[0].adult, false);
-    assert.equal(validateLinesResponse(rawStored).ok, false, 'AI response must not be allowed to provide Adult');
+    const checked = validateLinesResponse(rawStored);
+    assert.equal(checked.ok, true, '完整业务记录不因额外 Adult 字段丢失');
+    assert.ok(checked.model.every(line => line.adult === false), 'AI 自报 Adult 必须被忽略');
     const bound = bindVectorTickets({ generatedLines: [{ ...ordinary, ticketId: 'TICKET-1' }, { ...ordinary, ticketId: 'TICKET-2' }], freshTickets: [{ ticketId: 'TICKET-1', adultSelection: {} }, { ticketId: 'TICKET-2' }] });
     assert.deepEqual(bound.map(line => line.adult), [true, false]);
 });
@@ -161,10 +178,13 @@ test('ticket protocol rejects missing duplicate unknown and old-line IDs without
     const c = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'protocol-chat', cacheKey: () => 'protocol-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: () => [ticket], buildPrompt: () => 'p', callApi: async () => '<storylines_widget>\nLine: new|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>', commit: () => { commits++; }, cleanup: owner => { owner.status = 'finished'; } });
     assert.equal((await c.run()).status, 'failed'); assert.equal(commits, 0);
 });
-test('release prompt defines global agency, total capacity, machine format, and local 6x3 cues without old quotas', () => {
+test('release prompt defines global agency, neutral progression, ideal format, and local 6x3 cues without old quotas', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
-    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '未锁非终态自动线不得超过 8 条', '不设主动方、类型或单轮出生配额', '完整闭合', 'Line 必须恰好 8 段', '字段内禁止裸 |']) assert.match(prompt, new RegExp(phrase));
+    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '未锁非终态自动线不得超过 8 条', '不设主动方、类型或单轮出生配额', '关系张力、彼此试探、索取关注或立场摩擦', '不得突然扩大伤害或制造不可逆后果', '下一变化允许维持、缓和、转向、解决或消散', '阶段只描述生命周期位置', '成形＝影响变得明确，而非冲突极端化', '收束＝解决、和解、形成新平衡或事务落定', '淡出＝不再值得持续追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
+    assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
+    assert.match(prompt, /Line: 名称\|类型\|阶段\|时间锚点\|agency\|stall\|pin/);
+    assert.doesNotMatch(prompt, /\blevel\b|等级|四珠|珠子/);
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(prompt, /本轮真实唯一 Ticket 与 6×3 Cue/);
 });
@@ -193,7 +213,7 @@ test('adult line modes keep off unchanged and reserve explicit adult candidates'
     assert.equal(adultModeForCharacter({ adultMode: { c: 'invalid' } }, 'c'), 'off');
 });
 test('legacy storage keeps Cue and pinned local state', () => {
-    const stored = serializeLines([{ name: '锁线', type: '推进', stage: '萌芽', level: '1', when: '今天', agency: 'world', pin: true, desc: 'd', next: 'n', cue: 'lines-vector-v1:subject:survival-stability|relation:mutual-probing|setting:public-place' }]);
+    const stored = serializeLines([{ name: '锁线', type: '推进', stage: '萌芽', when: '今天', agency: 'world', pin: true, desc: 'd', next: 'n', cue: 'lines-vector-v1:subject:survival-stability|relation:mutual-probing|setting:public-place' }]);
     const parsed = parseLines(stored);
     assert.equal(parsed[0].pin, true);
     assert.match(parsed[0].cue, /^lines-vector-v1:/);
@@ -412,9 +432,10 @@ test('swipe storage clears only the selected chat and preserves raw layers', () 
 });
 
 test('injection excludes terminal lines and preserves the hidden-line contract', () => {
-    const raw = '<storylines_widget>\nLine: 活线|推进|萌芽|1|今天|world|false|false\nDesc: 状态\nNext: 下一步\nLine: 终线|推进|已完成|1|今天|world|false|false\nDesc: 不应注入\nNext: 结束\n</storylines_widget>';
+    const raw = '<storylines_widget>\nLine: 活线|推进|起线|今天|world|false|false\nDesc: 状态\nNext: 下一步\nLine: 终线|推进|收束|今天|world|false|false\nDesc: 不应注入\nNext: 结束\n</storylines_widget>';
     assert.equal(activeLines(raw).length, 1);
     assert.match(buildLinesInjection(activeLines(raw)), /活线/);
+    assert.match(buildLinesInjection(activeLines(raw)), /推进·起线·今天/);
     assert.doesNotMatch(buildLinesInjection(activeLines(raw)), /终线/);
     const calls = [];
     const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, adultMode: () => 'off', settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
@@ -423,6 +444,17 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     assert.doesNotMatch(calls.at(-1)[1], /终线/);
     controller.refresh();
     assert.doesNotMatch(calls.at(-1)[1], /成人模式/);
+});
+test('panel and inline production render contain no level beads', () => {
+    const feature = createLinesFeature({
+        getSettings: () => ({ linesInlineEnabled: true }), stageColors: { 起线: '#123456' },
+        escapeHtml: value => String(value), escapeAttr: value => String(value), cleanText: value => String(value),
+    });
+    const legacy = '<storylines_widget>\nLine: 旧线|推进|萌芽|4|今天|world|false|false\nDesc: 状态\nNext: 下一步\n</storylines_widget>';
+    for (const html of [feature.renderLines(legacy), feature.inlineHtml(legacy, true)]) {
+        assert.match(html, /旧线/);
+        assert.doesNotMatch(html, /sp-bead|sp-inline-dots/);
+    }
 });
 
 test('capacity keeps prior queue identities before new lines and preserves pinned extras', () => {
@@ -436,45 +468,46 @@ test('capacity keeps prior queue identities before new lines and preserves pinne
     const pinned = enforceLineCapacity({ previousLines: tenOld, mergedLines: [...tenOld, { name: '锁', pin: true }, { name: '锁2', pin: true }] });
     assert.equal(pinned.model.filter(line => !line.pin).length, 8);
     assert.deepEqual(pinned.model.filter(line => line.pin).map(line => line.name), ['锁', '锁2']);
-    const settled = enforceLineCapacity({ mergedLines: [...old, { name: '刚收束', stage: '已完成', pin: false }, { name: '锁', stage: '萌芽', pin: true }] });
-    assert.equal(settled.model.filter(line => !line.pin && line.stage !== '已完成').length, 8);
+    const settled = enforceLineCapacity({ mergedLines: [...old, { name: '刚收束', stage: '收束', pin: false }, { name: '锁', stage: '起线', pin: true }] });
+    assert.equal(settled.model.filter(line => !line.pin && line.stage !== '收束').length, 8);
     assert.equal(settled.model.some(line => line.name === '刚收束'), true);
     assert.equal(settled.model.some(line => line.name === '锁'), true);
 });
 
 test('evolution audit preserves identities and applies only the eight-line active pool math', () => {
-    const old = [{ name: '活线', stage: '萌芽', pin: false }, { name: '锁线', stage: '萌芽', pin: true }];
+    const old = [{ name: '活线', stage: '起线', pin: false }, { name: '锁线', stage: '起线', pin: true }];
     const ticket = id => ({ ticketId: `TICKET-${id}` });
-    const continued = { name: '活线', stage: '执行', ticketId: undefined };
-    const newborn = id => ({ name: `新${id}`, stage: '萌芽', ticketId: `TICKET-${id}` });
+    const continued = { name: '活线', stage: '延展', ticketId: undefined };
+    const newborn = id => ({ name: `新${id}`, stage: '起线', ticketId: `TICKET-${id}` });
     assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).ok, true);
     assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).reason, 'evolution-old-line-missing');
-    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [{ name: '活线', stage: '已完成' }, newborn(1), newborn(2)], freshTickets: [ticket(1), ticket(2)], intent: 'advance' }).ok, true);
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [{ name: '活线', stage: '收束' }, newborn(1), newborn(2)], freshTickets: [ticket(1), ticket(2)], intent: 'advance' }).ok, true);
     assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, newborn(1), newborn(2)], freshTickets: [ticket(1), ticket(2)], intent: 'advance' }).ok, true, '没有单轮出生配额');
-    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [{ name: '锁线', stage: '已完成' }], freshTickets: [], intent: 'advance' }).reason, 'evolution-pinned-terminal');
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, { name: '锁线', stage: '淡出' }], freshTickets: [], intent: 'advance' }).ok, true, '模型意外回显锁定终态时应容忍并由本地锁定值覆盖');
+    assert.equal(auditLineEvolution({ previousLines: old, generatedLines: [continued, { name: '锁线', stage: '淡出', ticketId: 'TICKET-1' }], freshTickets: [ticket(1)], intent: 'advance' }).reason, 'evolution-pinned-ticket');
     const eight = Array.from({ length: 8 }, (_, index) => newborn(index + 1));
     assert.equal(auditLineEvolution({ previousLines: [], generatedLines: eight, freshTickets: Array.from({ length: 8 }, (_, index) => ticket(index + 1)), intent: 'initial' }).ok, true);
     assert.equal(auditLineEvolution({ previousLines: [], generatedLines: [...eight, newborn(9)], freshTickets: Array.from({ length: 9 }, (_, index) => ticket(index + 1)), intent: 'initial' }).reason, 'evolution-auto-capacity-overflow');
-    const sevenOld = Array.from({ length: 7 }, (_, index) => ({ name: `旧${index + 1}`, stage: '萌芽', pin: false }));
-    const sevenContinued = sevenOld.map(line => ({ ...line, stage: '执行' }));
+    const sevenOld = Array.from({ length: 7 }, (_, index) => ({ name: `旧${index + 1}`, stage: '起线', pin: false }));
+    const sevenContinued = sevenOld.map(line => ({ ...line, stage: '延展' }));
     assert.equal(auditLineEvolution({ previousLines: sevenOld, generatedLines: [...sevenContinued, newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).ok, true);
-    const eightOld = [...sevenOld, { name: '旧8', stage: '萌芽', pin: false }];
-    const eightContinued = eightOld.map(line => ({ ...line, stage: '执行' }));
+    const eightOld = [...sevenOld, { name: '旧8', stage: '起线', pin: false }];
+    const eightContinued = eightOld.map(line => ({ ...line, stage: '延展' }));
     assert.equal(auditLineEvolution({ previousLines: eightOld, generatedLines: [...eightContinued, newborn(1)], freshTickets: [ticket(1)], intent: 'advance' }).reason, 'evolution-auto-capacity-overflow');
-    const oneSettled = [{ ...eightContinued[0], stage: '已完成' }, ...eightContinued.slice(1), newborn(1)];
+    const oneSettled = [{ ...eightContinued[0], stage: '收束' }, ...eightContinued.slice(1), newborn(1)];
     assert.equal(auditLineEvolution({ previousLines: eightOld, generatedLines: oneSettled, freshTickets: [ticket(1)], intent: 'advance' }).ok, true, '旧线终态为新线腾出一格');
-    assert.equal(auditLineEvolution({ previousLines: [...eightOld, { name: '锁线', stage: '萌芽', pin: true }], generatedLines: [...eightContinued, { name: '锁线', stage: '执行' }], freshTickets: [], intent: 'advance' }).activeAutoCount, 8, '锁线即使被模型回显也不占自动池');
+    assert.equal(auditLineEvolution({ previousLines: [...eightOld, { name: '锁线', stage: '起线', pin: true }], generatedLines: [...eightContinued, { name: '锁线', stage: '延展' }], freshTickets: [], intent: 'advance' }).activeAutoCount, 8, '锁线即使被模型回显也不占自动池');
 });
 
 test('production controller signs and binds eight tickets, accepts terminal turnover, and rejects a ninth active line', async () => {
-    const makeOld = (count, stage = '萌芽') => serializeLines(Array.from({ length: count }, (_, index) => ({ name: `旧${index + 1}`, type: '推进', stage, level: '1', when: '今天', agency: 'world', desc: '旧状态', next: '旧下一步' })));
-    const oldBlock = (index, stage = '执行') => `Line: 旧${index}|推进|${stage}|1|今天|world|false|false\nDesc: 新状态${index}\nNext: 新下一步${index}`;
-    const newBlock = index => `Line: 新${index}|推进|萌芽|1|今天|world|false|false\nTicket: TICKET-${index}\nDesc: 新生状态${index}\nNext: 新生下一步${index}`;
+    const makeOld = (count, stage = '起线') => serializeLines(Array.from({ length: count }, (_, index) => ({ name: `旧${index + 1}`, type: '推进', stage, when: '今天', agency: 'world', desc: '旧状态', next: '旧下一步' })));
+    const oldBlock = (index, stage = '延展') => `Line: 旧${index}|推进|${stage}|今天|world|false|false\nDesc: 新状态${index}\nNext: 新下一步${index}`;
+    const newBlock = index => `Line: 新${index}|推进|起线|今天|world|false|false\nTicket: TICKET-${index}\nDesc: 新生状态${index}\nNext: 新生下一步${index}`;
     const widget = blocks => `<storylines_widget>\n${blocks.join('\n')}\n</storylines_widget>`;
 
     for (const scenario of [
-        { name: 'terminal-only', savedRaw: makeOld(1, '已完成'), response: widget(Array.from({ length: 8 }, (_, index) => newBlock(index + 1))), expectedStatus: 'updated', expectedActive: 8, expectedTotal: 8 },
-        { name: 'terminal-turnover', savedRaw: makeOld(8), response: widget([...Array.from({ length: 8 }, (_, index) => oldBlock(index + 1, '已完成')), ...Array.from({ length: 8 }, (_, index) => newBlock(index + 1))]), expectedStatus: 'updated', expectedActive: 8, expectedTotal: 16 },
+        { name: 'terminal-only', savedRaw: makeOld(1, '收束'), response: widget(Array.from({ length: 8 }, (_, index) => newBlock(index + 1))), expectedStatus: 'updated', expectedActive: 8, expectedTotal: 8 },
+        { name: 'terminal-turnover', savedRaw: makeOld(8), response: widget([...Array.from({ length: 8 }, (_, index) => oldBlock(index + 1, '收束')), ...Array.from({ length: 8 }, (_, index) => newBlock(index + 1))]), expectedStatus: 'updated', expectedActive: 8, expectedTotal: 16 },
         { name: 'ninth-rejected', savedRaw: '', response: widget(Array.from({ length: 9 }, (_, index) => newBlock(index + 1))), expectedStatus: 'failed', expectedReason: 'evolution-auto-capacity-overflow' },
     ]) {
         let saved = { raw: scenario.savedRaw, ts: 1 }; let drawn = 0; let captured = null; let commits = 0;
@@ -492,7 +525,7 @@ test('production controller signs and binds eight tickets, accepts terminal turn
         if (scenario.expectedStatus === 'updated') {
             const model = parseLines(saved.raw);
             assert.equal(commits, 1, scenario.name);
-            assert.equal(model.filter(line => !line.pin && !['已爆发', '已消散', '已完成', '已失败'].includes(line.stage)).length, scenario.expectedActive, scenario.name);
+            assert.equal(model.filter(line => !line.pin && !['收束', '淡出'].includes(line.stage)).length, scenario.expectedActive, scenario.name);
             assert.equal(model.length, scenario.expectedTotal, scenario.name);
             assert.equal(model.filter(line => line.name.startsWith('新')).every(line => line.cue), true, `${scenario.name} cues`);
         } else {
@@ -503,7 +536,7 @@ test('production controller signs and binds eight tickets, accepts terminal turn
 });
 
 test('controller treats terminal-only history as advance and preserves same-name pin queues', async () => {
-    const terminal = serializeLines([{ name: '旧终态', type: '推进', stage: '已完成', level: '1', when: '今天', agency: 'world', desc: 'd', next: 'n' }]);
+    const terminal = serializeLines([{ name: '旧终态', type: '推进', stage: '收束', when: '今天', agency: 'world', desc: 'd', next: 'n' }]);
     let saved = { raw: terminal, ts: 1 }; let captured = null; let drawn = 0;
     const instance = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'terminal-only', cacheKey: () => 'terminal-only', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => saved, drawTickets: count => { drawn = count; return drawTickets(count, { seed: 'terminal-only' }); }, buildPrompt: (_raw, _travel, context) => { captured = context; return 'p'; }, callApi: async () => responseWithCount(1), commit: raw => { saved = { raw, ts: 2 }; }, runtime: { start() {}, finish() {} } });
     assert.equal((await instance.run()).status, 'updated'); assert.equal(captured.intent, 'advance'); assert.equal(drawn, AUTO_LINE_SEED_CAPACITY); assert.equal(parseLines(saved.raw).length, 1);
@@ -565,8 +598,8 @@ test('controller restores distinct active and pinned identities when model omits
 
 test('inline state separates active and settled lines while retaining settled cards', () => {
     const source = serializeLines([
-        ...Array.from({ length: 7 }, (_, i) => ({ name: `活${i}`, type: '推进', stage: '萌芽', level: '1', when: '今天', agency: 'world', desc: '状态', next: '下一步' })),
-        ...Array.from({ length: 3 }, (_, i) => ({ name: `收${i}`, type: '推进', stage: '已完成', level: '1', when: '今天', agency: 'world', desc: '状态', next: '结束' })),
+        ...Array.from({ length: 7 }, (_, i) => ({ name: `活${i}`, type: '推进', stage: '起线', when: '今天', agency: 'world', desc: '状态', next: '下一步' })),
+        ...Array.from({ length: 3 }, (_, i) => ({ name: `收${i}`, type: '推进', stage: '收束', when: '今天', agency: 'world', desc: '状态', next: '结束' })),
     ]);
     const state = inlineState(source);
     assert.equal(state.activeCount, 7); assert.equal(state.settledCount, 3); assert.equal(state.count, 10);

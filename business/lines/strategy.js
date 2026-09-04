@@ -1,7 +1,7 @@
-import { parseLines } from './schema.js';
+import { parseLines, TERMINAL_LINE_STAGES } from './schema.js';
 import { adultInjectionGuidance } from './adult.js';
 
-export const TERMINAL_STAGES = new Set(['已爆发', '已消散', '已完成', '已失败']);
+export const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
 
 export function createAdvanceStrategy({ mode = 'turns', interval = 1, dayAnchor = null, previousDay = null, counter = 0 } = {}) {
     if (mode === 'manual') return { shouldAdvance: false, counter };
@@ -39,7 +39,8 @@ export function activeLines(raw, { includeTerminal = false } = {}) {
 
 export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】', adultMode = 'off' } = {}) {
     const items = (Array.isArray(lines) ? lines : []).map(line => {
-        const parts = [`- ${line.name}（${line.type || '线'}·${line.stage}${line.stall ? '·停滞' : ''}）`];
+        const when = String(line.when || '').trim();
+        const parts = [`- ${line.name}（${line.type || '线'}·${line.stage}${when ? `·${when}` : ''}${line.stall ? '·停滞' : ''}）`];
         if (line.desc) parts.push(`  ${line.desc}`);
         if (line.next) parts.push(`  ${line.next}`);
         return parts.join('\n');

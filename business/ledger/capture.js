@@ -372,14 +372,13 @@ export function createLedgerCaptureController(options = {}) {
                         markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); retainProvenanceProgress(); throw error;
                     }
                     const batchMap = ledgerSourceMap(batch.flatMap(record => record.sources)), hits = [];
-                    let rejectedRow = false;
                     for (const item of found) {
                         const candidate = candidates.find(x => x._candidateId === item._candidateId && !String(x._sourceToken || '').trim());
                         const token = selectLedgerProvenanceToken(item._sourceToken, batchMap);
                         if (candidate && ledgerSourceAnchor(token, batchMap)) hits.push({ candidate, token, source: batchMap.get(token) });
-                        else { rejectedRow = true; if (candidate && String(item?._sourceToken || '').trim()) candidate._provenanceInvalid = true; }
+                        // 坏来源行只丢本行；合法候选仍可继续落地。来源 token 仍须通过 batchMap 验证。
                     }
-                    if (rejectedRow) {
+                    if (!hits.length) {
                         const error = provenanceDiagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'provenance-fields-invalid' });
                         markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length }); retainProvenanceProgress(); throw error;
                     }
@@ -391,8 +390,12 @@ export function createLedgerCaptureController(options = {}) {
                     progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                 }
                 if (!ledgerBaselineEmpty()) { provenanceCheckpoint = null; return { status: 'cancelled', reason: 'ledger-baseline-changed', stale: true }; }
-                const invalidProvenance = candidates.some(item => item._provenanceInvalid && !String(item._sourceToken || '').trim());
-                if (invalidProvenance) {
+                const unresolvedCandidates = candidates.filter(item => !String(item._sourceToken || '').trim());
+                if (unresolvedCandidates.length) {
+                    const unresolved = new Set(unresolvedCandidates);
+                    picked = picked.filter(item => !unresolved.has(item));
+                }
+                if (!picked.some(item => String(item._sourceToken || '').trim() === 'SET' || /^F\d+[SE]$/.test(String(item._sourceToken || '').trim().toUpperCase()))) {
                     provenanceCheckpoint = null;
                     return { status: 'failed', reason: 'completed-source-invalid', totalBatches: provenanceBatches.length, feedbackShown: false };
                 }

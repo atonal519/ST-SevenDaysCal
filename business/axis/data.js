@@ -210,25 +210,35 @@ export function normalizeAlmanacNoteTerminal(value) {
 
 function parseAlmanacWidget(raw) {
     const s = String(raw || '');
-    const m = s.match(/<almanac_widget>([\s\S]*?)<\/almanac_widget>/i);
+    const m = s.match(/<almanac_widget\b[^>]*>([\s\S]*?)<\/almanac_widget\s*>/i);
     const body = m ? m[1] : s;
     const out = [];
     for (const line of body.split('\n')) {
-        const mm = line.match(/^\s*Item\s*:\s*(.+)$/i);
+        let cleaned = line.trim();
+        if (/^[|｜].*[|｜]$/.test(cleaned)) cleaned = cleaned.slice(1, -1).trim();
+        cleaned = cleaned.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+        const mm = cleaned.match(/^Item\s*[:：]\s*(.+)$/i);
         if (!mm) {
             // 续行救援：提示词要求「说明单行不换行」，但模型对长说明常忍不住折行。
             // 非 Item 行不是垃圾，而是上一条说明被换行截断的尾巴——接回上一条 note，
             // 别再像旧版那样静默丢弃（老症状：几条较长的纪念日说明只显示到折行处）。
-            const cont = line.trim();
+            const cont = cleaned;
             if (cont && out.length) out[out.length - 1].note = (out[out.length - 1].note + cont).trim();
             continue;
         }
-        const parts = mm[1].split('|').map(x => x.trim());
+        const parts = mm[1].split(/[|｜]/).map(x => x.trim());
         const [name, type, month, day, days, displayDate, ...noteRest] = parts;
+        const monthValue = /^\d+$/.test(month || '') ? Number(month) : NaN;
+        const dayValue = /^\d+$/.test(day || '') ? Number(day) : NaN;
+        const daysValue = /^\d+$/.test(days || '') ? Number(days) : NaN;
+        const cal = loadCalDesc();
+        if (!name || !Number.isInteger(monthValue) || !Number.isInteger(dayValue) || !Number.isInteger(daysValue)
+            || !almValidMonthDay({ month: monthValue, day: dayValue }, cal)
+            || daysValue < 1 || daysValue > calYearLen(cal)) continue;
         const it = normalizeAlmItem({
-            name, type: almMapType(type), month, day, days, displayDate,
+            name, type: almMapType(type), month: monthValue, day: dayValue, days: daysValue, displayDate,
             note: noteRest.join('|').trim(), source: 'ai', pin: false,
-        });
+        }, cal);
         if (it) out.push(it);
     }
     // 必须等所有续行救援完成后再补一次句末标点；否则会在续行中间提前插入句号。
@@ -238,22 +248,26 @@ function parseAlmanacWidget(raw) {
 
 function parseEraWidget(raw) {
     const s = String(raw || '');
-    const m = s.match(/<era_widget>([\s\S]*?)<\/era_widget>/i);
+    const m = s.match(/<era_widget\b[^>]*>([\s\S]*?)<\/era_widget\s*>/i);
     const body = m ? m[1] : s;
     let era = '';
     let displayStyle = 'numeric';
     const months = [];
     for (const line of body.split('\n')) {
-        const em = line.match(/^\s*Era\s*:\s*(.+)$/i);
+        let cleaned = line.trim();
+        if (/^[|｜].*[|｜]$/.test(cleaned)) cleaned = cleaned.slice(1, -1).trim();
+        cleaned = cleaned.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+        const em = cleaned.match(/^Era\s*[:：]\s*(.+)$/i);
         if (em) { era = em[1].trim(); continue; }
-        const sm = line.match(/^\s*Style\s*:\s*(numeric|classical)\s*$/i);
-        if (sm) { displayStyle = sm[1].toLowerCase(); continue; }
-        const mm = line.match(/^\s*Month\s*:\s*(.+)$/i);
+        const sm = cleaned.match(/^Style\s*[:：]\s*(.+)$/i);
+        if (sm) { displayStyle = /classical|古典|传统/i.test(sm[1]) ? 'classical' : 'numeric'; continue; }
+        const mm = cleaned.match(/^Month\s*[:：]\s*(.+)$/i);
         if (!mm) continue;
-        const [name, days] = mm[1].split('|').map(x => x.trim());
-        months.push({ name, days });
+        const [name, days] = mm[1].split(/[|｜]/).map(x => x.trim());
+        if (!name || !/^\d+$/.test(days || '')) return null;
+        months.push({ name, days: Number(days) });
     }
-    return normalizeCalDesc({ era, displayStyle, months });
+    return validateFormalCalendarDescriptor({ era, displayStyle, months }).value || null;
 }
 
 function almDedupKey(it) { return `${it.name.toLowerCase()}|${it.month}|${it.day}`; }

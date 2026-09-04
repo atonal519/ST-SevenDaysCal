@@ -41,12 +41,12 @@ export function buildOutlineCreationContract() {
 - Think：简短说明该节点为何成立，以及它承担的叙事作用或转折逻辑；不要写成逐项答题。
 - title 是凝练点题的小标题，可用意象、动作、一个词或半句话，贴合节点气质即可。
 
-【机器格式合同】
-- 完整输出必须使用一对闭合的 <outline_widget>...</outline_widget>。
-- 每个节点严格按 Beat → Scene → Subtext → Think 的四行顺序输出；字段名使用英文冒号。
-- Beat 固定为五个字段，并使用半角竖线 | 分隔：Beat: 推演时间|标题|类型|所属故事线|结果
+【理想机器结构】
+- 完整输出使用一对闭合的 <outline_widget>...</outline_widget>。
+- 每个节点包含 Beat、Scene、Subtext、Think 四项业务内容，建议按 Beat → Scene → Subtext → Think 排列。
+- Beat 包含五个字段，以竖线分隔：Beat: 推演时间|标题|类型|所属故事线|结果
 - 推演时间使用宏观、相对、粗略的长跨度时间锚，如“初期”“数周内”“约一两个月后”“数月之后”，不要精确到某一天。
-- widget 内只放节点字段，不写解释性文字或 Markdown。每行填写真实内容，不得用省略号、占位符或“后续同理”代替节点，不得中途截断。
+- 每项填写真实内容，不得用省略号、占位符或“后续同理”代替节点，不得中途截断。
 
 <outline_widget>
 Beat: 推演时间|标题|类型|所属故事线|结果

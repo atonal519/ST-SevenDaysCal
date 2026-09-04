@@ -11,6 +11,17 @@ export function prefixNext(next, stall = false) {
     return `${stall ? '恢复条件：' : '下一步：'}${clean}`;
 }
 
+export function buildLineInjectText(line = {}) {
+    const when = String(line.when ?? '').trim();
+    const nextText = line.nextText || (line.next ? prefixNext(line.next, line.stall) : '');
+    return [
+        `【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`,
+        when ? `时间锚点：${when}` : '',
+        line.desc,
+        nextText,
+    ].filter(Boolean).join('\n');
+}
+
 export function selectInlineLines(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
     const parsed = parseLines(raw);
     // 展示层不截断已落库的线；旧数据或未来合同扩展都应完整呈现。
@@ -19,11 +30,7 @@ export function selectInlineLines(raw, { readOnly = false, max = Number.POSITIVE
 }
 
 export function buildInlineLineText(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
-    return selectInlineLines(raw, { readOnly, max }).filter(line => !TERMINAL_LINE_STAGES.has(line.stage)).map(line => [
-        `【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`,
-        line.desc,
-        line.nextText,
-    ].filter(Boolean).join('\n')).join('\n\n');
+    return selectInlineLines(raw, { readOnly, max }).filter(line => !TERMINAL_LINE_STAGES.has(line.stage)).map(buildLineInjectText).join('\n\n');
 }
 
 export function inlineState(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {

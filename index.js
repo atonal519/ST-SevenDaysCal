@@ -1392,7 +1392,11 @@ async function copyLastDebugPayload({
 
 // view: 'user' | 'char'   charName: confirmed char name
 const getCacheKey = getScheduleKey;
-const loadCachedForCurrentChat = (view, charName) => loadCachedSchedule(view ?? currentView, charName);
+const loadCachedForCurrentChat = (view, charName) => {
+    const targetView = view ?? currentView;
+    const targetCharName = targetView === 'char' ? (charName ?? charViewName) : '';
+    return loadCachedSchedule(targetView, targetCharName);
+};
 
 // ─── ST theme detection ───────────────────────────────────────────────────────
 // Read ST's --SmartThemeBodyColor (text color on documentElement) to decide
@@ -6402,8 +6406,7 @@ function parseLines(raw) { return parseCanonicalLines(raw); }
 // 锁定保护：把 oldRaw 里 pin 的线并进 AI 新输出。无锁定线时原样返回（零副作用）。
 
 const STAGE_COLORS = {
-    萌芽: '#d6b85a', 发酵: '#d98a3d', 逼近: '#cf5f3f', 已爆发: '#b93f3f', 已消散: '#888888',
-    筹备: '#7de9d9', 执行: '#58e8b3', 关键: '#2a8a5d', 已完成: '#1b5e3b', 已失败: '#888888',
+    起线: '#7de9d9', 延展: '#58e8b3', 成形: '#d6b85a', 收束: '#2a8a5d', 淡出: '#888888',
 };
 
 // 点/线面板 header 下方另起一行的「去间改」引导，视觉对齐历法管理页的 .sp-alm-manager-hint。

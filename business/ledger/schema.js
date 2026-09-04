@@ -17,30 +17,47 @@ export function normalizeLedgerSentenceTerminal(value) {
     return closing ? `${body}。${closing}` : `${text}。`;
 }
 export function parseLedgerCapture(raw) {
-    const s = String(raw || '').trim();
+    const s = String(raw || '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
     if (!s || /^无[。.！!]?$/.test(s)) return [];
     const out = [];
     for (const line of s.split('\n')) {
-        const t = line.trim();
+        const t = line.trim().replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
         if (!t || !/[｜|]/.test(t)) continue;
         const cols = t.split(/[｜|]/).map(x => x.trim());
-        if (/^[｜|]/.test(t)) cols.shift();
-        if (/[｜|]$/.test(t)) cols.pop();
+        const outerPipes = /^[｜|]/.test(t) && /[｜|]$/.test(t);
+        if (outerPipes) { cols.shift(); cols.pop(); }
         if (/^(?:事由|候选ID)$/i.test(cols[0] || '') || (cols.length && cols.every(col => /^:?-{3,}:?$/.test(col)))) continue;
         const candidateId = String(cols[0] || '').trim().toUpperCase();
         const provenance = /^C\d+$/.test(candidateId);
         const targetId = /^L\d+$/.test(candidateId) ? candidateId : null;
         const offset = (provenance || targetId) ? 1 : 0;
-        if (cols.length !== (offset ? 9 : 8)) continue;
+        const minimum = offset ? 9 : 8;
+        if (cols.length < minimum) continue;
         if (!cols[offset]) continue;
-        const entry = { 事由: cols[offset], 类型: types.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态', 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: normalizeLedgerSentenceTerminal(cols[offset + 4]) };
-        const cycle = parseInt(cols[offset + 6], 10);
+        const statusStart = offset + 4;
+        const sourcePattern = /^(?:SET|F\d+[SE])$/i;
+        const dateShape = value => !value || Boolean(parseDate(value)) || /^\d{1,4}(?:[-/]|月)\d{1,2}(?:日)?$/.test(value);
+        const cycleShape = value => !value || /^\d+$/.test(value);
+        let sourceIndex = -1;
+        for (let index = statusStart + 3; index < cols.length; index++) {
+            const sourceShape = !cols[index] || sourcePattern.test(cols[index]);
+            if (sourceShape && cycleShape(cols[index - 1]) && dateShape(cols[index - 2])) { sourceIndex = index; break; }
+        }
+        if (sourceIndex < 0 && cols.length === minimum) sourceIndex = cols.length - 1;
+        const sourceToken = sourceIndex >= 0 && sourcePattern.test(cols[sourceIndex]) ? cols[sourceIndex].toUpperCase() : '';
+        const cycleText = sourceIndex >= 0 ? cols[sourceIndex - 1] || '' : '';
+        const dueText = sourceIndex >= 0 ? cols[sourceIndex - 2] || '' : '';
+        const statusEnd = sourceIndex >= 0 ? sourceIndex - 2 : cols.length;
+        const status = cols.slice(offset + 4, statusEnd).join('｜');
+        if (!status) continue;
+        const entry = { 事由: cols[offset], 类型: types.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态', 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: normalizeLedgerSentenceTerminal(status) };
+        const cycle = /^\d+$/.test(cycleText) ? Number(cycleText) : NaN;
         if (Number.isFinite(cycle) && cycle > 0) entry.周期长度 = cycle;
-        const due = parseDate(cols[offset + 5] || '');
+        const due = parseDate(dueText);
         if (due) entry.到期锚 = { 历日期: due };
-        if (provenance) { entry._candidateId = candidateId; entry._sourceToken = cols[8] || ''; }
-        else if (targetId) { entry._targetId = targetId; entry._sourceToken = cols[8] || ''; }
-        else if (cols.length >= 8) entry._sourceToken = cols[7] || '';
+        if (provenance) { entry._candidateId = candidateId; entry._sourceToken = sourceToken; }
+        else if (targetId) { entry._targetId = targetId; entry._sourceToken = sourceToken; }
+        else entry._sourceToken = sourceToken;
         out.push(entry);
     }
     return out;
@@ -65,21 +82,38 @@ export function parseLedgerJudge(raw) {
     if (!s) return { status: 'invalid', changes: [], rejected: [] };
     const out = []; const rejected = [];
     for (const [index, line] of s.split('\n').entries()) {
-        const t = line.trim(); if (!t) continue;
+        const t = line.trim().replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim(); if (!t) continue;
         if (/^编号\s*[｜|]/.test(t)) continue;
         const reject = reason => rejected.push({ line: index + 1, reason });
         if (!/[｜|]/.test(t)) { reject('format'); continue; }
         const cols = t.split(/[｜|]/).map(x => x.trim());
-        if (cols.length !== 4) { reject('format'); continue; }
+        const outerPipes = /^[｜|]/.test(t) && /[｜|]$/.test(t);
+        if (outerPipes) { cols.shift(); cols.pop(); }
+        if (cols.length < 4) { reject('format'); continue; }
         const id = cols[0].replace(/[\[\]【】]/g, '').trim().toUpperCase();
         if (!/^L\d+$/i.test(id)) { reject('id'); continue; }
-        if (!cols[1]) { reject('content'); continue; }
-        const action = parseJudgeAction(cols[2]);
+        let actionIndex = -1; let action = null;
+        for (let dueColumn = 3; dueColumn < cols.length; dueColumn++) {
+            const dueCandidate = cols[dueColumn];
+            if (!dueCandidate || parseDate(dueCandidate)) {
+                actionIndex = dueColumn - 1;
+                action = parseJudgeAction(cols[actionIndex]);
+                break;
+            }
+        }
+        if (actionIndex < 0) {
+            for (let column = 2; column < cols.length - 1; column++) {
+                const candidate = parseJudgeAction(cols[column]);
+                if (candidate) { actionIndex = column; action = candidate; break; }
+            }
+        }
+        const dueText = actionIndex >= 0 ? cols[actionIndex + 1] || '' : '';
+        const content = actionIndex >= 0 ? cols.slice(1, actionIndex).join('｜').trim() : cols.slice(1).join('｜').trim();
+        if (!content) { reject('content'); continue; }
         if (!action) { reject('action'); continue; }
-        const dueText = cols[3] || '';
         const due = parseDate(dueText);
         if (dueText && !due) { reject('date'); continue; }
-        const change = { id, 现状: normalizeLedgerSentenceTerminal(cols[1]), 动作: action };
+        const change = { id, 现状: normalizeLedgerSentenceTerminal(content), 动作: action };
         if (due) change.到期 = due;
         out.push(change);
     }

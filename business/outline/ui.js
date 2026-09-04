@@ -1,5 +1,5 @@
 import { classifyGenerationError, diagnosticMessage } from '../../api/diagnostics.js';
-import { parseOutline } from './schema.js';
+import { normalizeOutlineResponse, parseOutline } from './schema.js';
 
 export function createOutlineUi(host = {}) {
     let controllers = null;
@@ -65,7 +65,7 @@ export function createOutlineUi(host = {}) {
     };
     const appendMessage = (role, content, historyIndex = null, candidateState = null) => {
         const source = String(content ?? '');
-        const beats = role === 'ai' ? parseOutline(source) : [];
+        const beats = role === 'ai' && normalizeOutlineResponse(source) ? parseOutline(source) : [];
         const widgetPattern = /<outline_widget\b[^>]*>[\s\S]*?<\/outline_widget\s*>/gi;
         const hasCompleteWidget = beats.length > 0 && widgetPattern.test(source);
         widgetPattern.lastIndex = 0;
@@ -104,7 +104,7 @@ export function createOutlineUi(host = {}) {
         $messages?.empty?.();
         let latestCandidateIndex = -1;
         history.forEach((message, index) => {
-            if (message.role === 'assistant' && parseOutline(message.content).length > 0) latestCandidateIndex = index;
+            if (message.role === 'assistant' && normalizeOutlineResponse(message.content)) latestCandidateIndex = index;
         });
         history.forEach((message, index) => appendMessage(
             message.role === 'assistant' ? 'ai' : message.role,

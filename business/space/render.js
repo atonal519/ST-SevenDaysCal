@@ -1,11 +1,18 @@
 import { extractWidgets } from './schema.js';
+import { normalizeLine, parseLineRow } from '../lines/schema.js';
 
 export function createSpaceRenderer(env = {}) {
     const escape = value => env.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
+    const rows = body => String(body || '').split('\n').map(line => {
+        let text = line.trim();
+        if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
+        return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+    }).filter(Boolean);
     const widgetCard = (kind, body, wid, editIdx = null) => {
         if (kind === 'schedule_widget') {
-            const line = body.split('\n').find(item => /^Event\s*:/i.test(item)) || '';
-            const [type, title, desc, time, location, dynamic] = line.replace(/^Event\s*:\s*/i, '').split('|').map(item => item.trim());
+            const line = rows(body).find(item => /^Event\s*[:：]/i.test(item)) || '';
+            const [type, title, desc, time, location, ...dynamicParts] = line.replace(/^Event\s*[:：]\s*/i, '').split(/[|｜]/).map(item => item.trim());
+            const dynamic = dynamicParts.join('｜');
             const types = { main: { label: '明线', color: '#d6b85a' }, hidden: { label: '暗线', color: '#a06fd6' }, bond: { label: '红线', color: '#d67f6f' } };
             const meta = types[type] || { label: type || '?', color: '#9aa6b2' };
             return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="schedule">
@@ -29,14 +36,14 @@ export function createSpaceRenderer(env = {}) {
         </div>`;
         }
         if (kind === 'line_widget') {
-            const rows = body.split('\n');
-            const lineRow = rows.find(item => /^Line\s*:/i.test(item)) || '';
-            const descRow = rows.find(item => /^Desc\s*:/i.test(item)) || '';
-            const nextRow = rows.find(item => /^Next\s*:/i.test(item)) || '';
-            const [name, lineType, stage, , when, agency, stall] = lineRow.replace(/^Line\s*:\s*/i, '').split('|').map(item => item.trim());
-            const desc = descRow.replace(/^Desc\s*:\s*/i, '').trim();
-            const next = nextRow.replace(/^Next\s*:\s*/i, '').trim();
-            const stalled = String(stall).toLowerCase() === 'true';
+            const bodyRows = rows(body);
+            const lineRow = bodyRows.find(item => /^Line\s*[:：]/i.test(item)) || '';
+            const descRow = bodyRows.find(item => /^Desc\s*[:：]/i.test(item)) || '';
+            const nextRow = bodyRows.find(item => /^Next\s*[:：]/i.test(item)) || '';
+            const { name, type: lineType, stage, when, agency, stall } = normalizeLine(parseLineRow(lineRow));
+            const desc = descRow.replace(/^Desc\s*[:：]\s*/i, '').trim();
+            const next = nextRow.replace(/^Next\s*[:：]\s*/i, '').trim();
+            const stalled = stall === true;
             return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="line">
             <div class="sp-space-widget-head">
                 <span class="sp-space-widget-badge sp-space-widget-badge-line">

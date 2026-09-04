@@ -1,4 +1,4 @@
-import { parseLines, serializeLines } from './schema.js';
+import { normalizeLine, parseLineRow, parseLines, serializeLines } from './schema.js';
 import { normalizeEditableText } from '../utils/text-edit.js';
 
 export function editLineDescription(raw, index, value) {
@@ -17,6 +17,8 @@ export function editLineFields(raw, index, values = {}) {
     end = lines.findIndex((line, i) => i > lineIndex && /^\s*Line\s*:/i.test(line)); if (end < 0) end = lines.length;
     next = lines.findIndex((line, i) => i > lineIndex && i < end && /^\s*Next\s*:/i.test(line));
     replace(next, 'Next', nextValue);
+    const identity = normalizeLine(parseLineRow(lines[lineIndex]));
+    lines[lineIndex] = [`Line: ${identity.name}`, identity.type, identity.stage, identity.when, identity.agency, identity.stall ? 'true' : 'false', identity.pin ? 'true' : 'false'].join('|');
     return { ok: true, raw: prefix + lines.join(eol) + suffix, value: normalized };
 }
 
@@ -34,7 +36,7 @@ export function mergePinned(oldRaw, aiRaw, options = {}) {
     for (const line of fresh) if (line.name) { const queue = queues.get(line.name) || []; queue.push(line); queues.set(line.name, queue); }
     for (const pinned of old.filter(line => line.pin)) {
         const queue = queues.get(pinned.name);
-        const pinnedIndex = queue?.findIndex(item => options.preferPinnedSource || item?.pin === true) ?? -1;
+        const pinnedIndex = queue?.findIndex(item => item?.pin === true) ?? -1;
         const same = pinnedIndex >= 0 ? queue.splice(pinnedIndex, 1)[0] : undefined;
         if (same) {
             if (options.preferPinnedSource) Object.assign(same, pinned);

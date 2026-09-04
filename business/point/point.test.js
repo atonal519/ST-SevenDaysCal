@@ -79,9 +79,9 @@ test('point prompt fixes 14 display slots and adult mode emits continuous Ticket
     assert.equal((mixed.match(/^AdultProof: 按上方对应 Ticket 的 SFW／NSFW 合同填写$/gm) || []).length, 14);
     assert.doesNotMatch(mixed, /^Ticket: POINT-TICKET-\d+$/m);
     for (const prompt of [off, mixed]) {
-        assert.match(prompt, /最终总展示数量固定为 14 条[\s\S]*Day 1、Day 2、Day 3 各 3 条，Future 5 条/);
+        assert.match(prompt, /目标总展示数量为 14 条[\s\S]*Day 1、Day 2、Day 3 各 3 条，Future 5 条/);
         assert.match(prompt, /已锁定事件也占对应栏目的名额/);
-        assert.match(prompt, /字段内容不得包含半角竖线/);
+        assert.match(prompt, /每个 Event 建议独占一行并用竖线分隔字段/);
         assert.match(prompt, /location 或线头动态为空时，仍须保留空字段位置/);
         assert.match(prompt, /锁定事件不附 Ticket 或 AdultProof/);
         assert.doesNotMatch(prompt, /StartDate|日程思考|重要 NPC|非主角人物/);
@@ -642,7 +642,7 @@ test('point adult validation keeps pinned blocks ticket-free and assigns new Tic
     const options = { generated: true, adultMode: 'mixed', pinned: [{ title: '锁点' }] };
     assert.equal(validateGeneratedCalendar(raw, null, options).ok, true);
     assert.equal(validateGeneratedCalendar(raw.replace('Event: main|锁点|已锁定|早|地|动\n', 'Event: main|锁点|已锁定|早|地|动\nTicket: POINT-TICKET-1\n'), null, options).ok, false);
-    assert.equal(validateGeneratedCalendar(raw.replace('Event: main|新点|新推进|午|地|动\nTicket:', 'Event: main|新点|新推进|午|地|动\nDesc: 插入行\nTicket:'), null, options).ok, false);
+    assert.equal(validateGeneratedCalendar(raw.replace('Event: main|新点|新推进|午|地|动\nTicket:', 'Event: main|新点|新推进|午|地|动\nDesc: 插入行\nTicket:'), null, options).ok, true);
     assert.equal(validateGeneratedCalendar(raw.replace('Ticket: POINT-TICKET-1', 'Ticket: junk POINT-TICKET-1 extra'), null, options).ok, false);
 });
 
@@ -654,22 +654,29 @@ test('point Adult metadata is local, round-trips, and tickets bind in source ord
     assert.equal(parseCalendar(stripPointAdultMetadata(stored)).days.flatMap(day => day.events).some(event => event.adult), false);
 });
 
-test('point generated protocol rejects AI pin/Adult and malformed tickets', () => {
+test('point generated protocol ignores AI pin/Adult instead of rejecting complete events', () => {
     const base = '<calendar_widget>\nDay: 1\nEvent: main|一|描述|早|地|动\nDay: 2\nEvent: main|二|描述|午|地|动\nDay: 3\nEvent: main|三|描述|晚|地|动\nFuture:\nEvent: main|四|描述|夜|地|动\n</calendar_widget>';
     assert.equal(validateGeneratedCalendar(base, null, { generated: true, adultMode: 'off' }).ok, true);
-    assert.equal(validateGeneratedCalendar(base.replace('动\nDay: 2', '动|true\nDay: 2'), null, { generated: true, adultMode: 'off' }).ok, false);
-    assert.equal(validateGeneratedCalendar(base.replace('动\nDay: 2', '动\nAdult: true\nDay: 2'), null, { generated: true, adultMode: 'off' }).ok, false);
+    for (const raw of [base.replace('动\nDay: 2', '动|true\nDay: 2'), base.replace('动\nDay: 2', '动\nAdult: true\nDay: 2')]) {
+        assert.equal(validateGeneratedCalendar(raw, null, { generated: true, adultMode: 'off' }).ok, true);
+        const event = parseCalendar(bindPointAdultTickets(raw, 'off')).days[0].events[0];
+        assert.equal(event.pin, false); assert.equal(event.adult, false);
+    }
 });
 
-test('point generated validation accepts five or six Event fields but rejects four or seven', () => {
+test('point generated validation drops missing-location records but accepts harmless extra fields', () => {
     const makeRaw = event => `<calendar_widget>\nDay: 1\nEvent: main|一|描述|早|地|动\nDay: 2\nEvent: main|二|描述|午|地|动\nDay: 3\nEvent: main|三|描述|晚|地|动\nFuture:\nEvent: ${event}\n</calendar_widget>`;
     const futureFive = 'main|未来五字段|描述|夜|地';
     const parsedFive = parsePointEventRecord(`Event: ${futureFive}`);
     assert.equal(parsedFive.npcAction, '');
     assert.equal(validateGeneratedCalendar(makeRaw(futureFive), null, { generated: true, adultMode: 'off' }).ok, true);
     assert.equal(validateGeneratedCalendar(makeRaw('main|六字段|描述|夜|地|动态'), null, { generated: true, adultMode: 'off' }).ok, true);
-    assert.equal(validateGeneratedCalendar(makeRaw('main|四字段|描述|夜'), null, { generated: true, adultMode: 'off' }).code, 'invalid-event-fields');
-    assert.equal(validateGeneratedCalendar(makeRaw('main|七字段|描述|夜|地|动态|false'), null, { generated: true, adultMode: 'off' }).code, 'invalid-event-fields');
+    const missing = makeRaw('main|四字段|描述|夜');
+    assert.equal(validateGeneratedCalendar(missing, null, { generated: true, adultMode: 'off' }).ok, true);
+    assert.equal(parseCalendar(bindPointAdultTickets(missing, 'off')).future?.events?.length || 0, 0);
+    const extra = makeRaw('main|七字段|描述|夜|地|动态|false');
+    assert.equal(validateGeneratedCalendar(extra, null, { generated: true, adultMode: 'off' }).ok, true);
+    assert.equal(parseCalendar(bindPointAdultTickets(extra, 'off')).future.events[0].pin, false);
     assert.equal(validateGeneratedCalendar(makeRaw('main|本地锁点|描述|夜|地|动态|true'), null, { generated: false, adultMode: 'off' }).ok, true);
 });
 

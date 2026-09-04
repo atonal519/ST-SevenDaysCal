@@ -1,18 +1,8 @@
-import { parseLines, serializeLines } from './schema.js';
+import { parseLineCard, parseLines, serializeLines } from './schema.js';
 import { serializeVectorCue } from './vectors/codec.js';
 
 export function parseLineWidget(body) {
-    const rows = String(body || '').split('\n').map(line => line.trim()).filter(Boolean);
-    const line = rows.find(row => /^Line\s*:/i.test(row));
-    if (!line) return null;
-    const parts = line.replace(/^Line\s*:\s*/i, '').split('|').map(value => value.trim());
-    if (parts.length < 5 || parts.length > 8) return null;
-    return {
-        name: parts[0], type: parts[1], stage: parts[2], level: parts[3], when: parts[4],
-        agency: parts[5] || 'world', stall: /^true$/i.test(parts[6] || ''), pin: /^true$/i.test(parts[7] || ''),
-        desc: (rows.find(row => /^Desc\s*:/i.test(row)) || '').replace(/^Desc\s*:\s*/i, '').trim(),
-        next: (rows.find(row => /^Next\s*:/i.test(row)) || '').replace(/^Next\s*:\s*/i, '').trim(),
-    };
+    return parseLineCard(body);
 }
 
 export function addLineWidget(raw, body, { pin = true } = {}) {

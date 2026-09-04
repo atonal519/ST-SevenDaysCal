@@ -1,4 +1,4 @@
-import { TERMINAL_LINE_STAGES } from './schema.js';
+import { isTerminalLineStage } from './schema.js';
 
 export const AUTO_LINE_CAPACITY = 8;
 // 每轮签发完整自动池容量的票据，允许旧线集中进入终态后由新线补满空位。
@@ -11,7 +11,7 @@ export function enforceLineCapacity({ previousLines = [], mergedLines = [], max 
     const candidates = Array.isArray(mergedLines) ? mergedLines : [];
     const used = new Set();
     const retained = [];
-    const isActiveAuto = line => line?.pin !== true && !TERMINAL_LINE_STAGES.has(line?.stage);
+    const isActiveAuto = line => line?.pin !== true && !isTerminalLineStage(line?.stage);
     const oldAuto = (Array.isArray(previousLines) ? previousLines : []).filter(isActiveAuto);
     const queues = new Map();
     for (let index = 0; index < candidates.length; index++) {
@@ -36,7 +36,7 @@ export function enforceLineCapacity({ previousLines = [], mergedLines = [], max 
         retained.push(line);
     }
     // 本轮刚收束的终态线与锁线都不占自动活线池，并维持各自在合并结果中的顺序。
-    const settled = candidates.filter(line => line?.pin !== true && TERMINAL_LINE_STAGES.has(line?.stage));
+    const settled = candidates.filter(line => line?.pin !== true && isTerminalLineStage(line?.stage));
     const pinned = candidates.filter(line => line?.pin === true);
     const model = [...retained, ...settled, ...pinned];
     return { ok: true, model, dropped: Math.max(0, candidates.length - model.length), rawCount: model.length };

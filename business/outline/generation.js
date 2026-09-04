@@ -1,5 +1,5 @@
 import { buildOutlinePrompt } from './prompts.js';
-import { parseOutline } from './schema.js';
+import { normalizeOutlineResponse } from './schema.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
 
 export function createOutlineGeneration({
@@ -80,27 +80,28 @@ export function createOutlineGeneration({
             });
             if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!String(raw || '').trim()) throw diagnostic.rejected(makeDiagnosticError('empty-output', { phase: 'empty-output' }), { phase: 'parse', reasonCode: 'outline-empty' });
-            if (parseOutline(raw).length === 0) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-no-beats' });
+            const normalizedRaw = normalizeOutlineResponse(raw);
+            if (!normalizedRaw) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-no-beats' });
             diagnostic.accepted({ phase: 'validation', reasonCode: 'outline-valid' });
             let committed;
-            try { committed = await (repository.commitOutlineConfirmed || repository.commitOutline)(target, { raw, ts: now(), cursor: 1 }, baseline, { ownerGuard: () => currentAndOwned(task) }); }
+            try { committed = await (repository.commitOutlineConfirmed || repository.commitOutline)(target, { raw: normalizedRaw, ts: now(), cursor: 1 }, baseline, { ownerGuard: () => currentAndOwned(task) }); }
             catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-save-failed' }); }
             if (!(committed === true || committed?.ok === true)) {
                 if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
                 const status = Number(committed?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (committed && typeof committed === 'object') error.saveResult = committed; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-save-rejected' });
             }
             diagnostic.committed({ reasonCode: committed?.stale ? 'outline-saved-stale' : 'outline-saved' });
-            if (committed?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true, raw }; }
+            if (committed?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true, raw: normalizedRaw }; }
             finish(task);
             try {
                 injection?.refresh(target);
-                const html = renderer.render(raw, 1);
+                const html = renderer.render(normalizedRaw, 1);
                 if (ui?.isOutlineMode?.()) {
                     ui.setOutline(html);
                     if (settings?.().notifyMode !== 'off') ui.toast?.('面已生成');
                 } else ui?.closedSuccess?.();
             } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
-            return { status: 'updated', raw };
+            return { status: 'updated', raw: normalizedRaw };
         } catch (error) {
             if (!currentAndOwned(task)) return { status: 'cancelled' };
             if (!repository.matches(target, task.baseline)) return { status: 'cancelled' };

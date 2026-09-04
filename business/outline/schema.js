@@ -5,7 +5,9 @@ export function parseOutline(raw) {
     const beats = [];
     let current = null;
     for (const rawLine of content.split('\n')) {
-        const text = rawLine.trim().replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '');
+        let text = rawLine.trim();
+        if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
+        text = text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
         if (!text) continue;
         if (/^Beat\s*[:：]/i.test(text)) {
             if (current) beats.push(current);
@@ -15,7 +17,7 @@ export function parseOutline(raw) {
                 title: (parts[1] || '').trim(),
                 type: (parts[2] || '').trim(),
                 line: (parts[3] || '').trim(),
-                outcome: (parts[4] || '').trim(),
+                outcome: parts.slice(4).join('｜').trim(),
                 scene: '',
                 subtext: '',
                 think: '',
@@ -30,6 +32,27 @@ export function parseOutline(raw) {
     }
     if (current) beats.push(current);
     return beats;
+}
+
+export function isCompleteOutlineBeat(beat) {
+    return !!beat && ['time', 'title', 'type', 'line', 'outcome', 'scene', 'subtext', 'think']
+        .every(key => String(beat[key] || '').trim());
+}
+
+export function parseCompleteOutline(raw) {
+    return parseOutline(raw).filter(isCompleteOutlineBeat);
+}
+
+export function normalizeOutlineResponse(raw) {
+    const beats = parseCompleteOutline(raw);
+    if (!beats.length) return '';
+    const blocks = beats.map(beat => [
+        `Beat: ${beat.time}|${beat.title}|${beat.type}|${beat.line}|${beat.outcome}`,
+        `Scene: ${beat.scene}`,
+        `Subtext: ${beat.subtext}`,
+        `Think: ${beat.think}`,
+    ].join('\n'));
+    return `<outline_widget>\n${blocks.join('\n')}\n</outline_widget>`;
 }
 
 import { normalizeEditableText } from '../utils/text-edit.js';

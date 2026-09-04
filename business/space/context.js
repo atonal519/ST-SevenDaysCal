@@ -6,7 +6,7 @@ export const LEDGER_READ_KEYWORDS = Object.freeze(['刻度', '暗历', '暗账',
 const includesAny = (message, words) => words.some(word => message.includes(word));
 const WRITE_RX = /(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做成|写成|做(?:一|一个|一条|个|条)|加(?:一|个|条)?|改(?:成|一下|为)?|修改|调整|设置|设(?:为|成)|重做|重写|换成|挪到|来一(?:张|个|条)|给我(?:做|来)?一(?:张|个|条))/;
 const VIEW_RX = /(?:查看|看看|看下|列出|列表|有哪些|哪几|有几(?:个|条)|多少(?:个|条)|当前|现有|已有|现在(?:有|的)|第\s*\d+\s*条)/;
-const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|等级|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)/;
+const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)/;
 const POINT_RX = /(?:日程|日历|待办|点卡片?|第\s*\d+\s*条\s*点|(?:当前|现有|已有|所有)(?:的)?点(?=$|[\s，。？！、；：]|要|里|再|改|修|调|重|简|详|短|长)|(?:有哪些|有几(?:个|条)|多少(?:个|条))点|(?:这个|那个)点(?=(?:$|[\s，。？！、；：]|要怎么|怎么|如何|显示|加|改|删|存|落地))|(?:往|向)点里|(?:做|新建|加|新增|添加|创建|生成|记录|保存|落地|安排|修改|查看|看看|列出|给我(?:做|来)?|来)(?:一|一个|一条|个|条)?点(?=$|[\s，。？！、；：]|然后|并|再|和))/;
 const LINE_RX = /(?:事件线|剧情线|线索|伏笔|线卡片?|第\s*\d+\s*条\s*线|(?:当前|现有|已有|所有)(?:的)?线(?=$|[\s，。？！、；：]|要|里|再|改|修|调|重|简|详|短|长)|(?:有哪些|有几(?:个|条)|多少(?:个|条))线|(?:这个|那个)线(?=(?:$|[\s，。？！、；：]|要怎么|怎么|如何|显示|加|改|删|存|落地))|(?:往|向)线里|(?:做|新建|加|新增|添加|创建|生成|记录|保存|落地|修改|查看|看看|列出|给我(?:做|来)?|来)(?:一|一个|一条|个|条)?线(?=$|[\s，。？！、；：]|然后|并|再|和))/;
 const ERA_RX = /(?:整套(?:的)?历|历法|纪年|年号|月名|月份结构|月份数量|月(?:份)?数|一年(?:有|几|多少|改成|设为|调整为)?[一二三四五六七八九十百\d]*个月|每(?:个)?月(?:都)?(?:天数|(?:有|几|多少)天|(?:(?:改|调整|设置|设)(?:为|成))?[零〇一二两三四五六七八九十百\d]+天)|历法卡片?)/;
@@ -33,11 +33,15 @@ const DESIRED_ALMANAC_RX = /(?:我要|我想要|我可以要|想要|需要)(?:�
 const NEGATED_DISCOURSE_THEN_CARD_RX = /(?:别|不要|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再)?(?:讨论|解释|分析|寒暄|评价|说明|聊聊|说说)(?:[，。？！；：,:;!?\s]*直接)*[，。？！；：,:;!?\s]*(?:给我|帮我|替我|为我|请)?(?:写|出|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?(?:点|线|历法?)(?:卡片)?/;
 const SEMANTIC_CARD_RX = /结构化卡片|(?:历|历法)卡片/;
 const PURE_DISCUSSION_RX = /(?:为什么|为何|为啥|是不是|是否|怎么看|如何理解|什么意思|意味着|象征|合理(?:吗|么)|成立(?:吗|么)|怎么样|怎么回事|[？?]|吗$|呢$)/;
+const PURE_EXPLANATION_RX = /^\s*(?:我)?(?:只是|只|单纯)?(?:想)?(?:问|了解|请教|听听解释)/;
+const EXPLICIT_EXPLANATION_RX = /^\s*(?:(?:请|麻烦|劳驾|帮我|给我)\s*)?(?:解释|说明|释义|解读|讲解|分析理解)(?:一下|下)?/;
 const REQUEST_LANGUAGE_RX = /(?:给我|帮我|请|我要|我想|想要|需要|替我|为我|生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|来|弄|输出|整理|转成|转换|改|修改|调整|设置|重做|重写)/;
 const DELEGATED_REQUEST_RX = /(?:给我|帮我|替我|为我|我要|我想|想要|我可以要|能不能.{0,4}给我|可以.{0,4}给我)/;
 const QUOTED_CARD_MENTION_RX = /(?:例如|比如|例子|举例|引用)[^"“‘\n]{0,16}["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’]|["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’].{0,32}(?:这句话|这个词|例子|引用|说法|表达|意思|说明|句式|比喻|你觉得|怎么回答|不用执行|不要执行)/;
 const MENTION_ONLY_RX = /(?:只是|仅仅|仅是|不过是).{0,12}(?:提到|提及|说到|谈到|引用)|(?:这里|此处).{0,12}(?:比喻|词语|说法|含义)/;
 const EVALUATION_RX = /(?:写得|做得|设计得|设定得?).{0,10}(?:好|巧|妙|温馨|独特|不错|有趣|自然)|(?:很好|巧妙|温馨|独特|不错|有趣|很自然)[。！!~～]*$/;
+const EXPLICIT_GREETING_RX = /^\s*(?:你好|您好|嗨|哈(?:喽|啰|罗)|早上好|上午好|中午好|下午好|晚上好|晚安|在吗|谢谢|感谢|辛苦了)[呀啊哦哈嘛吗！!。,.，~～\s]*$/;
+const GENERAL_REQUEST_RX = /^\s*(?:请|麻烦|劳驾|帮|给|把|替|为|我要|我想|想要|需要|能否|可否|可以|生成|新增|添加|新建|创建|记录|记下|保存|安排|修改|调整|重做|重写|整理|梳理|归纳|总结|铺)/;
 
 const moduleMatches = message => {
     const era = ERA_RX.test(message);
@@ -75,6 +79,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         || DESIRED_LINE_RX.test(message)
         || DESIRED_ALMANAC_RX.test(message)
         || (SEMANTIC_CARD_RX.test(message) && REQUEST_LANGUAGE_RX.test(message));
+    const explicitStructuredLanding = directSemanticRequest || (hasWrite && semanticKinds.length > 0);
     if (writeKinds.length > 1 || (!helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
     }
@@ -103,9 +108,13 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         || QUOTED_CARD_MENTION_RX.test(message)
         || MENTION_ONLY_RX.test(message)
         || EVALUATION_RX.test(message)
-        || (PURE_DISCUSSION_RX.test(message) && !REQUEST_LANGUAGE_RX.test(message) && !directSemanticRequest && !delegatedCardRequest);
+        || EXPLICIT_GREETING_RX.test(message)
+        || (PURE_EXPLANATION_RX.test(message) && !explicitStructuredLanding)
+        || (EXPLICIT_EXPLANATION_RX.test(message) && !explicitStructuredLanding)
+        || (PURE_DISCUSSION_RX.test(message) && !directSemanticRequest && !delegatedCardRequest);
+    const uncertainRequest = semanticCardCandidate || GENERAL_REQUEST_RX.test(message);
     return Object.freeze({
-        action: semanticCardCandidate && !reliableDiscussion ? 'semantic-route' : 'discuss',
+        action: uncertainRequest && !reliableDiscussion ? 'semantic-route' : 'discuss',
         kind: null,
         faq,
         pointContext: false,

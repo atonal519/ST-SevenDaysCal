@@ -1,4 +1,4 @@
-import { TERMINAL_LINE_STAGES } from './schema.js';
+import { isTerminalLineStage } from './schema.js';
 import { AUTO_LINE_CAPACITY } from './capacity.js';
 
 export function auditLineEvolution({ previousLines = [], generatedLines = [], freshTickets = [], intent = 'advance' } = {}) {
@@ -9,7 +9,7 @@ export function auditLineEvolution({ previousLines = [], generatedLines = [], fr
     const activeNames = new Set();
     const pinnedNames = new Set();
     for (const line of previous) {
-        if (!line?.name || (line.pin !== true && TERMINAL_LINE_STAGES.has(line.stage))) continue;
+        if (!line?.name || (line.pin !== true && isTerminalLineStage(line.stage))) continue;
         const kind = line.pin === true ? 'pinned' : 'active';
         const queue = identityQueues.get(line.name) || [];
         queue.push({ kind, line });
@@ -30,15 +30,14 @@ export function auditLineEvolution({ previousLines = [], generatedLines = [], fr
         if (identity?.kind === 'active') {
             consumedActive.set(name, (consumedActive.get(name) || 0) + 1);
             if (line.ticketId != null) return { ok: false, reason: 'evolution-old-line-ticket' };
-            if (TERMINAL_LINE_STAGES.has(line.stage)) terminalExits++;
+            if (isTerminalLineStage(line.stage)) terminalExits++;
             else activeAutoCount++;
         } else if (identity?.kind === 'pinned') {
-            if (TERMINAL_LINE_STAGES.has(line.stage)) return { ok: false, reason: 'evolution-pinned-terminal' };
             if (line.ticketId != null) return { ok: false, reason: 'evolution-pinned-ticket' };
         } else if (activeNames.has(name) || pinnedNames.has(name)) {
             return { ok: false, reason: activeNames.has(name) ? 'evolution-duplicate-old-line' : 'evolution-duplicate-pinned-line' };
         } else {
-            if (TERMINAL_LINE_STAGES.has(line.stage)) return { ok: false, reason: 'evolution-newborn-terminal' };
+            if (isTerminalLineStage(line.stage)) return { ok: false, reason: 'evolution-newborn-terminal' };
             if (!line.ticketId) return { ok: false, reason: 'evolution-newborn-missing-ticket' };
             newborn++;
             activeAutoCount++;

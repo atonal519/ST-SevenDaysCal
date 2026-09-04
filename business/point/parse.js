@@ -4,19 +4,50 @@
 import { calendarDate, formatCalendarDate, isGregorian, parseCalendarDate, validateCalendarDate } from '../calendar/date.js';
 import { normalizePointAdultMode, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
 
+const cleanPointLine = value => {
+    let text = String(value || '').trim();
+    if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
+    return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+};
+const pointFieldValue = (value, name) => String(value || '').replace(new RegExp(`^${name}\\s*[:：]\\s*`, 'i'), '').trim();
+const normalizePointType = value => {
+    const text = String(value || '').trim().toLowerCase();
+    if (['main', 'hidden', 'bond', 'user', 'char'].includes(text)) return text;
+    if (/暗|隐藏|伏笔/.test(text)) return 'hidden';
+    if (/红|关系|情感|羁绊/.test(text)) return 'bond';
+    return 'main';
+};
+export const isCompletePointEvent = event => Boolean(
+    event
+    && String(event.title || '').trim()
+    && String(event.desc || '').trim()
+    && String(event.time || '').trim()
+    && String(event.location || '').trim()
+);
+
+function pointDayHeading(value) {
+    const text = String(value || '').trim();
+    if (!/^(?:Day\b|第[^\s|｜]{1,8}天)/i.test(text)) return null;
+    const match = /^(?:Day\s*[:：]?\s*(\d+)|第([一二三四五六七]|\d+)天)/i.exec(text);
+    const chineseDay = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7 };
+    const dayNumber = match ? Number(match[1] || chineseDay[match[2]] || match[2]) : NaN;
+    return { dayNumber: Number.isInteger(dayNumber) && dayNumber > 0 ? dayNumber : null };
+}
+
 export function parsePointEventRecord(text) {
     const source = String(text || '');
-    const adult = /^\s*Adult\s*:\s*true\s*$/im.test(source);
-    const ticketId = source.match(/^\s*Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/im)?.[1]?.toUpperCase() || undefined;
-    const proof = [...source.matchAll(/^\s*AdultProof\s*:\s*([^\n]*)$/gim)][0]?.[0];
-    const parts = source.split('\n').filter(line => !/^\s*(?:Adult|Ticket|AdultProof)\s*:/i.test(line)).join('\n').replace(/^Event\s*:\s*/i, '').split('|').map(s => s.trim());
-    if (parts.length < 4) return null;
+    const lines = source.split('\n').map(cleanPointLine);
+    const adult = lines.some(line => /^Adult\s*[:：]\s*true\s*$/i.test(line));
+    const ticketId = lines.find(line => /^Ticket\s*[:：]/i.test(line))?.match(/^Ticket\s*[:：]\s*(POINT-TICKET-\d+)\s*$/i)?.[1]?.toUpperCase() || undefined;
+    const proof = lines.find(line => /^AdultProof\s*[:：]/i.test(line));
+    const parts = pointFieldValue(lines.filter(line => !/^(?:Adult|Ticket|AdultProof)\s*[:：]/i.test(line)).join('\n'), 'Event').split(/[|｜]/).map(s => s.trim());
+    if (parts.length < 4 || !parts[1]) return null;
     const tail = parts.slice(5);
-    const hasPin = tail.length > 0 && /^(true|false)$/i.test(tail[tail.length - 1]);
+    const hasPin = tail.length > 0 && /^(?:true|false|是|否)$/i.test(tail[tail.length - 1]);
     return {
-        type: (parts[0] || 'user').toLowerCase(), title: parts[1] || '', desc: parts[2] || '', time: parts[3] || '',
+        type: normalizePointType(parts[0]), title: parts[1] || '', desc: parts[2] || '', time: parts[3] || '',
         location: parts[4] || '', npcAction: tail.slice(0, hasPin ? -1 : undefined).join('|'),
-        pin: hasPin && tail[tail.length - 1].toLowerCase() === 'true',
+        pin: hasPin && /^(?:true|是)$/i.test(tail[tail.length - 1]),
         adult,
         ...(proof ? { adultProof: parsePointAdultProof(proof) } : {}),
         ...(ticketId ? { ticketId } : {}),
@@ -32,10 +63,32 @@ function pointEventBlocksFromInner(inner) {
     let buffer = [];
     const flush = () => { if (buffer.length) out.push(buffer); buffer = []; };
     for (const rawLine of String(inner || '').split('\n')) {
-        const line = rawLine.trim();
-        if (/^Event\s*:/i.test(line)) { flush(); buffer = [rawLine]; continue; }
-        if (/^(?:Day\s*:?\s*\d+|第[一二三四五六七\d]+天|Future\s*:|未来\s*:|<\/(?:calendar|schedule)_widget>)/i.test(line)) { flush(); continue; }
-        if (buffer.length) buffer.push(rawLine);
+        const line = cleanPointLine(rawLine);
+        if (/^Event\s*[:：]/i.test(line)) { flush(); buffer = [line]; continue; }
+        if (/^(?:Day\s*[:：]?\s*\d+|第[一二三四五六七\d]+天|Future\s*[:：]|未来\s*[:：]|<\/(?:calendar|schedule)_widget>)/i.test(line)) { flush(); continue; }
+        if (buffer.length) buffer.push(line);
+    }
+    flush();
+    return out;
+}
+
+function generatedPointEventRecordsFromInner(inner) {
+    const out = [];
+    let block = [];
+    let hasContext = false;
+    let blockHasContext = false;
+    const flush = () => {
+        if (block.length) out.push({ block, hasContext: blockHasContext });
+        block = [];
+    };
+    for (const rawLine of String(inner || '').split('\n')) {
+        const line = cleanPointLine(rawLine);
+        const day = pointDayHeading(line);
+        if (day) { flush(); hasContext = day.dayNumber != null; continue; }
+        if (/^(?:Future|未来)\s*[:：]/i.test(line)) { flush(); hasContext = true; continue; }
+        if (/^Event\s*[:：]/i.test(line)) { flush(); block = [line]; blockHasContext = hasContext; continue; }
+        if (/^<\/(?:calendar|schedule)_widget>/i.test(line)) { flush(); hasContext = false; continue; }
+        if (block.length) block.push(line);
     }
     flush();
     return out;
@@ -61,7 +114,7 @@ export function replacePointEventBlock(raw, idx0, newEventText) {
     let blocks = [], current = null;
     const flush = end => { if (current) { current.end = end; blocks.push(current); current = null; } };
     lines.forEach((line, index) => {
-        const t = line.trim();
+        const t = cleanPointLine(line);
         if (/^Event\s*:/i.test(t)) { flush(index); current = { start: index, end: index + 1 }; return; }
         if (/^(?:Day\s*:?\s*\d+|第[一二三四五六七\d]+天|Future\s*:|未来\s*:|<\/(?:calendar|schedule)_widget>)/i.test(t)) { flush(index); return; }
         if (current) current.end = index + 1;
@@ -127,7 +180,6 @@ export function parseCalendar(raw, calendar = null) {
     }
 
     const days = []; let cur = null; let inFuture = false; let future = null; let eventBuffer = ''; let eventMeta = null; let proofEligible = false;
-    const chineseDay = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7 };
     const flushEvent = () => {
         if (!eventBuffer || !cur) { eventBuffer = ''; return; }
         const ev = parsePointEventRecord(eventBuffer);
@@ -136,36 +188,36 @@ export function parseCalendar(raw, calendar = null) {
         eventMeta = null;
     };
     for (const line of content.split('\n')) {
-        const t = line.trim();
+        const t = cleanPointLine(line);
         if (!t) continue;
-        if (eventBuffer && !/^Ticket\s*:/i.test(t) && !/^AdultProof\s*:/i.test(t)) proofEligible = false;
-        const dayHeader = /^(?:Day\s*:?\s*(\d+)|第([一二三四五六七\d]+)天)/i.exec(t);
+        if (/^```/.test(t)) continue;
+        if (eventBuffer && !/^Ticket\s*[:：]/i.test(t) && !/^AdultProof\s*[:：]/i.test(t)) proofEligible = false;
+        const dayHeader = pointDayHeading(t);
         if (dayHeader) {
             flushEvent();
             if (cur && !inFuture) days.push(cur);
             // 日头可带天气：Day: N|天气|温度（旧数据无管道段 → 天气/温度为空，退化为旧行为）
-            const dayParts = t.split('|').slice(1).map(s => s.trim());
-            const dayNumber = Number(dayHeader[1] || chineseDay[dayHeader[2]] || dayHeader[2]);
-            cur = { dayNumber: Number.isFinite(dayNumber) ? dayNumber : null, events: [], weather: dayParts[0] || '', temp: dayParts[1] || '' };
+            const dayParts = t.split(/[|｜]/).slice(1).map(s => s.trim());
+            cur = dayHeader.dayNumber == null ? null : { dayNumber: dayHeader.dayNumber, events: [], weather: dayParts[0] || '', temp: dayParts[1] || '' };
             inFuture = false; continue;
         }
-        if (/^Future\s*:/i.test(t) || /^未来\s*:/i.test(t)) {
+        if (/^Future\s*[:：]/i.test(t) || /^未来\s*[:：]/i.test(t)) {
             flushEvent();
             if (cur && !inFuture) days.push(cur);
             future = { events: [] }; cur = future; inFuture = true; continue;
         }
-        if (/^Event\s*:/i.test(t)) {
+        if (/^Event\s*[:：]/i.test(t)) {
             flushEvent();
-            if (!cur) cur = { events: [] };
+            if (!cur) { eventMeta = null; proofEligible = false; continue; }
             eventBuffer = t;
             eventMeta = {};
             proofEligible = false;
             continue;
         }
-        if (eventBuffer && /^Adult\s*:\s*true\s*$/i.test(t)) { eventMeta.adult = true; continue; }
-        if (eventBuffer && /^Adult\s*:\s*false\s*$/i.test(t)) { eventMeta.adult = false; continue; }
-        if (eventBuffer && /^Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/i.test(t)) { eventMeta.ticketId = t.match(/^Ticket\s*:\s*(POINT-TICKET-\d+)\s*$/i)[1].toUpperCase(); proofEligible = true; continue; }
-        if (eventBuffer && /^AdultProof\s*:/i.test(t)) { if (proofEligible) eventMeta.adultProof = parsePointAdultProof(t); proofEligible = false; continue; }
+        if (eventBuffer && /^Adult\s*[:：]\s*true\s*$/i.test(t)) { eventMeta.adult = true; continue; }
+        if (eventBuffer && /^Adult\s*[:：]\s*false\s*$/i.test(t)) { eventMeta.adult = false; continue; }
+        if (eventBuffer && /^Ticket\s*[:：]\s*(POINT-TICKET-\d+)\s*$/i.test(t)) { eventMeta.ticketId = t.match(/^Ticket\s*[:：]\s*(POINT-TICKET-\d+)\s*$/i)[1].toUpperCase(); proofEligible = true; continue; }
+        if (eventBuffer && /^AdultProof\s*[:：]/i.test(t)) { if (proofEligible) eventMeta.adultProof = parsePointAdultProof(t.replace(/^AdultProof\s*：/i, 'AdultProof:')); proofEligible = false; continue; }
         if (eventBuffer) eventBuffer += ` ${t}`;
     }
     flushEvent();
@@ -174,16 +226,14 @@ export function parseCalendar(raw, calendar = null) {
 }
 
 // 生成响应写入前的结构闸门：数量是建议，结构与核心事件才是硬门槛。
-// 这是原始模型响应的硬门禁；锁定回并不能替模型补足缺失的 Future。
+// 这是原始模型响应的业务闸门；没有完整事件时，锁定回并也不能替模型凭空补内容。
 export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
     const text = String(raw || '');
     const widget = text.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
-    const eventBlocks = widget ? pointEventBlocksFromInner(widget[1]) : [];
-    const strictEvents = widget ? eventBlocks.every(block => {
-        const eventLine = block.find(line => /^\s*Event\s*:/i.test(line));
-        const fields = String(eventLine || '').trim().replace(/^Event\s*:\s*/i, '').split('|');
-        return fields.length === 5 || fields.length === 6 || (!options.generated && fields.length === 7);
-    }) : false;
+    const eventRecords = widget ? generatedPointEventRecordsFromInner(widget[1]) : [];
+    const validEventRecords = eventRecords.map(record => ({ ...record, event: parsePointEventRecord(record.block.join('\n')) }))
+        .filter(record => record.hasContext && isCompletePointEvent(record.event));
+    const strictEvents = validEventRecords.length > 0;
     const parsed = parseCalendar(text, calendar);
     const coreDays = (parsed.allDays || parsed.days).filter(day => [1, 2, 3].includes(day.dayNumber));
     const counts = new Map([1, 2, 3].map(n => [n, coreDays.filter(x => x.dayNumber === n).length]));
@@ -191,40 +241,35 @@ export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
         && coreDays.map(day => day.dayNumber).join(',') === '1,2,3'
         && coreDays.every(day => day.events.length > 0);
     const hasClosing = /<\/calendar_widget\s*>/i.test(text);
-    const hasFuture = /(?:^|\n)\s*(?:Future\s*:|未来\s*:)/im.test(text);
+    const hasFuture = /(?:^|\n)\s*(?:Future\s*[:：]|未来\s*[:：])/im.test(text);
     const validFutureEvents = parsed.future?.events?.filter(ev => ev && ev.title).length || 0;
     const dayMissing = [1, 2, 3].find(n => !counts.get(n));
     const dayDuplicate = [1, 2, 3].find(n => counts.get(n) > 1);
     const dayEmpty = coreDays.find(day => [1, 2, 3].includes(day.dayNumber) && !day.events.length);
-    const reason = !hasClosing ? 'missing-closing-tag' : !widget ? 'missing-widget' : !strictEvents ? 'invalid-event-fields' : dayMissing ? 'day-missing' : dayDuplicate ? 'day-duplicate' : dayEmpty ? 'day-empty' : !hasFuture ? 'missing-future' : validFutureEvents < 1 ? 'empty-future' : null;
+    const reason = !hasClosing ? 'missing-closing-tag' : !widget ? 'missing-widget' : !strictEvents ? 'invalid-event-fields' : null;
     if (!reason && options.generated) {
-        const lines = text.match(/(?:^|\n)\s*(?:Ticket\s*:\s*[^\n]+|Adult\s*:\s*[^\n]+)\s*/gi) || [];
-        const proofLines = text.match(/(?:^|\n)\s*AdultProof\s*:[^\n]*/gi) || [];
-        if (normalizePointAdultMode(options.adultMode) === 'off' && (lines.length || proofLines.length)) return { ok: false, code: 'adult-protocol-in-off-mode', reason: 'adult-protocol-in-off-mode', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
-        if (lines.some(line => /^\s*Adult\s*:/i.test(line))) return { ok: false, code: 'ai-adult-metadata', reason: 'ai-adult-metadata', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
         if (normalizePointAdultMode(options.adultMode) !== 'off') {
             const pinnedTitles = new Map();
             for (const event of (options.pinned || [])) { const title = String(event?.title || '').trim(); if (title) pinnedTitles.set(title, (pinnedTitles.get(title) || 0) + 1); }
             const tickets = [];
-            let generatedIndex = 0;
-            for (const block of eventBlocks) {
-                const eventLine = block.find(value => /^\s*Event\s*:/i.test(value));
-                const title = String(eventLine || '').replace(/^\s*Event\s*:\s*/i, '').split('|')[1]?.trim() || '';
-                const blockTickets = block.filter(value => /^Ticket:\s*(POINT-TICKET-\d+)\s*$/.test(String(value).trim()));
+            const usedTickets = new Set();
+            const ticketPlan = new Map(pointTicketPlan(options.adultMode, 14).map(ticket => [ticket.id, ticket]));
+            for (const { block, event } of validEventRecords) {
+                const title = String(event.title || '').trim();
+                const ticketFields = block.filter(value => /^Ticket\s*[:：]/i.test(String(value).trim()));
                 const available = pinnedTitles.get(title) || 0;
                 if (available > 0) {
                     pinnedTitles.set(title, available - 1);
-                    if (blockTickets.length) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
+                    if (ticketFields.length) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventRecords.length, tickets } };
                     continue;
                 }
-                if (blockTickets.length !== 1 || !/^\s*Ticket\s*:/i.test(block[1] || '')) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
-                const ticket = blockTickets[0].match(/^Ticket:\s*(POINT-TICKET-\d+)\s*$/)?.[1];
-                const expected = `POINT-TICKET-${++generatedIndex}`;
-                if (ticket !== expected) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets: [...tickets, ticket] } };
+                if (ticketFields.length !== 1) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventRecords.length, tickets } };
+                const ticket = ticketFields[0].match(/^Ticket\s*[:：]\s*(POINT-TICKET-\d+)\s*$/i)?.[1]?.toUpperCase();
+                if (!ticketPlan.has(ticket) || usedTickets.has(ticket)) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventRecords.length, tickets: [...tickets, ticket] } };
+                usedTickets.add(ticket);
                 tickets.push(ticket);
             }
-            if (tickets.length !== generatedIndex || lines.filter(line => /^\s*Ticket\s*:/i.test(line)).length !== tickets.length) return { ok: false, code: 'invalid-point-tickets', reason: 'invalid-point-tickets', strictEvents, diagnostics: { eventCount: eventBlocks.length, tickets } };
-        } else if (lines.some(line => /^\s*Ticket\s*:/i.test(line)) || proofLines.length) return { ok: false, code: 'ticket-in-off-mode', reason: 'ticket-in-off-mode', strictEvents, diagnostics: { eventCount: eventBlocks.length } };
+        }
     }
     return {
         ok: !reason,
@@ -236,7 +281,7 @@ export function validateGeneratedCalendar(raw, calendar = null, options = {}) {
         hasFuture,
         futureCount: validFutureEvents,
         strictEvents,
-        diagnostics: { eventCount: eventBlocks.length, dayCounts: Object.fromEntries(counts), futureCount: validFutureEvents, dayMissing, dayDuplicate, dayEmpty: dayEmpty?.dayNumber || null },
+        diagnostics: { eventCount: eventRecords.length, validEventCount: validEventRecords.length, rejectedEventCount: eventRecords.length - validEventRecords.length, dayCounts: Object.fromEntries(counts), futureCount: validFutureEvents, dayMissing, dayDuplicate, dayEmpty: dayEmpty?.dayNumber || null },
     };
 }
 
@@ -245,17 +290,28 @@ export function bindPointAdultTickets(raw, mode = 'off', calendar = null) {
     const normalized = normalizePointAdultMode(mode);
     const text = String(raw || '');
     const parsed = parseCalendar(text, calendar);
+    for (const day of parsed.allDays || parsed.days) day.events = (day.events || []).filter(isCompletePointEvent);
+    if (parsed.future) parsed.future.events = (parsed.future.events || []).filter(isCompletePointEvent);
     const events = [];
     for (const day of parsed.allDays || parsed.days) events.push(...(day.events || []));
     if (parsed.future) events.push(...(parsed.future.events || []));
     const ticketed = events.filter(event => event.ticketId);
-    const plan = normalized === 'off' ? [] : pointTicketPlan(normalized, ticketed.length);
-    if (normalized !== 'off' && (ticketed.length > plan.length || ticketed.some((event, i) => event.ticketId !== plan[i].id))) throw new Error('点成人票顺序或数量无效');
-    const tickets = new Map(ticketed.map((event, i) => [event, plan[i]]));
+    const plan = normalized === 'off' ? [] : pointTicketPlan(normalized, 14);
+    const planById = new Map(plan.map(ticket => [ticket.id, ticket]));
+    const seenTicketIds = new Set();
+    if (normalized !== 'off') {
+        for (const event of ticketed) {
+            if (!planById.has(event.ticketId) || seenTicketIds.has(event.ticketId)) throw new Error('点成人票无效或重复');
+            seenTicketIds.add(event.ticketId);
+        }
+    }
+    const tickets = new Map(ticketed.map(event => [event, planById.get(event.ticketId)]));
     events.forEach(event => {
         const ticket = tickets.get(event);
         const trustedNsfwTicket = Boolean(ticket?.adult);
-        event.adult = Boolean(event.adult || trustedNsfwTicket || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event));
+        event.pin = false;
+        // Adult 只由本地票据与正文核验得出；忽略模型自报的 Adult，同时保留旧有正文识别兼容。
+        event.adult = Boolean(trustedNsfwTicket || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event));
         delete event.ticketId;
         delete event.adultProof;
     });

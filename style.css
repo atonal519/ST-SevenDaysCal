@@ -2525,7 +2525,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     white-space: nowrap;
 }
 /* 线卡日期独占一行（在头部下方）：古风长日期「大梁二十九年十一月廿六未时」放进头部会把那行挤爆、
-   逼近右侧图标组。挪成单独一行后，无论长短都不再和阶段/类型/珠子/图标抢横向空间。 */
+   逼近右侧图标组。挪成单独一行后，无论长短都不再和阶段/类型/图标抢横向空间。 */
 .sp-line-when {
     font-family  : 'Roboto Mono', monospace;
     font-size    : var(--sp-fs-72);
@@ -3379,45 +3379,8 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 已静音（暂停埋入）：常驻亮出琥珀色（--sp-warn），区别于锁的主色。 */
 .sp-inline-ledger-mute.sp-inline-paused { opacity: 0.9; color: var(--sp-warn, #e0a030); }
 .sp-inline-head > .sp-inline-stage,
-.sp-inline-head > .sp-inline-dots,
 .sp-inline-head > .sp-inline-when,
 .sp-inline-head > .sp-inline-stall { flex-shrink: 0; }
-/* ─── Bead level indicator ─────────────────────────── */
-/* A horizontal thread with beads strung on it: ○—○—●—● */
-.sp-inline-dots {
-    display     : flex;
-    align-items : center;
-    position    : relative;
-    margin      : 0 2px;
-    gap         : 0;
-}
-.sp-inline-dots::before {
-    content   : '';
-    position  : absolute;
-    left      : 3px;
-    right     : 3px;
-    top       : 50%;
-    height    : 1px;
-    background: rgba(128,128,128,0.25);
-    transform : translateY(-50%);
-}
-.sp-bead {
-    position     : relative;
-    display      : inline-block;
-    width        : 7px;
-    height       : 7px;
-    border-radius: 50%;
-    border       : 1.5px solid rgba(128,128,128,0.35);
-    background   : transparent;
-    flex-shrink  : 0;
-    margin       : 0 2px;
-    box-sizing   : border-box;
-}
-.sp-bead-on {
-    border-color: transparent;
-    /* fill color set via inline style background */
-}
-
 .sp-inline-when {
     font-size: var(--sp-fs-63);
     opacity  : 0.45;

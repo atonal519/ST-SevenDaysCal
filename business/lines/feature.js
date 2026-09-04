@@ -12,7 +12,7 @@ import { parseLines } from './schema.js';
 import { stripInternalLineLines } from './vectors/codec.js';
 import { vectorGlyphSvg } from './vectors/glyph.js';
 import { linesViewModel } from './render.js';
-import { inlineState, prefixNext } from './inline.js';
+import { buildLineInjectText, inlineState } from './inline.js';
 import { chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
 import { renderActionMenu } from '../utils/action-menu.js';
 
@@ -97,15 +97,10 @@ export function createLinesFeature(env = {}) {
         const colors = env.stageColors || {};
         const cards = lines.map((l, i) => {
             const adult = l.adult === true;
-            const level = Math.max(1, Math.min(4, Number.parseInt(l.level, 10) || 1));
             const color = colors[l.stage] || '#9aa6b2';
             const edgeColor = lineEdgeColor(l);
-            const beads = Array.from({ length: 4 }, (_, n) => `<span class="sp-bead${n < level ? ' sp-bead-on' : ''}" style="${n < level ? `background:${color}` : ''}"></span>`).join('');
-            const parts = [`【线参考】${l.name}（${l.type}·${l.stage}${l.stall ? '·停滞' : ''}）`];
-            if (l.desc) parts.push(l.desc);
-            if (l.next) parts.push(prefixNext(l.next, l.stall));
             const next = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</span></div>` : '';
-            const inject = env.makeInjectBtn?.(parts.join('\n')) || ''; const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
+            const inject = env.makeInjectBtn?.(buildLineInjectText(l)) || ''; const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
             const actions = renderActionMenu('line', [
                 { action: 'line-edit', icon: 'fa-pen', label: '编辑', title: '编辑这条线' },
                 { action: 'line-pin', icon: l.pin ? 'fa-lock-open' : 'fa-lock', label: l.pin ? '解锁' : '锁定', title: l.pin ? '解锁这条线' : '锁定这条线' },
@@ -115,7 +110,7 @@ export function createLinesFeature(env = {}) {
             const desc = l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : '';
             const nextText = l.next ? `<div class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</div>` : '';
             const nextHtml = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span>${sensitive(nextText, adult)}</div>` : '';
-            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}<span class="sp-beat-time">${beads}</span>${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${sensitive(titleHtml('sp-beat-title', l), adult)}${sensitive(desc, adult)}${nextHtml}</div>`;
+            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${sensitive(titleHtml('sp-beat-title', l), adult)}${sensitive(desc, adult)}${nextHtml}</div>`;
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
@@ -126,17 +121,15 @@ export function createLinesFeature(env = {}) {
         const dashedSub = !readOnly && view.dashed.enabled ? dashed?.inlineHtml?.() || '' : '';
         const body = view.lines.map((line, i) => {
             const adult = line.adult === true;
-            const level = Math.max(1, Math.min(4, Number.parseInt(line.level, 10) || 1));
             const color = (env.stageColors || {})[line.stage] || '#9aa6b2';
             const edgeColor = lineEdgeColor(line);
-            const beads = Array.from({ length: 4 }, (_, n) => `<span class="sp-bead${n < level ? ' sp-bead-on' : ''}" style="${n < level ? `background:${color}` : ''}"></span>`).join('');
-            const actions = view.hasActions ? `<span class="sp-beat-actions">${env.makeInjectBtn?.([`【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`, line.desc, line.nextText].filter(Boolean).join('\n')) || ''}<button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span>` : '';
+            const actions = view.hasActions ? `<span class="sp-beat-actions">${env.makeInjectBtn?.(buildLineInjectText(line)) || ''}<button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span>` : '';
             const desc = line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : '';
             const next = line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span>${sensitive(`<span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span>`, adult)}</div>` : '';
-            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}<span class="sp-inline-dots">${beads}</span>${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${sensitive(titleHtml('sp-inline-name', line), adult)}${sensitive(desc, adult)}${next}</div>`;
+            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${sensitive(titleHtml('sp-inline-name', line), adult)}${sensitive(desc, adult)}${next}</div>`;
         }).join('');
         const controls = !readOnly && view.hasActions ? '<span class="sp-inline-summary-actions"><button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button><button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button></span>' : '';
-        const summaryText = view.empty ? '暂无' : [view.activeCount ? `${view.activeCount} 条活跃` : '', view.settledCount ? `${view.settledCount} 条已收束` : ''].filter(Boolean).join(' · ');
+        const summaryText = view.empty ? '暂无' : [view.activeCount ? `${view.activeCount} 条活跃` : '', view.settledCount ? `${view.settledCount} 条已结束` : ''].filter(Boolean).join(' · ');
         const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count${view.empty ? ' sp-inline-empty' : ''}">${summaryText}</span>${controls}</summary>`;
         return `${summary}${body || dashedSub ? `<div class="sp-inline-body" data-lines-inject-text="${env.escapeAttr?.(view.injectText) || ''}">${body}${dashedSub}</div>` : ''}`;
     };

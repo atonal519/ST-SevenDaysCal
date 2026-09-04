@@ -20,28 +20,29 @@ const widgetLabel = kind => ({
 
 function widgetContract(kind, calDescText) {
     if (kind === 'schedule_widget') return [
-        `【本轮唯一合法格式：点卡片】严格输出一张完整卡片，不寒暄、不解释：`,
+        `【点卡片理想结构】每张卡片写一条完整 Event，不寒暄、不解释：`,
         `<schedule_widget>Event: type|title|description|time|location|线头动态</schedule_widget>`,
         `- type 只能是 main / hidden / bond。`,
         `- description 至少 30 字，使用生活化口吻。`,
         `- 线头动态写与此事件相关的其他角色同期动态，可为空。`,
     ].join('\n');
     if (kind === 'line_widget') return [
-        `【本轮唯一合法格式：线卡片】严格输出一张完整卡片，不寒暄、不解释：`,
+        `【线卡片理想结构】每张卡片写一条完整 Line，不寒暄、不解释：`,
         `<line_widget>`,
-        `Line: name|type|stage|level|when|agency|stall`,
+        `Line: name|type|stage|when|agency|stall|pin`,
         `Desc: 事件线当前状态、背景与有关各方位置（30 字左右）`,
         `Next: 紧邻下一步或恢复条件（20 字左右）`,
         `</line_widget>`,
         `- type 只能是 推进 / 冲突。`,
-        `- stage 只能是 萌芽、发酵、逼近、已爆发、已消散、筹备、执行、关键、已完成、已失败。`,
-        `- level 只能是 1、2、3、4。`,
+        `- stage 只能是 起线、延展、成形、收束、淡出；五阶段是冲突／推进共用的生命周期。`,
+        `- 阶段只描述生命周期位置，不要求升级。成形表示影响变得明确而非冲突极端化；收束可表示解决、和解、形成新平衡或事务落定；淡出表示不再值得持续追踪。`,
         `- when 是时间锚点（如“近日”“下周”“未定”）。`,
         `- agency=player 仅当下一步必须等待 user 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 user 暂不参与也能自行推进。不得因为事件将来可能影响 user 就标 player。`,
         `- stall 只能是 true / false。stall=true 时 Next 写恢复条件；否则 Next 写真正主动方的紧邻下一步。`,
+        `- pin 是本地保留位，一律输出 false。`,
     ].join('\n');
     if (kind === 'almanac_widget') return [
-        `【本轮唯一合法格式：历卡片】用一张卡片记录具体日期；一次多个日期可写多行 Item，不寒暄、不解释：`,
+        `【历卡片理想结构】用卡片记录具体日期；一次多个日期可写多行 Item，不寒暄、不解释：`,
         `<almanac_widget>`,
         `Item: name|type|month|day|days|displayDate|note`,
         `</almanac_widget>`,
@@ -51,7 +52,7 @@ function widgetContract(kind, calDescText) {
         `- displayDate 是给人看的日期写法，无特殊写法留空；note 是一句话说明，可为空。`,
     ].join('\n');
     if (kind === 'era_widget') return [
-        `【本轮唯一合法格式：历法卡片】输出完整的一套历法，不寒暄、不解释：`,
+        `【历法卡片理想结构】输出完整的一套历法，不寒暄、不解释：`,
         `<era_widget>`,
         `Era: 纪年名`,
         `Style: numeric 或 classical`,
@@ -80,15 +81,15 @@ function outputModeBlock(intent = {}, calDescText = '') {
             `- 若用户是在直接要求、命令、委托，或表达希望把内容生成、整理、转换、输出为点、线、历、历法卡片，即使措辞口语、缩略、倒装、使用“出/生/插/写”等动词，或没有标准生成动词，也要选择对应的唯一卡片合同。`,
             `- 正向例子：“出一条线”“给我生个线”“插个线”“给我写一条线”“给我做个点”“把这句话用结构化卡片输出成线”“把这句话用结构化卡片输出成点”。这些都应按请求的唯一类型输出卡片，不得当成普通讨论。`,
             `- 若只是提问、评价、讨论、提及词语、引用示例，或否定/暂缓生成，只用自然语言回答，不输出任何卡片。例如：“他这个是不是触及到底线了”“这是不是有点恶心”“不要生成一条线，先聊聊”。`,
-            `- 若同时要求多种卡片且无法确定唯一类型，用自然语言简短追问本次只要哪一种；禁止一次输出多种卡片。`,
-            `- 一旦判定要生成卡片，只输出所选合同的一张完整卡片，不寒暄、不解释；四种合法合同如下，必须且只能选择其中一种：`,
+            `- 若同时要求不同种类的卡片且无法确定优先项，用自然语言简短追问本次先做哪一种。用户明确要同一种的多条候选时，可以连续输出多张同类卡片，供用户逐张选择应用。`,
+            `- 一旦判定要生成卡片，只输出所选种类的完整卡片，不寒暄、不解释；四种结构如下：`,
             contracts,
         ].join('\n');
     }
     if (!intent.kind) {
         return `【本轮输出模式】这是普通讨论或只读查询。只用自然语言回答，不生成结构化卡片，不输出无关标签。`;
     }
-    return `【本轮输出模式】用户已明确授权落地或修改一张${widgetLabel(intent.kind)}卡片。只允许使用下面这一种合法格式，禁止输出其他卡片、无关标签、前言或解释。\n${widgetContract(intent.kind, calDescText)}`;
+    return `【本轮输出模式】用户已明确授权落地或修改${widgetLabel(intent.kind)}卡片。只使用下面这一种结构，不输出其他种类、无关标签、前言或解释；用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText)}`;
 }
 
 function recentWidgetBlock(intent = {}) {

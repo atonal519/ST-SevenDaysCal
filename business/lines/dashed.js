@@ -43,7 +43,13 @@ export function pickRandomDashedTopics(entries = DASHED_TOPIC_CONFIG, random = M
     const pool = [...entries]; for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
     return pool.slice(0, 2).map(item => item.value);
 }
-export function dashedItemsFromRaw(raw) { return String(raw || '').split('\n').map(s => normalizeDashedText(s.replace(/^[\s\-*·•]+/, '').replace(/^\d{1,2}[.、．)）]\s*/, '').trim())).filter(Boolean); }
+export function dashedItemsFromRaw(raw) {
+    return String(raw || '').split('\n').map(line => line.trim()).filter(line => {
+        if (!line || /^```/.test(line)) return false;
+        if (/^(?:#{1,6}\s*)?(?:世界观)?(?:冷知识|补充设定)(?:列表)?\s*[:：]?$/.test(line)) return false;
+        return !/^(?:以下是|下面是).{0,12}(?:冷知识|补充设定)\s*[:：]?$/.test(line);
+    }).map(line => normalizeDashedText(line.replace(/^[\s\-*·•#>]+/, '').replace(/^\d{1,2}[.、．)）]\s*/, '').trim())).filter(Boolean);
+}
 export function normalizeDashedKeepCount(value) { const n = Math.floor(Number(value)); return Number.isFinite(n) && n >= 2 ? Math.min(n, Number.MAX_SAFE_INTEGER) : 15; }
 export function pruneDashedItems(items, keepCount, enabled = true) {
     if (!enabled) return { items: [...(items || [])], removed: [] }; const kept = [], removed = []; let unlocked = 0; const limit = normalizeDashedKeepCount(keepCount);

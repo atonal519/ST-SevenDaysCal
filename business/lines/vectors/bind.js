@@ -1,5 +1,5 @@
 import { serializeVectorCue } from './codec.js';
-import { TERMINAL_LINE_STAGES } from '../schema.js';
+import { isTerminalLineStage } from '../schema.js';
 
 export function bindVectorTickets({ previousLines = [], generatedLines = [], freshTickets = [] } = {}) {
     const queues = new Map();
@@ -13,7 +13,7 @@ export function bindVectorTickets({ previousLines = [], generatedLines = [], fre
         if (old) { if (line.ticketId != null) throw new Error('old-line-ticket-forbidden'); const withoutTicket = { ...line }; delete withoutTicket.ticketId; return { ...withoutTicket, pin: old.pin === true, adult: old.adult === true, cue: old.cue ?? null }; }
         // A terminal line is only valid when it closes an identity present in this run.
         // Dropping it here also leaves the next fresh ticket untouched.
-        if (TERMINAL_LINE_STAGES.has(line?.stage)) { if (line.ticketId != null) throw new Error('terminal-line-ticket-forbidden'); return null; }
+        if (isTerminalLineStage(line?.stage)) { if (line.ticketId != null) throw new Error('terminal-line-ticket-forbidden'); return null; }
         if (!line?.ticketId || used.has(line.ticketId)) throw new Error('missing-or-duplicate-ticket-id');
         const ticket = tickets.get(line.ticketId); if (!ticket) throw new Error('unknown-ticket-id');
         used.add(line.ticketId);

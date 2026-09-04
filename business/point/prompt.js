@@ -27,7 +27,7 @@ NSFW 票只适用于明确成年且自愿的虚构角色；对应 Event 必须�
 
 以 ${subject} 自身目标为核心，可按剧情证据涉及 ${companion} 或第三方；不强绑互动，不默认爱情。
 ${adultBlock}
-输出顺序必须严格为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>，中间不得省略任何块。最终总展示数量固定为 14 条：Day 1、Day 2、Day 3 各 3 条，Future 5 条；已锁定事件也占对应栏目的名额。不得把同一事件拆碎、换标题复述或凭空凑数；可从 ${subject} 自身事务、第三方行动、阵营或生活层面扩展真正独立的事项。
+理想输出顺序为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>。目标总展示数量为 14 条：Day 1、Day 2、Day 3 各 3 条，Future 5 条；已锁定事件也占对应栏目的名额。不得把同一事件拆碎、换标题复述或凭空凑数；可从 ${subject} 自身事务、第三方行动、阵营或生活层面扩展真正独立的事项。
 
 【天气说明】
 每个 Day 的日头请附带当天天气与温度，格式 Day: N|天气|温度（如 Day: 1|晴|3℃）。
@@ -36,7 +36,7 @@ ${adultBlock}
 
 【字段说明】
 格式：Event: type|title|description|time|location|线头动态
-- 每个 Event 必须独占一行；字段内容不得包含半角竖线「|」。location 或线头动态为空时，仍须保留空字段位置。
+- 每个 Event 建议独占一行并用竖线分隔字段；location 或线头动态为空时，仍须保留空字段位置。
 - type 只能是 main / hidden / bond
 - title 是单一、可识别的事件身份；同一主体、触发、核心目标和连续时间窗的上下游必须合并。
 - description：只写一个连续时间节点内的具体推进，以第三人称客观记述 ${subject} 这天经历的事，生活化口吻，直呼其名，不用第一人称，30字以上
@@ -47,7 +47,7 @@ ${adultBlock}
 【日期说明】
 Day 1 从剧情当前时间节点开始，向后推演；不要回填已经发生过的时间。
 ${pinnedBlock}
-【输出格式（严格遵守）】
+【理想输出结构】
 内部完成去重与排序，最终只输出以下 widget。
 ${adultContext?.mode && adultContext.mode !== 'off' ? '模板中的 Ticket／AdultProof 两行仅供新 Event 使用：N 按新 Event 顺序从 1 连续，锁定 Event 省略这两行；具体票型与 proof 只服从上方本轮票据表。\n' : ''}<calendar_widget>
 Day: 1|天气|温度

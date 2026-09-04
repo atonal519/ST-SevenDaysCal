@@ -42,10 +42,11 @@ export function createOutlineChat({
         ui?.endThinking?.(previous?.thinking);
     };
     const applyRaw = (target, raw, button = null) => {
-        if (!repository.isCurrent(target) || parseOutline(raw).length === 0) return false;
-        if (!repository.commitOutline(target, { raw, ts: now(), cursor: 1 })) return false;
+        const normalizedRaw = normalizeOutlineResponse(raw);
+        if (!repository.isCurrent(target) || !normalizedRaw) return false;
+        if (!repository.commitOutline(target, { raw: normalizedRaw, ts: now(), cursor: 1 })) return false;
         injection?.refresh(target);
-        ui?.setOutline?.(renderer.render(raw, 1));
+        ui?.setOutline?.(renderer.render(normalizedRaw, 1));
         ui?.markApplied?.(button);
         ui?.renderHistory?.(history);
         return true;
@@ -53,7 +54,7 @@ export function createOutlineChat({
     const latestCandidateIndex = () => {
         for (let index = history.length - 1; index >= 0; index -= 1) {
             const message = history[index];
-            if (message?.role === 'assistant' && parseOutline(message.content).length > 0) return index;
+            if (message?.role === 'assistant' && normalizeOutlineResponse(message.content)) return index;
         }
         return -1;
     };
@@ -62,8 +63,9 @@ export function createOutlineChat({
         const target = historyTarget;
         if (!target || !repository.isCurrent(target)) return null;
         const raw = String(history[index]?.content ?? '');
-        if (!raw || parseOutline(raw).length === 0) return null;
-        return Object.freeze({ applied: String(repository.readOutline(target)?.raw ?? '') === raw });
+        const normalizedRaw = normalizeOutlineResponse(raw);
+        if (!normalizedRaw) return null;
+        return Object.freeze({ applied: String(repository.readOutline(target)?.raw ?? '') === normalizedRaw });
     };
     const applyCandidate = (index, button = null) => {
         const state = candidateState(index);
@@ -113,7 +115,7 @@ export function createOutlineChat({
             const nextHistory = [...historySnapshot, { role: 'assistant', content: reply }].slice(-repository.historyCap);
             if (!repository.writeHistory(target, nextHistory, historySnapshot)) return { status: 'cancelled' };
             history = nextHistory;
-            if (nextHistory.length !== historySnapshot.length + 1 || parseOutline(reply).length > 0) ui?.renderHistory?.(history);
+            if (nextHistory.length !== historySnapshot.length + 1 || normalizeOutlineResponse(reply)) ui?.renderHistory?.(history);
             else ui?.appendMessage?.('ai', reply, history.length - 1);
             finish(task);
             return { status: 'updated', reply };
@@ -183,4 +185,4 @@ export function createOutlineChat({
     });
 }
 import { diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
-import { parseOutline } from './schema.js';
+import { normalizeOutlineResponse } from './schema.js';

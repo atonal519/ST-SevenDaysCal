@@ -1,8 +1,10 @@
 // 间→点 widget 应用：保持 canonical schedule raw 与 Future 追加/就地替换规则。
+import { isCompletePointEvent } from './parse.js';
+
 export function createPointWidgetActions(env) {
     return function applyScheduleWidget(body, button, editIndex = null) {
         const eventBlock = env.firstPointEventBlock(body); const event = eventBlock ? env.parsePointEventRecord(eventBlock) : null;
-        if (!event || !event.title || !event.time) { env.showToast('卡片格式不完整（Event 至少需要标题和时间），无法应用', null, true); return; }
+        if (!isCompletePointEvent(event)) { env.showToast('卡片格式不完整（Event 需要标题、描述、时间和地点），无法应用', null, true); return; }
         const key = env.getCacheKey('user', ''); if (!key) { env.showToast('当前 chat 没有可写入的待办缓存', null, true); return; }
         const saved = env.readStore(key); let raw = saved?.raw || '';
         const cleanEvent = { ...event, pin: false, adult: false };
