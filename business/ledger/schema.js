@@ -1,4 +1,6 @@
 // 刻度 AI I/O schema：严格解析，不承担 API、存储或 UI 副作用。
+import { stripRecordWrappers } from '../utils/record-wrappers.js';
+
 let parseDate = () => null;
 let types = ['持续状态', '约定待办', '周期'];
 export function bindLedgerSchema({ parseJudgedDate, ledgerTypes } = {}) {
@@ -7,6 +9,23 @@ export function bindLedgerSchema({ parseJudgedDate, ledgerTypes } = {}) {
 }
 export const splitCnList = value => String(value || '').split(/[、,，;；]/).map(x => x.trim()).filter(Boolean);
 export const normGist = value => String(value || '').replace(/\s+/g, '');
+function ledgerProtocolColumns(value) {
+    const text = String(value || '').trim().replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+    if (!/[｜|]/.test(text)) return [];
+    const columns = text.split(/[｜|]/).map(column => column.trim());
+    if (/^[｜|]/.test(text) && /[｜|]$/.test(text)) { columns.shift(); columns.pop(); }
+    return columns;
+}
+const captureAnchorKind = value => {
+    const columns = ledgerProtocolColumns(value);
+    const id = String(columns[0] || '').toUpperCase();
+    const offset = /^(?:C|L)\d+$/.test(id) ? 1 : 0;
+    return columns.length >= (offset ? 9 : 8) && columns[offset] ? 'record' : null;
+};
+const judgeAnchorKind = value => {
+    const columns = ledgerProtocolColumns(value);
+    return columns.length >= 4 && /^L\d+$/i.test(String(columns[0] || '').replace(/[\[\]【】]/g, '').trim()) ? 'record' : null;
+};
 // 仅供 AI capture/judge 的完整句字段使用；存储 normalize 与用户编辑器不得调用。
 export function normalizeLedgerSentenceTerminal(value) {
     const text = String(value ?? '').trim();
@@ -17,7 +36,8 @@ export function normalizeLedgerSentenceTerminal(value) {
     return closing ? `${body}。${closing}` : `${text}。`;
 }
 export function parseLedgerCapture(raw) {
-    const s = String(raw || '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const source = String(raw || '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const s = stripRecordWrappers(source, captureAnchorKind).trim();
     if (!s || /^无[。.！!]?$/.test(s)) return [];
     const out = [];
     for (const line of s.split('\n')) {
@@ -76,7 +96,8 @@ function parseJudgeAction(raw) {
 }
 export function normalizeJudgeAction(raw) { return parseJudgeAction(raw); }
 export function parseLedgerJudge(raw) {
-    const s = String(raw ?? '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const source = String(raw ?? '').trim().replace(/^```[^\n]*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const s = stripRecordWrappers(source, judgeAnchorKind).trim();
     const none = s.replace(/[。.!！！？?]+$/u, '').trim();
     if (new Set(['无', '无需更新', '无须更新', '无需变更', '无须变更', '本轮无需更新', '没有需要更新的事件']).has(none)) return { status: 'none', changes: [] };
     if (!s) return { status: 'invalid', changes: [], rejected: [] };

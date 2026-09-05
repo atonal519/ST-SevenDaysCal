@@ -2150,6 +2150,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap           : 8px;
     pointer-events: none;
 }
+#sp-toast-wrap[data-sp-tauritavern-ios] {
+    top: max(20px, var(--tt-inset-top, 0px));
+}
 .sp-toast {
     display    : flex;
     align-items: center;

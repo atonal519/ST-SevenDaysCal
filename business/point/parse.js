@@ -2,6 +2,7 @@
 // 从 index.js 机械搬移。全部为 <calendar_widget> 点日程结构的文本↔对象互转与读写辅助，
 // 无 DOM / store / 历法(axis) 依赖。渲染层（renderSchedule 等）见 ./render.js，生成 prompt 见 ./prompt.js。
 import { calendarDate, formatCalendarDate, isGregorian, parseCalendarDate, validateCalendarDate } from '../calendar/date.js';
+import { stripRecordWrappers } from '../utils/record-wrappers.js';
 import { normalizePointAdultMode, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
 
 const cleanPointLine = value => {
@@ -10,6 +11,13 @@ const cleanPointLine = value => {
     return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
 };
 const pointFieldValue = (value, name) => String(value || '').replace(new RegExp(`^${name}\\s*[:：]\\s*`, 'i'), '').trim();
+const pointAnchorKind = value => {
+    const text = cleanPointLine(value);
+    if (pointDayHeading(text) || /^(?:Future|未来)\s*[:：]/i.test(text)) return 'context';
+    if (/^Event\s*[:：]/i.test(text)) return 'event';
+    return /^(?:StartDate|Ticket|AdultProof|Adult)\s*[:：]/i.test(text) ? 'field' : null;
+};
+const completePointStructure = kinds => kinds.includes('context') || kinds.includes('event');
 const normalizePointType = value => {
     const text = String(value || '').trim().toLowerCase();
     if (['main', 'hidden', 'bond', 'user', 'char'].includes(text)) return text;
@@ -35,7 +43,7 @@ function pointDayHeading(value) {
 }
 
 export function parsePointEventRecord(text) {
-    const source = String(text || '');
+    const source = stripRecordWrappers(text, pointAnchorKind, completePointStructure);
     const lines = source.split('\n').map(cleanPointLine);
     const adult = lines.some(line => /^Adult\s*[:：]\s*true\s*$/i.test(line));
     const ticketId = lines.find(line => /^Ticket\s*[:：]/i.test(line))?.match(/^Ticket\s*[:：]\s*(POINT-TICKET-\d+)\s*$/i)?.[1]?.toUpperCase() || undefined;
@@ -62,7 +70,7 @@ function pointEventBlocksFromInner(inner) {
     const out = [];
     let buffer = [];
     const flush = () => { if (buffer.length) out.push(buffer); buffer = []; };
-    for (const rawLine of String(inner || '').split('\n')) {
+    for (const rawLine of stripRecordWrappers(inner, pointAnchorKind, completePointStructure).split('\n')) {
         const line = cleanPointLine(rawLine);
         if (/^Event\s*[:：]/i.test(line)) { flush(); buffer = [line]; continue; }
         if (/^(?:Day\s*[:：]?\s*\d+|第[一二三四五六七\d]+天|Future\s*[:：]|未来\s*[:：]|<\/(?:calendar|schedule)_widget>)/i.test(line)) { flush(); continue; }
@@ -81,7 +89,7 @@ function generatedPointEventRecordsFromInner(inner) {
         if (block.length) out.push({ block, hasContext: blockHasContext });
         block = [];
     };
-    for (const rawLine of String(inner || '').split('\n')) {
+    for (const rawLine of stripRecordWrappers(inner, pointAnchorKind, completePointStructure).split('\n')) {
         const line = cleanPointLine(rawLine);
         const day = pointDayHeading(line);
         if (day) { flush(); hasContext = day.dayNumber != null; continue; }
@@ -167,7 +175,7 @@ export function parseCalendar(raw, calendar = null) {
     // Strip HTML comments across the whole widget body before splitting into lines.
     // LLM often emits multi-line <!-- 日程思考: ... --> blocks; per-line startsWith
     // would only skip the first line and treat the rest as content.
-    const content = (m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, '');
+    const content = stripRecordWrappers((m ? m[1] : raw).replace(/<!--[\s\S]*?-->/g, ''), pointAnchorKind, completePointStructure);
 
     const dateMatch = content.match(/^StartDate:\s*((?:\d{4}|null)-\d{1,2}-\d{1,2})/m);
     let startDate = null;

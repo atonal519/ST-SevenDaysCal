@@ -35,7 +35,7 @@ test('line edit keeps Next inside the selected Line block and handles empty fiel
 import { bindVectorTickets } from './vectors/bind.js';
 import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
-import { inlineState } from './inline.js';
+import { buildLineInjectText, inlineState } from './inline.js';
 
 const raw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|起线|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
@@ -54,6 +54,49 @@ test('release schema accepts complete output and preserves uncapped narrative', 
     assert.equal(longResult.ok, true);
     assert.equal(longResult.model[0].desc.length, 300);
     assert.equal(longResult.model[0].next.length, 240);
+});
+test('arbitrary record wrappers are removed across response, storage, cards, and manual injection', () => {
+    const wrappedResponse = `<storylines_widget>
+<record data-id="first">Line: 雾港来信|起线|今夜|world|false|false
+Desc: 信使把蜡封信交到旧钟楼
+Next: 守钟人准备核对落款 </record><item data-id="second">
+Line: 星桥修缮|延展|明晨|player|false|false
+Desc: 工匠已备齐替换用的铜索
+Next: 等待巡桥人确认封路时段
+</item >
+</storylines_widget>`;
+    const checked = validateLinesResponse(wrappedResponse);
+    assert.equal(checked.ok, true);
+    assert.deepEqual(checked.model.map(line => [line.name, line.desc, line.next]), [
+        ['雾港来信', '信使把蜡封信交到旧钟楼', '守钟人准备核对落款'],
+        ['星桥修缮', '工匠已备齐替换用的铜索', '等待巡桥人确认封路时段'],
+    ]);
+    assert.doesNotMatch(checked.raw, /<\s*\/?\s*(?:record|item)\b/i);
+
+    const oldStored = `<storylines_widget>
+Line: 旧航标|延展|昨夜|world|false|false
+Desc: 灯塔换上了备用灯芯 <aside>仍需观察风向</aside>
+Next: 港务员将复查亮度 </legacy-shell>
+</storylines_widget>`;
+    const storedLine = parseLines(oldStored)[0];
+    assert.equal(storedLine.desc, '灯塔换上了备用灯芯 <aside>仍需观察风向</aside>');
+    assert.equal(storedLine.next, '港务员将复查亮度');
+    assert.doesNotMatch(serializeLines([storedLine]), /legacy-shell/i);
+
+    const card = parseLineCard('<draft-record class="candidate">\nLine: 月台钟声|起线|午后|world|false|false\nDesc: 站长发现时钟慢了两分\nNext: 钟表匠将检查摆轮 </draft-record>');
+    assert.deepEqual([card.name, card.desc, card.next], ['月台钟声', '站长发现时钟慢了两分', '钟表匠将检查摆轮']);
+
+    const singleInject = buildLineInjectText(storedLine);
+    const multiInject = inlineState(checked.raw).injectText;
+    assert.match(singleInject, /港务员将复查亮度/);
+    assert.match(multiInject, /守钟人准备核对落款[\s\S]*等待巡桥人确认封路时段/);
+    assert.doesNotMatch(`${singleInject}\n${multiInject}`, /<\s*\/?\s*(?:record|item|legacy-shell|draft-record)\b/i);
+});
+test('wrapper cleanup preserves paired narrative tags, multiline text, namespaces, and comparisons', () => {
+    const result = validateLinesResponse('<storylines_widget>\n<记录>Line: 温室记录|起线|今日|world|false|false\nDesc: <storyline priority="low">叶片舒展\n温度 < 25 且湿度 > 60</storyline>，<storyline-note>保留近名标签</storyline-note>\n<强调>Next: 这里只是台词</强调>\nNext: 园丁继续记录晨间读数 <storyline:note>保留命名空间标签</storyline:note> </记录>\n</storylines_widget>');
+    assert.equal(result.ok, true);
+    assert.equal(result.model[0].desc, '<storyline priority="low">叶片舒展 温度 < 25 且湿度 > 60</storyline>，<storyline-note>保留近名标签</storyline-note> <强调>Next: 这里只是台词</强调>');
+    assert.equal(result.model[0].next, '园丁继续记录晨间读数 <storyline:note>保留命名空间标签</storyline:note>');
 });
 test('release schema extracts and normalizes complete records from outer response noise', () => {
     for (const response of [

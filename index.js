@@ -7975,7 +7975,12 @@ function injectToastContainer() {
     // 带上主题类：#sp-toast-wrap 挂在 <html> 下、在 .sp-root 之外，拿不到 .sp-night/.sp-day
     // 作用域里的 --sp-*-legacy 令牌。双层背景的不透明底板 var(--sp-surface-legacy) 会落空→透底。
     // 加 sp-${theme} 把 legacy 令牌带进作用域（applyTheme 会随主题切换更新）。
-    if (!$('#sp-toast-wrap').length) document.documentElement.insertAdjacentHTML('beforeend', `<div id="sp-toast-wrap" class="sp-${currentTheme}"></div>`);
+    const nav = globalThis.navigator;
+    const userAgent = nav?.userAgent || '';
+    const isIos = /iphone|ipad|ipod/i.test(userAgent)
+        || ((nav?.maxTouchPoints || 0) > 1 && (nav?.platform === 'MacIntel' || /Macintosh/i.test(userAgent)));
+    const tauriIosAttr = globalThis.__TAURITAVERN__?.abiVersion >= 1 && isIos ? ' data-sp-tauritavern-ios' : '';
+    if (!$('#sp-toast-wrap').length) document.documentElement.insertAdjacentHTML('beforeend', `<div id="sp-toast-wrap" class="sp-${currentTheme}"${tauriIosAttr}></div>`);
 }
 
 function showToast(msg, onClick, isError = false) {

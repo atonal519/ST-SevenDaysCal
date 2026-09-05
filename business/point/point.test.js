@@ -8,6 +8,32 @@ import { createPointWidgetActions } from './widget.js';
 import { buildPrompt } from './prompt.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 
+test('point parser removes arbitrary structural wrappers without weakening fields or metadata', () => {
+    const raw = `<calendar_widget>
+<days-packet><day-record data-n="1">Day: 1|晴|20℃</day-record>
+<event-record>Event: main|温室巡检|叶片温度 < 25|上午|玻璃温室|记录 <storyline>湿度 > 60</storyline>|true
+Ticket: POINT-TICKET-1
+AdultProof: NONE</event-record>
+</days-packet><future-packet>Future:</future-packet>
+<event-record>Event: hidden|复查水泵|确认备用泵状态|明日|泵房|通知维护员
+<强调>Ticket: POINT-TICKET-9</强调>
+Ticket: POINT-TICKET-2
+AdultProof: NONE</event-record>
+</calendar_widget>`;
+    const parsed = parseCalendar(raw);
+    assert.deepEqual([parsed.allDays[0].dayNumber, parsed.allDays[0].weather, parsed.allDays[0].temp], [1, '晴', '20℃']);
+    assert.deepEqual([parsed.days[0].events[0].title, parsed.days[0].events[0].pin, parsed.days[0].events[0].ticketId], ['温室巡检', true, 'POINT-TICKET-1']);
+    assert.equal(parsed.days[0].events[0].desc, '叶片温度 < 25');
+    assert.equal(parsed.days[0].events[0].npcAction, '记录 <storyline>湿度 > 60</storyline>');
+    assert.equal(parsed.days[0].events[0].adultProof, null);
+    assert.equal(parsed.future.events[0].title, '复查水泵');
+    assert.equal(parsed.future.events[0].ticketId, 'POINT-TICKET-2');
+    assert.match(parsed.future.events[0].npcAction, /<强调>Ticket: POINT-TICKET-9<\/强调>/);
+    const checked = validateGeneratedCalendar(raw, null, { generated: true, adultMode: 'mixed', pinned: [] });
+    assert.equal(checked.ok, true);
+    assert.equal(checked.strictEvents, true);
+});
+
 test('point replacement reuses formal pin parsing for pipe-bearing locked adult events', () => {
     const raw = '<calendar_widget>\nFuture:\nEvent: main|旧|描述|晚|地|含|竖线|true\nAdult: true\n</calendar_widget>';
     const result = parseCalendar(raw); assert.equal(result.future.events[0].pin, true); assert.equal(result.future.events[0].adult, true);

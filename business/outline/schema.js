@@ -1,13 +1,25 @@
+import { stripRecordWrappers } from '../utils/record-wrappers.js';
+
+const cleanOutlineLine = value => {
+    let text = String(value || '').trim();
+    if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
+    return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+};
+const outlineAnchorKind = value => {
+    const text = cleanOutlineLine(value);
+    for (const kind of ['Beat', 'Scene', 'Subtext', 'Think']) if (new RegExp(`^${kind}\\s*[:：]`, 'i').test(text)) return kind.toLowerCase();
+    return null;
+};
+const completeOutlineStructure = kinds => ['beat', 'scene', 'subtext', 'think'].every(kind => kinds.includes(kind));
+
 export function parseOutline(raw) {
     const source = String(raw || '');
     const widget = /<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i.exec(source);
-    const content = widget ? widget[1] : source;
+    const content = stripRecordWrappers(widget ? widget[1] : source, outlineAnchorKind, completeOutlineStructure);
     const beats = [];
     let current = null;
     for (const rawLine of content.split('\n')) {
-        let text = rawLine.trim();
-        if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
-        text = text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
+        const text = cleanOutlineLine(rawLine);
         if (!text) continue;
         if (/^Beat\s*[:：]/i.test(text)) {
             if (current) beats.push(current);
