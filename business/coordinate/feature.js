@@ -2,6 +2,7 @@ import { createCoordinateController } from './controller.js';
 import { createCoordinateUI } from './ui.js';
 import { captureMesText, sanitizeSnapshot, makePreview } from './capture.js';
 import { createCoordinateRenderer, createFullscreenController } from './render.js';
+import { clearReplyMarker, normalizeId, readReplyMarker, replyVersion, writeReplyMarker } from './identity.js';
 
 export function createCoordinateFeature({ repository, root = null, capture = captureMesText, ports = null, host = {} } = {}) {
     const ui = createCoordinateUI({ root });
@@ -13,11 +14,79 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
     const renderer = new Proxy(rendererImpl, { get(target, key) { const value = target[key]; return typeof value === 'function' && ['render', 'chars', 'chats', 'items', 'full', 'tags'].includes(key) ? (...args) => renderCurrent(() => value.apply(target, args)) : value; } });
     const fullscreen = createFullscreenController({ body: root, sheet: host.sheet?.(), documentRef: host.document || globalThis.document });
     let initialized = false; let gestureCleanup = null;
-    let savedKeys = new Set();
-    const floorKey = (chatId, messageId) => `${chatId ?? ''}::${messageId ?? ''}`;
-    const refreshSavedKeys = async () => { try { const items = await repository.getAllItems(); savedKeys = new Set(items.map(item => floorKey(item.chatId, item.messageId))); host.document?.querySelectorAll?.('#chat .mes .sp-anchor-btn').forEach(btn => { const mid = btn.closest('.mes')?.getAttribute('mesid'); const saved = savedKeys.has(floorKey(host.context?.()?.chatId, mid)); btn.classList.toggle('sp-anchor-saved', saved); btn.title = saved ? '已收藏 · 点击取消' : '收藏此楼'; }); } catch (error) { host.warn?.('[SP anchor] 读取已收藏键失败', error); } return savedKeys; };
-    const scanButtons = () => { const doc = host.document; if (!doc) return; if (!host.enabled?.() || host.settings?.()?.anchorInlineBtn === false) { doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove()); return; } const chatId = host.context?.()?.chatId; doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => { if (mes.querySelector('.sp-anchor-btn')) return; const target = mes.querySelector('.mes_buttons, .extraMesButtons, .name_text') || mes.querySelector('.mes_block') || mes; const mid = mes.getAttribute('mesid'); const button = doc.createElement('button'); button.type = 'button'; button.className = `sp-anchor-btn${savedKeys.has(floorKey(chatId, mid)) ? ' sp-anchor-saved' : ''}`; button.title = savedKeys.has(floorKey(chatId, mid)) ? '已收藏 · 点击取消' : '收藏此楼'; button.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖'; button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); api.onFloorButton(mes); }); target.appendChild(button); }); };
-    const onFloorButton = async mes => { const ctx = host.context?.() || {}; const chatId = ctx.chatId ?? null; const mid = mes?.getAttribute?.('mesid'); const key = floorKey(chatId, mid); const expected = controller.snapshotRevision(); const btn = mes?.querySelector?.('.sp-anchor-btn'); if (savedKeys.has(key)) { btn?.classList.add('sp-anchor-busy'); try { for (const id of await repository.findItemIdsByFloor(chatId, +mid)) await controller.delete(id, expected); if (!controller.isCurrent(expected)) return; savedKeys.delete(key); if (btn) { btn.classList.remove('sp-anchor-saved'); btn.title = '收藏此楼'; } host.toast?.('已取消收藏'); } catch (error) { host.toast?.(`取消收藏失败：${error?.message || '未知错误'}`, null, true); } finally { btn?.classList.remove('sp-anchor-busy'); } return; } const textEl = mes?.querySelector?.('.mes_text'); if (!textEl) return host.toast?.('找不到楼层内容', null, true); btn?.classList.add('sp-anchor-busy'); try { const raw = host.capture?.(textEl, Number.isFinite(+mid) ? +mid : null) ?? textEl.innerHTML; const sourceHtml = typeof raw === 'string' ? raw : raw?.html; const html = typeof raw === 'object' && raw?.html != null ? raw.html : sanitizeSnapshot(sourceHtml); const item = { id: globalThis.crypto?.randomUUID?.() || `a-${Date.now()}`, chatId, chatIdHash: ctx.chatMetadata?.chat_id_hash ?? null, chatName: host.chatName?.() || '', charName: mes.getAttribute('ch_name') || ctx.name2 || '角色', messageId: mid, floorIndex: Number.isFinite(+mid) ? +mid : null, textPreview: raw?.preview || makePreview(html), ts: Date.now(), tags: [] }; const saved = await controller.save(item, { html, preview: item.textPreview }, expected); if (!controller.isCurrent(expected)) return; savedKeys.add(key); await repository.checkSize(); if (btn) { btn.classList.add('sp-anchor-saved'); btn.title = '已收藏 · 点击取消'; } host.toast?.('已收藏此楼'); if (saved && host.selectMany) { try { const tags = await repository.getTags(); const customValue = '__new_tag__'; const result = await host.selectMany({ title: '给这条收藏加标签', body: '可多选已有标签，也可以新建一个标签。', choices: [...tags.map(tag => ({ value: tag.id, label: tag.name })), { value: customValue, label: '新建标签' }], initialValues: saved.tags || [], custom: { value: customValue, placeholder: '输入新标签名…', maxLength: 20, rows: 1 } }); if (result) { const selected = new Set((result.values || []).filter(id => id !== customValue)); if (result.values?.includes(customValue) && result.customValue) { const tag = await repository.addTag(result.customValue, 'slate'); if (tag?.id) selected.add(tag.id); } await repository.setItemTags(saved.id, [...selected]); } } catch (error) { host.toast?.('楼层已收藏，但标签未保存', null, true); } } } catch (error) { if (controller.isCurrent(expected)) host.toast?.(`收藏失败：${error?.message || '未知错误'}`, null, true); } finally { btn?.classList.remove('sp-anchor-busy'); } };
+    let savedItems = new Map();
+    const busyReplies = new WeakSet();
+    const buttonSources = new WeakMap();
+    const messageAt = (ctx, mid) => { const id = Number(mid); return Number.isInteger(id) && id >= 0 ? ctx?.chat?.[id] : null; };
+    const sourceFor = (ctx, mes) => { const mid = mes?.getAttribute?.('mesid'); const message = messageAt(ctx, mid); const version = replyVersion(message); return message && version ? { chatId: ctx?.chatId ?? null, mid: String(mid), message, version } : null; };
+    const sameSource = (left, right) => !!left && !!right && normalizeId(left.chatId) === normalizeId(right.chatId) && left.mid === right.mid && left.message === right.message && left.version === right.version;
+    const savedItemFor = (message, chatId) => { const marker = readReplyMarker(message); if (!marker) return null; const item = savedItems.get(marker.itemId); return item && normalizeId(item.chatId) === normalizeId(chatId) ? item : null; };
+    const setButtonState = (button, saved) => { if (!button) return; button.classList.toggle('sp-anchor-saved', Boolean(saved)); button.title = saved ? '已收藏 · 点击取消' : '收藏此楼'; };
+    const bindButton = (button, source) => { if (button && source) buttonSources.set(button, source); };
+    const refreshButton = (mes, button, { trusted = false } = {}) => {
+        const ctx = host.context?.() || {}; const source = sourceFor(ctx, mes); const bound = buttonSources.get(button);
+        const sameMessage = bound && source && normalizeId(bound.chatId) === normalizeId(source.chatId) && bound.message === source.message;
+        if (!bound || trusted || sameMessage) bindButton(button, source);
+        const active = buttonSources.get(button);
+        if (!sameSource(active, source)) return false;
+        setButtonState(button, savedItemFor(source.message, source.chatId));
+        return true;
+    };
+    const currentOperation = (source, expected) => { const ctx = host.context?.() || {}; return sameSource(source, sourceFor(ctx, { getAttribute: name => name === 'mesid' ? source.mid : null })) && controller.isCurrent(expected); };
+    const persistChat = async () => { if (typeof host.saveChatDebounced === 'function') return await host.saveChatDebounced(); if (typeof host.saveChat === 'function') return await host.saveChat(); };
+    const persistMarker = async task => { try { if (task() === false) throw new Error('marker update rejected'); await persistChat(); return true; } catch (error) { host.warn?.('[SP anchor] 回复关联保存失败', error); return false; } };
+    const refreshSavedKeys = async () => { try { const items = await repository.getAllItems(); savedItems = new Map(items.map(item => [normalizeId(item.id), item])); host.document?.querySelectorAll?.('#chat .mes .sp-anchor-btn').forEach(btn => refreshButton(btn.closest('.mes'), btn)); } catch (error) { host.warn?.('[SP anchor] 读取已收藏键失败', error); } return new Set(savedItems.keys()); };
+    const scanButtons = ({ rebindMessageId = null } = {}) => { const doc = host.document; if (!doc) return; if (!host.enabled?.() || host.settings?.()?.anchorInlineBtn === false) { doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove()); return; } const hasTrustedId = rebindMessageId !== null && rebindMessageId !== undefined && Number.isInteger(Number(rebindMessageId)); doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => { let button = mes.querySelector('.sp-anchor-btn'); if (!button) { const target = mes.querySelector('.mes_buttons, .extraMesButtons, .name_text') || mes.querySelector('.mes_block') || mes; button = doc.createElement('button'); button.type = 'button'; button.className = 'sp-anchor-btn'; button.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖'; button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); api.onFloorButton(mes); }); target.appendChild(button); } const trusted = hasTrustedId && Number(mes.getAttribute('mesid')) === Number(rebindMessageId); refreshButton(mes, button, { trusted }); }); };
+    const onFloorButton = async mes => {
+        const ctx = host.context?.() || {}; const source = sourceFor(ctx, mes); const btn = mes?.querySelector?.('.sp-anchor-btn');
+        if (!source) return host.toast?.('找不到楼层数据', null, true);
+        const bound = btn ? buttonSources.get(btn) : null;
+        if (bound && !sameSource(bound, source)) return host.toast?.('楼层已变化，请稍后重试', null, true);
+        if (btn && !bound) bindButton(btn, source);
+        if (busyReplies.has(source.message)) return;
+        const expected = controller.snapshotRevision();
+        busyReplies.add(source.message); btn?.classList.add('sp-anchor-busy');
+        const savedItem = savedItemFor(source.message, source.chatId);
+        if (savedItem) {
+            try {
+                await controller.delete(savedItem.id, expected);
+            } catch (error) {
+                if (currentOperation(source, expected)) host.toast?.(`取消收藏失败：${error?.message || '未知错误'}`, null, true);
+                busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy');
+                return;
+            }
+            savedItems.delete(normalizeId(savedItem.id));
+            if (currentOperation(source, expected)) {
+                setButtonState(btn, false);
+                const markerSaved = await persistMarker(() => clearReplyMarker(source.message, savedItem.id));
+                host.toast?.(markerSaved ? '已取消收藏' : '已取消收藏，但标记保存失败', null, !markerSaved);
+            }
+            busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy');
+            return;
+        }
+        const textEl = mes?.querySelector?.('.mes_text');
+        if (!textEl) { busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy'); return host.toast?.('找不到楼层内容', null, true); }
+        let saved;
+        try {
+            const raw = host.capture?.(textEl, Number.isFinite(+source.mid) ? +source.mid : null) ?? textEl.innerHTML;
+            const sourceHtml = typeof raw === 'string' ? raw : raw?.html;
+            const html = typeof raw === 'object' && raw?.html != null ? raw.html : sanitizeSnapshot(sourceHtml);
+            const item = { id: globalThis.crypto?.randomUUID?.() || `a-${Date.now()}`, chatId: source.chatId, chatIdHash: ctx.chatMetadata?.chat_id_hash ?? null, chatName: host.chatName?.() || '', charName: mes.getAttribute('ch_name') || ctx.name2 || '角色', messageId: source.mid, floorIndex: Number.isFinite(+source.mid) ? +source.mid : null, textPreview: raw?.preview || makePreview(html), ts: Date.now(), tags: [] };
+            saved = await controller.save(item, { html, preview: item.textPreview }, expected);
+        } catch (error) {
+            if (currentOperation(source, expected)) host.toast?.(`收藏失败：${error?.message || '未知错误'}`, null, true);
+            busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy');
+            return;
+        }
+        savedItems.set(normalizeId(saved.id), saved);
+        if (!currentOperation(source, expected)) { busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy'); return; }
+        setButtonState(btn, true);
+        const markerSaved = await persistMarker(() => !!writeReplyMarker(source.message, saved.id));
+        try { await repository.checkSize(); } catch (error) { host.warn?.('[SP anchor] 收藏空间检查失败', error); }
+        host.toast?.(markerSaved ? '已收藏此楼' : '收藏已保存，但回复关联保存失败', null, !markerSaved);
+        if (saved && host.selectMany) { try { const tags = await repository.getTags(); const customValue = '__new_tag__'; const result = await host.selectMany({ title: '给这条收藏加标签', body: '可多选已有标签，也可以新建一个标签。', choices: [...tags.map(tag => ({ value: tag.id, label: tag.name })), { value: customValue, label: '新建标签' }], initialValues: saved.tags || [], custom: { value: customValue, placeholder: '输入新标签名…', maxLength: 20, rows: 1 } }); if (result) { const selected = new Set((result.values || []).filter(id => id !== customValue)); if (result.values?.includes(customValue) && result.customValue) { const tag = await repository.addTag(result.customValue, 'slate'); if (tag?.id) selected.add(tag.id); } await repository.setItemTags(saved.id, [...selected]); } } catch (error) { host.toast?.('楼层已收藏，但标签未保存', null, true); } }
+        busyReplies.delete(source.message); btn?.classList.remove('sp-anchor-busy');
+    };
     const tagColor = color => ['rose', 'amber', 'olive', 'teal', 'indigo', 'plum', 'slate', 'clay'].includes(String(color)) ? String(color) : 'slate';
     const api = { addTag: (name, color) => controller.action(() => repository.addTag(name, tagColor(color))).then(result => result.value), deleteTag: id => controller.action(() => repository.deleteTag(id)).then(result => result.value), setItemTags: (id, tags) => controller.action(() => repository.setItemTags(id, tags)).then(result => result.value), renameTag: (id, name) => controller.action(() => repository.renameTag(id, name)).then(result => result.value), recolorTag: (id, color) => controller.action(() => repository.recolorTag(id, tagColor(color))).then(result => result.value), onFloorButton };
     return {
@@ -43,7 +112,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
         renderer,
         onChatChanged(meta = {}) { fullscreen.clear(); controller.beginChat(meta); const revision = controller.snapshotRevision(); if (meta.enabled === false || host.enabled?.() === false) { this.close(); return Promise.resolve(0); } const ctx = host.context?.() || {}; const currentId = meta.chatId ?? ctx.chatId; const hash = meta.chatIdHash ?? ctx.chatMetadata?.chat_id_hash; const name = meta.chatName || host.chatName?.() || currentId; const charName = meta.charName || ctx.name2 || ctx.character || ''; return (async () => { if (currentId == null) return 0; await repository.healChatByHash?.(currentId, name, hash); if (!controller.isCurrent(revision)) return 0; const existing = await ports?.listCharacterChatIds?.(); if (!controller.isCurrent(revision) || (host.context?.()?.chatId ?? currentId) !== currentId || !existing) return 0; return repository.adoptOrphans?.(charName, existing, currentId, name, hash) || 0; })().catch(error => { host.warn?.('[SP anchor] 切 chat 自愈失败', error); return 0; }); },
         onChatRenamed(meta) { controller.beginChat(meta); },
-        onCharacterRendered() { scanButtons(); }, onChatDomChanged() { scanButtons(); }, onThemeChanged(theme) { currentTheme = theme || currentTheme; scanButtons(); if (ui.route() === 'full' && ui.itemId?.()) return renderCurrent(() => renderer.full(ui.itemId(), null, currentTheme)); },
+        onCharacterRendered(meta = {}) { scanButtons({ rebindMessageId: meta.messageId }); }, onChatDomChanged() { scanButtons(); }, onThemeChanged(theme) { currentTheme = theme || currentTheme; scanButtons(); if (ui.route() === 'full' && ui.itemId?.()) return renderCurrent(() => renderer.full(ui.itemId(), null, currentTheme)); },
         storageUsage: async () => { const usage = await repository.checkSize(); return { ...usage, count: await repository.countItems(), bytesText: repository.formatBytes(usage.bytes) }; },
         formatBytes: bytes => repository.formatBytes(bytes),
         clearAll: async () => { const items = await repository.getAllItems(); for (const item of items) await repository.deleteItem(item.id); await refreshSavedKeys(); },

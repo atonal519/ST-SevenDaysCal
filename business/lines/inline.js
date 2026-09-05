@@ -15,7 +15,7 @@ export function buildLineInjectText(line = {}) {
     const when = String(line.when ?? '').trim();
     const nextText = line.nextText || (line.next ? prefixNext(line.next, line.stall) : '');
     return [
-        `【线参考】${line.name}（${line.type}·${line.stage}${line.stall ? '·停滞' : ''}）`,
+        `【线参考】${line.name}（${line.stage}${line.stall ? '·停滞' : ''}）`,
         when ? `时间锚点：${when}` : '',
         line.desc,
         nextText,

@@ -2524,15 +2524,18 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-/* 线卡日期独占一行（在头部下方）：古风长日期「大梁二十九年十一月廿六未时」放进头部会把那行挤爆、
-   逼近右侧图标组。挪成单独一行后，无论长短都不再和阶段/类型/图标抢横向空间。 */
+/* 线卡日期位于首行；长日期优先收缩并省略，绝不挤掉右侧操作。 */
 .sp-line-when {
     font-family  : 'Roboto Mono', monospace;
     font-size    : var(--sp-fs-72);
     color        : var(--sp-subtle);
-    margin       : -2px 0 5px;
+    margin       : 0 2px;
     line-height  : 1.35;
-    word-break   : break-word;
+    min-width    : 0;
+    flex         : 1 1 auto;
+    overflow     : hidden;
+    text-overflow: ellipsis;
+    white-space  : nowrap;
 }
 .sp-beat-type {
     font-size    : var(--sp-fs-68);
@@ -2583,6 +2586,66 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-line-card .sp-beat-time {
     flex-basis: auto;
 }
+/* 线卡首行以 22px 控件令牌作为视觉行盒：编号/阶段胶囊和楼内按钮同高，
+   标题仍保留自己的自然行高与换行，不靠固定卡高硬撑间距。 */
+.sp-line-card > .sp-beat-head > .sp-seq-badge,
+.sp-line-card > .sp-beat-head > .sp-beat-type,
+.sp-inline-line > .sp-inline-head > .sp-inline-stage {
+    display    : inline-flex;
+    align-items: center;
+    box-sizing : border-box;
+    min-height : var(--sp-btn-22);
+    line-height: 1;
+}
+/* 主页菜单钮保留 32px 点击面积，但不让它把默认首行撑高；负值封顶 -5px，
+   80% 小字号时首行宁可保留 22px，也不让按钮向下悬出后盖住标题。 */
+.sp-line-card > .sp-beat-head > .sp-beat-actions {
+    margin-block: clamp(-5px, calc((var(--sp-btn-22) - 32px) / 2), 0px);
+}
+.sp-line-card .sp-line-stage-meter,
+.sp-inline-line .sp-line-stage-meter {
+    display    : inline-flex;
+    align-items: center;
+    gap        : 6px;
+    width      : 42px;
+    height     : 6px;
+    flex       : 0 0 42px;
+}
+.sp-line-card .sp-line-stage-segment,
+.sp-inline-line .sp-line-stage-segment {
+    position     : relative;
+    width        : 6px;
+    height       : 6px;
+    flex         : 0 0 6px;
+    box-sizing   : border-box;
+    border       : 1px solid rgba(128,128,128,0.42);
+    border-radius: 50%;
+    background   : transparent;
+}
+.sp-line-card .sp-line-stage-segment:not(:last-child)::after,
+.sp-inline-line .sp-line-stage-segment:not(:last-child)::after {
+    content   : '';
+    position  : absolute;
+    top       : 50%;
+    left      : calc(100% + 1px);
+    width     : 4px;
+    height    : 1px;
+    transform : translateY(-50%);
+    background: rgba(128,128,128,0.28);
+}
+.sp-line-card .sp-line-stage-segment-filled,
+.sp-inline-line .sp-line-stage-segment-filled {
+    border-color: currentColor;
+    background  : currentColor;
+}
+/* 淡出是独立结束态：四格全部低调置灰，不视作“100% 成功”。 */
+.sp-line-card .sp-line-stage-meter-faded .sp-line-stage-segment,
+.sp-inline-line .sp-line-stage-meter-faded .sp-line-stage-segment {
+    color       : var(--sp-subtle);
+    border-color: currentColor;
+    background  : currentColor;
+    opacity     : 0.28;
+}
 .sp-beat-line {
     font-size    : var(--sp-fs-68);
     font-weight  : 500;
@@ -2623,6 +2686,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height  : 1.4;
     margin-bottom: 5px;
 }
+.sp-line-card > .sp-beat-head { margin-bottom: 5px; }
+.sp-line-card .sp-beat-title { margin-bottom: 5px; }
+.sp-line-card > .sp-adult-sensitive,
+.sp-inline-line > .sp-adult-sensitive { display: block; }
 
 .sp-line-title-with-glyph {
     display: flex;
@@ -2646,6 +2713,40 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-line-glyph-edge { opacity: 0.72; stroke-width: 1.1; }
 .sp-line-glyph-node { opacity: 0.28; stroke-width: 1; }
 .sp-line-glyph-node-selected { opacity: 1; stroke-width: 2.2; }
+.sp-line-cues {
+    display    : flex;
+    align-items: flex-start;
+    min-width  : 0;
+    max-width  : 100%;
+    margin     : 0 0 5px;
+}
+.sp-line-cue-list {
+    display  : flex;
+    flex     : 1 1 auto;
+    flex-wrap: wrap;
+    gap      : 4px;
+    min-width: 0;
+}
+.sp-line-cue-chip {
+    --sp-line-cue-accent: var(--sp-primary);
+    display      : inline-flex;
+    align-items  : center;
+    max-width    : 100%;
+    padding      : 1px 6px;
+    border       : 1px solid color-mix(in oklab, var(--sp-line-cue-accent) 52%, var(--sp-divider));
+    border-radius: 99px;
+    background   : color-mix(in oklab, var(--sp-line-cue-accent) 16%, transparent);
+    color        : color-mix(in oklab, var(--sp-line-cue-accent) 62%, var(--sp-on-surface));
+    font-size    : var(--sp-fs-62);
+    line-height  : 1.35;
+    overflow-wrap: anywhere;
+}
+.sp-line-cue-tone-rose  { --sp-line-cue-accent: #c06a86; }
+.sp-line-cue-tone-amber { --sp-line-cue-accent: #b98234; }
+.sp-line-cue-tone-mint  { --sp-line-cue-accent: #4f967c; }
+.sp-line-cue-tone-lake  { --sp-line-cue-accent: #4f8eb8; }
+.sp-line-cue-tone-grape { --sp-line-cue-accent: #8a70b3; }
+.sp-line-cue-tone-peach { --sp-line-cue-accent: #b56f5a; }
 .sp-beat-outcome {
     font-size  : var(--sp-fs-82);
     color      : var(--sp-on-surface);
@@ -3307,6 +3408,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     letter-spacing: 0.02em;
     /* color set via inline style (STAGE_COLORS) */
 }
+.sp-inline-line > .sp-inline-head > .sp-inline-stage {
+    padding      : 1px 6px;
+    border-radius: 99px;
+    background   : color-mix(in oklab, currentColor 12%, transparent);
+    line-height  : 1.35;
+}
 .sp-inline-type {
     font-size    : var(--sp-fs-62);
     padding      : 1px 5px;
@@ -3381,11 +3488,21 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-inline-head > .sp-inline-stage,
 .sp-inline-head > .sp-inline-when,
 .sp-inline-head > .sp-inline-stall { flex-shrink: 0; }
+.sp-inline-line > .sp-inline-head > .sp-inline-when {
+    flex       : 1 1 auto;
+    min-width  : 0;
+    overflow   : hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .sp-inline-when {
     font-size: var(--sp-fs-63);
     opacity  : 0.45;
     margin-left: 2px;
 }
+.sp-inline-line > .sp-inline-head { margin-bottom: 5px; }
+.sp-inline-line .sp-line-cue-chip { font-size: var(--sp-fs-58); }
+.sp-inline-line .sp-inline-name { margin-bottom: 5px; }
 .sp-inline-name {
     font-size  : var(--sp-fs-82);
     font-weight: 600;

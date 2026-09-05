@@ -24,7 +24,7 @@ export function captureSnapshotElement(element, { DOMPurify: purifier = globalTh
 export function sanitizeSnapshot(htmlRaw, { DOMPurify: purifier = globalThis.DOMPurify, documentRef = globalThis.document } = {}) {
     const raw = String(htmlRaw ?? '');
     if (!purifier?.sanitize) return fallbackText(raw);
-    const html = purifier.sanitize(raw, { ADD_TAGS: ['style'], ADD_ATTR: ['data-*'], FORBID_TAGS: ['script'], FORBID_ATTR: [/^on/i] });
+    const html = purifier.sanitize(raw, { FORCE_BODY: true, ADD_TAGS: ['style'], ADD_ATTR: ['data-*'], FORBID_TAGS: ['script'], FORBID_ATTR: [/^on/i] });
     if (!documentRef?.createElement) return html;
     const box = documentRef.createElement('template');
     box.innerHTML = html;

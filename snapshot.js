@@ -59,6 +59,20 @@ function messageAt(mesId) {
     return chat[i] || null;
 }
 
+// 只有当前最后一条可见楼仍处于“本楼生成/召回可更新”窗口。后面一旦出现新楼，旧楼即成为
+// 历史楼；此后任何 DOM 重挂、主题刷新或活态业务刷新都不得再用当前缓存改写它。
+function isCurrentWritableFloor(mesId) {
+    const chat = ctx()?.chat;
+    if (!Array.isArray(chat)) return false;
+    const target = Number(mesId);
+    if (!Number.isInteger(target) || target < 0 || target >= chat.length) return false;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (!chat[i] || chat[i].is_system) continue;
+        return i === target;
+    }
+    return false;
+}
+
 // ── 写 ────────────────────────────────────────────────────────────────────
 // snap 形状（全部可空，缺哪块渲染端就不渲哪段）：
 //   { v, ts, point, line, almanac, anchor, pool, recall }
@@ -77,7 +91,7 @@ function messageAt(mesId) {
 //   避免每次 sync 都把 chat 标脏、debounce 永远够不到落盘。
 export function writeSnapshot(mesId, snap) {
     const msg = messageAt(mesId);
-    if (!msg) return false;
+    if (!msg || !isCurrentWritableFloor(mesId)) return false;
     const calendar = snap?.calendar;
     if (!isValidCalendarDescriptor(calendar)) return false;
 

@@ -81,7 +81,7 @@ export function createLinesGenerationController(env = {}) {
                 return Object.freeze({ ...ticket, ticketId: `TICKET-${index + 1}`, ...(pool ? { adultPool: pool } : {}), ...(selection ? { adultSelection: selection } : {}) });
             });
             owner.vectorTickets = adultTickets;
-            const vectorContext = { intent, retained: isReroll ? [] : promptLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : promptLines.filter(line => !line.cue).map(line => line.name), pinnedBackground: sourceLines.filter(line => line.pin), freshTickets: adultTickets, adultSelections };
+            const vectorContext = { intent, retained: isReroll ? [] : promptLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : promptLines.filter(line => !line.cue).map(line => line.name), rerollNames: isReroll ? [...new Set(sourceLines.filter(line => !line.pin).map(line => line.name.trim()).filter(Boolean))] : [], pinnedBackground: sourceLines.filter(line => line.pin), freshTickets: adultTickets, adultSelections };
             const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext, participantIdentity, contextSnapshot);
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
             const beforeCall = env.readSaved() || {};

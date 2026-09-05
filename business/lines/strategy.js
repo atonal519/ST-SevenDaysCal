@@ -40,7 +40,7 @@ export function activeLines(raw, { includeTerminal = false } = {}) {
 export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】', adultMode = 'off' } = {}) {
     const items = (Array.isArray(lines) ? lines : []).map(line => {
         const when = String(line.when || '').trim();
-        const parts = [`- ${line.name}（${line.type || '线'}·${line.stage}${when ? `·${when}` : ''}${line.stall ? '·停滞' : ''}）`];
+        const parts = [`- ${line.name}（${line.stage}${when ? `·${when}` : ''}${line.stall ? '·停滞' : ''}）`];
         if (line.desc) parts.push(`  ${line.desc}`);
         if (line.next) parts.push(`  ${line.next}`);
         return parts.join('\n');

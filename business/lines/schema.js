@@ -1,7 +1,6 @@
 import { serializeVectorCue } from './vectors/codec.js';
 export const TERMINAL_LINE_STAGES = new Set(['收束', '淡出']);
 export const LINE_STAGES = new Set(['起线', '延展', '成形', '收束', '淡出']);
-export const LINE_TYPES = new Set(['冲突', '推进']);
 function bool(value) { return /^(?:true|1|yes|y|是|对|开启|停滞|暂停|锁定)$/i.test(String(value ?? '').trim()); }
 const cleanLabel = value => {
     let text = String(value || '').trim();
@@ -10,12 +9,6 @@ const cleanLabel = value => {
 };
 const splitFields = value => String(value || '').split(/[|｜]/).map(field => field.trim());
 const fieldValue = (text, name) => text.replace(new RegExp(`^${name}\\s*[:：]\\s*`, 'i'), '').trim();
-const normalizeType = value => {
-    const text = String(value || '').trim();
-    if (LINE_TYPES.has(text)) return text;
-    if (/冲突|矛盾|对抗|危机/.test(text)) return '冲突';
-    return '推进';
-};
 export const normalizeLineStage = value => {
     const text = String(value || '').trim();
     if (LINE_STAGES.has(text)) return text;
@@ -42,25 +35,39 @@ const isLegacyLevel = value => /^(?:[1-4]|[一二三四](?:级)?)$/.test(String(
 export function parseLineRow(value) {
     const text = cleanLabel(value);
     const fields = splitFields(/^Line\s*[:：]/i.test(text) ? fieldValue(text, 'Line') : text);
-    const canonicalPosition = isAgencyField(fields[4]) || (isBoolField(fields[5]) && isBoolField(fields[6]));
-    const legacyPosition = isAgencyField(fields[5]) || (fields.length >= 8 && isBoolField(fields[6]) && isBoolField(fields[7]));
-    const legacy = isLegacyLevel(fields[3]) && !canonicalPosition && (legacyPosition || fields.length === 7 || fields.length >= 8);
-    const [name, type, stage, when, agency, stall, pin] = legacy
-        ? [fields[0], fields[1], fields[2], fields[4], fields[5], fields[6], fields[7]]
-        : fields;
-    return { fieldCount: fields.length, name, type, stage, when, agency, stall, pin: legacy && fields.length === 7 ? false : pin };
+    if (fields.length === 6) {
+        const [name, stage, when, agency, stall, pin] = fields;
+        return { fieldCount: fields.length, name, stage, when, agency, stall, pin, format: 'canonical-v3' };
+    }
+    if (fields.length === 7) {
+        const oldCanonicalShape = isAgencyField(fields[4]) && isBoolField(fields[5]) && isBoolField(fields[6]);
+        const legacyLevelShape = isLegacyLevel(fields[3]) && isAgencyField(fields[5]) && isBoolField(fields[6]);
+        if (legacyLevelShape && !oldCanonicalShape) {
+            return { fieldCount: fields.length, name: fields[0], stage: fields[2], when: fields[4], agency: fields[5], stall: fields[6], pin: false, format: 'legacy-level' };
+        }
+        return { fieldCount: fields.length, name: fields[0], stage: fields[2], when: fields[3], agency: fields[4], stall: fields[5], pin: fields[6], format: 'canonical-v2' };
+    }
+    if (fields.length === 8) {
+        const oldCanonicalShape = isAgencyField(fields[4]) && isBoolField(fields[5]) && isBoolField(fields[6]);
+        const legacyLevelShape = isLegacyLevel(fields[3]) && isAgencyField(fields[5]) && isBoolField(fields[6]) && isBoolField(fields[7]);
+        if (legacyLevelShape || !oldCanonicalShape) {
+            return { fieldCount: fields.length, name: fields[0], stage: fields[2], when: fields[4], agency: fields[5], stall: fields[6], pin: fields[7], format: 'legacy-level' };
+        }
+        return { fieldCount: fields.length, name: fields[0], stage: fields[2], when: fields[3], agency: fields[4], stall: fields[5], pin: fields[6], format: 'canonical-v2-extra' };
+    }
+    return { fieldCount: fields.length, name: fields[0], stage: fields[1], when: fields[2], agency: fields[3], stall: fields[4], pin: fields[5], format: 'unknown' };
 }
-export function normalizeLine(record = {}) { return { name: String(record.name ?? '').trim(), type: String(record.type ?? '').trim(), stage: normalizeLineStage(record.stage), when: String(record.when ?? '').trim(), agency: String(record.agency ?? '').trim().toLowerCase() === 'player' ? 'player' : 'world', stall: record.stall === true || bool(record.stall), pin: record.pin === true || bool(record.pin), adult: record.adult === true, desc: String(record.desc ?? '').trim(), next: String(record.next ?? '').trim(), cue: serializeVectorCue(record.cue) }; }
+export function normalizeLine(record = {}) { return { name: String(record.name ?? '').trim(), stage: normalizeLineStage(record.stage), when: String(record.when ?? '').trim(), agency: String(record.agency ?? '').trim().toLowerCase() === 'player' ? 'player' : 'world', stall: record.stall === true || bool(record.stall), pin: record.pin === true || bool(record.pin), adult: record.adult === true, desc: String(record.desc ?? '').trim(), next: String(record.next ?? '').trim(), cue: serializeVectorCue(record.cue) }; }
 function parseLegacyInner(content) {
     const lines = []; let current = null;
     for (const source of String(content).split(/\r?\n/)) { const text = cleanLabel(source); if (!text) continue;
-        if (/^Line\s*[:：]/i.test(text)) { if (current) lines.push(normalizeLine(current)); const parsed = parseLineRow(text); if (parsed.fieldCount < 7) { current = null; continue; } current = { name: parsed.name, type: normalizeType(parsed.type), stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: bool(parsed.pin), desc: '', next: '' }; }
+        if (/^Line\s*[:：]/i.test(text)) { if (current) lines.push(normalizeLine(current)); const parsed = parseLineRow(text); if (parsed.fieldCount < 6) { current = null; continue; } current = { name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: bool(parsed.pin), desc: '', next: '' }; }
         else if (current && /^Desc\s*[:：]/i.test(text)) current.desc = fieldValue(text, 'Desc'); else if (current && /^Next\s*[:：]/i.test(text)) current.next = fieldValue(text, 'Next'); else if (current && /^Cue\s*[:：]/i.test(text)) current.cue = fieldValue(text, 'Cue'); else if (current && /^Adult\s*[:：]/i.test(text)) current.adult = bool(fieldValue(text, 'Adult'));
     }
     if (current) lines.push(normalizeLine(current)); return lines;
 }
 export function parseLines(raw, { legacy = true } = {}) { if (typeof raw !== 'string' || !raw.trim()) return []; const match = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i); return match ? parseLegacyInner(match[1]) : (legacy ? parseLegacyInner(raw) : []); }
-export function serializeLines(model, { includeCue = true, includeAdult = true } = {}) { const blocks = (Array.isArray(model) ? model : []).map(item => { const l = normalizeLine(item); const row = [`Line: ${l.name}`, l.type, l.stage, l.when, l.agency, l.stall ? 'true' : 'false', l.pin ? 'true' : 'false'].join('|'); return [row, l.desc ? `Desc: ${l.desc}` : '', l.next ? `Next: ${l.next}` : '', includeCue && l.cue ? `Cue: ${l.cue}` : '', includeAdult && l.adult ? 'Adult: true' : ''].filter(Boolean).join('\n'); }); return `<storylines_widget>\n${blocks.join('\n\n')}\n</storylines_widget>`; }
+export function serializeLines(model, { includeCue = true, includeAdult = true } = {}) { const blocks = (Array.isArray(model) ? model : []).map(item => { const l = normalizeLine(item); const row = [`Line: ${l.name}`, l.stage, l.when, l.agency, l.stall ? 'true' : 'false', l.pin ? 'true' : 'false'].join('|'); return [row, l.desc ? `Desc: ${l.desc}` : '', l.next ? `Next: ${l.next}` : '', includeCue && l.cue ? `Cue: ${l.cue}` : '', includeAdult && l.adult ? 'Adult: true' : ''].filter(Boolean).join('\n'); }); return `<storylines_widget>\n${blocks.join('\n\n')}\n</storylines_widget>`; }
 function tolerantBlocks(inner) {
     const blocks = []; let block = null;
     const flush = () => { if (block) blocks.push(block); block = null; };
@@ -90,8 +97,8 @@ export function parseLineCard(body) {
     const block = tolerantBlocks(body)[0];
     if (!block) return null;
     const parsed = parseLineRow(block.line);
-    if (parsed.fieldCount < 7 || !parsed.name || !parsed.when || !block.desc || !block.next) return null;
-    return normalizeLine({ name: parsed.name, type: normalizeType(parsed.type), stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: false, desc: block.desc, next: block.next });
+    if (parsed.fieldCount < 6 || !parsed.name || !parsed.when || !block.desc || !block.next) return null;
+    return normalizeLine({ name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: false, desc: block.desc, next: block.next });
 }
 export function validateLinesResponse(raw) {
     if (typeof raw !== 'string' || !raw.trim()) return { ok: false, reason: 'empty' }; let source = raw.trim();
@@ -103,10 +110,10 @@ export function validateLinesResponse(raw) {
         const parsed = parseLineRow(block.line);
         const ticketId = block.ticketSeen && /^TICKET-\d+$/i.test(block.ticketId || '') ? block.ticketId.toUpperCase() : null;
         const reason = block.ticketSeen && !ticketId ? 'invalid-ticket'
-                : parsed.fieldCount < 7 || !parsed.name || !parsed.when || !block.desc || !block.next ? 'missing-business-field'
+                : parsed.fieldCount < 6 || !parsed.name || !parsed.when || !block.desc || !block.next ? 'missing-business-field'
                     : null;
         if (reason) { rejected.push({ index, reason }); continue; }
-        model.push({ ...normalizeLine({ name: parsed.name, type: normalizeType(parsed.type), stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: false, desc: block.desc, next: block.next }), ...(ticketId ? { ticketId } : {}) });
+        model.push({ ...normalizeLine({ name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: false, desc: block.desc, next: block.next }), ...(ticketId ? { ticketId } : {}) });
     }
     return model.length ? { ok: true, model, raw: serializeLines(model), rejected } : { ok: false, reason: rejected[0]?.reason || 'no-lines', rejected };
 }

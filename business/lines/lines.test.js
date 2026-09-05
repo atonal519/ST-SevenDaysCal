@@ -19,7 +19,7 @@ test('line combined edit updates Desc and Next in one raw mutation', () => {
     const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc: 旧描述\nNext: 旧下一步\n</storylines_widget>';
     const result = editLineFields(raw, 0, { desc: ' 新描述 ', next: ' 新下一步 ' });
     assert.equal(result.ok, true); assert.match(result.raw, /Desc: 新描述\nNext: 新下一步/);
-    assert.match(result.raw, /Line: A\|推进\|延展\|今天\|world\|false\|false/);
+    assert.match(result.raw, /Line: A\|延展\|今天\|world\|false\|false/);
 });
 test('line edit keeps Next inside the selected Line block and handles empty fields', () => {
     const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc:\nNext:\nLine: B|推进|执行|1|今天|world|false|false\nDesc: B desc\nNext: B next\n</storylines_widget>';
@@ -43,7 +43,7 @@ const freshRaw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|
 test('line description edit only changes Desc and normalizes whitespace while preserving identity fields', () => {
     const source = serializeLines([{ name: '线', type: '冲突', stage: '延展', when: '今天', agency: 'player', stall: true, pin: true, adult: true, cue: 'bad', desc: '旧', next: '下一步' }]);
     const result = editLineDescription(source, 0, ' 新的\n  描述 '); assert.equal(result.ok, true); const line = parseLines(result.raw)[0];
-    assert.equal(line.desc, '新的 描述'); assert.equal(line.name, '线'); assert.equal(line.type, '冲突'); assert.equal(line.stage, '延展'); assert.equal(line.stall, true); assert.equal(line.pin, true); assert.equal(line.adult, true); assert.equal(line.next, '下一步');
+    assert.equal(line.desc, '新的 描述'); assert.equal(line.name, '线'); assert.equal(Object.hasOwn(line, 'type'), false); assert.equal(line.stage, '延展'); assert.equal(line.stall, true); assert.equal(line.pin, true); assert.equal(line.adult, true); assert.equal(line.next, '下一步');
 });
 test('release schema accepts complete output and preserves uncapped narrative', () => {
     const result = validateLinesResponse(raw);
@@ -65,7 +65,7 @@ test('release schema extracts and normalizes complete records from outer respons
     ]) {
         const result = validateLinesResponse(response);
         assert.equal(result.ok, true);
-        assert.equal(result.raw, raw);
+        assert.equal(result.raw, '<storylines_widget>\nLine: 主线|起线|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>');
         assert.doesNotMatch(result.raw, /正文状态栏|以上是生成结果|```/);
     }
 
@@ -80,7 +80,8 @@ test('incomplete model output is rejected without placeholder text', () => {
 });
 test('space line card reuses tolerant business-field validation', () => {
     const parsed = parseLineCard('| **Line：** 候选线｜矛盾｜准备｜下周｜用户｜否｜false |\n**Next：** 下一变化\n**Desc：** 当前状态\n备注：忽略');
-    assert.deepEqual([parsed.name, parsed.type, parsed.stage, parsed.when, parsed.agency, parsed.pin], ['候选线', '冲突', '起线', '下周', 'player', false]);
+    assert.deepEqual([parsed.name, parsed.stage, parsed.when, parsed.agency, parsed.pin], ['候选线', '起线', '下周', 'player', false]);
+    assert.equal(Object.hasOwn(parsed, 'type'), false);
     assert.equal(Object.hasOwn(parsed, 'level'), false);
     const oldSpace = parseLineCard('Line: 旧间卡|推进|执行|4|明天|world|true\nDesc: 旧描述\nNext: 旧下一步');
     assert.deepEqual([oldSpace.name, oldSpace.when, oldSpace.agency, oldSpace.stall, oldSpace.pin], ['旧间卡', '明天', 'world', true, false]);
@@ -91,19 +92,26 @@ test('space line card reuses tolerant business-field validation', () => {
     assert.deepEqual([canonicalNumericWhen.when, canonicalNumericWhen.agency, canonicalNumericWhen.stall, canonicalNumericWhen.pin], ['1', 'world', true, false]);
     assert.equal(parseLineCard('Line: 缺下一步|推进|萌芽|近日|world|false|false\nDesc: 当前状态'), null);
 });
-test('legacy eight-field storage is read-only compatible and rewrites as seven fields', () => {
+test('legacy seven/eight-field storage stays readable and rewrites as six fields', () => {
     const legacy = '<storylines_widget>\nLine: 旧线|冲突|逼近|4|今晚|player|true|true\nDesc: 旧状态\nNext: 旧下一步\n</storylines_widget>';
     const parsed = parseLines(legacy)[0];
     assert.deepEqual([parsed.name, parsed.stage, parsed.when, parsed.agency, parsed.stall, parsed.pin], ['旧线', '成形', '今晚', 'player', true, true]);
     assert.equal(Object.hasOwn(parsed, 'level'), false);
     const rewritten = serializeLines([parsed]);
-    assert.match(rewritten, /Line: 旧线\|冲突\|成形\|今晚\|player\|true\|true/);
+    assert.match(rewritten, /Line: 旧线\|成形\|今晚\|player\|true\|true/);
+    assert.equal(Object.hasOwn(parsed, 'type'), false);
     const legacyStages = ['萌芽', '筹备', '发酵', '执行', '逼近', '关键', '已爆发', '已完成', '已消散', '已失败'];
     const canonicalStages = legacyStages.map(stage => parseLines(`<storylines_widget>\nLine: ${stage}|推进|${stage}|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>`)[0].stage);
     assert.deepEqual(canonicalStages, ['起线', '起线', '延展', '延展', '成形', '成形', '收束', '收束', '淡出', '淡出']);
-    assert.equal(rewritten.split('\n').find(line => line.startsWith('Line:')).split('|').length, 7);
+    assert.equal(rewritten.split('\n').find(line => line.startsWith('Line:')).split('|').length, 6);
     const aliases = parseLines('<storylines_widget>\nLine: old8|推进|筹备|4|下周|world|停滞|false\nDesc: d\nNext: n\n</storylines_widget>')[0];
     assert.deepEqual([aliases.when, aliases.agency, aliases.stall, aliases.pin], ['下周', 'world', true, false]);
+    for (const when of ['world', 'player', 'user', '用户', '玩家', '主角', '世界', '环境', '自行', '自演化']) {
+        const oldSeven = parseLines(`<storylines_widget>\nLine: old7|推进|延展|${when}|player|false|true\nDesc: d\nNext: n\n</storylines_widget>`)[0];
+        assert.deepEqual([oldSeven.stage, oldSeven.when, oldSeven.agency, oldSeven.stall, oldSeven.pin], ['延展', when, 'player', false, true]);
+    }
+    const agencyLikeWhen8 = parseLines('<storylines_widget>\nLine: old8-agency-when|推进|延展|4|world|player|false|true\nDesc: d\nNext: n\n</storylines_widget>')[0];
+    assert.deepEqual([agencyLikeWhen8.stage, agencyLikeWhen8.when, agencyLikeWhen8.agency, agencyLikeWhen8.stall, agencyLikeWhen8.pin], ['延展', 'world', 'player', false, true]);
 });
 test('adult provenance is local-only and survives storage round trip', () => {
     const adult = { name: '成人线', type: '推进', stage: '起线', when: '今天', agency: 'world', desc: 'd', next: 'n', adult: true };
@@ -180,10 +188,11 @@ test('ticket protocol rejects missing duplicate unknown and old-line IDs without
 });
 test('release prompt defines global agency, neutral progression, ideal format, and local 6x3 cues without old quotas', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
-    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '未锁非终态自动线不得超过 8 条', '不设主动方、类型或单轮出生配额', '关系张力、彼此试探、索取关注或立场摩擦', '不得突然扩大伤害或制造不可逆后果', '下一变化允许维持、缓和、转向、解决或消散', '阶段只描述生命周期位置', '成形＝影响变得明确，而非冲突极端化', '收束＝解决、和解、形成新平衡或事务落定', '淡出＝不再值得持续追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
+    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '未锁非终态自动线不得超过 8 条', '不设主动方或单轮出生配额', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响变得明确，而非要求事态极端化', '收束＝解决、和解、形成新平衡或事务落定', '淡出＝不再值得持续追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
     assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
-    assert.match(prompt, /Line: 名称\|类型\|阶段\|时间锚点\|agency\|stall\|pin/);
+    assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
+    assert.doesNotMatch(prompt, /type 使用冲突或推进|名称\|类型\|阶段/);
     assert.doesNotMatch(prompt, /\blevel\b|等级|四珠|珠子/);
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(prompt, /本轮真实唯一 Ticket 与 6×3 Cue/);
@@ -228,6 +237,25 @@ test('controller uses one API call for manual reroll and commits valid output', 
     });
     const result = await controller.run(false, { reroll: true });
     assert.equal(result.status, 'updated'); assert.equal(calls, 1); assert.match(committed, /storylines_widget/);
+});
+
+test('reroll prompt receives all unlocked names including terminal lines while tracked lines stay empty', async () => {
+    const old = '<storylines_widget>\nLine: 旧主题|推进|起线|今天|world|false|false\nDesc: 绝不能泄漏的旧描述\nNext: 绝不能泄漏的旧下一步\nLine: 终态旧主题|推进|收束|今晚|world|false|false\nDesc: 绝不能泄漏的终态描述\nNext: 绝不能泄漏的终态下一步\nLine: 锁线|推进|起线|明天|world|false|true\nDesc: 锁定背景\nNext: 锁定后续\n</storylines_widget>';
+    let prompt = '';
+    const controller = createLinesGenerationController({
+        owners: createTaskOwnerManager(), chatId: () => 'reroll-names', cacheKey: () => 'reroll-names',
+        loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: old, ts: 1 }),
+        drawTickets: count => drawTickets(count, { seed: 'reroll-names' }), vectorCapacity: 8,
+        buildPrompt: (previousRaw, _travel, vectorContext) => { prompt = buildLinesPrompt('用户', '角色', 'user', previousRaw, 'auto', vectorContext); return prompt; },
+        callApi: async () => freshRaw, commit: () => {}, runtime: { start() {}, finish() {} },
+    });
+    assert.equal((await controller.run(false, { reroll: true })).status, 'updated');
+    assert.match(prompt, /【当前已追踪】\n（无）/);
+    assert.match(prompt, /【上一版自动线主题·仅名称避重】\n- 旧主题\n- 终态旧主题/);
+    assert.doesNotMatch(prompt, /绝不能泄漏的旧描述|绝不能泄漏的旧下一步|绝不能泄漏的终态描述|绝不能泄漏的终态下一步/);
+    assert.match(prompt, /锁线：当前 锁定背景；后续 锁定后续（本地已保留）/);
+    const avoidance = prompt.match(/【上一版自动线主题·仅名称避重】([\s\S]*?)【本地锁线只读背景】/)?.[1] || '';
+    assert.doesNotMatch(avoidance, /锁线|锁定背景|锁定后续/);
 });
 
 test('controller attaches temporary adult selections to fresh tickets by mode without touching Cue storage', async () => {
@@ -435,7 +463,8 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     const raw = '<storylines_widget>\nLine: 活线|推进|起线|今天|world|false|false\nDesc: 状态\nNext: 下一步\nLine: 终线|推进|收束|今天|world|false|false\nDesc: 不应注入\nNext: 结束\n</storylines_widget>';
     assert.equal(activeLines(raw).length, 1);
     assert.match(buildLinesInjection(activeLines(raw)), /活线/);
-    assert.match(buildLinesInjection(activeLines(raw)), /推进·起线·今天/);
+    assert.match(buildLinesInjection(activeLines(raw)), /活线（起线·今天）/);
+    assert.doesNotMatch(buildLinesInjection(activeLines(raw)), /推进·起线/);
     assert.doesNotMatch(buildLinesInjection(activeLines(raw)), /终线/);
     const calls = [];
     const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, adultMode: () => 'off', settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
@@ -455,6 +484,76 @@ test('panel and inline production render contain no level beads', () => {
         assert.match(html, /旧线/);
         assert.doesNotMatch(html, /sp-bead|sp-inline-dots/);
     }
+});
+
+test('panel and inline render the normalized local stage meter without percentage semantics', () => {
+    const colors = { 起线: '#111111', 延展: '#222222', 成形: '#333333', 收束: '#444444', 淡出: '#555555' };
+    const feature = createLinesFeature({
+        getSettings: () => ({ linesInlineEnabled: true }), stageColors: colors,
+        escapeHtml: value => String(value), escapeAttr: value => String(value), cleanText: value => String(value),
+    });
+    const renderBoth = raw => [feature.renderLines(raw), feature.inlineHtml(raw, true)];
+    const rawFor = (stage, stall = false) => serializeLines([{ name: `${stage}线`, stage, when: '今天', agency: 'world', stall, desc: '状态', next: '下一步' }]);
+
+    for (const [stage, expectedFilled] of [['起线', 1], ['延展', 2], ['成形', 3], ['收束', 4]]) {
+        for (const html of renderBoth(rawFor(stage))) {
+            assert.equal((html.match(/sp-line-stage-meter/g) || []).length, 1, stage);
+            assert.equal((html.match(/sp-line-stage-segment-filled/g) || []).length, expectedFilled, stage);
+            assert.match(html, new RegExp(`style="color:${colors[stage]}" aria-hidden="true"`));
+            assert.doesNotMatch(html, /role="progressbar"|aria-value(?:now|min|max)/);
+        }
+    }
+
+    for (const html of renderBoth(rawFor('淡出'))) {
+        assert.match(html, /sp-line-stage-meter-faded/);
+        assert.equal((html.match(/sp-line-stage-segment/g) || []).length, 4);
+        assert.doesNotMatch(html, /sp-line-stage-segment-filled/);
+    }
+});
+
+test('legacy stages use the normalized meter and stalled lines keep their current step', () => {
+    const feature = createLinesFeature({
+        getSettings: () => ({ linesInlineEnabled: true }),
+        escapeHtml: value => String(value), escapeAttr: value => String(value), cleanText: value => String(value),
+    });
+    const legacyRaw = (stage, stall = false) => `<storylines_widget>\nLine: 旧线|推进|${stage}|4|今天|world|${stall}|false\nDesc: 状态\nNext: 下一步\n</storylines_widget>`;
+    for (const [legacyStage, canonicalStage, expectedFilled] of [['萌芽', '起线', 1], ['执行', '延展', 2], ['逼近', '成形', 3], ['已完成', '收束', 4]]) {
+        for (const html of [feature.renderLines(legacyRaw(legacyStage)), feature.inlineHtml(legacyRaw(legacyStage), true)]) {
+            assert.match(html, new RegExp(`>${canonicalStage}<\\/span><span class="sp-line-stage-meter"`));
+            assert.equal((html.match(/sp-line-stage-segment-filled/g) || []).length, expectedFilled, legacyStage);
+        }
+    }
+    for (const html of [feature.renderLines(legacyRaw('已失败')), feature.inlineHtml(legacyRaw('已失败'), true)]) {
+        assert.match(html, />淡出<\/span><span class="sp-line-stage-meter sp-line-stage-meter-faded"/);
+        assert.doesNotMatch(html, /sp-line-stage-segment-filled/);
+    }
+    const stalled = legacyRaw('逼近', true);
+    for (const html of [feature.renderLines(stalled), feature.inlineHtml(stalled, true)]) {
+        assert.equal((html.match(/sp-line-stage-segment-filled/g) || []).length, 3);
+        assert.match(html, /sp-line-stall/);
+        assert.match(html, />停滞<\/span>/);
+    }
+});
+
+test('panel and inline line cards keep Cue glyph, show only public cue labels, and put date in head', () => {
+    const feature = createLinesFeature({
+        getSettings: () => ({ linesInlineEnabled: true }), stageColors: { 起线: '#123456' },
+        escapeHtml: value => String(value), escapeAttr: value => String(value), cleanText: value => String(value),
+    });
+    const cue = 'lines-vector-v1:relation:mutual-probing|subject:survival-stability|setting:public-place';
+    const withCue = serializeLines([{ name: '有印记', stage: '起线', when: '很长的古典日期锚点', agency: 'world', desc: '状态', next: '下一步', cue }]);
+    for (const html of [feature.renderLines(withCue), feature.inlineHtml(withCue, true)]) {
+        assert.match(html, /sp-line-vector-glyph/);
+        assert.match(html, /sp-line-cues/);
+        for (const label of ['互相试探', '生存安稳', '公共场合']) assert.match(html, new RegExp(label));
+        for (const slot of ['rose', 'amber', 'mint']) assert.match(html, new RegExp(`sp-line-cue-tone-${slot}`));
+        assert.doesNotMatch(html, /mutual-probing|survival-stability|public-place|双方观察彼此的边界与反应/);
+        assert.doesNotMatch(html, /取材角度|sp-line-cues-label/);
+        assert.match(html, /(?:sp-beat-head|sp-inline-head)[^]*sp-(?:line|inline)-when/);
+        assert.doesNotMatch(html, /sp-inline-type|sp-beat-line/);
+    }
+    const withoutCue = serializeLines([{ name: '旧线', stage: '起线', when: '今天', agency: 'world', desc: '状态', next: '下一步' }]);
+    for (const html of [feature.renderLines(withoutCue), feature.inlineHtml(withoutCue, true)]) assert.doesNotMatch(html, /sp-line-cues|取材角度|sp-line-vector-glyph/);
 });
 
 test('capacity keeps prior queue identities before new lines and preserves pinned extras', () => {
@@ -722,6 +821,120 @@ function automaticLinesFeature(status, { mode = 'turns' } = {}) {
     });
     return { feature, toasts, calls: () => calls };
 }
+
+const retirementRaw = lines => serializeLines(lines.map(line => ({
+    when: '今天', agency: 'world', stall: false, desc: `${line.name}状态`, next: `${line.name}下一步`, ...line,
+})));
+
+function terminalRetirementFeature({ raw, mode = 'manual', interval = 9, status = 'failed', save = async value => ({ ok: true, value }) } = {}) {
+    let saved = { raw, ts: 10 }; let chatId = 'retire-chat'; let epoch = 1; let chat = [{ is_user: false, is_system: false, mes: '正文' }];
+    const writes = []; const cached = []; const effects = []; let calls = 0;
+    const feature = createLinesFeature({
+        runtime: { busy: false, cache: value => cached.push(value) }, pluginEnabled: () => true,
+        getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }), getMode: () => mode, getInterval: () => interval,
+        chatId: () => chatId, boundaryEpoch: () => epoch, cacheKey: () => 'retire-key', chat: () => chat,
+        readSaved: () => saved, readRaw: () => saved.raw, floorSignature: () => 'sig', loadConfig: () => ({ url: 'u', key: 'k' }), swipeId: () => 0,
+        writeStoreConfirmed: async (key, value, options) => {
+            writes.push({ key, value });
+            const before = { raw: saved.raw, ts: saved.ts };
+            const result = await save(value, options);
+            if (result?.ok === true && !result.stale) {
+                if (!options.ownerGuard() || saved.raw !== before.raw || saved.ts !== before.ts) return { ...result, stale: true };
+                saved = value;
+                if (!options.ownerGuard()) { saved = before; return { ...result, stale: true }; }
+            }
+            return result;
+        },
+        generation: { run: async () => { calls++; return { status }; } },
+        refreshInlineWindow: () => effects.push('inline'), freezeSnapshot: () => effects.push('freeze'),
+    });
+    return {
+        feature, writes, cached, effects, calls: () => calls, saved: () => saved,
+        addFloor: mes => { chat = [...chat, { is_user: false, is_system: false, mes }]; return chat.length - 1; },
+        switchChat: () => { chatId = 'other-chat'; epoch++; },
+    };
+}
+
+test('a new normal AI floor retires only prior unlocked terminal lines before any optional advance', async () => {
+    const source = retirementRaw([
+        { name: '活线', stage: '延展' }, { name: '完成线', stage: '收束' },
+        { name: '淡出线', stage: '淡出' }, { name: '锁定终线', stage: '收束', pin: true },
+    ]);
+    for (const mode of ['manual', 'turns', 'days']) {
+        const harness = terminalRetirementFeature({ raw: source, mode, interval: 99 });
+        assert.equal(harness.feature.onMessageReceived({ messageId: 0, type: 'normal' }), true);
+        await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+        assert.deepEqual(parseLines(harness.saved().raw).map(line => line.name), ['活线', '锁定终线'], mode);
+        assert.equal(harness.writes.length, 1, mode);
+        assert.equal(harness.cached.at(-1), harness.saved().raw, mode);
+        assert.equal(harness.calls(), 0, `${mode} 未触发推进时不应额外调用 AI`);
+    }
+});
+
+test('terminal retirement stays removed on API failure, keeps new terminal until the following floor, and writes empty raw', async () => {
+    const oldTerminal = retirementRaw([{ name: '旧终线', stage: '收束' }]);
+    const harness = terminalRetirementFeature({ raw: oldTerminal, mode: 'turns', interval: 1, status: 'failed' });
+    harness.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    assert.equal(harness.saved().raw, '');
+    assert.equal(harness.calls(), 1);
+    assert.equal(harness.feature.onMessageReceived({ messageId: 0, type: 'normal' }), false);
+    await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    assert.equal(harness.writes.length, 1, '同楼重复渲染不得重复清理');
+
+    harness.saved().raw = retirementRaw([{ name: '本轮新终线', stage: '淡出' }]);
+    const next = harness.addFloor('下一楼');
+    assert.equal(harness.feature.onMessageReceived({ messageId: next, type: 'normal' }), true);
+    assert.match(harness.saved().raw, /本轮新终线/, '本轮刚结束者在下一楼确认前仍保留');
+    await harness.feature.onCharacterRendered({ messageId: next, type: 'normal' });
+    assert.equal(harness.saved().raw, '');
+});
+
+test('suppressed, failed-save, and switched-chat floors never fake terminal retirement', async () => {
+    const source = retirementRaw([{ name: '应保留终线', stage: '收束' }]);
+    const suppressed = terminalRetirementFeature({ raw: source });
+    suppressed.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    await suppressed.feature.onCharacterRendered({ messageId: 0, type: 'normal', autoSuppressed: true });
+    assert.equal(suppressed.writes.length, 0);
+    assert.equal(suppressed.saved().raw, source);
+
+    const failed = terminalRetirementFeature({ raw: source, save: async () => ({ ok: false }) });
+    failed.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    await failed.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    assert.equal(failed.saved().raw, source);
+    assert.deepEqual(failed.cached, []);
+
+    let release;
+    const switched = terminalRetirementFeature({ raw: source, save: () => new Promise(resolve => { release = () => resolve({ ok: true }); }) });
+    switched.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    const rendering = switched.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    await new Promise(resolve => setImmediate(resolve));
+    switched.switchChat(); release(); await rendering;
+    assert.equal(switched.saved().raw, source);
+    assert.deepEqual(switched.cached, []);
+    assert.equal(switched.calls(), 0);
+
+    const reroll = terminalRetirementFeature({ raw: source });
+    reroll.feature.onGenerationStarted({ genType: 'regenerate' });
+    assert.equal(reroll.feature.onMessageReceived({ messageId: 0, type: 'normal' }), false);
+    await reroll.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    await reroll.feature.onSwiped({ mesId: 0, info: { pendingGeneration: false, nextSwipeId: 1 } });
+    assert.equal(reroll.writes.length, 0, '同楼 regenerate/swipe 不得被当成新楼清理');
+});
+
+test('a same-chat edit while confirmed retirement waits makes the old cleanup stale', async () => {
+    const source = retirementRaw([{ name: '旧终线', stage: '收束' }]);
+    let release;
+    const harness = terminalRetirementFeature({ raw: source, save: () => new Promise(resolve => { release = () => resolve({ ok: true }); }) });
+    harness.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    const rendering = harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    await new Promise(resolve => setImmediate(resolve));
+    harness.saved().raw = retirementRaw([{ name: '用户编辑后的活线', stage: '延展' }]);
+    harness.saved().ts = 11;
+    release(); await rendering;
+    assert.deepEqual(parseLines(harness.saved().raw).map(line => line.name), ['用户编辑后的活线']);
+    assert.deepEqual(harness.cached, []);
+});
 
 test('automatic line success toast is emitted only for an updated generation result', async () => {
     for (const status of ['failed', 'cancelled', 'skipped', 'updated']) {

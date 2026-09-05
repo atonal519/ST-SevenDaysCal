@@ -379,12 +379,12 @@ export function createInlineFeature(env = {}) {
     }
 
     // 用户楼「召回框」：外壳复用 .sp-inline-box/.sp-dash（与 AI 楼一摸一样形式），内含本回合召回注入回显（丰富版）。
-    // snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；最新用户楼传 null → 读 injection controller echo。
+    // snap：历史用户楼传快照（读 snap.recall [{id,事由,类型,起始锚,现状}]）；当前最后一楼若是用户楼则传 null → 读 injection controller echo。
     // 字段照召回闭环：类型胶囊(上色) + 事由 + 起始 + 推测应至状态(现状)。纯只读——召回是给用户核对「AI 这轮收到了啥」，无逐条操作。
     // 空召回 → 返回 ''（该用户楼不挂框；关注入/无召回的楼天然无此块）。
     // strip 委托（历/点的 per-day tap）共用：从被点元素回溯它所在的框，判断是否历史楼只读框，
     // 若是则取该楼快照，供 drawer 用快照数据渲染（历史楼 tap 展开看到的是那层楼当时的态，非活缓存）。
-    // 返回 { readOnly, snap }：readOnly=false（最新楼）时 snap=null，drawer 各 helper 退回读活缓存。
+    // 返回 { readOnly, snap }：readOnly=false（当前最后一楼）时 snap=null，drawer 各 helper 退回读活缓存。
     function inlineTapContext(el) {
         const box = el.closest?.('.sp-inline-box-ro');
         if (!box) return { readOnly: false, snap: null, resolvedCalendar: loadCalDesc(), resolution: { resolved: true, source: 'live-current' } };
@@ -408,7 +408,7 @@ export function createInlineFeature(env = {}) {
     // 视口：IntersectionObserver 观察每层 AI 楼，进视口才真正 build DOM、离开视口卸 DOM（省重排）。
     //   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
     //
-    // 深度按最近 N 个 AI 楼确定，但窗口覆盖其间用户楼；最新 AI 楼与最新用户楼读活态出口，其余读快照。
+    // 深度按最近 N 个 AI 楼确定，但窗口覆盖其间用户楼；仅当前最后一个可见楼读活态出口，其余一律读各自快照。
 
 
 
@@ -445,13 +445,14 @@ export function createInlineFeature(env = {}) {
         const users = all.filter(el => el.getAttribute('is_user') === 'true');
         const latestAiEl = ai.at(-1) || null;
         const latestUserEl = users.at(-1) || null;
+        const currentEl = [...all].reverse().find(el => el.getAttribute('is_system') !== 'true') || null;
         const depth = computeRenderDepth();
         let floors = all;
         if (depth > 0 && ai.length > depth) {
             const start = all.indexOf(ai[ai.length - depth]);
             floors = start >= 0 ? all.slice(start) : all;
         }
-        return { winSet: new Set(floors), latestAiEl, latestUserEl };
+        return { winSet: new Set(floors), latestAiEl, latestUserEl, currentEl };
     };
     const inViewport = el => {
         if (!el?.getBoundingClientRect) return true;
@@ -503,7 +504,7 @@ export function createInlineFeature(env = {}) {
             const current = computeWindow();
             for (const entry of entries) {
                 const el = entry.target;
-                const latest = el === current.latestAiEl || el === current.latestUserEl;
+                const latest = el === current.currentEl;
                 if (entry.isIntersecting) mount(el, latest);
                 else if (!latest) unmount(el);
             }
@@ -515,7 +516,7 @@ export function createInlineFeature(env = {}) {
         const current = computeWindow();
         const floors = doc?.querySelectorAll?.('#chat .mes:not([is_system="true"])') || [];
         for (const el of floors) {
-            const latest = el === current.latestAiEl || el === current.latestUserEl;
+            const latest = el === current.currentEl;
             if (current.winSet.has(el)) {
                 inlineObserver?.observe(el);
                 if (latest || inViewport(el)) mount(el, latest);

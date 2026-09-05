@@ -8,8 +8,8 @@ import { runGenerationUiEffect } from '../../api/diagnostics.js';
 import { commitLineWidget } from './widget.js';
 import { createDashedModule } from './dashed.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
-import { parseLines } from './schema.js';
-import { stripInternalLineLines } from './vectors/codec.js';
+import { parseLines, serializeLines, TERMINAL_LINE_STAGES } from './schema.js';
+import { publicCueChips, stripInternalLineLines } from './vectors/codec.js';
 import { vectorGlyphSvg } from './vectors/glyph.js';
 import { linesViewModel } from './render.js';
 import { buildLineInjectText, inlineState } from './inline.js';
@@ -26,6 +26,21 @@ const LINE_EDGE_COLORS = Object.freeze({
 const lineEdgeColor = line => line.adult
     ? (line.pin ? LINE_EDGE_COLORS.adultPinned : LINE_EDGE_COLORS.adult)
     : (line.pin ? LINE_EDGE_COLORS.ordinaryPinned : LINE_EDGE_COLORS.ordinary);
+
+const LINE_STAGE_STEPS = Object.freeze({
+    '起线': 1,
+    '延展': 2,
+    '成形': 3,
+    '收束': 4,
+});
+
+// 阶段文字已承担可访问的状态语义；四格只是本地视觉刻度，不伪装成百分比进度。
+const lineStageMeterHtml = (stage, color) => {
+    const faded = stage === '淡出';
+    const filled = faded ? 0 : (LINE_STAGE_STEPS[stage] || 0);
+    const segments = Array.from({ length: 4 }, (_, index) => `<span class="sp-line-stage-segment${index < filled ? ' sp-line-stage-segment-filled' : ''}"></span>`).join('');
+    return `<span class="sp-line-stage-meter${faded ? ' sp-line-stage-meter-faded' : ''}" style="color:${color}" aria-hidden="true">${segments}</span>`;
+};
 
 // 线域组合根：宿主只注入能力与跨域回调；各纯业务子模块不反向读取 index 状态。
 export function createLinesFeature(env = {}) {
@@ -75,6 +90,11 @@ export function createLinesFeature(env = {}) {
         const body = name;
         return glyph ? `<div class="${className} sp-line-title-with-glyph">${glyph}${body}</div>` : `<div class="${className}">${body}</div>`;
     };
+    const cueLabelsHtml = line => {
+        const chips = publicCueChips(line.cue);
+        if (!chips.length) return '';
+        return `<div class="sp-line-cues"><span class="sp-line-cue-list">${chips.map(chip => `<span class="sp-line-cue-chip sp-line-cue-tone-${chip.colorSlot}">${env.escapeHtml?.(chip.label) ?? String(chip.label)}</span>`).join('')}</span></div>`;
+    };
     const widget = env.widget || (env.widgetEnv && {
         apply(body, editIdx = null, button = null) {
             const key = env.widgetEnv.key?.();
@@ -110,7 +130,7 @@ export function createLinesFeature(env = {}) {
             const desc = l.desc ? `<div class="sp-beat-scene">${env.escapeHtml?.(env.cleanText?.(l.desc) || l.desc)}</div>` : '';
             const nextText = l.next ? `<div class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</div>` : '';
             const nextHtml = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span>${sensitive(nextText, adult)}</div>` : '';
-            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${l.type ? `<span class="sp-beat-line">${env.escapeHtml?.(l.type)}</span>` : ''}${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${l.when ? `<div class="sp-line-when">${env.escapeHtml?.(l.when)}</div>` : ''}${sensitive(titleHtml('sp-beat-title', l), adult)}${sensitive(desc, adult)}${nextHtml}</div>`;
+            return `<div class="sp-beat sp-line-card${l.stall ? ' sp-line-stall' : ''}${l.pin ? ' sp-line-pinned' : ''}${l.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-beat-head"><span class="sp-seq-badge">#${i + 1}</span><span class="sp-beat-type" style="color:${color}">${env.escapeHtml?.(l.stage)}</span>${lineStageMeterHtml(l.stage, color)}${l.when ? `<span class="sp-line-when">${env.escapeHtml?.(l.when)}</span>` : ''}${l.stall ? '<span class="sp-line-stall-tag">停滞</span>' : ''}<span class="sp-beat-actions">${actions}</span></div>${sensitive(titleHtml('sp-beat-title', l), adult)}${cueLabelsHtml(l)}${sensitive(desc, adult)}${nextHtml}</div>`;
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
@@ -126,7 +146,7 @@ export function createLinesFeature(env = {}) {
             const actions = view.hasActions ? `<span class="sp-beat-actions">${env.makeInjectBtn?.(buildLineInjectText(line)) || ''}<button class="sp-line-del-one" data-line-idx="${i}" title="删除这条线"><i class="fa-solid fa-xmark"></i></button></span>` : '';
             const desc = line.desc ? `<div class="sp-inline-desc">${env.escapeHtml?.(env.cleanText?.(line.desc) || line.desc)}</div>` : '';
             const next = line.next ? `<div class="sp-line-next sp-inline-next ${line.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${line.stall ? '⏸' : '→'}</span>${sensitive(`<span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(line.next) || line.next)}</span>`, adult)}</div>` : '';
-            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${line.type ? `<span class="sp-inline-type">${env.escapeHtml?.(line.type)}</span>` : ''}${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${sensitive(titleHtml('sp-inline-name', line), adult)}${sensitive(desc, adult)}${next}</div>`;
+            return `<div class="sp-inline-line${line.stall ? ' sp-line-stall' : ''}${line.adult ? ' sp-line-adult' : ''}" data-line-idx="${i}" style="border-left:3px solid ${edgeColor}"><div class="sp-inline-head"><span class="sp-inline-stage" style="color:${color}">${env.escapeHtml?.(line.stage)}</span>${lineStageMeterHtml(line.stage, color)}${line.when ? `<span class="sp-inline-when">${env.escapeHtml?.(line.when)}</span>` : ''}${line.stall ? '<span class="sp-line-stall-tag sp-inline-stall">停滞</span>' : ''}${actions}</div>${sensitive(titleHtml('sp-inline-name', line), adult)}${cueLabelsHtml(line)}${sensitive(desc, adult)}${next}</div>`;
         }).join('');
         const controls = !readOnly && view.hasActions ? '<span class="sp-inline-summary-actions"><button class="sp-inline-refresh-lines" title="重新生成线"><i class="fa-solid fa-rotate-right"></i></button><button class="sp-inline-advance-lines" title="推进事件线"><i class="fa-solid fa-forward"></i></button></span>' : '';
         const summaryText = view.empty ? '暂无' : [view.activeCount ? `${view.activeCount} 条活跃` : '', view.settledCount ? `${view.settledCount} 条已结束` : ''].filter(Boolean).join(' · ');
@@ -193,6 +213,29 @@ export function createLinesFeature(env = {}) {
         if (!hasSaved && !String(saved.raw || '')) return true;
         return !!baseline && String(saved.raw || '') === String(baseline.raw || '') && (!hasSaved || (Number(saved.ts) || null) === (Number(baseline.ts) || null));
     };
+    const floorCredentialCurrent = credential => env.chatId?.() === credential?.chatId
+        && (credential?.boundaryEpoch === undefined || env.boundaryEpoch?.() === credential.boundaryEpoch);
+    const retirePreviousTerminalLines = async credential => {
+        const baseline = credential?.linesBaseline;
+        if (!baseline || !credential.cacheKey || !floorCredentialCurrent(credential) || !canonicalMatches(baseline)) return false;
+        const previous = parseLines(baseline.raw);
+        const retained = previous.filter(line => line.pin || !TERMINAL_LINE_STAGES.has(line.stage));
+        if (retained.length === previous.length) return false;
+        const raw = retained.length ? serializeLines(retained) : '';
+        const target = { raw, ts: Date.now() };
+        const writer = env.writeStoreConfirmed || env.writeStore;
+        let stored;
+        try {
+            stored = await writer?.(credential.cacheKey, target, { ownerGuard: () => floorCredentialCurrent(credential) && (canonicalMatches(baseline) || canonicalMatches(target)) });
+        } catch {
+            return false;
+        }
+        if (!(stored === true || stored?.ok === true) || stored?.stale || !floorCredentialCurrent(credential)) return false;
+        runtime.cache(raw);
+        if (env.isPanelActive?.()) refreshPanel(true);
+        syncInline(credential.chatId);
+        return true;
+    };
     const abortGeneration = ({ restore = true, reason = 'manual-abort' } = {}) => {
         const owner = owners.invalidate('lines-generation', reason);
         runtime.abort(reason);
@@ -228,7 +271,11 @@ export function createLinesFeature(env = {}) {
             lifecycle.consumePendingSwipe(mid);
             return false;
         }
-        return lifecycle.registerFloor({ chatId, messageId: mid, type: 'normal' });
+        const saved = env.readSaved?.() || { raw: env.readRaw?.() || '', ts: null };
+        return lifecycle.registerFloor({
+            chatId, messageId: mid, type: 'normal', cacheKey: env.cacheKey?.(), boundaryEpoch: env.boundaryEpoch?.(),
+            linesBaseline: Object.freeze({ raw: String(saved.raw || ''), ts: Number(saved.ts) || null }),
+        });
     };
     const onCharacterRendered = async ({ messageId, type, autoSuppressed = false } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return;
@@ -244,6 +291,8 @@ export function createLinesFeature(env = {}) {
         }
         const credential = lifecycle.consumeFloor(mid, env.chatId?.());
         if (!credential) { await appendInlineBlock(mid, false); return; }
+        if (!autoSuppressed) await retirePreviousTerminalLines(credential);
+        if (!floorCredentialCurrent(credential)) return;
         lifecycle.lastSeenMaxMesId = mid;
         let advance = false;
         const mode = env.getMode?.();

@@ -3,6 +3,14 @@ import { POOLS, POOL_IDS, RELATION_POOL_ID } from './pools.js';
 const VERSION = 'lines-vector-v1';
 const CUE_RE = /^lines-vector-v1:([^:|]+):([^:|]+)\|([^:|]+):([^:|]+)\|([^:|]+):([^:|]+)$/;
 const order = [RELATION_POOL_ID, ...POOL_IDS.filter(id => id !== RELATION_POOL_ID)];
+const PUBLIC_CUE_COLOR_BY_POOL = Object.freeze({
+    relation: 'rose',
+    subject: 'amber',
+    setting: 'mint',
+    timing: 'lake',
+    resource: 'grape',
+    external: 'peach',
+});
 
 export function parseVectorCue(value) {
     if (typeof value !== 'string') return null;
@@ -31,6 +39,15 @@ export function ticketFromCue(value) {
     const cue = parseVectorCue(value); if (!cue) return null;
     return Object.freeze({ version: VERSION, id: serializeVectorCue(cue), pools: Object.freeze(cue.map(item => item.poolId)), tags: Object.freeze(cue.map(item => item.tagId)), selections: Object.freeze(cue.map(item => Object.freeze({ ...item, ...POOLS[item.poolId].tags.find(tag => tag.id === item.tagId), poolLabel: POOLS[item.poolId].label }))) });
 }
+
+/** Public, user-facing chip data for a stored Cue. Internal ids/prompts stay private. */
+export function publicCueChips(value) {
+    const ticket = ticketFromCue(value);
+    return ticket ? Object.freeze(ticket.selections.map(item => Object.freeze({ label: item.label, colorSlot: PUBLIC_CUE_COLOR_BY_POOL[item.poolId] }))) : Object.freeze([]);
+}
+
+/** Public labels retained as a small compatibility helper for non-visual consumers. */
+export function publicCueLabels(value) { return Object.freeze(publicCueChips(value).map(item => item.label)); }
 
 export function stripInternalLineLines(raw) { return String(raw ?? '').split(/\r?\n/).filter(line => !/^\s*(?:Cue|Adult)\s*:/i.test(line)).join('\n'); }
 export function stripVectorCueLines(raw) { return stripInternalLineLines(raw); }

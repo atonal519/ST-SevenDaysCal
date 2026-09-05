@@ -18,7 +18,7 @@ export function editLineFields(raw, index, values = {}) {
     next = lines.findIndex((line, i) => i > lineIndex && i < end && /^\s*Next\s*:/i.test(line));
     replace(next, 'Next', nextValue);
     const identity = normalizeLine(parseLineRow(lines[lineIndex]));
-    lines[lineIndex] = [`Line: ${identity.name}`, identity.type, identity.stage, identity.when, identity.agency, identity.stall ? 'true' : 'false', identity.pin ? 'true' : 'false'].join('|');
+    lines[lineIndex] = [`Line: ${identity.name}`, identity.stage, identity.when, identity.agency, identity.stall ? 'true' : 'false', identity.pin ? 'true' : 'false'].join('|');
     return { ok: true, raw: prefix + lines.join(eol) + suffix, value: normalized };
 }
 

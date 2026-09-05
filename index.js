@@ -44,7 +44,7 @@ import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindA
 import { normalizeApiUrl } from './api/sse.js';
 import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
 import { recordChatBoundary, shareRecentDiagnosticTrace, traceDiagnosticEvent } from './runtime/diagnostic-trace.js';
-import { normalizeTagNames } from './utils/tag-names.js';
+import { normalizeTagRules } from './utils/tag-names.js';
 import { ADULT_MODES, ADULT_MODE_LABELS, adultModeForCharacter } from './business/lines/adult.js';
 import { axisState } from './business/axis/state.js';
 import {
@@ -1822,6 +1822,7 @@ jQuery(async () => {
             chatName: () => { const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name'); return el?.value || el?.textContent?.trim() || getContext().chatId || '当前聊天'; },
             capture: el => { const ctx = getContext?.() || {}; return captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify, messageFormatting: ctx.messageFormatting }); },
             toast: (message, action, error) => showToast(message, action, error),
+            saveChatDebounced: () => scriptCore.saveChatDebounced(),
             warn: (message, error) => console.warn(message, error),
             confirm: message => spConfirm({ title: String(message).includes('收藏') ? '删除收藏' : '删除标签', body: message }),
             selectMany: options => customDialog.selectMany(options),
@@ -3121,11 +3122,11 @@ function injectModal() {
                                         <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（创作链只用内置强化词）。也可追加创作规范，如：去八股、控制文风、叙事口吻…"></textarea>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔，可直接写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效）；支持中文、日文等 Unicode 标签名。</p>
+                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔；XML 包裹可写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效），双中括号包裹请固定填写 <code>[[...]]</code>（三个点是配置占位）。可组合填写 <code>content,[[...]]</code>，并支持中文、日文等 Unicode 标签名。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
                                         <p class="sp-cfg-hint">标签本身去掉、<strong>内部文字保留</strong>（如正文被 <code>content</code> 包裹）。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
-                                        <p class="sp-cfg-hint">标签<strong>连同内部内容一起删除</strong>（如思维链 <code>think</code> / <code>reasoning</code>）。</p>
+                                        <p class="sp-cfg-hint">包裹符<strong>连同内部内容一起删除</strong>（如 <code>think,reasoning,[[...]]</code>）；未闭合的双中括号会保留原文，不会吞掉后文。</p>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-storyclock"><summary>时间戳提示词</summary>
                                         <p class="sp-cfg-hint"><strong>全部内容均可编辑</strong>；留空＝用内置完整默认（默认词随插件更新走）。删除 SDC 标签或机器合同可能导致时间戳无法识别，风险由你承担。务必让两端各带 date、weekday、time；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
@@ -6892,13 +6893,13 @@ function bindMemoryHandlers() {
         this.value = v;
         saveSettingsDebounced();
     });
-    // Tag sanitizer inputs — normalize Unicode tag names (optional surrounding <>, comma-separated), save.
+    // Tag sanitizer inputs — normalize Unicode tag names or the fixed [[...]] rule, then save.
     // Applies to future reads; existing L0 summaries built with old rules keep
     // their hash and stay valid — new content read after change uses new rules.
     // input=即打即存（存 sanitize 值但不回写 value，免光标跳）；change=失焦时规范化回写显示。
     // 关键：只用 change 会在「输入框还没失焦就点保存/关面板」时丢掉那次编辑（表现为“动了 API，标签/提示词被重置”）。
     function sanitizeTagList(raw) {
-        return normalizeTagNames(raw).join(',');
+        return normalizeTagRules(raw).join(',');
     }
     function bindTagField(sel, key) {
         // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内）→ 必须 $in 绑定，否则不落存
@@ -7936,9 +7937,30 @@ function syncMobileViewport() {
     const top  = offsetTop + marginTop;  // fixed 绝对值 = 可视视口位移 + 留白
     const maxH = Math.max(260, vh - marginTop - bottomGap);  // 高度只按可视视口算，不含 offsetTop
 
-    sheet.style.top = `${top}px`;
-    sheet.style.height = `${maxH}px`;
-    sheet.style.maxHeight = `${maxH}px`;
+    const nextTop = `${top}px`;
+    const nextHeight = `${maxH}px`;
+    if (sheet.style.top === nextTop && sheet.style.height === nextHeight && sheet.style.maxHeight === nextHeight) return;
+
+    const settingsBody = settingsOpen ? inEl('.sp-settings-body') : null;
+    const savedScrollTop = settingsBody?.scrollTop;
+    sheet.style.top = nextTop;
+    sheet.style.height = nextHeight;
+    sheet.style.maxHeight = nextHeight;
+
+    if (!settingsBody) return;
+    if (settingsBody.scrollTop !== savedScrollTop) settingsBody.scrollTop = savedScrollTop;
+
+    const focused = _spShadow?.activeElement;
+    const tagName = focused?.tagName;
+    if (!focused || !settingsBody.contains(focused)
+        || (tagName !== 'INPUT' && tagName !== 'TEXTAREA' && tagName !== 'SELECT' && !focused.isContentEditable)) return;
+    const bodyRect = settingsBody.getBoundingClientRect();
+    const focusRect = focused.getBoundingClientRect();
+    const above = focusRect.top < bodyRect.top;
+    const below = focusRect.bottom > bodyRect.bottom;
+    if (above && below) return;  // 超高输入框已横跨可见区，保持用户当前阅读位置
+    if (below) settingsBody.scrollTop += focusRect.bottom - bodyRect.bottom;
+    else if (above) settingsBody.scrollTop -= bodyRect.top - focusRect.top;
 }
 
 // ─── Toast (top) ──────────────────────────────────────────────────────────────

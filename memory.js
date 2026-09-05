@@ -18,7 +18,7 @@
 
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
-import { normalizeTagNames, TAG_NAME_SOURCE } from './utils/tag-names.js';
+import { LITERAL_DOUBLE_BRACKET_RULE, normalizeTagRules, TAG_NAME_SOURCE } from './utils/tag-names.js';
 import { diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
 
 const MEMORY_KEY = 'sp-memory';
@@ -144,10 +144,11 @@ function persist() {
 //               with their content. Redundant with default behavior but lets
 //               users document intent (e.g. write 'think,reasoning').
 export function normalizeTagList(csv) {
-    return normalizeTagNames(csv);
+    return normalizeTagRules(csv);
 }
 const parseTagList = normalizeTagList;
 const escapeTagName = name => String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const replaceLiteralDoubleBracketBlocks = (text, replacement) => String(text).replace(/\[\[([\s\S]*?)\]\]/g, replacement);
 
 export function stripTags(raw, opts = {}) {
     if (!raw) return '';
@@ -161,6 +162,10 @@ export function stripTags(raw, opts = {}) {
     //    Restored (as bare inner text) at the end.
     const keepStash = [];
     for (const name of keep) {
+        if (name === LITERAL_DOUBLE_BRACKET_RULE) {
+            s = replaceLiteralDoubleBracketBlocks(s, (_m, inner) => inner);
+            continue;
+        }
         const safeName = escapeTagName(name);
         const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safeName}\\s*>`, 'giu');
         s = s.replace(rx, (_m, inner) => {
@@ -172,6 +177,10 @@ export function stripTags(raw, opts = {}) {
     //    the default pass but explicit for user clarity + future-proofs if we
     //    ever change the default).
     for (const name of extra) {
+        if (name === LITERAL_DOUBLE_BRACKET_RULE) {
+            s = replaceLiteralDoubleBracketBlocks(s, '');
+            continue;
+        }
         const safeName = escapeTagName(name);
         const rx = new RegExp(`<${safeName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${safeName}\\s*>`, 'giu');
         let prev;
@@ -188,6 +197,11 @@ export function stripTags(raw, opts = {}) {
     s = s.replace(new RegExp(`<\\/?${TAG_NAME_SOURCE}(?:\\s[^>]*)?\\/?>`, 'gu'), '');
     // 6. Restore keep-list inner content (bare, no tags)
     s = s.replace(/ KEEP(\d+) /g, (_m, idx) => keepStash[+idx] ?? '');
+    // XML keep 先于双中括号 keep 时，后者会藏在 stash 内；恢复后再解包一次，
+    // 使两种配置顺序行为一致，也避免把 XML 占位符带进最终文本。
+    if (keep.includes(LITERAL_DOUBLE_BRACKET_RULE)) {
+        s = replaceLiteralDoubleBracketBlocks(s, (_m, inner) => inner);
+    }
     // 7. Second cleaning pass — restored kept content may itself contain
     //    noisy tags (e.g. <content><thinking>...</thinking>正文</content>).
     //    Run the default + orphan strip again. Keep list is NOT re-applied
@@ -197,6 +211,11 @@ export function stripTags(raw, opts = {}) {
         s = s.replace(new RegExp(`<(${TAG_NAME_SOURCE})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gu'), '');
     } while (s !== prev);
     s = s.replace(new RegExp(`<\\/?${TAG_NAME_SOURCE}(?:\\s[^>]*)?\\/?>`, 'gu'), '');
+    // XML keep 块恢复后，其中的显式双中括号噪音仍须清理；同一规则也在
+    // keep 列表时维持既有的“保留优先”合同。
+    if (extra.includes(LITERAL_DOUBLE_BRACKET_RULE) && !keep.includes(LITERAL_DOUBLE_BRACKET_RULE)) {
+        s = replaceLiteralDoubleBracketBlocks(s, '');
+    }
     // 8. Collapse the whitespace left behind by removed blocks
     s = s.replace(/\n{3,}/g, '\n\n').trim();
     return s;
