@@ -4897,25 +4897,18 @@ body.sp-anchor-fs-lock { overflow: hidden; }
    坐标·收藏楼层
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* 楼层内「收藏此楼」按钮（挂在 ST 楼层头部 char 名旁，不在面板内 → 全局样式） */
+/* 楼层内「收藏此楼」按钮（挂在 ST 楼层操作栏，不在面板内 → 全局样式） */
 .sp-anchor-btn {
-    display        : inline-flex;
-    align-items    : center;
-    justify-content: center;
-    width          : 22px;
-    height         : 22px;
-    padding        : 0;
-    margin         : 0 2px;
-    background     : transparent;
-    border         : none;
-    cursor         : pointer;
+    appearance     : none;
+    background     : none;
+    border         : 0;
+    font           : inherit;
     color          : var(--SmartThemeBodyColor, #aaa);
     opacity        : 0.5;
-    vertical-align : middle;
-    transition     : opacity .15s, color .15s, transform .15s;
+    transition     : opacity .15s, color .15s;
 }
-.sp-anchor-btn:hover           { opacity: 1; transform: translateY(-1px); }
-.sp-anchor-btn-svg             { width: 15px; height: 15px; display: block; }
+.sp-anchor-btn:hover           { opacity: 1; }
+.sp-anchor-btn-svg             { width: 1em; height: 1em; display: block; pointer-events: none; }
 .sp-anchor-btn.sp-anchor-saved { opacity: 1; color: var(--SmartThemeQuoteColor, #d0bcff); }
 .sp-anchor-btn.sp-anchor-busy  { opacity: 0.35; pointer-events: none; }
 

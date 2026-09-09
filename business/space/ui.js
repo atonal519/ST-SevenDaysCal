@@ -15,13 +15,21 @@ export function createSpaceUi(host = {}) {
     let controllers = null;
     let bound = false;
 
-    const registerWidget = widget => {
+    const registerWidget = (widget, messageContext = {}) => {
         const wid = String(++widgetSeq);
-        widgets.set(wid, { kind: widget.kind, body: widget.body, editIdx: widget.editIdx });
+        widgets.set(wid, {
+            kind: widget.kind,
+            body: widget.body,
+            editIdx: widget.editIdx,
+            owner: widget.owner,
+            pointBaselines: Array.isArray(messageContext.pointBaselines) ? messageContext.pointBaselines : null,
+            legacyPointOwner: messageContext.legacyPointOwner === true,
+            identity: host.captureIdentity?.() || null,
+        });
         return wid;
     };
-    const appendMessage = (role, content, historyIndex = null) => {
-        const parts = controllers.renderer.message(role, content, historyIndex, registerWidget);
+    const appendMessage = (role, content, historyIndex = null, messageContext = {}) => {
+        const parts = controllers.renderer.message(role, content, historyIndex, registerWidget, messageContext);
         const $wrap = host.$?.('<div>').addClass(`sp-chat-msg-wrap ${parts.wrapClass}`);
         if (!$wrap) return;
         if (parts.canAct) $wrap.attr('data-idx', historyIndex);
@@ -38,7 +46,10 @@ export function createSpaceUi(host = {}) {
     };
     const renderHistory = history => {
         query('#sp-space-msgs')?.empty?.();
-        history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index));
+        history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
+            pointBaselines: message.pointBaselines,
+            legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
+        }));
     };
     const emptyMessages = () => query('#sp-space-msgs')?.empty?.();
     const beginThinking = () => {
@@ -130,7 +141,7 @@ export function createSpaceUi(host = {}) {
             const index = Number($message.attr('data-idx'));
             if (Number.isInteger(index) && index >= 0 && index < controllers.chat.history().length) startEdit($message, index);
         });
-        $root.on('click.spSpaceFeature', '.sp-space-widget-apply', function () {
+        $root.on('click.spSpaceFeature', '.sp-space-widget-apply', async function () {
             const $button = host.$(this);
             if ($button.prop('disabled')) return;
             const stored = widgets.get($button.attr('data-wid'));
@@ -138,8 +149,17 @@ export function createSpaceUi(host = {}) {
                 host.toast?.('这张卡片已过期，请再让 AI 生成一次', true);
                 return;
             }
+            if (stored.identity && host.isCurrentIdentity?.(stored.identity) === false) {
+                host.toast?.('这张卡片属于之前的聊天，请在当前聊天重新生成', true);
+                return;
+            }
             const actions = host.widgetActions?.() || {};
-            if (stored.kind === 'schedule_widget') actions.point?.(stored.body, $button, stored.editIdx);
+            if (stored.kind === 'schedule_widget') await actions.point?.(stored.body, $button, {
+                editIndex: stored.editIdx,
+                owner: stored.owner || (stored.legacyPointOwner ? { view: 'user', charName: '' } : null),
+                pointBaselines: stored.pointBaselines,
+                legacyPointOwner: stored.legacyPointOwner,
+            });
             else if (stored.kind === 'line_widget') actions.lines?.(stored.body, stored.editIdx, $button);
             else if (stored.kind === 'almanac_widget') actions.almanac?.(stored.body, $button, $button.attr('data-idx'));
             else if (stored.kind === 'era_widget') actions.era?.(stored.body, $button);

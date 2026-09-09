@@ -21,7 +21,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
     const sourceFor = (ctx, mes) => { const mid = mes?.getAttribute?.('mesid'); const message = messageAt(ctx, mid); const version = replyVersion(message); return message && version ? { chatId: ctx?.chatId ?? null, mid: String(mid), message, version } : null; };
     const sameSource = (left, right) => !!left && !!right && normalizeId(left.chatId) === normalizeId(right.chatId) && left.mid === right.mid && left.message === right.message && left.version === right.version;
     const savedItemFor = (message, chatId) => { const marker = readReplyMarker(message); if (!marker) return null; const item = savedItems.get(marker.itemId); return item && normalizeId(item.chatId) === normalizeId(chatId) ? item : null; };
-    const setButtonState = (button, saved) => { if (!button) return; button.classList.toggle('sp-anchor-saved', Boolean(saved)); button.title = saved ? '已收藏 · 点击取消' : '收藏此楼'; };
+    const setButtonState = (button, saved) => { if (!button) return; button.classList.toggle('sp-anchor-saved', Boolean(saved)); button.title = saved ? '已收藏 · 点击取消' : '收藏此楼'; button.setAttribute?.('aria-label', button.title); button.setAttribute?.('aria-pressed', String(Boolean(saved))); };
     const bindButton = (button, source) => { if (button && source) buttonSources.set(button, source); };
     const refreshButton = (mes, button, { trusted = false } = {}) => {
         const ctx = host.context?.() || {}; const source = sourceFor(ctx, mes); const bound = buttonSources.get(button);
@@ -36,7 +36,38 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
     const persistChat = async () => { if (typeof host.saveChatDebounced === 'function') return await host.saveChatDebounced(); if (typeof host.saveChat === 'function') return await host.saveChat(); };
     const persistMarker = async task => { try { if (task() === false) throw new Error('marker update rejected'); await persistChat(); return true; } catch (error) { host.warn?.('[SP anchor] 回复关联保存失败', error); return false; } };
     const refreshSavedKeys = async () => { try { const items = await repository.getAllItems(); savedItems = new Map(items.map(item => [normalizeId(item.id), item])); host.document?.querySelectorAll?.('#chat .mes .sp-anchor-btn').forEach(btn => refreshButton(btn.closest('.mes'), btn)); } catch (error) { host.warn?.('[SP anchor] 读取已收藏键失败', error); } return new Set(savedItems.keys()); };
-    const scanButtons = ({ rebindMessageId = null } = {}) => { const doc = host.document; if (!doc) return; if (!host.enabled?.() || host.settings?.()?.anchorInlineBtn === false) { doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove()); return; } const hasTrustedId = rebindMessageId !== null && rebindMessageId !== undefined && Number.isInteger(Number(rebindMessageId)); doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => { let button = mes.querySelector('.sp-anchor-btn'); if (!button) { const target = mes.querySelector('.mes_buttons, .extraMesButtons, .name_text') || mes.querySelector('.mes_block') || mes; button = doc.createElement('button'); button.type = 'button'; button.className = 'sp-anchor-btn'; button.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖'; button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); api.onFloorButton(mes); }); target.appendChild(button); } const trusted = hasTrustedId && Number(mes.getAttribute('mesid')) === Number(rebindMessageId); refreshButton(mes, button, { trusted }); }); };
+    const scanButtons = ({ rebindMessageId = null } = {}) => {
+        const doc = host.document;
+        if (!doc) return;
+        if (!host.enabled?.() || host.settings?.()?.anchorInlineBtn === false) {
+            doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove());
+            return;
+        }
+        const hasTrustedId = rebindMessageId !== null && rebindMessageId !== undefined && Number.isInteger(Number(rebindMessageId));
+        doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => {
+            let button = mes.querySelector('.sp-anchor-btn');
+            const actionBar = mes.querySelector('.mes_buttons');
+            if (!actionBar) {
+                button?.remove?.();
+                return;
+            }
+            if (!button) {
+                button = doc.createElement('button');
+                button.type = 'button';
+                button.className = 'mes_button sp-anchor-btn';
+                button.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖';
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    api.onFloorButton(mes);
+                });
+            }
+            button.classList?.add?.('mes_button');
+            actionBar.insertBefore(button, actionBar.querySelector('.mes_edit'));
+            const trusted = hasTrustedId && Number(mes.getAttribute('mesid')) === Number(rebindMessageId);
+            refreshButton(mes, button, { trusted });
+        });
+    };
     const onFloorButton = async mes => {
         const ctx = host.context?.() || {}; const source = sourceFor(ctx, mes); const btn = mes?.querySelector?.('.sp-anchor-btn');
         if (!source) return host.toast?.('找不到楼层数据', null, true);

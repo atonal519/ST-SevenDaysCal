@@ -314,6 +314,42 @@ export function readData(kind, view = 'user', charName = '') {
     return v == null ? null : v;
 }
 
+// 当前 chat 的全部非空点 scope。间只通过这条只读 seam 看点存档，避免用固定槽/最近角色
+// 代替真实全集，也避免绕过外置存储根直接读取 chatMetadata。
+export function scheduleScopesFromData(data = {}) {
+    const source = data && typeof data === 'object' ? data : {};
+    const scopes = [];
+    const append = (view, charName, value) => {
+        const raw = String(value?.raw || '');
+        if (!raw.trim()) return;
+        scopes.push(Object.freeze({
+            view,
+            charName: view === 'char' ? String(charName || '').trim() : '',
+            raw,
+            userName: String(value?.userName || '').trim(),
+            ts: Number(value?.ts) || null,
+        }));
+    };
+    append('user', '', source['schedule-user']);
+    const chars = [];
+    for (const [key, value] of Object.entries(source)) {
+        if (!key.startsWith('schedule-char-')) continue;
+        const encoded = key.slice('schedule-char-'.length);
+        if (!encoded) continue;
+        try {
+            const charName = decodeURIComponent(encoded).trim();
+            if (charName) chars.push({ charName, value });
+        } catch { /* 非法 scope key 不冒充人物 */ }
+    }
+    chars.sort((left, right) => left.charName.localeCompare(right.charName, 'zh-CN'));
+    for (const item of chars) append('char', item.charName, item.value);
+    return Object.freeze(scopes);
+}
+
+export function listScheduleScopes() {
+    return scheduleScopesFromData(store(false)?.data || {});
+}
+
 export function writeData(kind, view, charName, value) {
     const s = store(true);
     if (!s) return false;

@@ -80,6 +80,53 @@ function pointEventBlocksFromInner(inner) {
     return out;
 }
 
+// 返回与 parseCalendar 相同的有效事件顺序，同时保留原文行位置供定点替换。
+// 没有合法 Day/Future 归属的孤立 Event、非法日期下的 Event 与不可解析记录都不占编号。
+function effectivePointEventBlocksFromInner(inner) {
+    const source = String(inner || '');
+    const lines = source.split('\n');
+    const maskedLines = source.replace(/<!--[\s\S]*?-->/g, comment => comment.replace(/[^\n]/g, ' ')).split('\n');
+    // 与 parseCalendar 共用包装归一化，但保留原始行号，供替换时只动业务记录内容。
+    const semanticLines = maskedLines.map(line => stripRecordWrappers(line, pointAnchorKind, completePointStructure));
+    const out = [];
+    let hasContext = false;
+    let current = null;
+    const flush = end => {
+        if (!current) return;
+        current.end = end;
+        const event = parsePointEventRecord(semanticLines.slice(current.start, end).join('\n'));
+        if (event) out.push({ ...current, event });
+        current = null;
+    };
+    semanticLines.forEach((rawLine, index) => {
+        const line = cleanPointLine(rawLine);
+        const day = pointDayHeading(line);
+        if (day) {
+            flush(index);
+            hasContext = day.dayNumber != null;
+            return;
+        }
+        if (/^(?:Future|未来)\s*[:：]/i.test(line)) {
+            flush(index);
+            hasContext = true;
+            return;
+        }
+        if (/^Event\s*[:：]/i.test(line)) {
+            flush(index);
+            current = hasContext ? { start: index, end: index + 1 } : null;
+            return;
+        }
+        if (/^<\/(?:calendar|schedule)_widget>/i.test(line)) {
+            flush(index);
+            hasContext = false;
+            return;
+        }
+        if (current) current.end = index + 1;
+    });
+    flush(lines.length);
+    return out;
+}
+
 function generatedPointEventRecordsFromInner(inner) {
     const out = [];
     let block = [];
@@ -119,26 +166,32 @@ export function replacePointEventBlock(raw, idx0, newEventText) {
     const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const inner = m ? m[1] : src;
     const lines = inner.split('\n');
-    let blocks = [], current = null;
-    const flush = end => { if (current) { current.end = end; blocks.push(current); current = null; } };
-    lines.forEach((line, index) => {
-        const t = cleanPointLine(line);
-        if (/^Event\s*:/i.test(t)) { flush(index); current = { start: index, end: index + 1 }; return; }
-        if (/^(?:Day\s*:?\s*\d+|第[一二三四五六七\d]+天|Future\s*:|未来\s*:|<\/(?:calendar|schedule)_widget>)/i.test(t)) { flush(index); return; }
-        if (current) current.end = index + 1;
-    });
-    flush(lines.length);
+    const blocks = effectivePointEventBlocksFromInner(inner);
     const block = blocks[idx0];
     if (!block) return null;
-    const indent = (lines[block.start].match(/^\s*/) || [''])[0];
-    const originalMetadata = lines.slice(block.start + 1, block.end).filter(line => /^\s*Adult\s*:\s*true\s*$/i.test(line));
-    const originalEvent = parsePointEventRecord(lines[block.start]);
+    const blockLines = lines.slice(block.start, block.end);
+    const semanticLines = blockLines.map(line => stripRecordWrappers(line, pointAnchorKind, completePointStructure));
+    const firstContent = semanticLines[0]?.trim() || '';
+    const firstOffset = firstContent ? blockLines[0].indexOf(firstContent) : -1;
+    const prefix = firstOffset >= 0 ? blockLines[0].slice(0, firstOffset) : (blockLines[0].match(/^\s*/) || [''])[0];
+    let lastContentIndex = semanticLines.findLastIndex(line => line.trim());
+    if (lastContentIndex < 0) lastContentIndex = 0;
+    const lastContent = semanticLines[lastContentIndex]?.trim() || '';
+    const lastOffset = lastContent ? blockLines[lastContentIndex].lastIndexOf(lastContent) : -1;
+    const sameLineSuffix = lastOffset >= 0 ? blockLines[lastContentIndex].slice(lastOffset + lastContent.length) : '';
+    const trailingShellLines = blockLines.slice(lastContentIndex + 1);
+    const originalEvent = block.event;
     const replacement = String(newEventText || '').split('\n').map((line, i) => {
-        if (i || !/^\s*Event\s*:/i.test(line) || !originalEvent?.pin) return i ? line : indent + line.trim();
+        if (i || !/^\s*Event\s*:/i.test(line) || !originalEvent?.pin) return i ? line : prefix + line.trim();
         const clean = line.trim().replace(/^Event\s*:\s*/i, '');
-        return `${indent}Event: ${clean}|true`;
+        return `${prefix}Event: ${clean}|true`;
     });
-    if (originalMetadata.length && !replacement.some(line => /^\s*Adult\s*:/i.test(line))) replacement.push(...originalMetadata);
+    if (originalEvent?.adult && !replacement.some(line => /^\s*Adult\s*:/i.test(stripRecordWrappers(line, pointAnchorKind, completePointStructure)))) {
+        const indent = (lines[block.start].match(/^\s*/) || [''])[0];
+        replacement.push(`${indent}Adult: true`);
+    }
+    if (sameLineSuffix) replacement[replacement.length - 1] += sameLineSuffix;
+    replacement.push(...trailingShellLines);
     lines.splice(block.start, block.end - block.start, ...replacement);
     const newInner = lines.join('\n');
     return m ? src.replace(m[0], m[0].replace(m[1], newInner)) : newInner;
@@ -155,8 +208,9 @@ export function pointEventLines(raw) {
 // 点 → 编号列表（编辑冲突检测 / 提示词辅助）
 export function numberedPointList(raw) {
     const TYPE_LABEL = { user: '用户线', char: '角色线', main: '明线', hidden: '暗线', bond: '红线' };
-    const parsed = parseCalendar(String(raw || ''));
-    const events = [...(parsed.days || []).flatMap(day => day.events || []), ...(parsed.future?.events || [])];
+    const source = String(raw || '');
+    const match = source.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
+    const events = effectivePointEventBlocksFromInner(match ? match[1] : source).map(block => block.event);
     return events.map((event, i) => {
         const { type, title, desc, time, location, npcAction: dynamic } = event;
         const bits = [`#${i + 1}`, `【${TYPE_LABEL[(type || '').toLowerCase()] || type || '?'}】`, title || '(未命名)'];
@@ -431,11 +485,13 @@ export function mergePinnedPoints(oldRaw, aiRaw, calendar = null) {
 }
 
 // 单个点 → 注入参考文本（注入卡 / 楼内块抽屉用）
-export function buildPointInjectText(ev, weather = '', temp = '', dateLabel = '') {
+export function buildPointInjectText(ev, weather = '', temp = '', dateLabel = '', owner = null) {
     const w  = String(weather || '').trim();
     const tp = String(temp || '').trim();
     const dl = String(dateLabel || '').trim();
     const parts = [ev?.adult ? '【成人点参考】' : '【点参考】'];
+    const ownerName = String(owner?.name || '').trim();
+    if (ownerName) parts.push(`人物：${ownerName}（${owner?.view === 'char' ? 'TA' : '我'}）`);
     if (dl)           parts.push(`日期：${dl}`);
     if (w || tp)      parts.push(`天气：${w}${tp ? ' ' + tp : ''}`);
     if (ev.time)      parts.push(`时间：${ev.time}`);

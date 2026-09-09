@@ -1,5 +1,5 @@
 import { buildSpaceChatSystemPrompt, buildSpaceHelpText } from './prompts.js';
-import { latestSpaceWidget, stripWidgetsForApi } from './schema.js';
+import { compactPointBaselines, latestSpaceWidget, stripWidgetsForApi } from './schema.js';
 
 export const LEDGER_READ_KEYWORDS = Object.freeze(['刻度', '暗历', '暗账', '状态', '伤', '病', '孕', '约定', '周期', '待办', '身心', '现在怎', '好了没', '没了结']);
 
@@ -137,6 +137,17 @@ export function numberedSpaceLineList(raw, parseLines) {
     }).join('\n');
 }
 
+const pointOwnerHeading = (scope, userName) => scope.view === 'char'
+    ? `【TA｜人物：${scope.charName}｜view="char" char="${String(scope.charName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}"】`
+    : `【我｜人物：${userName}｜view="user"】`;
+
+export function numberedSpacePointGroups(scopes, numberedPoints, userName = '用户') {
+    return (Array.isArray(scopes) ? scopes : []).map(scope => {
+        const list = numberedPoints?.(scope.raw) || '';
+        return list ? `${pointOwnerHeading(scope, userName)}\n${list}` : '';
+    }).filter(Boolean).join('\n\n');
+}
+
 export function createSpaceContext(env = {}) {
     const buildMessages = async ({ target, userMsg, historySnapshot }) => {
         const ctx = env.context?.() || {};
@@ -145,9 +156,12 @@ export function createSpaceContext(env = {}) {
         const message = String(userMsg || '');
         const intent = classifySpaceIntent(message, historySnapshot);
         const outlineRaw = env.readOutline?.(target) || '';
-        const pointList = intent.pointContext
-            ? env.numberedPoints?.(env.readPointRaw?.(target) || '') || ''
-            : '';
+        let pointScopes = env.readPointScopes?.(target);
+        if (!Array.isArray(pointScopes)) {
+            const legacyPointRaw = String(env.readPointRaw?.(target) || '');
+            pointScopes = legacyPointRaw.trim() ? [{ view: 'user', charName: '', raw: legacyPointRaw, ts: null }] : [];
+        }
+        const pointList = numberedSpacePointGroups(pointScopes, env.numberedPoints, userName);
         const lineList = intent.lineContext
             ? numberedSpaceLineList(env.readLineRaw?.(target) || '', env.parseLines)
             : '';
@@ -177,7 +191,9 @@ export function createSpaceContext(env = {}) {
             personaOverride: String(env.settings?.()?.spacePersona || '').trim(),
             intent,
         });
-        return [{ role: 'system', content: system }, ...stripWidgetsForApi(historySnapshot), { role: 'user', content: userMsg }];
+        const messages = [{ role: 'system', content: system }, ...stripWidgetsForApi(historySnapshot), { role: 'user', content: userMsg }];
+        Object.defineProperty(messages, 'pointBaselines', { value: compactPointBaselines(pointScopes), enumerable: false });
+        return messages;
     };
     return Object.freeze({ buildMessages });
 }

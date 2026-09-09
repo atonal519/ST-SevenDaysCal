@@ -3,17 +3,19 @@ import assert from 'node:assert/strict';
 import { createPointController, pointScheduleNeedsDateSync, splitAbortController } from './controller.js';
 import { editPointDescription, editPointFields } from './mutations.js';
 import { allocatePointAdultPools, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
-import { bindPointAdultTickets, mergePinnedPoints, parseCalendar, parsePointEventRecord, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
+import { bindPointAdultTickets, mergePinnedPoints, numberedPointList, parseCalendar, parsePointEventRecord, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
 import { createPointWidgetActions } from './widget.js';
 import { buildPrompt } from './prompt.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 
 test('point parser removes arbitrary structural wrappers without weakening fields or metadata', () => {
     const raw = `<calendar_widget>
+<event-record>Event: main|孤立坏记录|没有合法日期归属|凌晨|门厅|等待</event-record>
 <days-packet><day-record data-n="1">Day: 1|晴|20℃</day-record>
 <event-record>Event: main|温室巡检|叶片温度 < 25|上午|玻璃温室|记录 <storyline>湿度 > 60</storyline>|true
 Ticket: POINT-TICKET-1
-AdultProof: NONE</event-record>
+AdultProof: NONE
+Adult: true</event-record>
 </days-packet><future-packet>Future:</future-packet>
 <event-record>Event: hidden|复查水泵|确认备用泵状态|明日|泵房|通知维护员
 <强调>Ticket: POINT-TICKET-9</强调>
@@ -26,12 +28,24 @@ AdultProof: NONE</event-record>
     assert.equal(parsed.days[0].events[0].desc, '叶片温度 < 25');
     assert.equal(parsed.days[0].events[0].npcAction, '记录 <storyline>湿度 > 60</storyline>');
     assert.equal(parsed.days[0].events[0].adultProof, null);
+    assert.equal(parsed.days[0].events[0].adult, true);
     assert.equal(parsed.future.events[0].title, '复查水泵');
     assert.equal(parsed.future.events[0].ticketId, 'POINT-TICKET-2');
     assert.match(parsed.future.events[0].npcAction, /<强调>Ticket: POINT-TICKET-9<\/强调>/);
     const checked = validateGeneratedCalendar(raw, null, { generated: true, adultMode: 'mixed', pinned: [] });
     assert.equal(checked.ok, true);
     assert.equal(checked.strictEvents, true);
+    const numbered = numberedPointList(raw);
+    assert.doesNotMatch(numbered, /孤立坏记录/);
+    assert.match(numbered, /#1[^\n]*温室巡检/);
+    assert.match(numbered, /#2[^\n]*复查水泵/);
+    const replaced = replacePointEventBlock(raw, 0, 'Event: bond|温室复检|更新后的完整描述|傍晚|玻璃温室|通知维护员');
+    assert.match(replaced, /<days-packet><day-record data-n="1">Day: 1\|晴\|20℃<\/day-record>/);
+    assert.match(replaced, /<event-record>Event: bond\|温室复检[\s\S]*Adult: true<\/event-record>/);
+    assert.match(replaced, /<event-record>Event: main\|孤立坏记录/);
+    const after = parseCalendar(replaced);
+    assert.deepEqual([after.days[0].events[0].title, after.days[0].events[0].pin, after.days[0].events[0].adult], ['温室复检', true, true]);
+    assert.equal(after.future.events[0].title, '复查水泵');
 });
 
 test('point replacement reuses formal pin parsing for pipe-bearing locked adult events', () => {
@@ -56,7 +70,7 @@ test('point pinned merge keeps the union of old and newly detected Adult state',
     }
 });
 
-test('point widget dirty raw inserts only sanitized six-field event', () => {
+test('point widget dirty raw inserts only sanitized six-field event', async () => {
     let saved;
     const apply = createPointWidgetActions({
         firstPointEventBlock: raw => raw.match(/<schedule_widget>[\s\S]*?<\/schedule_widget>/i) ? raw.match(/Event:[^\n]+/i)?.[0] || null : null,
@@ -64,8 +78,9 @@ test('point widget dirty raw inserts only sanitized six-field event', () => {
         getCacheKey: () => 'point', readStore: () => ({ raw: 'legacy-unwrapped', userName: '用户', ts: 1 }), writeStore: (_key, value) => { saved = value; }, getUserName: () => '用户',
         currentView: () => 'user', renderSchedule: () => '', loadCalendar: () => null, shouldShowPanel: () => false,
         setCached: () => {}, setBody: () => {}, syncLatestScheduleBlock: () => {}, showToast: () => {}, replaceNthEventLine: () => null,
+        selectOwner: async () => ({ view: 'user', charName: '' }),
     });
-    apply('<schedule_widget>\nEvent: main|脏点|描述|晚|地|动态|true\nAdult: true\nTicket: POINT-TICKET-1\n</schedule_widget>');
+    await apply('<schedule_widget>\nEvent: main|脏点|描述|晚|地|动态|true\nAdult: true\nTicket: POINT-TICKET-1\n</schedule_widget>');
     assert.match(saved.raw, /Event: main\|脏点\|描述\|晚\|地\|动态/);
     assert.doesNotMatch(saved.raw, /POINT-TICKET|Adult:|\|true/);
 });

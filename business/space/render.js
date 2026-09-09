@@ -8,13 +8,21 @@ export function createSpaceRenderer(env = {}) {
         if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
         return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
     }).filter(Boolean);
-    const widgetCard = (kind, body, wid, editIdx = null) => {
+    const widgetCard = (kind, body, wid, editIdx = null, owner = null, legacyPointOwner = false) => {
         if (kind === 'schedule_widget') {
             const line = rows(body).find(item => /^Event\s*[:：]/i.test(item)) || '';
             const [type, title, desc, time, location, ...dynamicParts] = line.replace(/^Event\s*[:：]\s*/i, '').split(/[|｜]/).map(item => item.trim());
             const dynamic = dynamicParts.join('｜');
             const types = { main: { label: '明线', color: '#d6b85a' }, hidden: { label: '暗线', color: '#a06fd6' }, bond: { label: '红线', color: '#d67f6f' } };
             const meta = types[type] || { label: type || '?', color: '#9aa6b2' };
+            const userName = String(env.getUserName?.() || '我').trim() || '我';
+            const ownerLabel = editIdx == null
+                ? '应用时选择人物'
+                : owner?.view === 'char'
+                    ? `${owner.charName}（TA）`
+                    : owner?.view === 'user' || legacyPointOwner
+                        ? `${userName}（我）`
+                        : '人物待确认';
             return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="schedule">
             <div class="sp-space-widget-head">
                 <span class="sp-space-widget-badge" style="background:${meta.color}22;color:${meta.color};border-color:${meta.color}">
@@ -25,13 +33,14 @@ export function createSpaceRenderer(env = {}) {
                 <div class="sp-space-widget-title">${escape(title || '(未命名)')}</div>
                 ${desc ? `<div class="sp-space-widget-desc">${escape(desc)}</div>` : ''}
                 <div class="sp-space-widget-meta">
+                    <span><i class="fa-solid fa-user"></i> ${escape(ownerLabel)}</span>
                     ${time ? `<span><i class="fa-regular fa-clock"></i> ${escape(time)}</span>` : ''}
                     ${location ? `<span><i class="fa-solid fa-location-dot"></i> ${escape(location)}</span>` : ''}
                 </div>
                 ${dynamic ? `<div class="sp-space-widget-dynamic">🧵 ${escape(dynamic)}</div>` : ''}
             </div>
             <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换第 ${editIdx} 条` : '应用到点'}</button>
+                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换 ${escape(ownerLabel)} · 第 ${editIdx} 条` : '选择人物并应用'}</button>
             </div>
         </div>`;
         }
@@ -115,7 +124,7 @@ export function createSpaceRenderer(env = {}) {
         return '';
     };
 
-    const message = (role, content, historyIndex, registerWidget) => {
+    const message = (role, content, historyIndex, registerWidget, messageContext = {}) => {
         const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
         const wrapClass = role === 'user' ? 'sp-chat-msg-wrap-user' : role === 'ai' ? 'sp-chat-msg-wrap-ai' : 'sp-chat-msg-wrap-system';
         const canAct = role !== 'system' && Number.isInteger(historyIndex);
@@ -125,8 +134,8 @@ export function createSpaceRenderer(env = {}) {
             const parsed = extractWidgets(content);
             contentHtml = parsed.text ? env.formatAi?.(parsed.text) ?? escape(parsed.text).replace(/\n/g, '<br>') : '';
             widgetCards = parsed.widgets.map(widget => {
-                const wid = registerWidget?.(widget);
-                return widgetCard(widget.kind, widget.body, wid, widget.editIdx);
+                const wid = registerWidget?.(widget, messageContext);
+                return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true);
             }).join('');
         } else {
             contentHtml = escape(content).replace(/\n/g, '<br>');

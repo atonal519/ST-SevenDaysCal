@@ -2,7 +2,7 @@ import { theaterId } from './schema.js';
 
 import { createGenerationDiagnosticScope, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 export function createTheaterGeneration({ write, beautify, buildWriteMessages, buildBeautifyMessages, sanitize, fallback, plainTextFallback, onDiagnostic, makeId = () => theaterId() } = {}) {
-    return async function generateTheater(input, { signal, onStage, templateSource, userName, charName, storyContext, settings = {}, isCurrent = () => true, diagnosticScope = null } = {}) {
+    return async function generateTheater(input, { signal, onStage, templateSource, explicitTitle, userName, charName, storyContext, settings = {}, isCurrent = () => true, diagnosticScope = null } = {}) {
         const diagnostic = diagnosticScope || createGenerationDiagnosticScope('theater-generation');
         if (!String(input || '').trim()) throw new Error('请先填写小剧场需求');
         // Owner-frozen names are authoritative even if a stale/malformed story
@@ -60,6 +60,7 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
         }
         if (beautifyAccepted && beautifyApplied) beautifyDiagnostic.committed({ reasonCode: 'beautify-applied' });
         if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
-        return { id: makeId(), title: '', raw: String(raw), request: String(input).trim(), html, ts: Date.now(), templateSource: templateSource?.input ? { ...templateSource, input: String(templateSource.input) } : undefined };
+        const title = explicitTitle === undefined ? String(templateSource?.title || '').trim() : String(explicitTitle ?? '').trim();
+        return { id: makeId(), title, raw: String(raw), request: String(input).trim(), html, ts: Date.now(), templateSource: templateSource?.input ? { ...templateSource, input: String(templateSource.input) } : undefined };
     };
 }

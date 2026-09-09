@@ -22,6 +22,8 @@ function widgetContract(kind, calDescText) {
     if (kind === 'schedule_widget') return [
         `【点卡片理想结构】每张卡片写一条完整 Event，不寒暄、不解释：`,
         `<schedule_widget>Event: type|title|description|time|location|线头动态</schedule_widget>`,
+        `- 新点不写 edit / view / char；归属由用户点击应用时在产品内选择。`,
+        `- 修改已有点时，必须从【全部人物的当前点】对应人物分组复制 view / char，并填写该组内 edit 序号；例如 <schedule_widget view="char" char="Alice" edit="3">…</schedule_widget>。`,
         `- type 只能是 main / hidden / bond。`,
         `- description 至少 30 字，使用生活化口吻。`,
         `- 线头动态写与此事件相关的其他角色同期动态，可为空。`,
@@ -96,15 +98,24 @@ function recentWidgetBlock(intent = {}) {
     const widget = intent.recentWidget;
     if (intent.action !== 'revise-recent' || !widget) return '';
     const edit = widget.editIdx == null ? '无（候选新卡）' : String(widget.editIdx);
+    const ownerChar = String(widget.owner?.charName || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    const owner = widget.kind === 'schedule_widget' && widget.editIdx != null
+        ? (widget.owner?.view === 'char' ? `TA：${widget.owner.charName}（view="char" char="${ownerChar}"）` : '我（view="user"；旧卡未记录归属时也只按我兼容）')
+        : '';
     return [
         `【上一张${widgetLabel(widget.kind)}卡片真实快照·仅供本轮修改】`,
         `历史 edit 序号：${edit}`,
+        owner ? `历史人物归属：${owner}` : '',
         widget.body,
         `请按用户本轮意见输出完整新版本；未提及的字段逐项保留，不要只输出差异。`,
         widget.editIdx == null
             ? `上一张是候选新卡，本轮仍输出不带 edit 的候选新卡。`
-            : `历史 edit 序号只用于定位来源；当前点/线列表才是正式现值。仅当当前列表仍能明确确认同一条目时才沿用 edit="${widget.editIdx}"，否则先自然追问，绝不复活失效的历史编号。`,
-    ].join('\n');
+            : `历史 edit 序号只用于定位来源；当前点/线列表才是正式现值。仅当当前列表仍能明确确认同一人物的同一条目时才沿用 edit="${widget.editIdx}"；点还须原样沿用该人物的 view / char，不能换人。否则先自然追问，绝不复活失效的历史编号。`,
+    ].filter(Boolean).join('\n');
 }
 
 export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', intent = {} }) {
@@ -115,6 +126,8 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
     const toneBlock = ov
         ? `\n【说话风格·人格】你仍然是上面那位「创作顾问」（这一身份最高、不可动摇：不推进剧情、不扮演故事里的角色、直接答问）；在此前提下，请以下述人格与语气来表达：\n${ov}\n（以上人格只改变语气、用词和行文气质；不得模仿正文里的状态栏、面板、属性框或分隔线。本轮输出形态只服从下方【本轮输出模式】：普通讨论用自然对话，明确获准的合法卡片不得被人格设定禁止。）`
         : ADVISOR_TONE_GUIDE;
+    const pointEditMode = !!pointList && (intent.kind === 'schedule_widget' || intent.action === 'semantic-route');
+    const lineEditMode = !!lineList && (intent.kind === 'line_widget' || intent.action === 'semantic-route');
     const parts = [
         `你是 ${userName} 与 ${charName} 故事外的创作顾问。不推进剧情、不扮演角色，直接答问。`,
         personaDesc ? `\n【${userName} 的人物设定】\n${personaDesc}` : '',
@@ -123,7 +136,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         wiContext,
         memText ? `\n【故事记忆】\n${memText}` : '',
         recentCtx,
-        pointList ? `\n【当前的点·按序号（可改）】\n${pointList}` : '',
+        pointList ? `\n【全部人物的当前点·按人物分组】\n${pointList}\n每个人物从 #1 独立编号；回答涉及已有安排时必须同时看人物名和组内编号，不能把不同人物的同号点混在一起。` : '',
         lineList  ? `\n【当前的线·按序号（可改）】\n${lineList}` : '',
         ledgerList ? `\n【当前的刻度（暗历·时间账）】以下是插件在后台从剧情里捞出、随时间推移仍牵动角色的事（伤情/身心状态、约定待办、周期）：\n${ledgerList}\n用户问「某人现在什么状态 / 伤好了没 / 有哪些没了结的约定 / 下次周期哪天」等，以此为准回答；这是只读参考，你不改动它、也不要向用户报条目编号。` : '',
         almanacText ? `\n【本世界观·重要日期（历）】一年之中的既定节日、生日、纪念日（按月日排序）：\n${almanacText}\n涉及日期、节日、生日、纪念日的问题以此为准。${intent.kind === 'almanac_widget' ? '用户要记录的日期若已在其中，直接指出即可，不要重复生成。' : ''}` : '',
@@ -137,12 +150,12 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         outputModeBlock(intent, calDescText),
         recentWidgetBlock(intent),
 
-        (intent.kind && (pointList || lineList)) ? `\n【改现有条目】若用户要改的是上面当前列表里的某条已存在条目：` : '',
-        (intent.kind === 'schedule_widget' && pointList) ? `- 不要新增；在点卡片开标签加 edit="序号"，例如 <schedule_widget edit="3">…</schedule_widget>。` : '',
-        (intent.kind === 'line_widget' && lineList) ? `- 不要新增；在线卡片开标签加 edit="序号"，例如 <line_widget edit="2">…</line_widget>。` : '',
-        (intent.kind && (pointList || lineList)) ? `- 序号取上面列表里 #N 的数字 N；卡片内写修改后的完整内容，用户没提到要改的字段保留原值` : '',
-        (intent.kind && (pointList || lineList)) ? `- **只以上面【当前的点/线·按序号】为准**：历史对话里出现过的旧卡片、旧编号一律作废，绝不照抄历史内容；第 N 条的现值就是上面列表 #N 那一行` : '',
-        (intent.kind && (pointList || lineList)) ? `- 若用户没说清改哪一条，先反问确认，不要臆测乱改` : '',
+        (pointEditMode || lineEditMode) ? `\n【改现有条目】若用户要改的是上面当前列表里的某条已存在条目：` : '',
+        pointEditMode ? `- 不要新增；点卡片必须同时写人物归属与组内序号：我的点用 <schedule_widget view="user" edit="3">…</schedule_widget>；TA 的点用该人物分组标题给出的 view / char，例如 <schedule_widget view="char" char="Alice" edit="3">…</schedule_widget>。` : '',
+        lineEditMode ? `- 不要新增；在线卡片开标签加 edit="序号"，例如 <line_widget edit="2">…</line_widget>。` : '',
+        (pointEditMode || lineEditMode) ? `- 序号取对应列表里 #N 的数字 N；卡片内写修改后的完整内容，用户没提到要改的字段保留原值` : '',
+        (pointEditMode || lineEditMode) ? `- **只以上面当前点/线列表为准**：历史对话里出现过的旧卡片、旧编号一律作废，绝不照抄历史内容；第 N 条的现值就是对应人物分组或线列表 #N 那一行` : '',
+        (pointEditMode || lineEditMode) ? `- 若用户没说清人物或具体条目，先反问确认，不要臆测乱改` : '',
     ];
     return parts.filter(Boolean).join('\n');
 }

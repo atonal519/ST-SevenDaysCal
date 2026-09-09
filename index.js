@@ -195,6 +195,7 @@ import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
 import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
+import { pointRawToken } from './business/space/schema.js';
 import { createChatAnchorRepository } from './runtime/chat-date-anchor.js';
 import {
     initializeWorldInfoSelection,
@@ -461,7 +462,13 @@ const applyPointWidget = createPointWidgetActions({
     writeStore,
     replaceNthEventLine,
     getUserName: () => getContext().name1 || '用户',
+    chatId: () => getContext().chatId,
+    captureParticipantIdentity,
+    sameParticipantIdentity,
+    pointRawToken,
+    selectOwner: options => selectPointWidgetOwner(options),
     currentView: () => currentView,
+    currentChar: () => charViewName,
     renderSchedule,
     loadCalendar: loadCalDesc,
     setCached: html => { pointState.cachedSchedule = html; },
@@ -540,6 +547,7 @@ const pointInlineRenderer = createPointInlineRenderer({
     typeMeta: TYPE_META,
     makeInjectBtn,
     buildPointInjectText,
+    pointOwner: () => ({ view: 'user', name: getContext().name1 || '用户' }),
     cleanText,
 });
 const parseJudgedDate = parseJudgedDatePure;
@@ -1484,6 +1492,34 @@ const customDialog = createDialogManager({
     },
 });
 
+async function selectPointWidgetOwner({ edit = false } = {}) {
+    const ctx = getContext();
+    const userName = String(ctx?.name1 || '用户').trim() || '用户';
+    const charNames = store.listScheduleScopes().filter(scope => scope.view === 'char').map(scope => scope.charName);
+    const choices = [{ value: 'user', label: `我 · ${userName}` }];
+    const charValues = new Map();
+    charNames.forEach((name, index) => {
+        const value = `char-${index}`;
+        charValues.set(value, name);
+        choices.push({ value, label: `TA · ${name}` });
+    });
+    choices.push({ value: 'other-char', label: '其他 TA' });
+    const selected = await customDialog.selectOne({
+        title: edit ? '这张修改卡属于谁？' : '把这个新点交给谁？',
+        body: edit ? '请选择卡片所指人物；序号只在该人物自己的点里生效。' : '新点会加入所选人物的「未来」列。',
+        choices,
+        initialValue: 'user',
+        custom: { value: 'other-char', placeholder: '输入 TA 的准确名字', maxLength: 120, rows: 2 },
+        actions: [{ value: 'apply', label: edit ? '确认人物' : '加入未来', primary: true }],
+        cancelText: '取消',
+        validate: result => result.value === 'other-char' && !String(result.customValue || '').trim() ? '请输入 TA 名字' : '',
+    });
+    if (!selected || selected.action !== 'apply') return null;
+    if (selected.value === 'user') return { view: 'user', charName: '' };
+    const charName = selected.value === 'other-char' ? String(selected.customValue || '').trim() : charValues.get(selected.value);
+    return charName ? { view: 'char', charName } : null;
+}
+
 let settingsOpen   = false;
 let dragState      = null;
 let resizeState    = null;
@@ -1644,7 +1680,7 @@ const spaceFeature = createSpaceFeature({
         context: getContext,
         settings: getSettings,
         readOutline: () => outlineFeature.readRaw(),
-        readPointRaw: () => readCacheRaw(getCacheKey('user', '')),
+        readPointScopes: () => store.listScheduleScopes(),
         numberedPoints: numberedPointList,
         readLineRaw: () => readStore(getLinesCacheKey())?.raw || '',
         parseLines: parseCanonicalLines,
@@ -1663,6 +1699,7 @@ const spaceFeature = createSpaceFeature({
     },
     renderEnv: {
         escapeHtml,
+        getUserName: () => getContext().name1 || '用户',
         formatAi: renderAiMessageHtml,
         parseAlmanac: parseAlmanacWidget,
         parseEra: parseEraWidget,
@@ -1682,7 +1719,7 @@ const spaceFeature = createSpaceFeature({
         toast: (message, error) => showToast(message, null, error),
         // 轴动作在本 facade 之后初始化；只在真实点击时读取，严禁顶层提前解引用造成 TDZ。
         widgetActions: () => ({
-            point: (body, $button, editIdx) => applyPointWidget(body, $button, editIdx),
+            point: (body, $button, options) => applyPointWidget(body, $button, options),
             lines: (body, editIdx, $button) => linesFeature.widget.apply(body, editIdx, $button),
             almanac: (body, $button, index) => axisWidgetActions.applyAlmanacWidget(body, $button, index),
             era: (body, $button) => axisWidgetActions.applyEraWidget(body, $button),
@@ -2719,6 +2756,7 @@ function injectFab() {
 
     const fab = document.getElementById(FAB_ID);
     const fabButton = fab?.querySelector('.sp-fab-btn');
+    if (globalThis.__TAURITAVERN__?.abiVersion >= 1) fab?.setAttribute('data-tt-mobile-surface', 'free-window');
     if (!fab || !fabButton) return;
     fabButton.addEventListener('pointerdown', function (e) {
         if (e.isPrimary === false || e.button !== 0 || fabDragState) return;
@@ -3428,6 +3466,7 @@ function injectModal() {
     // :root 的 --sp-* 令牌与 --SmartTheme* 变量穿透 shadow 边界照常继承，主题色板/缩放零改动。
     const host = document.createElement('div');
     host.id = MODAL_ID;
+    if (globalThis.__TAURITAVERN__?.abiVersion >= 1) host.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
     host.className = `sp-root sp-${currentTheme}`;
     host.style.cssText = 'display:none;position:fixed;z-index:2000001';
     const root = host.attachShadow({ mode: 'open' });

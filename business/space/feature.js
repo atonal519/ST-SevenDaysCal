@@ -22,7 +22,7 @@ export function createSpaceFeature(env = {}) {
     });
     const context = createSpaceContext(env.contextEnv);
     const renderer = createSpaceRenderer(env.renderEnv);
-    const ui = createSpaceUi(env.ui);
+    const ui = createSpaceUi({ ...env.ui, captureIdentity, isCurrentIdentity: isCurrent });
     const chat = createSpaceChat({
         repository,
         loadConfig: env.loadConfig,
@@ -43,6 +43,7 @@ export function createSpaceFeature(env = {}) {
     const onChatChanged = ({ enabled = true } = {}) => {
         chatRevision += 1;
         chat.abort('chat-boundary');
+        ui.clearWidgets();
         if (!enabled) return;
         repository.clearMemory();
         ui.emptyMessages();

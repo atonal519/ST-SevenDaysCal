@@ -49,14 +49,21 @@ export function createSpaceChat(env = {}) {
                 return Object.freeze({ status: 'cancelled' });
             }
             diagnostic.accepted({ phase: 'response' });
-            if (!repository.replace(target, appendSpaceAssistant(history(), reply))) {
+            const pointContext = Array.isArray(messages?.pointBaselines)
+                ? { pointBaselines: messages.pointBaselines }
+                : null;
+            if (!repository.replace(target, appendSpaceAssistant(history(), reply, pointContext))) {
                 diagnostic.rejected(new Error('space reply persistence failed'), { phase: 'save', reasonCode: 'space-save-failed' });
                 env.ui?.appendMessage?.('system', '发送失败：回复保存失败，请重试');
                 return Object.freeze({ status: 'failed', error: new Error('space reply persistence failed') });
             }
             diagnostic.committed({ phase: 'save' });
             env.ui?.endThinking?.(thinking);
-            env.ui?.appendMessage?.('ai', reply, history().length - 1);
+            const savedReply = history().at(-1);
+            env.ui?.appendMessage?.('ai', reply, history().length - 1, {
+                pointBaselines: savedReply?.pointBaselines,
+                legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
+            });
             return Object.freeze({ status: 'updated', reply });
         } catch (error) {
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'space-request-failed' });

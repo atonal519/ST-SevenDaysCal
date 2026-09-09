@@ -54,13 +54,13 @@ export function scheduleDayLabel(i, startDate, ctx) {
     return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
 }
 
-function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '') {
+function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '', owner = null) {
     const adult = ev.adult === true;
     const meta = TYPE_META[ev.type] || TYPE_META.main;
     // F5 锁点：仅面板内渲染（有定位 dayKey）且事件有标题时给锁钮；注入卡/无定位场景不显示
     // 删除钮：仅面板内渲染（有定位 dayKey）才给；注入卡/无定位场景不显示。走 .sp-sch-del-one，
     // 与楼内块抽屉同类、共用 handler（#sp-body/#chat 委托）与 triggerDeletePointEvent（同刷主面板+楼内块）。
-    const inject = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel));
+    const inject = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel, owner));
     const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
     const actions = dayKey !== null ? renderActionMenu('point', [
         { action: 'point-edit', icon: 'fa-pen', label: '编辑', title: '编辑这个点' },
@@ -88,6 +88,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
     const hasFuture = future && future.events.length > 0;
 
     const totalTabs = days.length + (hasFuture ? 1 : 0);
+    const owner = { view: perspective === 'char' ? 'char' : 'user', name: String(userName || '').trim() };
     const chipCls   = perspective === 'char' ? 'sp-char-chip' : 'sp-user-chip';
 
     // 点后台同步在飞时，点刷新圆圈置灰禁点（同步会后台重写点，此刻手动刷新会跟它抢 store）
@@ -138,10 +139,10 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
             const dateText = formatPointDate(month, dd, ctx.cal);
             dateLabel = dateText ? `${dateText} · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}` : '日期未知';
         }
-        return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel)).join('')}</div>`;
+        return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel, owner)).join('')}</div>`;
     });
     if (hasFuture) panels.push(
-        `<div class="sp-day-panel sp-future-panel" style="width:calc(100%/${totalTabs})">${future.events.map((ev, ei) => renderEvent(ev, 'future', ei, '', '', '未来')).join('')}</div>`
+        `<div class="sp-day-panel sp-future-panel" style="width:calc(100%/${totalTabs})">${future.events.map((ev, ei) => renderEvent(ev, 'future', ei, '', '', '未来', owner)).join('')}</div>`
     );
 
     const debug = days.length < 3 ? `
