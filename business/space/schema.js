@@ -86,6 +86,7 @@ export function latestSpaceWidget(history) {
     for (let index = history.length - 1; index >= 0; index -= 1) {
         const message = history[index];
         if (message?.role !== 'assistant') continue;
+        if (message.portableReadonly === true) continue;
         const widgets = extractWidgets(message.content).widgets.filter(widget => widget.body);
         if (!widgets.length) return null;
         const widget = widgets.at(-1);

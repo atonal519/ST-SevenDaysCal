@@ -24,6 +24,7 @@ export function createSpaceUi(host = {}) {
             owner: widget.owner,
             pointBaselines: Array.isArray(messageContext.pointBaselines) ? messageContext.pointBaselines : null,
             legacyPointOwner: messageContext.legacyPointOwner === true,
+            readOnly: messageContext.readOnly === true,
             identity: host.captureIdentity?.() || null,
         });
         return wid;
@@ -49,6 +50,7 @@ export function createSpaceUi(host = {}) {
         history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
             pointBaselines: message.pointBaselines,
             legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
+            readOnly: message.portableReadonly === true,
         }));
     };
     const emptyMessages = () => query('#sp-space-msgs')?.empty?.();
@@ -147,6 +149,10 @@ export function createSpaceUi(host = {}) {
             const stored = widgets.get($button.attr('data-wid'));
             if (!stored) {
                 host.toast?.('这张卡片已过期，请再让 AI 生成一次', true);
+                return;
+            }
+            if (stored.readOnly) {
+                host.toast?.('这是导入的历史卡片，仅供查看', true);
                 return;
             }
             if (stored.identity && host.isCurrentIdentity?.(stored.identity) === false) {

@@ -43,18 +43,21 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
             doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove());
             return;
         }
+        const isTauriTavern = globalThis.__TAURITAVERN__?.abiVersion >= 1;
         const hasTrustedId = rebindMessageId !== null && rebindMessageId !== undefined && Number.isInteger(Number(rebindMessageId));
         doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => {
             let button = mes.querySelector('.sp-anchor-btn');
-            const actionBar = mes.querySelector('.mes_buttons');
-            if (!actionBar) {
+            const target = isTauriTavern
+                ? mes.querySelector('.mes_buttons')
+                : (mes.querySelector('.mes_buttons, .extraMesButtons, .name_text') || mes.querySelector('.mes_block') || mes);
+            if (!target) {
                 button?.remove?.();
                 return;
             }
             if (!button) {
                 button = doc.createElement('button');
                 button.type = 'button';
-                button.className = 'mes_button sp-anchor-btn';
+                button.className = 'sp-anchor-btn';
                 button.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖';
                 button.addEventListener('click', event => {
                     event.preventDefault();
@@ -62,8 +65,9 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                     api.onFloorButton(mes);
                 });
             }
-            button.classList?.add?.('mes_button');
-            actionBar.insertBefore(button, actionBar.querySelector('.mes_edit'));
+            button.classList?.toggle?.('mes_button', isTauriTavern);
+            if (isTauriTavern) target.insertBefore(button, target.querySelector('.mes_edit'));
+            else target.appendChild(button);
             const trusted = hasTrustedId && Number(mes.getAttribute('mesid')) === Number(rebindMessageId);
             refreshButton(mes, button, { trusted });
         });

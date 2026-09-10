@@ -5,7 +5,7 @@ import { recordDiagnosticResult } from '../runtime/external-chat-storage.js';
 
 const CODES = new Set([
     'config-missing', 'http-400', 'auth', 'not-found', 'rate-limit', 'server',
-    'timeout', 'network', 'invalid-json', 'response-error', 'empty-output', 'truncated', 'sse-invalid', 'unknown',
+    'timeout', 'upstream-timeout', 'network', 'invalid-json', 'response-error', 'empty-output', 'truncated', 'sse-invalid', 'unknown',
     'parse', 'invalid-structure', 'invalid-fields', 'save', 'recoverable-fallback',
 ]);
 
@@ -41,6 +41,7 @@ const MESSAGES = Object.freeze({
     'rate-limit': 'AI 请求触发限流，请稍后重试或检查额度。',
     server: 'AI 服务暂时异常，请稍后重试。',
     timeout: 'AI 请求超时，请稍后重试或调大请求超时。',
+    'upstream-timeout': '上游服务返回超时说明，本次未自动重试；请稍后重试，或缩短发送给模型的上下文。',
     network: '网络连接中断，请检查网络后重试。',
     'invalid-json': 'AI 接口已响应，但响应包不是有效 JSON，构画无法读取正文；请重试或检查接口兼容性。',
     'response-error': 'AI 接口已响应，但返回的是错误包而非正文；请检查接口状态、额度或模型权限。',

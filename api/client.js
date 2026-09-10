@@ -5,6 +5,7 @@ import {
     normalizeApiUrl,
     PROTECTED_BODY_KEYS,
     isPlaceholderContent,
+    isUpstreamTimeoutTemplate,
     extractCompletion,
     readSseContent,
     retryBackoffMs,
@@ -141,6 +142,7 @@ export async function postChatCompletion(options = {}) {
         channel: options.diagnosticChannel || options.diagnosticModule || 'api',
         requestId: createDiagnosticRequestId(startedAt),
     };
+    let failedRawResponse = null;
     try { options.diagnosticSink?.(Object.freeze({ requestId: base.requestId, module: base.module })); } catch {}
     traceDiagnosticEvent('api-start', {
         ...base,
@@ -150,6 +152,10 @@ export async function postChatCompletion(options = {}) {
     });
     try {
         const result = await postChatCompletionCore({ ...options, signal, diagnosticLifecycle: lifecycle, diagnosticTraceBase: base });
+        if (isUpstreamTimeoutTemplate(result)) {
+            failedRawResponse = result;
+            throw makeDiagnosticError('upstream-timeout', { phase: 'response', status: lifecycle.httpStatus });
+        }
         recordDiagnosticTransport({ requestId: base.requestId, module: base.module, ok: true, rawResponse: result, httpStatus: lifecycle.httpStatus });
         traceDiagnosticEvent('api-success', {
             ...base,
@@ -167,7 +173,7 @@ export async function postChatCompletion(options = {}) {
         const abortReason = timeout
             ? 'timeout'
             : aborted ? safeAbortReason(signal?.reason, 'external-abort') : undefined;
-        recordDiagnosticTransport({ requestId: base.requestId, module: base.module, ok: false, errorClass: apiTraceErrorClass(error, signal), httpStatus: Number(error?.status) || lifecycle.httpStatus });
+        recordDiagnosticTransport({ requestId: base.requestId, module: base.module, ok: false, rawResponse: failedRawResponse, errorClass: apiTraceErrorClass(error, signal), httpStatus: Number(error?.status) || lifecycle.httpStatus });
         try {
             error.spDiagnosticRequestId = base.requestId;
             error.spDiagnosticModule = base.module;

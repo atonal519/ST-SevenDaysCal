@@ -48,14 +48,27 @@ import {
     abortMigration,
     bindExternalChatStorage,
     buildCurrentChatDiagnosticPackage,
+    getChatRoot,
     isExternalMode,
+    isExternalReady,
     loadExternalChat,
     migrateCurrentChat,
     probeExternalBackend,
     pruneExternalSnapshots,
     refreshDiagnosticRetention,
+    replaceExternalRootsAtomic,
     storageStatus,
 } from './runtime/external-chat-storage.js';
+import {
+    PORTABLE_CHAT_MAX_BYTES,
+    PORTABLE_MODULES,
+    buildPortableChatPackage,
+    createPortableImportPlan,
+    parsePortableChatPackage,
+    persistentChatRootsAreBlank,
+    portableModuleLabel,
+    rebasePortableImportPlan,
+} from './runtime/portable-chat-data.js';
 import { normalizeTagRules } from './utils/tag-names.js';
 import { ADULT_MODES, ADULT_MODE_LABELS, adultModeForCharacter } from './business/lines/adult.js';
 import { axisState } from './business/axis/state.js';
@@ -236,6 +249,10 @@ const ledgerMetadataSaverReady = (() => {
     const advanced = createTargetMetadataSaver({ coreModule: scriptCore });
     return advanced?.supported ? advanced : createBestEffortMetadataSaver({ context: getContext });
 })();
+const portableMetadataSaver = createTargetMetadataSaver({
+    coreModule: scriptCore,
+    ownedRoots: ['/sp-store', '/sp-theater'],
+});
 const getLedgerTarget = () => {
     try { return typeof scriptCore.resolveChatStateTarget === 'function' ? scriptCore.resolveChatStateTarget() : null; }
     catch { return null; }
@@ -1942,6 +1959,7 @@ jQuery(async () => {
         _activeSpConfirmCancel?.();
         _activeStoreConflictFinish?.('defer');
         customDialog.cancelActive();
+        closeActivePortableImportOverlay();
         removeDialogOverlays();
         timeTravel.clear('chat-boundary');
         clearAutomationClaims();
@@ -2045,6 +2063,13 @@ jQuery(async () => {
         refreshLedgerInjection();       // 暗历注入：切 chat → 账随 chat_metadata 变，重设（关/空时内部自清）
     };
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
+    for (const type of [event_types.CHAT_CREATED, event_types.GROUP_CHAT_CREATED]) {
+        if (type && _stListeners.newChatStorage) eventSource.removeListener?.(type, _stListeners.newChatStorage);
+    }
+    _stListeners.newChatStorage = handleNewChatStorage;
+    for (const type of [event_types.CHAT_CREATED, event_types.GROUP_CHAT_CREATED]) {
+        if (type) eventSource.on(type, _stListeners.newChatStorage);
+    }
     if (_stListeners.diagnosticRetention) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
     _stListeners.diagnosticRetention = () => refreshDiagnosticRetention(getContext());
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
@@ -2360,6 +2385,34 @@ function _abortAllBackground() {
     ledgerJudgeController.reset('plugin-disabled');
     ledgerCaptureController.reset('plugin-disabled');
     if (outlineMode) outlineFeature.chat.load();
+}
+
+// 导入会同时改动多个业务模块。提交前统一废止仍基于旧数据工作的构画任务，
+// 防止迟到结果在新包落盘后又把旧点/线/历法写回来；这里只中断运行态，不改任何存档。
+function abortPortableImportTasks(reason = 'portable-import') {
+    const activeTravel = timeTravel.getState();
+    if (activeTravel) clearTimeTravelSession(activeTravel, { removeWaitingBlock: activeTravel.phase === 'waiting', reason });
+    _timeTravelSelectionSeq++;
+    _activeTimeTravelSelection = null;
+    clearAutomationClaims();
+    pointTaskOwners.invalidateAll(reason);
+    pointController.reset(reason);
+    try { pointState.scheduleAbortController?.abort(reason); } catch {}
+    pointState.scheduleAbortController = null;
+    try { _autoRegenSchedAbort?.abort(reason); } catch {}
+    _autoRegenSchedAbort = null;
+    linesFeature.actions?.invalidatePreflight?.(reason);
+    linesFeature.abortGeneration({ restore: false, reason });
+    linesFeature.dashed.abort(reason);
+    outlineFeature.abortAll(reason);
+    spaceFeature.abortAll(reason);
+    theaterFeature.abort(reason);
+    axisGenerationController.reset(reason);
+    dateDetectionController.reset(reason);
+    dateCoordinator.clear();
+    ledgerCaptureController.reset(reason);
+    ledgerJudgeController.reset(reason);
+    memory.abortAll(reason);
 }
 
 // 插件总开关落地。关：藏悬浮球、清所有楼内块与坐标入口（由各 feature 内部闸兜底）、
@@ -3356,6 +3409,15 @@ function injectModal() {
                                                 <div class="sp-mem-actions">
                                                     <button id="sp-storage-migrate" class="sp-save-btn" type="button" hidden>迁出到白鳥数据后端</button>
                                                     <button id="sp-storage-retry" class="sp-mem-btn" type="button" hidden>重试加载</button>
+                                                </div>
+                                            </div>
+                                            <div class="sp-storage-mode-card">
+                                                <div class="sp-storage-group-head">当前聊天 · 按模块备份与迁入</div>
+                                                <p class="sp-cfg-hint">只处理你勾选的点、线、面、间、日历／历法或已保存小剧场。不会带走正文、记忆、刻度、设置、密钥、坐标收藏与本机草稿。</p>
+                                                <div class="sp-mem-actions">
+                                                    <button id="sp-storage-portable-export" class="sp-save-btn" type="button"><i class="fa-solid fa-file-export"></i> 导出数据</button>
+                                                    <button id="sp-storage-portable-import" class="sp-mem-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入数据</button>
+                                                    <input id="sp-storage-portable-file" type="file" accept=".json,application/json" hidden>
                                                 </div>
                                             </div>
                                             <div id="sp-storage-body"><div class="sp-cfg-hint">（打开设置时自动统计…）</div></div>
@@ -6199,6 +6261,62 @@ function storageChatStillCurrent(identity) {
     return !!identity && !!now && identity.chatId === now.chatId && identity.metadata === now.metadata;
 }
 
+let newChatStorageAttempt = null;
+
+function sameStorageChatIdentity(left, right) {
+    return !!left && !!right && left.chatId === right.chatId && left.metadata === right.metadata;
+}
+
+function migrationAllowsChatFallback(result) {
+    const reason = String(result?.reason || '');
+    return ['network', 'timeout', 'unavailable', 'capability-mismatch'].includes(reason)
+        || (/^http-\d+$/.test(reason) && reason !== 'http-409')
+        || (result?.stage === 'backend-probe' && Number.isInteger(Number(result?.error?.status)) && Number(result.error.status) !== 409);
+}
+
+function migrationHasConflict(result) {
+    return result?.commitState === 'conflict'
+        || result?.publishResult?.commitState === 'conflict'
+        || String(result?.reason || '').includes('conflict')
+        || String(result?.publishResult?.reason || '').includes('conflict');
+}
+
+async function routeChatStorageToAvailableBackend(identity) {
+    if (!storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ok: false, reason: 'chat-changed' } };
+    if (storageStatus().mode === 'external') return { mode: isExternalReady() ? 'external' : 'blocked', result: { ok: isExternalReady(), reason: isExternalReady() ? 'already-external' : 'external-not-ready' } };
+    let result;
+    try { result = await migrateCurrentChat(); }
+    catch (error) { result = { ok: false, reason: error?.code || 'migration-failed', error }; }
+    if (!storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ...result, ok: false, reason: 'chat-changed' } };
+    if (result?.ok) return { mode: 'external', result };
+    if (migrationAllowsChatFallback(result)) return { mode: 'chat', result };
+    if (result?.reason === 'publish-unknown' || result?.commitState === 'unknown' || result?.publishResult?.commitState === 'unknown') return { mode: 'unknown', result };
+    return { mode: 'blocked', result };
+}
+
+async function handleNewChatStorage() {
+    const boundary = captureChatBoundary();
+    const identity = storageChatIdentity();
+    if (!identity || !isCurrentChatBoundary(boundary)) return { mode: 'blocked', result: { ok: false, reason: 'missing-chat' } };
+    if (sameStorageChatIdentity(newChatStorageAttempt?.identity, identity)) return newChatStorageAttempt.task;
+    const task = (async () => {
+        const routed = await routeChatStorageToAvailableBackend(identity);
+        if (!storageChatStillCurrent(identity) || !isCurrentChatBoundary(boundary)) return { mode: 'blocked', result: { ...routed.result, ok: false, reason: 'chat-changed' } };
+        if (routed.mode === 'external') {
+            void renderStorageUsage(); void renderCurrentChatStorageMode();
+        } else if (routed.mode === 'unknown') {
+            showToast('新聊天的存储位置暂时无法确认。请刷新当前聊天核实，在确认前不要继续写入构画数据。', null, true);
+        } else if (routed.mode === 'blocked' && routed.result?.reason !== 'chat-changed' && routed.result?.reason !== 'already-external') {
+            showToast(migrationHasConflict(routed.result)
+                ? '新聊天在切换存储期间发生了变化，仍保留在聊天文件中；请稍后在存储管理里重试迁出。'
+                : `新聊天没有切换到后端：${routed.result?.error?.message || routed.result?.reason || '无法确认存储位置'}`, null, true);
+        }
+        return routed;
+    })();
+    newChatStorageAttempt = { identity, task };
+    return task;
+}
+
 function storageRow(label, bytesText, btnHtml = '', extraClass = '') {
     return `<div class="sp-storage-row ${extraClass}">
         <span class="sp-storage-row-label">${escapeHtml(label)}</span>
@@ -6215,6 +6333,7 @@ async function renderCurrentChatStorageMode() {
     $migrate.prop('hidden', true); $retry.prop('hidden', true);
     const state = storageStatus();
     if (!state.chatId) { $status.text('当前没有打开聊天。'); return; }
+    if (state.busy) { $status.text('当前聊天的构画存储位置正在切换，请等待完成。'); return; }
     if (state.mode === 'external') {
         if (state.status === 'ready') {
             $status.text(`当前聊天已使用白鳥数据后端。聊天文件只保留定位标记与楼层快照指针；单独导出聊天不会包含完整构画数据，请同时保留后端数据。${state.error ? ` 最近一次外置操作失败：${state.error}` : ''}`);
@@ -6266,6 +6385,7 @@ function mountMigrationOverlay() {
 
 async function startCurrentChatMigration() {
     const initial = storageStatus();
+    if (initial.busy) { showToast('当前聊天的构画存储位置正在切换，请等待完成', null, true); return; }
     if (!initial.chatId || initial.mode !== 'chat') return;
     const confirmed = await customDialog.confirm({
         title: '迁出当前聊天的构画数据',
@@ -6298,6 +6418,301 @@ function downloadDiagnosticPackage(data) {
     anchor.href = url; anchor.download = `gouhua-diagnostic-${Date.now()}.json`; anchor.style.display = 'none';
     document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     return text;
+}
+
+const portableClone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const portableSame = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+let portableImportPickerIdentity = null;
+
+function portableStorageAvailable(actionLabel) {
+    const state = storageStatus();
+    if (!state.chatId) { showToast(`请先打开一个聊天，再${actionLabel}`, null, true); return false; }
+    if (state.busy) { showToast(`当前聊天的构画存储位置正在切换，请等待完成后再${actionLabel}`, null, true); return false; }
+    if (state.mode === 'external' && !isExternalReady()) {
+        showToast(`当前聊天的白鳥数据尚未就绪，不能${actionLabel}。请先重试加载。`, null, true);
+        return false;
+    }
+    return true;
+}
+
+function currentPortableRoots() {
+    return {
+        'sp-store': portableClone(getChatRoot('sp-store')),
+        'sp-theater': portableClone(getChatRoot('sp-theater')),
+    };
+}
+
+function currentPersistentRoots() {
+    const metadata = getContext()?.chatMetadata;
+    return Object.fromEntries(['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger'].map(key => [key, portableClone(metadata?.[key])]));
+}
+
+function portableModuleSummary(portablePackage, id) {
+    if (id === 'theater') return `${portablePackage.modules[id].saved.length} 条`;
+    const entries = portablePackage.modules[id].entries || {};
+    if (id === 'space') return `${Array.isArray(entries['space-chat-user']) ? entries['space-chat-user'].length : 0} 条对话`;
+    return `${Object.keys(entries).length} 项`;
+}
+
+function downloadPortablePackage(data) {
+    const text = JSON.stringify(data, null, 2);
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    anchor.href = url; anchor.download = `gouhua-modules-${stamp}.json`; anchor.style.display = 'none';
+    document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return text;
+}
+
+async function exportPortableModules(preselected = null) {
+    if (!portableStorageAvailable('导出数据')) return false;
+    const identity = storageChatIdentity();
+    let selected = Array.isArray(preselected) ? preselected : null;
+    if (!selected) {
+        const result = await customDialog.selectMany({
+            title: '导出当前聊天的构画数据',
+            body: '按需勾选模块；默认不全选。至少选择一项。',
+            choices: PORTABLE_MODULES.map(item => ({ value: item.id, label: item.label })),
+            initialValues: [],
+            confirmText: '导出所选模块', cancelText: '取消',
+            validate: value => value.values.length ? '' : '请至少选择一个模块',
+        });
+        if (!result) return false;
+        selected = result.values;
+    }
+    if (!storageChatStillCurrent(identity) || !portableStorageAvailable('导出数据')) return false;
+    const built = buildPortableChatPackage({ selectedModules: selected, roots: currentPortableRoots() });
+    if (!built.ok) {
+        if (built.reason === 'no-content') {
+            const emptyLabels = (built.emptyModules || selected).map(portableModuleLabel);
+            await customDialog.choose({
+                title: '没有可导出的内容',
+                body: `所选模块没有内容：${emptyLabels.join('、')}。`,
+                note: '本次未生成导出文件。',
+                choices: [{ value: 'close', label: '知道了', primary: true }],
+            });
+        } else {
+            showToast(built.message || '没有可导出的数据', null, true);
+        }
+        return false;
+    }
+    const text = downloadPortablePackage(built.package);
+    const emptyLabels = built.emptyModules.map(portableModuleLabel);
+    const exportedLabels = built.package.selectedModules.map(portableModuleLabel);
+    if (emptyLabels.length) {
+        await customDialog.choose({
+            title: '导出完成',
+            body: `已导出：${exportedLabels.join('、')}。无内容，已跳过：${emptyLabels.join('、')}。`,
+            note: '已生成下载文件，文件中只包含有内容的模块。',
+            choices: [{ value: 'close', label: '知道了', primary: true }],
+        });
+        return true;
+    }
+    showToast(`已导出 ${exportedLabels.join('、')}`, async () => {
+        if (await copyPlainText(text)) showToast('数据包已复制');
+    });
+    return true;
+}
+
+let activePortableImportOverlayClose = null;
+
+function closeActivePortableImportOverlay() {
+    activePortableImportOverlayClose?.();
+}
+
+function mountPortableImportOverlay() {
+    closeActivePortableImportOverlay();
+    document.getElementById('sp-portable-import-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'sp-portable-import-overlay';
+    overlay.innerHTML = `<div role="dialog" aria-modal="true" style="width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background:#17191f;color:#f5f5f7;box-shadow:0 20px 70px #000b;font-family:var(--sp-font-user,system-ui)">
+        <div style="font-size:18px;font-weight:700;margin-bottom:10px">正在导入所选模块</div>
+        <div data-sp-portable-status style="font-size:14px;line-height:1.65;opacity:.86">正在核对目标数据并确认保存，请稍候…</div>
+        <button data-sp-portable-close type="button" hidden style="margin-top:18px;width:100%;min-height:42px;border:1px solid #ffffff30;border-radius:10px;background:#ffffff10;color:inherit">关闭</button>
+    </div>`;
+    Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
+    const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
+    for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.addEventListener(name, block, true);
+    document.documentElement.appendChild(overlay);
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.removeEventListener(name, block, true);
+        overlay.remove();
+        if (activePortableImportOverlayClose === close) activePortableImportOverlayClose = null;
+    };
+    activePortableImportOverlayClose = close;
+    return {
+        unknown(message) {
+            overlay.querySelector('[data-sp-portable-status]').textContent = message;
+            const button = overlay.querySelector('[data-sp-portable-close]');
+            button.hidden = false; button.onclick = close;
+        },
+        close,
+    };
+}
+
+async function commitPortableImport({ identity, originalRoots, portablePackage, selectedModules }) {
+    if (!storageChatStillCurrent(identity)) return { ok: false, reason: 'chat-changed', commitState: 'not-dispatched' };
+    const originalPlan = createPortableImportPlan({ roots: originalRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
+    if (!originalPlan.ok) return originalPlan;
+    if (isExternalMode()) {
+        return replaceExternalRootsAtomic({
+            expectedRoots: originalPlan.expectedRoots,
+            replacementRoots: originalPlan.replacementRoots,
+            ownerGuard: () => storageChatStillCurrent(identity),
+        });
+    }
+    if (!portableMetadataSaver.supported) return { ok: false, reason: portableMetadataSaver.reason || 'fixed-saver-unavailable', commitState: 'not-dispatched' };
+    const target = getLedgerTarget();
+    let freshMetadata;
+    try { freshMetadata = portableClone(scriptCore.getChatMetadataSnapshot(target)); }
+    catch { return { ok: false, reason: 'metadata-snapshot-unavailable', commitState: 'not-dispatched' }; }
+    if (!freshMetadata || !storageChatStillCurrent(identity)) return { ok: false, reason: 'chat-changed', commitState: 'not-dispatched' };
+    const freshRoots = { 'sp-store': portableClone(freshMetadata['sp-store']), 'sp-theater': portableClone(freshMetadata['sp-theater']) };
+    const freshPlan = rebasePortableImportPlan({ originalRoots, freshRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
+    if (!freshPlan.ok) return freshPlan;
+    if (Object.entries(freshPlan.replacementRoots).every(([key, value]) => portableSame(freshRoots[key], value))) {
+        return { ok: true, reason: 'no-change', commitState: 'confirmed', replacementRoots: freshPlan.replacementRoots };
+    }
+    const afterMetadata = portableClone(freshMetadata);
+    for (const [key, value] of Object.entries(freshPlan.replacementRoots)) afterMetadata[key] = portableClone(value);
+    let saved = await dispatchTargetMetadataWithRefresh({
+        saver: portableMetadataSaver,
+        target,
+        afterMetadata,
+        refresh: scriptCore.refreshChatWriteSnapshotsFromServer,
+        isCurrent: () => storageChatStillCurrent(identity),
+    });
+    if (saved.commitState === 'unknown' && typeof saved.confirm === 'function') {
+        const confirmed = await saved.confirm();
+        if (confirmed?.confirmed) saved = { ...saved, ok: true, commitState: 'confirmed', confirmedAfterUnknown: true };
+        else if (confirmed?.submitted === false) saved = { ...saved, ok: false, commitState: 'not-dispatched', reason: 'confirmed-not-submitted' };
+    }
+    if (saved.ok && saved.commitState === 'confirmed' && storageChatStillCurrent(identity)) {
+        for (const [key, value] of Object.entries(freshPlan.replacementRoots)) identity.metadata[key] = portableClone(value);
+    }
+    return { ...saved, replacementRoots: freshPlan.replacementRoots };
+}
+
+function refreshPortableImportedModules(selectedModules) {
+    const selected = new Set(selectedModules);
+    if (selected.has('points') || selected.has('calendar')) {
+        const key = getCacheKey(currentView, charViewName);
+        const saved = readStore(key);
+        const subject = currentView === 'char' ? (charViewName || getContext().name2 || '角色') : (getContext().name1 || '用户');
+        pointState.cachedSchedule = saved?.raw ? renderSchedule(saved.raw, saved.userName || subject, currentView, loadCalDesc()) : null;
+        if (_lastMainView === 'schedule' && !settingsOpen && $(`#${MODAL_ID}`).is(':visible')) {
+            setBody(pointState.cachedSchedule || `<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div>`);
+        }
+    }
+    if (selected.has('lines')) {
+        linesFeature.clearAllSwipe(getContext().chatId);
+        linesRuntime.reset();
+        linesFeature.dashed.resetError();
+        if (linesMode) linesFeature.refreshPanel();
+        refreshLinesInjection();
+    }
+    if (selected.has('outline')) {
+        outlineFeature.refreshFromStore('outline');
+        outlineFeature.refreshFromStore('creative-chat');
+    }
+    if (selected.has('space')) spaceFeature.refreshFromStore('space-chat');
+    if (selected.has('calendar')) {
+        axisState._almanacEditor = null;
+        axisState._almanacCalDay = null;
+        axisState._almanacCalMonth = null;
+        axisState._almTodayEditing = false;
+        axisCalendarManager.close();
+        if (axisState.almanacMode) renderAlmanacPanel();
+        refreshStoryClockInjection();
+    }
+    if (selected.has('theater')) theaterFeature.resetAfterStorageClear();
+    void renderStorageUsage();
+}
+
+async function importPortableFile(file, identity) {
+    if (!file || !identity || !storageChatStillCurrent(identity)) return;
+    const boundary = captureChatBoundary();
+    const importStillCurrent = () => storageChatStillCurrent(identity) && isCurrentChatBoundary(boundary);
+    if (file.size > PORTABLE_CHAT_MAX_BYTES) { showToast('数据包超过 8 MB 限制', null, true); return; }
+    let text;
+    try { text = await file.text(); }
+    catch { if (importStillCurrent()) showToast('无法读取这个文件', null, true); return; }
+    if (!importStillCurrent() || !portableStorageAvailable('导入数据')) return;
+    const parsed = parsePortableChatPackage(text);
+    if (!parsed.ok) { showToast(`导入失败：${parsed.message}`, null, true); return; }
+    const portablePackage = parsed.package;
+    const picked = await customDialog.selectMany({
+        title: '选择要导入的模块',
+        body: '勾选的模块会替换目标聊天里的对应模块；未勾选模块原样保留。',
+        choices: portablePackage.selectedModules.map(id => ({ value: id, label: `${portableModuleLabel(id)} · ${portableModuleSummary(portablePackage, id)}` })),
+        initialValues: portablePackage.selectedModules,
+        confirmText: '检查替换影响', cancelText: '取消',
+        validate: value => value.values.length ? '' : '请至少选择一个模块',
+    });
+    if (!picked || !importStillCurrent() || !portableStorageAvailable('导入数据')) return;
+    const previewRoots = currentPortableRoots();
+    const preview = createPortableImportPlan({ roots: previewRoots, portablePackage, selectedModules: picked.values, targetChatId: identity.chatId });
+    if (!preview.ok) { showToast(`导入失败：${preview.message || preview.reason}`, null, true); return; }
+    const selectedLabels = picked.values.map(portableModuleLabel).join('、');
+    const existingLabels = preview.existingModules.map(portableModuleLabel).join('、');
+    const dateNote = picked.values.includes('points') && !picked.values.includes('calendar') ? '点会沿用目标聊天现有的历法。' : '';
+    const decision = await customDialog.choose({
+        title: '确认替换所选模块',
+        body: `将导入：${selectedLabels}。${existingLabels ? `目标已有 ${existingLabels}，这些对应内容会被替换。` : '目标没有对应旧内容。'} 未选模块会保留。`,
+        note: `${dateNote} 如需备份，可先导出目标当前的这些模块；导出后请重新选择文件继续导入。`,
+        choices: [
+            { value: 'cancel', label: '取消' },
+            { value: 'backup', label: '先导出目标数据' },
+            { value: 'apply', label: '确认导入', primary: true },
+        ],
+    });
+    if (!importStillCurrent()) return;
+    if (decision === 'backup') { await exportPortableModules(picked.values); return; }
+    if (decision !== 'apply' || !portableStorageAvailable('导入数据')) return;
+    const persistentRoots = currentPersistentRoots();
+    const originalRoots = currentPortableRoots();
+    const routeBlankReceiver = storageStatus().mode === 'chat' && persistentChatRootsAreBlank(persistentRoots);
+    abortPortableImportTasks('portable-import');
+    if (routeBlankReceiver) _abortAllBackground();
+    const overlay = mountPortableImportOverlay();
+    if (routeBlankReceiver) {
+        const routed = await routeChatStorageToAvailableBackend(identity);
+        if (!importStillCurrent()) { overlay.close(); return; }
+        if (routed.mode === 'unknown') {
+            overlay.unknown('目标聊天的存储位置暂时无法确认。请关闭后刷新当前聊天核实；在确认前不要重复导入。');
+            return;
+        }
+        if (routed.mode === 'blocked') {
+            overlay.close();
+            if (routed.result?.reason === 'chat-changed') return;
+            showToast(migrationHasConflict(routed.result)
+                ? '目标聊天在确认期间产生了新的构画数据，本次没有导入；请重新操作。'
+                : `导入前无法确认目标存储位置：${routed.result?.error?.message || routed.result?.reason || '迁移失败'}`, null, true);
+            return;
+        }
+    }
+    let result;
+    try { result = await commitPortableImport({ identity, originalRoots, portablePackage, selectedModules: picked.values }); }
+    catch (error) { result = { ok: false, reason: 'import-failed', error, commitState: 'not-dispatched' }; }
+    if (!importStillCurrent()) { overlay.close(); return; }
+    if (result.ok && result.commitState === 'confirmed') {
+        overlay.close();
+        if (importStillCurrent()) {
+            refreshPortableImportedModules(picked.values);
+            showToast(`已导入：${selectedLabels}`);
+        }
+        return;
+    }
+    if (result.commitState === 'unknown') {
+        overlay.unknown('保存结果暂时无法确认。请关闭后刷新当前聊天核实；在确认前不要重复导入。');
+        return;
+    }
+    overlay.close();
+    const conflict = result.commitState === 'conflict' || String(result.reason || '').includes('conflict');
+    showToast(conflict ? '目标模块在确认期间发生了变化，本次没有覆盖；请重新导入。' : `导入失败：${result.error?.message || result.reason || '未能保存'}`, null, true);
 }
 
 async function exportCurrentChatDiagnosticPackage() {
@@ -6495,6 +6910,22 @@ function refreshEditorsFromCurrentStore(kind) {
 function bindStorageHandlers() {
     $in('#sp-storage-refresh').on('click', () => renderStorageUsage());
     $in('#sp-storage-migrate').on('click', () => { void startCurrentChatMigration(); });
+    $in('#sp-storage-portable-export').on('click', () => { void exportPortableModules(); });
+    $in('#sp-storage-portable-import').on('click', () => {
+        if (!portableStorageAvailable('导入数据')) return;
+        portableImportPickerIdentity = storageChatIdentity();
+        const input = inEl('#sp-storage-portable-file');
+        if (!input) return;
+        input.value = '';
+        input.click();
+    });
+    $in('#sp-storage-portable-file').on('change', function () {
+        const identity = portableImportPickerIdentity;
+        portableImportPickerIdentity = null;
+        const file = this.files?.[0] || null;
+        this.value = '';
+        if (file) void importPortableFile(file, identity);
+    });
     $in('#sp-storage-retry').on('click', async () => {
         const before = storageStatus().chatId;
         await loadExternalChat({ force: true });

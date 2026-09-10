@@ -8,7 +8,10 @@ export function createSpaceRenderer(env = {}) {
         if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
         return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
     }).filter(Boolean);
-    const widgetCard = (kind, body, wid, editIdx = null, owner = null, legacyPointOwner = false) => {
+    const widgetCard = (kind, body, wid, editIdx = null, owner = null, legacyPointOwner = false, readOnly = false) => {
+        const readOnlyAction = readOnly
+            ? '<div class="sp-space-widget-readonly"><i class="fa-solid fa-lock"></i> 导入的历史卡片，仅供查看</div>'
+            : null;
         if (kind === 'schedule_widget') {
             const line = rows(body).find(item => /^Event\s*[:：]/i.test(item)) || '';
             const [type, title, desc, time, location, ...dynamicParts] = line.replace(/^Event\s*[:：]\s*/i, '').split(/[|｜]/).map(item => item.trim());
@@ -23,7 +26,7 @@ export function createSpaceRenderer(env = {}) {
                     : owner?.view === 'user' || legacyPointOwner
                         ? `${userName}（我）`
                         : '人物待确认';
-            return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="schedule">
+            return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="schedule">
             <div class="sp-space-widget-head">
                 <span class="sp-space-widget-badge" style="background:${meta.color}22;color:${meta.color};border-color:${meta.color}">
                     <i class="fa-regular fa-calendar"></i> ${editIdx != null ? `建议改点·第 ${editIdx} 条` : '建议加到点'}（${escape(meta.label)}）
@@ -40,7 +43,7 @@ export function createSpaceRenderer(env = {}) {
                 ${dynamic ? `<div class="sp-space-widget-dynamic">🧵 ${escape(dynamic)}</div>` : ''}
             </div>
             <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换 ${escape(ownerLabel)} · 第 ${editIdx} 条` : '选择人物并应用'}</button>
+                ${readOnlyAction || `<button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换 ${escape(ownerLabel)} · 第 ${editIdx} 条` : '选择人物并应用'}</button>`}
             </div>
         </div>`;
         }
@@ -53,7 +56,7 @@ export function createSpaceRenderer(env = {}) {
             const desc = descRow.replace(/^Desc\s*[:：]\s*/i, '').trim();
             const next = nextRow.replace(/^Next\s*[:：]\s*/i, '').trim();
             const stalled = stall === true;
-            return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="line">
+            return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="line">
             <div class="sp-space-widget-head">
                 <span class="sp-space-widget-badge sp-space-widget-badge-line">
                     <i class="fa-solid fa-diagram-project"></i> ${editIdx != null ? `建议改线·第 ${editIdx} 条` : '建议加到线'}
@@ -71,7 +74,7 @@ export function createSpaceRenderer(env = {}) {
                 ${next ? `<div class="sp-space-widget-next">→ ${escape(next)}</div>` : ''}
             </div>
             <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换第 ${editIdx} 条` : '应用到线'}</button>
+                ${readOnlyAction || `<button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid ${editIdx != null ? 'fa-pen' : 'fa-plus'}"></i> ${editIdx != null ? `替换第 ${editIdx} 条` : '应用到线'}</button>`}
             </div>
         </div>`;
         }
@@ -82,7 +85,7 @@ export function createSpaceRenderer(env = {}) {
             const labels = { festival: '节日', birthday: '生日', anniversary: '纪念日', custom: '自定义' };
             return items.map((item, index) => {
                 const date = item.displayDate || `${env.calendarMonthName?.(calendar, item.month) ?? item.month}${item.day}日`;
-                return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="almanac">
+                return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="almanac">
                 <div class="sp-space-widget-head">
                     <span class="sp-space-widget-badge sp-space-widget-badge-almanac">
                         <i class="fa-regular fa-calendar-check"></i> 建议加到历
@@ -96,7 +99,7 @@ export function createSpaceRenderer(env = {}) {
                     </div>
                 </div>
                 <div class="sp-space-widget-actions">
-                    <button class="sp-space-widget-apply" data-wid="${wid}" data-idx="${index}"><i class="fa-solid fa-plus"></i> 应用到轴</button>
+                    ${readOnlyAction || `<button class="sp-space-widget-apply" data-wid="${wid}" data-idx="${index}"><i class="fa-solid fa-plus"></i> 应用到轴</button>`}
                 </div>
             </div>`;
             }).join('');
@@ -105,7 +108,7 @@ export function createSpaceRenderer(env = {}) {
             const desc = env.parseEra?.(body);
             if (!desc) return '';
             const months = desc.months.map(month => `<span class="sp-space-widget-eramonth">${escape(month.name)}·${month.days}天</span>`).join('');
-            return `<div class="sp-space-widget-card" data-wid="${wid}" data-kind="era">
+            return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="era">
             <div class="sp-space-widget-head">
                 <span class="sp-space-widget-badge sp-space-widget-badge-era">
                     <i class="fa-regular fa-calendar-days"></i> 建议应用历法
@@ -117,7 +120,7 @@ export function createSpaceRenderer(env = {}) {
                 <div class="sp-space-widget-eramonths">${months}</div>
             </div>
             <div class="sp-space-widget-actions">
-                <button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid fa-calendar-check"></i> 应用历法</button>
+                ${readOnlyAction || `<button class="sp-space-widget-apply" data-wid="${wid}"><i class="fa-solid fa-calendar-check"></i> 应用历法</button>`}
             </div>
         </div>`;
         }
@@ -135,7 +138,7 @@ export function createSpaceRenderer(env = {}) {
             contentHtml = parsed.text ? env.formatAi?.(parsed.text) ?? escape(parsed.text).replace(/\n/g, '<br>') : '';
             widgetCards = parsed.widgets.map(widget => {
                 const wid = registerWidget?.(widget, messageContext);
-                return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true);
+                return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true);
             }).join('');
         } else {
             contentHtml = escape(content).replace(/\n/g, '<br>');

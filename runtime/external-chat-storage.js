@@ -391,6 +391,61 @@ export function persistExternalRoots({ confirmed = false, ownerGuard = () => tru
     return confirmed ? operation : true;
 }
 
+// 便携包导入专用：先在独立副本上替换所选 root，再以 current record 的 revision
+// 做一次 CAS。调用方不必预先改 active.current；冲突或未知结果也不会把暂存值
+// 塞回 live root，更不会进入普通写入的 pending 自动重试队列。
+export async function replaceExternalRootsAtomic({ expectedRoots = {}, replacementRoots = {}, ownerGuard = () => true } = {}) {
+    if (!isExternalMode() || !isExternalReady() || isStorageBusy()) {
+        return { ok: false, reason: 'external-not-ready', dispatched: false, commitState: 'not-dispatched' };
+    }
+    const keys = Object.keys(replacementRoots).filter(key => EXTERNAL_ROOT_KEYS.includes(key));
+    if (!keys.length || keys.length !== Object.keys(replacementRoots).length || keys.some(key => !Object.prototype.hasOwnProperty.call(expectedRoots, key))) {
+        return { ok: false, reason: 'invalid-roots', dispatched: false, commitState: 'not-dispatched' };
+    }
+    try {
+        return await enqueue(async state => {
+            if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', dispatched: false, commitState: 'not-dispatched' };
+            const currentRoots = state.current?.data?.roots || {};
+            for (const key of keys) {
+                if (!same(currentRoots[key], expectedRoots[key])) return { ok: false, reason: 'root-conflict', path: key, dispatched: false, commitState: 'conflict' };
+            }
+            const envelope = state.current;
+            const data = cleanCurrentData(envelope?.data);
+            for (const key of keys) {
+                const value = replacementRoots[key];
+                if (value === undefined) delete data.roots[key];
+                else data.roots[key] = clone(value);
+            }
+            if (same(data, envelope?.data)) return { ok: true, reason: 'no-change', dispatched: false, commitState: 'confirmed', revision: envelope?.revision };
+            if (!ownerGuard()) return { ok: false, reason: 'stale-before-dispatch', dispatched: false, commitState: 'not-dispatched' };
+            const expectedRevision = Number(envelope?.revision) || 0;
+            const recordId = state.marker.currentRecord || 'current';
+            try {
+                const saved = await putRecord(state.marker.collection, recordId, data, expectedRevision);
+                state.current = { ...saved, data: cleanCurrentData(saved?.data ?? data) };
+                state.records.set(recordId, state.current);
+                state.error = null;
+                if (active === state) notify();
+                return { ok: true, stale: !ownerGuard(), dispatched: true, commitState: 'confirmed', revision: saved.revision };
+            } catch (error) {
+                const pending = { collection: state.marker.collection, recordId, data };
+                const readBack = await matchingCurrentReadBack(pending, { allowList: true });
+                if (readBack) {
+                    state.current = { ...readBack, data: cleanCurrentData(readBack?.data ?? data) };
+                    state.records.set(recordId, state.current);
+                    state.error = null;
+                    if (active === state) notify();
+                    return { ok: true, stale: !ownerGuard(), dispatched: true, confirmedAfterUnknown: true, commitState: 'confirmed', revision: readBack.revision };
+                }
+                if (error?.status === 409) return { ok: false, reason: 'revision-conflict', error, dispatched: true, commitState: 'conflict' };
+                return { ok: false, reason: 'put-result-unknown', error, dispatched: true, commitState: 'unknown' };
+            }
+        });
+    } catch (error) {
+        return { ok: false, reason: error?.code || 'external-not-ready', error, dispatched: false, commitState: 'not-dispatched' };
+    }
+}
+
 export function externalOwnKeyBytes(key) {
     if (!isExternalReady()) return null;
     const value = active.current?.data?.roots?.[key];
@@ -541,7 +596,7 @@ export function recordDiagnosticTransport({ requestId, module, ok, rawResponse =
             const attempt = floor.attempts?.[String(module)];
             if (attempt?.requestId !== requestId) continue;
             attempt.transport = { status: ok ? 'success' : 'failed', ...(Number.isInteger(Number(httpStatus)) ? { httpStatus: Number(httpStatus) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}) };
-            if (ok && typeof rawResponse === 'string') attempt.rawResponse = rawResponse;
+            if (typeof rawResponse === 'string' && (ok || errorClass === 'upstream-timeout')) attempt.rawResponse = rawResponse;
             return floors;
         }
         return floors;
@@ -792,14 +847,16 @@ async function collectionIdFor(target) {
 export function abortMigration() { if (active.migration?.phase === 'copying') active.migration.controller.abort('user-abort'); }
 
 export async function migrateCurrentChat({ onProgress = () => {} } = {}) {
-    const ctx = context(); const chatId = String(ctx?.chatId || ''); const target = captureChatTarget();
+    const ctx = context(); const chatId = String(ctx?.chatId || '');
+    if (isStorageBusy()) return { ok: false, reason: 'migration-in-progress' };
+    const target = captureChatTarget();
     if (!chatId || !target || hasMarker(ctx)) return { ok: false, reason: hasMarker(ctx) ? 'already-external' : 'missing-chat-target' };
     const controller = new AbortController(); const generation = active.generation + 1;
     active = { ...freshActive(), chatId, mode: 'chat', status: 'migrating', target, generation, migration: { phase: 'copying', controller } }; notify();
     const migrationState = active;
-    const failEarly = (reason, error = null) => {
+    const failEarly = (reason, error = null, details = {}) => {
         if (active === migrationState) active = { ...freshActive(), chatId, mode: 'chat', status: 'chat', error: error?.message || null, generation: generation + 1 };
-        notify(); return { ok: false, reason, ...(error ? { error } : {}) };
+        notify(); return { ok: false, reason, ...(error ? { error } : {}), ...details };
     };
     let hostState;
     try { hostState = await readHostState(target); }
@@ -832,7 +889,7 @@ export async function migrateCurrentChat({ onProgress = () => {} } = {}) {
         const refreshedRoots = Object.fromEntries(EXTERNAL_ROOT_KEYS.map(key => [key, currentSnapshot?.[key]]));
         if (!currentSnapshot?.integrity || !Array.isArray(messagesSnapshot) || !same(liveRoots, refreshedRoots) || !same(liveMessages, messagesSnapshot)) return failEarly('live-flush-mismatch');
     }
-    const health = await probeExternalBackend(); if (!health.ok) return failEarly(health.reason, health.error);
+    const health = await probeExternalBackend(); if (!health.ok) return failEarly(health.reason, health.error, { stage: 'backend-probe' });
     if (active !== migrationState || String(context()?.chatId || '') !== chatId) return failEarly('chat-changed');
     const collection = `${await collectionIdFor(target)}-${randomId('attempt').slice(-12)}`; const created = [];
     const expectedRoots = Object.fromEntries(EXTERNAL_ROOT_KEYS.map(key => [key, clone(currentSnapshot[key])]));

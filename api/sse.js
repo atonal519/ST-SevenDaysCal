@@ -51,6 +51,32 @@ export function isPlaceholderContent(s) {
     return t === '<none>' || t === 'none';
 }
 
+// Some upstream gateways return a human-readable timeout page as a successful
+// chat completion. Match only the complete observed template so ordinary story
+// text that mentions timeouts, or a quoted/fenced copy of the page, stays data.
+const UPSTREAM_TIMEOUT_TEMPLATE_TAIL = [
+    '- Your prompt took too long to process, likely due to a large context window or heavy reasoning required by the AI provider.',
+    'How to fix:',
+    '- **Send "continue"** to resume from where the model stopped (works for most timeouts).',
+    '- **Start a new session/chat** to clear accumulated context and reset the timer.',
+    '- Shorten your prompt or split it into smaller parts.',
+    '- Avoid repeatedly retrying the exact same request to prevent continuous timeouts.',
+    '**Billing:**',
+    '- This request still counts as a request and is billed based on its input (minimum 1,000 prompt / 1,000 completion / 1,000 cached tokens).',
+    '- Do not resend the same request — it will keep failing and keep consuming your quota.',
+    '**Recommended tools:**',
+    '- These responses are optimized for opencode, Claude Code, and Codex.',
+    '- If you are using a non-standard client and keep hitting errors, switch to one of the supported tools above.',
+].join('\n');
+
+export function isUpstreamTimeoutTemplate(value) {
+    const normalized = String(value ?? '').replace(/\r\n?/g, '\n').trim();
+    const lines = normalized.split('\n');
+    if (!/^\[req_[^\]\s]+\] \[[^\]\r\n]+\]$/.test(lines[0] || '')) return false;
+    if (!/^\*\*Request exceeded \d+(?:\.\d+)?s limit\*\*$/.test(lines[1] || '')) return false;
+    return lines.slice(2).join('\n') === UPSTREAM_TIMEOUT_TEMPLATE_TAIL;
+}
+
 // 从非流式响应里提取正文：优先 content，空则兜底 reasoning_content，仍空则抛可读错误。
 export function extractCompletion(data, { allowEmptyOutput = false } = {}) {
     const choice = data?.choices?.[0];

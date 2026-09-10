@@ -4171,6 +4171,15 @@ select.sp-input { appearance: none; cursor: pointer; }
     justify-content: flex-end;
     margin-top    : 4px;
 }
+.sp-space-widget-card-readonly { opacity: 0.88; }
+.sp-space-widget-readonly {
+    display      : inline-flex;
+    align-items  : center;
+    gap          : 5px;
+    color        : var(--sp-subtle);
+    font-size    : var(--sp-fs-72);
+    line-height  : 1.45;
+}
 .sp-space-widget-apply {
     display      : inline-flex;
     align-items  : center;
@@ -4897,18 +4906,36 @@ body.sp-anchor-fs-lock { overflow: hidden; }
    坐标·收藏楼层
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* 楼层内「收藏此楼」按钮（挂在 ST 楼层操作栏，不在面板内 → 全局样式） */
+/* 楼层内「收藏此楼」按钮（普通 ST 在姓名旁；TT 在楼层操作栏 → 全局样式） */
 .sp-anchor-btn {
+    color          : var(--SmartThemeBodyColor, #aaa);
+    opacity        : 0.5;
+    transition     : opacity .15s, color .15s, transform .15s;
+}
+.sp-anchor-btn:not(.mes_button) {
+    display        : inline-flex;
+    align-items    : center;
+    justify-content: center;
+    width          : 22px;
+    height         : 22px;
+    padding        : 0;
+    margin         : 0 2px;
+    background     : transparent;
+    border         : none;
+    cursor         : pointer;
+    vertical-align : middle;
+}
+.sp-anchor-btn.mes_button {
     appearance     : none;
     background     : none;
     border         : 0;
     font           : inherit;
-    color          : var(--SmartThemeBodyColor, #aaa);
-    opacity        : 0.5;
-    transition     : opacity .15s, color .15s;
 }
-.sp-anchor-btn:hover           { opacity: 1; }
-.sp-anchor-btn-svg             { width: 1em; height: 1em; display: block; pointer-events: none; }
+.sp-anchor-btn:not(.mes_button):hover { opacity: 1; transform: translateY(-1px); }
+.sp-anchor-btn.mes_button:hover       { opacity: 1; }
+.sp-anchor-btn-svg                    { display: block; pointer-events: none; }
+.sp-anchor-btn:not(.mes_button) .sp-anchor-btn-svg { width: 15px; height: 15px; }
+.sp-anchor-btn.mes_button .sp-anchor-btn-svg       { width: 1em; height: 1em; }
 .sp-anchor-btn.sp-anchor-saved { opacity: 1; color: var(--SmartThemeQuoteColor, #d0bcff); }
 .sp-anchor-btn.sp-anchor-busy  { opacity: 0.35; pointer-events: none; }
 
