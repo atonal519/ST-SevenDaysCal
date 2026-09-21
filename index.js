@@ -6036,6 +6036,8 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
     globalRef: globalThis,
     contextProvider: getContext,
     isSelected: () => getSettings().useQianQianJie === true,
+    readCache: () => readStore(keyDesc('qqj-prompt-cache', 'user', '')),
+    writeCache: (value, options) => writeStoreConfirmed(keyDesc('qqj-prompt-cache', 'user', ''), value, options),
 });
 
 // Alternate sources are mutually exclusive (enforced in bindMemoryHandlers); each
