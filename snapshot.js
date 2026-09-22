@@ -1,24 +1,7 @@
-// snapshot.js — 构画·楼内渲染框「每层楼快照」数据层
-//
-// 背景（2026-08-05 楼内渲染框重构）：点/历/线的楼内块原本只挂最新一层、显示全局最新态，
-// 往上翻历史楼看到的是被覆盖后的"假历史"。本模块把**每层 AI 楼生成/推进当时**的点/线/历/锚点
-// 状态冻结成一份快照，绑到那条 message 上，随 chat 存档走。往上翻 → 从该楼快照重建 →
-// 看到的是那层楼「当时的世界状态」（真历史）。
-//
-// 为什么存 message.extra 而不是新开 chat_metadata 结构：
-//   - 删楼 / 编辑删楼 → ST 把整条 message 连同 extra 一起删掉，快照自动没，「删历史记录」白送；
-//   - swipe → extra 天然 per-swipe 隔离（见下方双写），滑到哪条看哪条快照；
-//   - 不能用 mesId 当 key 存别处：mesId 是数组下标，删楼会前移错位。
-//
-// ⚠️ swipe 双写（ST 源码 script.js ~12341 注释）：chat[floor].extra 只是**当前 swipe** 的镜像，
-//   真正随 swipe/删楼/分支回滚的是 swipe_info[swipe_id].extra。只写 extra 的话，用户切走再
-//   切回会被旧 swipe_info 覆盖、快照丢失。故写入时两处都写、读取只读 extra（ST 切 swipe 时
-//   会自己把 swipe_info[i].extra 同步回 extra）。
-//
-// 快照**不进 prompt**：ST 拼上下文只取 message.mes，extra 是纯元数据（token 数/翻译/图片等
-//   扩展都存这），塞快照不污染 AI 上下文。
-//
-// 持久化用 saveChatDebounced（去抖非阻塞），避开 saveChat 同步 I/O 尖峰（ST 卡顿根因之一）。
+// snapshot.js — 楼内渲染框的逐楼快照数据层。
+// 快照绑定生成当时的 message，而不是用会随删楼移动的 mesId 另建索引。内置存储写
+// message.extra，并镜像到当前 swipe_info 槽；外置模式保存独立记录与指针。快照属于渲染元数据，
+// 不进入 prompt。只有当前最后一条非系统楼可更新，历史楼保持当时状态。
 
 import { getContext } from '../../../extensions.js';
 import { isValidCalendarDescriptor, resolveSnapshotCalendar } from './runtime/chat-date-anchor.js';
@@ -29,8 +12,7 @@ registerExternalStorageContext(getContext);
 // message.extra 上的键，带 gouhua_ 前缀防和别的扩展撞。
 const SNAP_KEY = 'gouhua_snapshot';
 
-// 当前快照 schema 版本。字段只增不改、新字段追加末尾且可选（对齐构画一贯的格式演进纪律），
-// 老快照缺字段时读取端按缺省兜底，不强制迁移。
+// 字段只增不改并保持可选；旧快照缺字段时由读取端补默认值，不强制迁移。
 const SNAP_VERSION = 2;
 
 let snapshotSaveTimer = null;
@@ -62,7 +44,7 @@ function messageAt(mesId) {
     return chat[i] || null;
 }
 
-// 只有当前最后一条可见楼仍处于“本楼生成/召回可更新”窗口。后面一旦出现新楼，旧楼即成为
+// 只有当前最后一条非系统楼仍处于“本楼生成/召回可更新”窗口。后面一旦出现新楼，旧楼即成为
 // 历史楼；此后任何 DOM 重挂、主题刷新或活态业务刷新都不得再用当前缓存改写它。
 function isCurrentWritableFloor(mesId) {
     const chat = ctx()?.chat;
@@ -83,11 +65,11 @@ function isCurrentWritableFloor(mesId) {
 //     line    : 线 raw 字符串（含 <line_widget>… 或线缓存 raw）
 //     almanac : 历条目数组（loadAlmanac() 的归一化结果）
 //     anchor  : { month, day, year?, eraLabel? } 当时的「今天」锚点
-//     pool    : 【AI 楼】当时的暗账「标注池」精简条目 [{id,事由,类型,起始锚,周期长度,到期锚,标签,锁,静音}]（新字段·末尾·可选）
-//     recall  : 【用户楼】当轮召回注入回显 [{id,事由,类型,起始锚,现状}]（丰富版；新字段·末尾·可选）
-//   （旧字段 ledger＝早期只读回显，已退役；老快照的 ledger 读取端直接忽略，孤立无害。）
+//     pool    : 【AI 楼】当时的暗账「标注池」精简条目 [{id,事由,类型,起始锚,周期长度,到期锚,标签,锁,静音}]（可选）
+//     recall  : 【用户楼】当轮召回注入回显 [{id,事由,类型,起始锚,现状}]（可选）
+//   兼容旧快照中的 ledger 字段：读取端忽略它，不影响其它字段。
 //
-// 用户楼也存快照：召回框挂在用户楼、需要历史楼看当轮召回，故放开原「只给 AI 楼挂」限制。
+// 用户楼也存快照，因为召回框需要在历史用户楼复现当轮注入。
 // 用户楼的 point/line/almanac 恒空（只有 recall 有料），AI 楼反之只有 pool——两类互斥、同一 schema 承载。
 //
 // 幂等/省写：与现存快照 JSON 相等则跳过（不 touch extra、不触发保存），
@@ -135,7 +117,7 @@ export function writeSnapshot(mesId, snap) {
     return true;
 }
 
-// 内容等价（忽略 ts / v 差异——v 升级时另有迁移路径，这里只判实质内容）。
+// 内容等价只比较渲染状态；时间戳和 schema 号不代表业务内容变化。
 function _sameSnapContent(a, b) {
     if (a.point !== b.point) return false;
     if (a.line !== b.line) return false;
@@ -170,7 +152,7 @@ function _mirrorToCurrentSwipe(msg, payload) {
 
 // ── 读 ────────────────────────────────────────────────────────────────────
 // 只读 message.extra（ST 切 swipe 时已把 swipe_info[i].extra 同步回 extra）。
-// 返回 null = 该楼无快照（重构前的老楼 / 从未生成过）→ 渲染端据此决定不显块。
+// 返回 null 表示该楼没有可用快照；渲染端据此不显示楼内块。
 export function readSnapshot(mesId) {
     const msg = messageAt(mesId);
     const snap = isExternalMode() ? readExternalSnapshot(msg) : msg?.extra?.[SNAP_KEY];

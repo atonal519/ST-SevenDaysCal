@@ -1,5 +1,5 @@
 // ─── 点（日程）域 · 生成 prompt ───────────────────────────────────────────────
-// 从 index.js 机械搬移 buildPrompt：纯字符串拼装，无 DOM / store / 历法依赖。
+// 纯字符串拼装，不依赖 DOM、store 或历法运行态。
 export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null, adultContext = null) {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;

@@ -53,6 +53,7 @@ export function createSpaceUi(host = {}) {
         history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
             pointBaselines: message.pointBaselines,
             lineBaselines: message.lineBaselines,
+            expectedWidgetKind: message.expectedWidgetKind,
             legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
             readOnly: message.portableReadonly === true,
         }));

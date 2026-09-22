@@ -1,15 +1,6 @@
-// ledger.js — 构画·暗账（时间打点 / shadow ledger）存储层
-//
-// 动机：主楼 AI 记得事件、却算不出「距今多久 / 现在该是什么状态」——伤口一周该结痂却反复喊剧痛，
-// 月经上个月来的当成昨天。暗账在点/线/面之外单开一层「时间账」：从正文捞事件 → 打点（此时·此物·此
-// 状态）→ 每 N 楼重算时间差刷现状 → 以强提醒注入主楼，让主楼只表达被嚼碎的结论、不自己算。
-//
-// 本文件只管【存储层】：chat_metadata['sp-ledger'] 的读写与通用 schema。capture/judge/inject/render/select
-// 等同域模块负责其他职责。存储照 memory.js / store.js：saveMetadata() 同步落盘（切档 clearChat()
-// 会取消防抖保存并清空 chat_metadata，防抖那份会永久丢，故必须同步写）。
-//
-// OWN_KEYS 白名单已含 'sp-ledger' → 存储管理面板经 store.ownKeyBytes / clearOwnKey 自动显示占用/可清，
-// 无需本模块再接线（那两个函数按 key 字符串直读 chat_metadata，与本模块是否被 import 无关）。
+// 构画刻度的存储层。逻辑根 `sp-ledger` 可承载于普通聊天 metadata 或外置后端；本文件只负责
+// schema、读写和事务，捕获、判定、选择、注入与渲染由同域模块处理。读路径不得创建空根；
+// 批量生成路径必须等待确认式提交并遵守固定聊天 owner，普通交互写入仍保持同步访问合同。
 
 const { getContext = () => null } = await import('../../../../../extensions.js').catch(() => ({}));
 import { getChatRoot, persistExternalRoots, registerExternalStorageContext } from '../../runtime/external-chat-storage.js';
@@ -19,7 +10,7 @@ registerExternalStorageContext(getContext);
 const LEDGER_KEY     = 'sp-ledger';
 const SCHEMA_VERSION = 1;
 
-// 通用 schema（蓝图三·一套字段管所有类型）。一次性事件 vs 周期不是两种数据类型，只是了结时
+// 通用 schema。一次性事件 vs 周期不是两种数据类型，只是了结时
 // 「丢弃 vs 滚到下一轮」的结算差异，字段全通用。新字段一律追加末尾 + 可选，别插中间。
 //   类型 : '持续状态' | '约定待办' | '周期'
 //   状态 : '活跃' | '已了结'（了结只翻标志位、默认筛选排除，不物理删——用户可捞回）
@@ -65,7 +56,7 @@ function ledger(create = false) {
     if (!Array.isArray(m.entries)) m.entries = [];
     if (!Number.isFinite(+m.seq))  m.seq = 0;
     if (m.version !== SCHEMA_VERSION) {
-        m.version = SCHEMA_VERSION;   // v1 初版，无历史结构要迁移；未来 bump 在此补齐
+        m.version = SCHEMA_VERSION;   // schema 升级时在写路径补齐结构
         if (create) persist();
     }
     return m;

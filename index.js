@@ -125,12 +125,12 @@ import {
     formatCalendarDate,
     formatStoryClockHeadParts,
 } from './business/axis/ui.js';
-// 轴锚点/周几/距今/将至排序已抽出到 business/axis/anchor.js；index.js 内部跨域读取器经 bindAxisAnchor 注入。
+// 轴锚点模块通过 bindAxisAnchor 注入 index.js 的跨域读取器，避免循环依赖。
 import {
     bindAxisAnchor,
     almTodayAnchor, almDaysUntil, almDaysBetweenFull, almWeekdayRef, almWeekdayFor,
 } from './business/axis/anchor.js';
-// 历注入文本构造（纯函数，仅依赖 data.js/anchor.js）已抽出到 business/axis/inject.js。
+// 历注入文本是只依赖 data.js/anchor.js 的纯函数。
 import { getAlmanacInjectText } from './business/axis/inject.js';
 import { createAxisPanel } from './business/axis/panel.js';
 import { renderAxisToolbar } from './business/axis/toolbar.js';
@@ -164,7 +164,7 @@ bindExternalChatStorage({ getContext, coreModule: scriptCore, fetchImpl: (...arg
 const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
 
 // ─── 点（日程）域：状态 / 解析 / 提示词 / 渲染 ────────────────────────────────
-// point 业务域已从本文件抽出到 business/point/*，此处仅按需导入（机械迁移，不改行为）。
+// point 域的状态、解析、提示词与渲染由 business/point/* 提供。
 import { pointState } from './business/point/state.js';
 import { parseCalendar, validateGeneratedCalendar, bindPointAdultTickets, parsePointEventRecord, firstPointEventBlock, replacePointEventBlock, buildPointInjectText, numberedPointList, mergePinnedPoints, forceStartDate } from './business/point/parse.js';
 import { isGregorian as isGregorianCalendar } from './business/calendar/date.js';
@@ -177,7 +177,7 @@ import { createPointWidgetActions } from './business/point/widget.js';
 import { createPointController, pointScheduleNeedsDateSync } from './business/point/controller.js';
 import { createPointInlineRenderer } from './business/point/inline.js';
 import { pointTicketPlan } from './business/point/adult.js';
-// ledger 检索前置选择器（纯逻辑三件套）已抽出到 business/ledger/select.js；到期/距今口径经 bindLedgerSelect 注入。
+// ledger 选择器保持纯逻辑；到期/距今口径经 bindLedgerSelect 注入。
 import { bindLedgerSelect, selectLedgerForInject } from './business/ledger/select.js';
 import { bindLedgerDate, ledgerDaysSince, ledgerDueInfo, listJudgeableLedger, fmtLedgerForJudge } from './business/ledger/date.js';
 import { bindLedgerSchema, splitCnList, normGist, parseLedgerCapture as parseLedgerCaptureSchema, parseLedgerCaptureDetailed, parseLedgerJudge as parseLedgerJudgeSchema } from './business/ledger/schema.js';
@@ -204,6 +204,7 @@ import { createTaskOwnerManager } from './runtime/task-owner.js';
 import { evaluateTaskLifecycle } from './runtime/task-orchestration.js';
 import { parseLines as parseCanonicalLines, TERMINAL_LINE_STAGES } from './business/lines/schema.js';
 import { buildLinesPrompt as buildCanonicalLinesPrompt } from './business/lines/prompt.js';
+import { LINE_DIRECTION_LABELS, LINE_DIRECTION_VALUES, normalizeLineDirection } from './business/lines/direction.js';
 import { createAdvanceStrategy } from './business/lines/strategy.js';
 import { createLinesFeature } from './business/lines/feature.js';
 import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
@@ -233,7 +234,7 @@ function syncLatestScheduleBlock(expectedChatId = null) {
     if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
     return refreshInlineWindow(true);
 }
-// ledger 暗账页渲染/编辑/批量（Option B）已抽出到 business/ledger/render.js；index.js 宿主经 bindLedgerRender 注入。
+// ledger 页面的渲染、编辑与批量状态由 business/ledger/render.js 持有，宿主依赖经 bindLedgerRender 注入。
 import {
     bindLedgerRender,
     batchReset, resetLedgerRenderState,
@@ -738,9 +739,8 @@ const FAB_ID     = 'sp-fab';
 const POS_KEY    = 'sp-pos';
 const SIZE_KEY    = 'sp-size';
 
-// ─── Shadow DOM 窗口宿主（2026-08-14 隔离改造批次1）──────────────────────────────
-// 主窗口 #sp-modal-root 迁入 shadow root：ST 全局样式/选择器/事件在边界处切断，
-// 根治样式污染。jQuery 选择器不穿透 shadow——窗口内 id/类查询一律改走 $in()/inEl()。
+// ─── Shadow DOM 窗口宿主 ───────────────────────────────────────────────────────
+// 主窗口位于 shadow root，以隔离 ST 全局样式、选择器和事件；窗口内查询必须走 $in()/inEl()。
 // _spShadow 在 injectModal() 里赋值；applyTheme() 同步 shadow 内 wrapper 的主题类。
 // 集合版：querySelector 只取首个，集合操作（removeClass/addClass/toggleClass/show/hide/each/map/length…）必须走它
 const almToolbarHtml = () => renderAxisToolbar(actionMenuHtml);
@@ -1306,7 +1306,7 @@ const ST_BASE  = new URL('../../../../../', import.meta.url).href;   // ST 站�
 // 悬浮球图标（Solar「pen-new-round-outline」，MIT 免费素材；源 assets/pen.svg）。
 // 内联而非 <img>：单 path 用 fill=currentColor，直接继承按钮字色——主题日/夜换色、
 // 生成态霓虹变色（.sp-btn-generating 改 color）全都自动跟随，无需另写。宽高 1em 跟字号缩放，
-// 替换旧的 <i class="fa-...">，行为一致。仅悬浮球用；魔杖菜单入口仍是字体图标（见 injectExtButton）。
+// 仅悬浮球使用该 SVG；魔杖菜单入口继续使用字体图标（见 injectExtButton）。
 const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M1.25 12C1.25 6.063 6.063 1.25 12 1.25a.75.75 0 0 1 0 1.5A9.25 9.25 0 1 0 21.25 12a.75.75 0 0 1 1.5 0c0 5.937-4.813 10.75-10.75 10.75S1.25 17.937 1.25 12m15.52-9.724a3.503 3.503 0 0 1 4.954 4.953l-6.648 6.649c-.371.37-.604.604-.863.806a5.3 5.3 0 0 1-.987.61c-.297.141-.61.245-1.107.411l-2.905.968a1.492 1.492 0 0 1-1.887-1.887l.968-2.905c.166-.498.27-.81.411-1.107q.252-.526.61-.987c.202-.26.435-.492.806-.863zm3.893 1.06a2.003 2.003 0 0 0-2.832 0l-.376.377q.032.145.098.338c.143.413.415.957.927 1.469a3.9 3.9 0 0 0 1.807 1.025l.376-.376a2.003 2.003 0 0 0 0-2.832m-1.558 4.391a5.4 5.4 0 0 1-1.686-1.146a5.4 5.4 0 0 1-1.146-1.686L11.218 9.95c-.417.417-.58.582-.72.76a4 4 0 0 0-.437.71c-.098.203-.172.423-.359.982l-.431 1.295l1.032 1.033l1.295-.432c.56-.187.779-.261.983-.358q.378-.18.71-.439c.177-.139.342-.302.759-.718z" clip-rule="evenodd"/></svg>';
 
 
@@ -1457,7 +1457,7 @@ async function copyLastDebugPayload({
 
 
 // 存储描述符 {kind, view, charName}：getCacheKey 是 schedule key alias，其余 key 已归入对应模块。
-// 无 chat 时返回 null（保留旧 getter「无 chat → null」语义，各处 if(!key) 守卫照旧生效）。
+// 无 chat 时返回 null，调用方统一用 if (!key) 守卫。
 
 // view: 'user' | 'char'   charName: confirmed char name
 const getCacheKey = getScheduleKey;
@@ -1501,10 +1501,8 @@ function getEffectiveTheme() {
 
 let currentTheme   = detectSTTheme();
 
-// 新历法编辑使用独立决策弹窗；作者原有 spConfirm 与既有调用保持不变。
-// 批次4：mount 用惰性包装——_spDialogShadow 在 injectModal() 运行时才赋值，而本实例化在模块
-// 顶层（更早）；弹窗实际 append 发生在运行时，届时 _spDialogShadow 已就绪。removeOverlay 注入
-// 让 modal.js 保持通用（独立 shadow 内 $() 查不到 overlay，须走 $dialog）。
+// 新历法编辑使用独立决策弹窗。mount 必须惰性读取 _spDialogShadow，因为管理器在宿主初始化前创建；
+// removeOverlay 由宿主注入，确保独立 shadow 内的 overlay 用正确查询根移除。
 const customDialog = createDialogManager({
     $: jQuery,
     mount: { appendChild: el => _spDialogShadow?.appendChild(el) },
@@ -1604,6 +1602,7 @@ const linesFeature = createLinesFeature({
     injectionEnv: {
         context: () => getContext(), settings: getSettings, enabled: injectEnabled,
         adultMode: () => getAdultMode(charStableKey(getContext())),
+        direction: () => getLineDirection(charStableKey(getContext())),
         readRaw: () => readStore(getLinesCacheKey())?.raw || '',
         promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
     },
@@ -1625,7 +1624,7 @@ const linesFeature = createLinesFeature({
         participantIdentity: captureParticipantIdentity,
         sameParticipantIdentity,
         contextSnapshot: captureGenerationContext,
-        buildPrompt: (previousRaw, travelContext, vectorContext, identity) => appendTravelPromptContext(buildLinesPrompt(identity?.userName || '用户', identity?.charName || '角色', 'user', previousRaw, getScale(identity?.characterKey || charStableKey(getContext())), vectorContext, getAdultMode(identity?.characterKey || charStableKey(getContext()))), travelContext),
+        buildPrompt: (previousRaw, travelContext, vectorContext, identity) => appendTravelPromptContext(buildLinesPrompt(identity?.userName || '用户', identity?.charName || '角色', 'user', previousRaw, getScale(identity?.characterKey || charStableKey(getContext())), vectorContext, getAdultMode(identity?.characterKey || charStableKey(getContext())), getLineDirection(identity?.characterKey || charStableKey(getContext()))), travelContext),
         random: () => Math.random(),
         callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, options),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
@@ -1708,6 +1707,7 @@ const spaceFeature = createSpaceFeature({
     contextEnv: {
         context: getContext,
         settings: getSettings,
+        lineDirection: ctx => getLineDirection(charStableKey(ctx)),
         readOutline: () => outlineFeature.readRaw(),
         readPointScopes: () => store.listScheduleScopes(),
         numberedPoints: numberedPointList,
@@ -1756,8 +1756,7 @@ const spaceFeature = createSpaceFeature({
     },
 });
 let theaterMode          = false;
-// 暗历内联编辑态/归档折叠态/批量模式已随 ledger 渲染层迁入 business/ledger/render.js
-// （经 getLedgerEditor、归档/批量 actions 与 resetLedgerRenderState 复位）。
+// 刻度编辑、归档展开与批量选择状态由 ledger 渲染层持有并统一复位。
 const _injectTexts      = {};
 const _injectIdsByText  = new Map();
 let   _injectIdSeq      = 0;
@@ -1794,7 +1793,7 @@ function applyUiFont() {
     const url    = (s.uiFontUrl    ?? SP_FONT_DEFAULT_URL).trim();
     let   family = (s.uiFontFamily ?? SP_FONT_DEFAULT_FAMILY).trim();
 
-    // <link> 侧：有 URL 就挂/换，留空则移除（=只用系统栈兜底）。href 用绝对 URL——
+    // <link> 侧：有 URL 就挂或换，留空则移除并使用系统栈兜底。href 用绝对 URL——
     // zeoseven 那份 CSS 里 @font-face src 是相对路径 ./xxx.woff2，浏览器基于 link href 解析，
     // 故必须走 <link href> 而非把 CSS 内容内联（内联会丢失基准 URL、woff2 404）。
     let link = document.getElementById(SP_FONT_LINK_ID);
@@ -2096,8 +2095,7 @@ jQuery(async () => {
     if (_stListeners.externalSnapshotPrune) eventSource.removeListener?.(event_types.MESSAGE_DELETED, _stListeners.externalSnapshotPrune);
     _stListeners.externalSnapshotPrune = () => { if (!currentCharacterExcluded() && isExternalMode()) void pruneExternalSnapshots(getContext()?.chat || []); };
     eventSource.on(event_types.MESSAGE_DELETED, _stListeners.externalSnapshotPrune);
-    // 首屏补迁移：扩展初始化时当前 chat 往往已 ready（CHAT_CHANGED 早已错过），
-    // 否则老用户要手动切一次 chat 才触发迁移。同步搬数据，冲突延后弹窗。
+    // 初始化时当前聊天可能已经 ready，需主动检查 localStorage 旧数据；同步判断，冲突弹窗延后显示。
     try {
         const _mig0 = currentCharacterExcluded() ? { status: 'skipped' } : store.migrateChatFromLocalStorage(getContext().chatId);
         if (_mig0.status === 'conflict') scheduleForChatBoundary(() => showStoreConflictDialog(_mig0), 900);
@@ -2178,10 +2176,8 @@ jQuery(async () => {
     };
     eventSource.on(event_types.MESSAGE_SWIPED, _stListeners.swiped);
     // 线·编辑盖章：用户小铅笔改正文 → 只把该楼签名基线刷成编辑后正文，绝不重算/生成。
-    // 堵的漏洞：编辑只发 MESSAGE_EDITED（线不监听→当场不动，合预期），但旧签名还停在编辑前；
-    // 若这楼随后又触发一次 CMR（紧接着 swipe/🔄，或 MVU 类改写插件重渲染），就会拿「编辑后正文」比
-    // 「编辑前签名」→ 误判 contentChanged=重roll、多算一次线。此处提前把签名对齐到编辑后即根除。
-    // 照 swiped 的盖章同款：编辑要不要更新线交给用户手点刷新键，与「编辑不自动重算」一致。
+    // MESSAGE_EDITED 不自动重算线，但必须把签名基线同步到编辑后正文；否则后续 CMR 会把普通编辑
+    // 误判为重生成。是否更新线仍由用户手动刷新决定。
     // emit 时机：messageEditDone 先 renderEditedMessage 再 emit，故 chat[mid].mes 已是新正文，_floorSig 拿到的即新签名。
     if (_stListeners.edited) eventSource.removeListener?.(event_types.MESSAGE_EDITED, _stListeners.edited);
     _stListeners.edited = (mesId) => {
@@ -2230,8 +2226,8 @@ jQuery(async () => {
         const chat = getContext().chat;
         if (!Array.isArray(chat)) return;
         if (messageId !== chat.length - 1) return;
-        // 戳优先：戳开且本楼有戳 → 每次最新楼定型都直读落地（零 API、幂等），**不进单调闸**——
-        // 重roll/swipe 复用同 messageId，若被闸挡掉，戳从 919 翻 920 时显示跟了、锚点没跟（论坛 bug）。
+        // 戳优先：最新楼每次定型都重新读取并幂等落地，不进 messageId 单调闸；同一楼切 swipe
+        // 仍可能改变时间戳，日期锚必须随当前正文更新。
         // 结果登记进日期协调器：同 renderKey 的并发渲染共享一次解析，杜绝重复 API。
         const renderKey = buildDateRenderKey(messageId);
         const bootstrap = consumeDateBootstrap(messageId);
@@ -2341,7 +2337,7 @@ jQuery(async () => {
         } catch (err) { console.warn('[7dayscal] 坐标改名同步失败', safeDiagnosticLog('axis', 'save', err)); }
     };
     eventSource.on(event_types.CHAT_RENAMED, _stListeners.rename);
-    // 柏宝书就绪事件：加载顺序不固定，早期同步检测可能扑空而误报"未就绪"。
+    // 柏宝书加载顺序不固定，初次同步检测可能早于其 API 就绪。
     // 柏宝书文档推荐监听 st-baibai-book:ready 兜底——就绪后清掉"仅警告一次"的闩，
     // 并在面板开着且选了柏宝书源时立刻把状态刷成"已就绪"。
     if (_bbbReadyListener) window.removeEventListener('st-baibai-book:ready', _bbbReadyListener);
@@ -2493,7 +2489,6 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
 
 // ─── In-game day-change detection (桥接到历·almTodayAnchor) ───────────────────
 // days 模式（跟随局内时间）的推进检测：从历的权威「今天」取 {月-日}，变化即推进。
-// 历史上这里读柏宝书 state.time，现已改为桥接 almTodayAnchor
 // 兜底来源按现行 anchor 优先级解析；柏宝书未安装时仍可由其他可用上下文推进，并与历共用同一个「今天」。
 // extractDayFromTime / _cnToNumber / _CN_* 仍被 almTodayAnchor、parseJudgedDate 复用，保留。
 
@@ -2501,7 +2496,7 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
 // 中文数字 → 阿拉伯数字（覆盖 0–99，足以处理古代年月日）。含农历「廿/卅」与大写/繁体（民国·契据式）。
 
 
-// 抽出"这一天"的规范化 key。剥掉 era 前缀、时分秒尾巴以及数字前导零，
+// “这一天”的规范化 key 会剥掉 era 前缀、时分秒尾巴以及数字前导零，
 // 让同一天不同写法（"1287/04/01" ≡ "1287/4/1" ≡ "1287年4月1日"）落到同一
 // 个 key 上。返回 null 表示无法识别 → 不推进。
 
@@ -2520,7 +2515,7 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
 // 字段照标注池闭环：类型胶囊(上色) + 事由 + 起始/周期/终止 + 标签；不显现状（现状归「召回」框）。
 // 统一楼内块由当前渲染窗口控制；历史楼保留各自快照，最新楼读活态。
 // 虚线冷知识已折进 .sp-lines-inline 的 body（合并成一个楼内块），清线块即连虚线一并清；
-// 仍带上 .sp-dashed-inline 兜底，扫掉合并前旧版本残留在 DOM 里的独立虚线块。
+// 保留 .sp-dashed-inline 兼容选择器，用于清理旧 DOM 中的独立虚线块。
 // 新楼层挂线块 + （可选）首次推进生成。渲染改由 refreshInlineWindow() 统一负责；
 // 入口保留唯一真副作用——首次推进的线生成，以及推进前后的即时刷窗。
 // Back-fill：切聊天/初始化/主开关切换时的入口。渲染交给窗口控制器；保留潜伏注入 refresh 真副作用。
@@ -2662,30 +2657,24 @@ function getLedgerJudgeInterval() {
 // 每楼正文首尾各打一个 HTML 注释时间戳（<!-- SDC-start … --> / <!-- SDC-end … -->），
 // 我们再从 chat 末尾往回扫读回。HTML 注释酒馆天然不渲染，无需像柏宝书那样加隐藏正则；
 // 但注释必须留在 message.mes 里，下楼主模型才看得见上楼 end、以它为基准往前推。
-// 命门（吸收自柏宝书方法论、提示词全自写）：
+// 核心合同：
 //   ① 起止双界——一楼是一段区间不是一个点，故首尾两个戳；
 //   ② 标签留正文——绝不删，靠它让下楼继承基准，增量在模型脑内、输出成绝对值；
 //   ③ 往回扫 + 兜底——读「当前时间」从末楼往前扫第一条可解析的（end 优先），漏了也不崩。
 // 当前链路会将时间戳注入、解析为结构化日期，并在完整戳存在时优先落入共享锚；缺失时按设置走 API 兜底。
 // 首尾注释的正则（宽松容错：允许注释内外多余空白；内容自由，不强制格式）。
 
-// 时间戳总开关（不受 injectEnabled 统辖，只受 pluginEnabled + 本开关；见 refreshStoryClockInjection）。默认开——用户定：这是全插件时间地基，值得常驻。
-// storyClockEnabled 已迁至轴控制器。
+// 时间戳总开关不受 injectEnabled 统辖，只受 pluginEnabled 与自身开关控制。
 
-// 自写提示词（吸收柏宝书三套路：拔高到系统强制 / 以上楼 end 为基准推进 / 禁用「某天」敷衍；
-// 措辞、示例、标签名全原创，绝不照搬）。粒度到小时，年份可写可略。
+// 时间戳提示词要求以上楼 end 为推进基准，并输出可回读的绝对时间；粒度到小时，年份可写可略。
 
-// 取生效的强注词：用户在设置里二改了(非空)就整段用他的；留空用内置默认（默认词随插件更新）。
-// 重设时间戳注入。关闭时清空。幂等，可随处多调。照 refreshLinesInjection 套路。
-// refreshStoryClockInjection 已迁至 storyClockController。
+// 用户设置非空时整段替换内置提示词；留空使用当前内置默认。关闭时清空注入，重复刷新保持幂等。
 
 // 从单楼正文解析首尾戳，并供结构化日期解析使用。返回 { start, end }（各为去空白后的原文字符串，缺失=null）。
 // 从 chat 末尾往回扫，取最近一楼「可解析出至少一个戳」的 AI 楼。end 优先作「当前时间」。
 // 漏了/坏了不崩：某楼无戳就继续往上找；全无 → 返回 null（显示层据此不显示这一行）。
-// latestStoryClock 已迁至 story-clock.js。
 
 // 从最近一楼的戳解析出结构化 {month,day}。end 优先(当前时间)、退 start。无戳/解析不出 → null（交回兜底）。
-// storyClockDate 已迁至 story-clock.js。
 
 // 自定义历法下，正文用的是自定义月名（如「霜月」），公历式发问会答非所问。带上历法描述、
 // 并允许 AI 用「第M月D日」或月名作答；内置公历返回上面的原版 prompt（零行为变化）。
@@ -2694,7 +2683,7 @@ function getLedgerJudgeInterval() {
 // 构画 AI 从最近正文里捞「需按时间追踪」的新事件，标注入 sp-ledger（此时·此物·此状态）。
 // 起始锚 = 此刻楼层 + 历「今天」(almTodayAnchor)，钉死不改；判定与注入由同域流程负责。
 // 触发：每 N 楼自动车(runLedgerCaptureStep 无参) + 轴面板「刻度」页手动「立即标注」(manual=true)。
-// capture 窗口与来源批次大小由 business/ledger/capture.js 统一提供。
+// capture 窗口与来源批量大小由 business/ledger/capture.js 统一定义。
 
 // ═══ 暗历③·判定·刷现状 ═══════════════════════════════════════════════════════
 // 每 N 楼把活跃条目连同「距今几天」（纯 JS 算好，LLM 不擅长日期差）喂给构画 AI，
@@ -2892,12 +2881,16 @@ function injectFab() {
     });
     fabButton.addEventListener('pointermove', onFabPointerMove);
     fabButton.addEventListener('pointerup', onFabPointerEnd);
-    fabButton.addEventListener('pointercancel', onFabPointerEnd);
+    fabButton.addEventListener('pointercancel', onFabPointerCancel);
+    fabButton.addEventListener('lostpointercapture', onFabPointerCaptureLost);
 
-    fabButton.addEventListener('click', function () {
-        if (!fabDragged) {
-            $(`#${MODAL_ID}`).is(':visible') ? closePanel() : openSchedule();
+    fabButton.addEventListener('click', function (e) {
+        if (fabDragged && e.detail !== 0) {
+            fabDragged = false;
+            return;
         }
+        fabDragged = false;
+        $(`#${MODAL_ID}`).is(':visible') ? closePanel() : openSchedule();
     });
 }
 
@@ -2915,16 +2908,34 @@ function onFabPointerMove(ev) {
     f.style.bottom = 'auto';
 }
 function onFabPointerEnd(ev) {
+    finishFabPointerGesture(ev, { releaseCapture: true });
+}
+function onFabPointerCancel(ev) {
+    finishFabPointerGesture(ev, { cancelled: true, releaseCapture: true });
+}
+function onFabPointerCaptureLost(ev) {
+    finishFabPointerGesture(ev, { cancelled: true });
+}
+function finishFabPointerGesture(ev, { cancelled = false, releaseCapture = false } = {}) {
     if (!fabDragState || ev.pointerId !== fabDragState.pointerId) return;
     const pointerId = fabDragState.pointerId;
-    if (fabDragged) {
-        const f = document.getElementById(FAB_ID);
-        const r = f.getBoundingClientRect();
-        localStorage.setItem('sp-fab-pos', JSON.stringify({ left: r.left, top: r.top }));
+    const wasDragged = fabDragged;
+    if (cancelled) fabDragged = true;
+    try {
+        if (wasDragged) {
+            const f = document.getElementById(FAB_ID);
+            const r = f.getBoundingClientRect();
+            localStorage.setItem('sp-fab-pos', JSON.stringify({ left: r.left, top: r.top }));
+        }
+    } catch {
+        // 浏览器拒绝持久化位置时，当前手势仍必须结束，否则 FAB 会一直忽略后续按下。
+    } finally {
+        fabDragState = null;
+        const captureTarget = ev.currentTarget;
+        if (releaseCapture && captureTarget?.hasPointerCapture?.(pointerId)) {
+            try { captureTarget.releasePointerCapture(pointerId); } catch {}
+        }
     }
-    fabDragState = null;
-    const captureTarget = ev.currentTarget;
-    if (captureTarget?.hasPointerCapture?.(pointerId)) captureTarget.releasePointerCapture(pointerId);
 }
 
 function bindLinesHistoryUi($linesWrap) {
@@ -3421,10 +3432,14 @@ function injectModal() {
                                     </details>
 
                                     <details class="sp-settings-section" id="sp-adult-scale-section">
-                                        <summary class="sp-settings-section-title">成人内容与叙事尺度</summary>
+                                        <summary class="sp-settings-section-title">剧情倾向、成人内容与叙事尺度</summary>
                                         <div class="sp-settings-section-body">
                                             <p class="sp-cfg-group" id="sp-scale-hint">叙事尺度（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-scale-row"><!-- populated when settings opens --></div>
+                                            <hr class="sp-mem-divider">
+                                            <p class="sp-cfg-group">剧情倾向（按角色保存）</p>
+                                            <div class="sp-mode-row" id="sp-line-direction-row"><!-- populated when settings opens --></div>
+                                            <p class="sp-cfg-hint">影响线的生成与推进；开启“线 · 潜伏注入”后，也会指导主楼剧情。倾向只在符合现有证据的走向中调整优先级。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">成人剧情模式（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-adult-row"><!-- populated when settings opens --></div>
@@ -3614,7 +3629,7 @@ function injectModal() {
                     <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
                 </div>
             </div>`;
-    // Shadow DOM 宿主（2026-08-14 隔离改造批次1）：id/类留在 light DOM 的 host 上——
+    // id/类留在 light DOM 的 host 上，供开关、主题与可见性判断操作；窗口内容放入 shadow root，
     // openSchedule/closePanel 的 show/hide、applyTheme 的类切换、各 is(':visible')
     // 判断的操作对象不变；窗口内容整体进 shadow root，ST 全局 button/input/滚动条/
     // 文字阴影等规则在边界处切断。style.css 与 fontawesome 经 <link> 只作用于本 shadow；
@@ -3685,10 +3700,9 @@ function injectModal() {
         const view = $in('.sp-side-tab.sp-view-active').data('view') || 'schedule';
         $pop.html(MODULE_INTROS[view] || MODULE_INTROS.schedule).show();   // 内容全为作者手写 HTML（图标图例），无用户输入 → .html() 安全
     });
-    // 批次3：shadow 内点击的 e.target 被重定向为 host，closest() 判断失效（点 pop 内部也触发关闭）
-    // → 改走 composedPath()（含 shadow 内节点）判断点击是否落在 pop/btn 内。
+    // shadow 外监听看到的 target 会被重定向为 host，必须用 composedPath() 判断点击是否在气泡内。
     $(document).off('click.spIntro').on('click.spIntro', function (e) {
-        // hotfix3：合成事件（如 fastChat/mobileKeyboard 的 jQuery .trigger()）无 originalEvent → ?. 防御，path 为空走关闭分支
+        // jQuery 合成事件可能没有 originalEvent；此时空路径按外部点击关闭。
         const path = e.originalEvent?.composedPath?.() || [];
         if (path.some(el => el instanceof Element && el.matches('#sp-module-intro-pop, .sp-module-intro-btn'))) return;
         $in('#sp-module-intro-pop').hide();
@@ -3853,7 +3867,7 @@ function injectModal() {
     $in('#sp-body').on('click', '#sp-abort-generate', abortScheduleGen);
     $linesWrap.on('click', '#sp-abort-lines', abortLinesGen);
 
-    // ── 棱（小剧场）事件（全部委托到注入式 ui；旧委托仅作为无 UI 兼容路径）──
+    // ── 棱（小剧场）事件：优先使用注入式 UI，无 UI 时走兼容入口 ──
     const $theater = $in('#sp-theater-wrap');
     theaterFeature.bindUi($theater);
 
@@ -3913,7 +3927,7 @@ function injectModal() {
     $almanac.on('click', '.sp-alm-add-day', function () {
         openAlmanacEditor(null, { month: almCalMonth() + 1, day: parseInt($(this).attr('data-day'), 10) || 1 });
     });
-    // 轴工具栏：宽版按钮与窄版抽屉共享同一动作分发，避免重构后只剩静态按钮。
+    // 宽版工具栏与窄版抽屉共享同一动作分发，保证两套入口行为一致。
     const dispatchAlmanacAction = action => {
         if (action === 'add-almanac') return openAlmanacEditor();
         if (action === 'generate-almanac') return triggerGenerateAlmanac();
@@ -4077,12 +4091,11 @@ function injectModal() {
         await axisCalendarManager.updateBinding($(this).attr('data-avatar'), null, $(this).attr('data-template-id'));
     });
 
-    // 批次3：同 spIntro——action 菜单在 shadow 内，target 重定向失效，改 composedPath 判断。
-    // hotfix3：合成事件无 originalEvent → ?. 防御，path 为空 → some()=false → 走关闭分支（安全默认）
+    // action 菜单位于 shadow 内，外点判断必须使用 composedPath；合成事件无路径时按外部点击关闭。
     $(document).off('click.spActionMenu').on('click.spActionMenu', function (event) {
         if (!(event.originalEvent?.composedPath?.() || []).some(el => el instanceof Element && el.matches('.sp-action-menu'))) closeActionMenus();
     });
-    // 批次3：keydown 是 composed 事件，从 shadow 冒泡到 document 照常触发、无 target 判断 → 无需改。
+    // keydown 是 composed 事件，可从 shadow 冒泡到 document；Escape 无需读取内部 target。
     $(document).off('keydown.spActionMenu').on('keydown.spActionMenu', function (event) {
         if (event.key === 'Escape') closeActionMenus();
     });
@@ -4300,6 +4313,12 @@ function injectModal() {
         setScale(charKey, this.value);
         refreshLinesInjection();
     });
+    $in('#sp-line-direction-row').on('change.autoSave', 'input[name="sp-line-direction"]', function () {
+        const charKey = charStableKey(getContext());
+        if (!charKey) return;
+        setLineDirection(charKey, this.value);
+        refreshLinesInjection();
+    });
     $in('#sp-adult-row').on('change.autoSave', 'input[name="sp-lines-adult-mode"]', function () {
         const charKey = charStableKey(getContext());
         if (!charKey) return;
@@ -4492,7 +4511,7 @@ function injectModal() {
         getSettings().scheduleAutoDetect = this.checked;
         saveSettingsDebounced();
     });
-    // 暗历·潜伏注入开关（原挂暗历 sheet，2.x 挪进设置「轴」区）：on → 按当前账+场景立即注入；off → 清空扩展 prompt + 回显。
+    // 刻度潜伏注入开关：开启后按当前账与场景立即注入，关闭后清空扩展 prompt 与回显。
     $in('#sp-ledger-inject').on('change', function () {
         getSettings().ledgerInject = this.checked;
         saveSettingsDebounced();
@@ -4666,8 +4685,7 @@ function guessCharName(ctx) {
 
 function setView(view, charName) {
     currentView = view;
-    // 记住"最近看的 char 是谁"：切到 char 更新它；切回 user **不清**——否则再切回 char 时
-    // 没了名字，只能退回填名界面（老 bug）。user 视角下泄漏无虞：store.scopeOf 用
+    // 记住最近查看的 char；切回 user 时不清空，便于再次返回。store.scopeOf 同时检查 view 与
     // `view==='char' && charName` 双重门，user 视角 charViewName 再有值也拼不进 char 子键。
     // 真正该清 charViewName 的只有换聊天(CHAT_CHANGED)/主动重选角色(onRegenClick)。
     if (view === 'char' && charName) charViewName = charName;
@@ -4727,7 +4745,7 @@ function confirmCharView() {
 // ─── TA▾ 固定槽抽屉（换人入口，已与「刷新」解耦）───────────────────────────────
 // TA▾ 展开固定槽列表：点槽=切到该 char（读缓存、不弹框、不重生成）、✕=移除该槽、
 // 「添加/查看角色」=开填写框查任意角色（含 NPC/反派）。查看不占槽，想固定去点视图头部 📌。
-// 固定槽为空时点 TA▾ 直接开填写框（等于旧行为），钉了第一个才有列表可展开。
+// 固定槽为空时点 TA▾ 直接打开填写框；至少固定一个角色后才显示列表。
 let _taDrawerOpen = false;
 
 // TA▾ 标签：在 char 视角且有名字时显当前 char 名，否则回落「TA」。
@@ -4751,8 +4769,7 @@ function openTaDrawer() {
     _taDrawerOpen = true;
     $in('#sp-ta-trigger').addClass('sp-ta-open');
     // 外点即收：点抽屉/触发器以外任意处关闭（触发器自身的 toggle 另管，故排除它避免双触发）。
-    // 批次3：抽屉在 shadow 内，target 重定向失效 → 改 composedPath 判断点击是否落在抽屉/触发器内。
-    // hotfix3：合成事件无 originalEvent → ?. 防御，path 为空 → some()=false → 不 return → 走关闭分支（安全默认）
+    // 抽屉位于 shadow 内，外点判断必须使用 composedPath；合成事件无路径时按外部点击关闭。
     $(document).off('click.tadrawer').on('click.tadrawer', function (e) {
         if ((e.originalEvent?.composedPath?.() || []).some(el => el instanceof Element && el.matches('#sp-ta-drawer, #sp-ta-trigger'))) return;
         closeTaDrawer();
@@ -5231,10 +5248,8 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
 // Every key is initialized exactly once from the host switch, then belongs to this chat.
 // Legacy wiFilter / wiFilterByChat remain read-only migration sources.
 //
-// charKey 用**角色卡文件名 avatar**（如 `坏狗.png`）——它跟着卡文件走、稳定不变。
-// 早期误用 ctx.characterId（= this_chid，characters 数组的**下标索引**）：一旦增删/重排
-// 角色，索引就漂移，同一张卡下次读到的是别人的（或空）设置——表现为每次进聊天筛选都被重置。
-// 2.0.0 换稳定键，旧的数字键数据不迁移（已知会重置一次，发版公告告知用户重选）。
+// charKey 使用角色卡 avatar 文件名；characterId 是可随角色列表重排的数组下标，不能作为持久设置键。
+// 数字键旧数据不迁移，避免把已漂移的设置认领给错误角色。
 function charStableKey(ctx) {
     const c = ctx?.characters?.[ctx?.characterId];
     return c?.avatar || null;   // 无角色（群聊/未选卡）→ null，各 getter 守卫返回默认
@@ -5419,6 +5434,24 @@ const SCALE_LABELS = {
     meso : '中观（家族 / 组织 / 职场 / 学派）',
     micro: '微观（人际 / 情感 / 日常）',
 };
+
+function getLineDirectionMap() {
+    // key 是稳定的角色卡 avatar；这是全局 settings 映射，不写入线 raw 或聊天数据。
+    const s = getSettings();
+    if (!s.lineDirection || typeof s.lineDirection !== 'object') s.lineDirection = {};
+    return s.lineDirection;
+}
+
+function getLineDirection(charKey) {
+    if (charKey == null) return 'natural';
+    return normalizeLineDirection(getLineDirectionMap()[charKey]);
+}
+
+function setLineDirection(charKey, value) {
+    if (charKey == null) return;
+    getLineDirectionMap()[charKey] = normalizeLineDirection(value);
+    saveSettingsDebounced();
+}
 
 function getScaleMap() {
     const s = getSettings();
@@ -5676,11 +5709,7 @@ async function getCharBookEntries(ctx) {
     return excluded.size ? items.filter(e => !hasWiExcluded(e.source, excluded)) : items;
 }
 
-// Recent chat context — fills the gap between memory (delayed L0/L1 summaries)
-// and "what the user just typed". Both 间 and 面 discussions previously saw
-// only outline+wi+memText, so the last few floors of the main chat were
-// invisible to the assistant — feels like it "ignores context".
-// Returns a formatted block or '' when the chat is empty.
+// 近期聊天上下文补足延后一组的 L0/L1 记忆与当前用户输入之间的空窗；聊天为空时返回 ''。
 async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 2500) {
     const chat = ctx?.chat;
     if (!Array.isArray(chat) || !chat.length) return '';
@@ -6082,8 +6111,7 @@ async function _getMemTextRaw(opts = {}) {
     return memory.getMemoryContext();
 }
 
-// 记忆块 tk 预算封顶（源无关）：把上面任一记忆源产出的文本压到预算内再交给生成。早期设计缺漏——
-// 柏宝书注入版靠向量召回自封顶，但 Anima 全量拼分片、内置 L1 早期章节全塞，长故事会飙到 10w+ tk。
+// 记忆块 tk 预算封顶（源无关）：所有记忆源的文本都先压到预算内再交给生成，避免长故事上下文失控。
 //   full=true（历·排全年日期）→ 保覆盖：跨全程等距抽块，别掐中段（会漏中段生日/纪念日）。
 //   full=false（点/线/面/间）→ 近景优先：留最近的块 + 一小段最早梗概，中段省略。
 // 不超预算 → 原样返回、零改动。按空行块边界切（三源都用 '\n\n' 分语义单元）；遇到单个超大块时会按策略截取首部或尾部。
@@ -6197,7 +6225,7 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
     const { personaDesc, authorNote: rawAuthorNote } = readCardExtras(ctx);
     const authorNote = rawAuthorNote;
 
-    // Story memory (Plan C: objective memory + view tag)
+    // 故事记忆按本轮固定快照或当前已选记忆源读取。
     const hasMemorySnapshot = Object.prototype.hasOwnProperty.call(opts, 'memorySnapshot');
     let rawMemText;
     if (hasMemorySnapshot) {
@@ -6306,7 +6334,7 @@ function injectToST(text) {
 //
 // Regex isolation (约定：构画渲染绝不被用户正则改写)：构画的气泡没有真实楼层，
 // messageId 只能传 null → ST 把它当成最远深度的楼，于是「显示域 + 按深度过滤」的
-// 用户正则会命中并清空气泡（曾有用户装「不发送远楼信息」正则后 间/面/棱 全白）。
+// 用户正则可能命中并清空气泡。
 // 做法：调用期间临时把 'regex' 塞进 disabledExtensions，getRegexedString 开头即
 // 短路返回原文（engine.js），markdown / 引号包裹 / 净化等其余步骤照跑，渲染与主
 // 聊天一致。调用是同步的、随即在 finally 还原，不落盘、不触发保存、对别处无副作用。
@@ -6344,7 +6372,7 @@ function readCacheRaw(desc) {
 // ─── Apply widget to almanac (历) ─────────────────────────────────────────
 // 历是一张扁平日期表（非 raw 文本）。一张卡一个日期，按 idx 取该条单独注入。
 // **纯追加**：只把这一条去重后加进去，绝不动任何已有项——尤其不能碰「生成节日」出的
-// 未锁 AI 节日（那是 source='ai' pin=false，用 mergeAlmanac 会被当未锁 AI 项清掉 → 原版节日全没）。
+// 未锁 AI 节日；mergeAlmanac 会替换未锁 AI 项，因此此处不能调用它。
 // 间来的日期默认 pin，日后「生成节日」重算也保得住（与「间加线默认锁定」一致）。
 // 历法 widget 动作统一由 axisWidgetActions 提供。
 
@@ -7343,8 +7371,8 @@ async function triggerGenerateLines() {
     return linesFeature.generate();
 }
 
-function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto', vectorContext = {}, adultMode = 'off') {
-    return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale, vectorContext, adultMode);
+function buildLinesPrompt(userName, charName, perspective = 'user', previousRaw = '', scale = 'auto', vectorContext = {}, adultMode = 'off', direction = 'natural') {
+    return buildCanonicalLinesPrompt(userName, charName, perspective, previousRaw, scale, vectorContext, adultMode, direction);
 }
 
 // ─── Storylines parse / render ────────────────────────────────────────────────
@@ -7365,7 +7393,7 @@ const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<butt
 
 // ─── 历（日历 / 历法）─────────────────────────────────────────────────────────
 // 独立模块，与点/线/面共通但存储隔离：点是 AI 每轮重算的易失数据，历要稳，
-// 单独存 chat_metadata（kind='almanac'，不分我/TA，固定 user scope，抄 dashed）。
+// 单独存于 `almanac-user`，不分我/TA，固定 user scope。
 // 历数据供构画生成与讨论上下文使用，不作为主楼常驻注入。数据形状：{ items:[{id,name,type,month,day,displayDate,note,pin,source}], ts }
 
 
@@ -7373,10 +7401,7 @@ const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<butt
 
 
 
-// 历「当前日期」锚点体系（almTodayAnchor/almDaysUntil/almWeekdayRef/almWeekdayFor 及日期差 helpers）
-// 已抽出到 business/axis/anchor.js（纯数据层从 data.js/叶子模块 import，跨域读取器经 bindAxisAnchor 注入）。
-
-// 历注入文本构造 getAlmanacInjectText 已抽出到 business/axis/inject.js（纯函数，仅依赖 data.js/anchor.js）。
+// 当前日期锚点与历注入文本分别由 business/axis/anchor.js 和 inject.js 提供。
 
 // 当前历法描述（供间做「改历法」增量编辑参考）；内置公历返回 ''（无需告知，AI 直接按需新建）。
 
@@ -7592,6 +7617,7 @@ function toggleSettings() {
         if (!currentCharacterExcluded()) renderWiList();     // 排除卡不读取当前聊天关联世界书正文
         renderWiExcludeList();   // 全局排除清单（async fire-and-forget；冷缓存会强刷世界书全表）
         renderScaleRow();   // per-character scale radios (sync)
+        renderLineDirectionRow();
         renderAdultRow();
         renderMemorySection();   // memory status + settings sync
         renderTheaterSection();  // 棱设置；排除卡只同步全局提示词，不读聊天缓存
@@ -7954,8 +7980,9 @@ function bindMemoryHandlers() {
     });
     $in('#sp-mem-check').on('click', function () {
         if (currentCharacterExcluded()) return;
+        const r = memory.getHealthReport();
         refreshMemoryStatus();
-        showToast('已刷新记忆状态');
+        showToast(`记忆完整性：AI 楼 ${r.totalAi}，稳定组 ${r.totalGroups}，完成 ${r.withL0}，待补 ${r.pending}，失败 ${r.permaFailed}，净化空组 ${r.strippedEmpty}`);
     });
     $in('#sp-mem-fill').on('click', async function () {
         if (currentCharacterExcluded()) return;
@@ -7963,11 +7990,11 @@ function bindMemoryHandlers() {
         setMemoryProgressVisible(true);
         $(this).prop('disabled', true);
         try {
-            await memory.fillMissing(({ current, total, done }) => {
-                updateMemoryProgress(current, total);
-                if (current % 3 === 0 || done) refreshMemoryStatus();
+            const result = await memory.fillMissing(({ current, total, done, aborted }) => {
+                updateMemoryProgress(current, total, aborted);
+                if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
             });
-            showToast('补齐完成');
+            showToast(result?.aborted ? '补齐已中止，未完成的分组没有计入成功' : '补齐完成');
         } catch (err) {
             showToast('补齐失败：' + diagnosticMessage(err), null, true);
         } finally {
@@ -7983,7 +8010,7 @@ function bindMemoryHandlers() {
         const ok = await spConfirm({
             title  : '推翻重构',
             body   : `将清空全部摘要并按当前分组重新生成，约需 ${cost} 次 L0 API 调用 + 若干次 L1 压缩。`,
-            note   : '重构期间可随时中止；中止会还原到重构前的记忆、不会清空。已有的点 / 线 / 面 不受影响。',
+            note   : '生成阶段中止会还原到重构前的记忆；进入确认保存后中止，写入可能已经发生，构画会按实际确认结果提示。已有的点 / 线 / 面 不受影响。',
             confirmText: '开始重构',
             cancelText : '取消',
         });
@@ -7991,14 +8018,15 @@ function bindMemoryHandlers() {
         if ($(this).prop('disabled')) return;
         setMemoryProgressVisible(true);
         $(this).prop('disabled', true);
-        let wasAborted = false;
         try {
-            await memory.rebuildAll(({ current, total, done, aborted }) => {
-                if (aborted) wasAborted = true;
-                updateMemoryProgress(current, total, aborted);
+            const result = await memory.rebuildAll(({ current, total, done, aborted, phase }) => {
+                updateMemoryProgress(current, total, aborted, phase);
                 if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
             });
-            showToast(wasAborted ? '已中止，已还原到重构前的记忆' : '重构完成');
+            if (!result?.aborted) showToast('重构完成');
+            else if (result.saveState === 'confirmed') showToast('已在保存阶段中止，但重构结果已确认落盘并生效');
+            else if (result.saveState === 'unknown') showToast('已在保存阶段中止，写入结果未确认；请刷新后核实当前记忆', null, true);
+            else showToast('已中止，已还原到重构前的记忆');
         } catch (err) {
             showToast('重构失败：' + diagnosticMessage(err), null, true);
         } finally {
@@ -8015,8 +8043,11 @@ function setMemoryProgressVisible(visible) {
     if (visible) updateMemoryProgress(0, 0);
 }
 
-function updateMemoryProgress(current, total, aborted = false) {
-    $in('#sp-mem-progress-count').text(aborted ? `已中止 (${current}/${total})` : `${current}/${total}`);
+function updateMemoryProgress(current, total, aborted = false, phase = '') {
+    const label = phase === 'saving'
+        ? (aborted ? `保存阶段已中止 (${current}/${total})` : `正在确认保存 (${current}/${total})`)
+        : (aborted ? `已中止 (${current}/${total})` : `${current}/${total}`);
+    $in('#sp-mem-progress-count').text(label);
     const pct = total > 0 ? Math.round((current / total) * 100) : 0;
     $in('#sp-mem-progress-fill').css('width', pct + '%');
 }
@@ -8035,6 +8066,13 @@ function renderScaleRow() {
             <span>${escapeHtml(SCALE_LABELS[v])}</span>
         </label>`).join('');
     $row.html(opts);
+}
+
+function renderLineDirectionRow() {
+    const $row = $in('#sp-line-direction-row');
+    if (!$row.length) return;
+    const current = getLineDirection(charStableKey(getContext()));
+    $row.html(LINE_DIRECTION_VALUES.map(value => `<label class="sp-mode-opt"><input type="radio" name="sp-line-direction" value="${value}"${value === current ? ' checked' : ''}><span>${escapeHtml(LINE_DIRECTION_LABELS[value])}</span></label>`).join(''));
 }
 
 function renderAdultRow() {
@@ -8256,7 +8294,7 @@ function syncWiSelectAll() {
 // /api/worldinfo/list）才填；用户没开过酒馆 WI 面板 → 缓存冷 → 清单空。读书路径不受影响
 // （走 loadWorldInfo/TavernHelper 直取），所以会出现「读书正常、排除清单空」。分层兜底、
 // 首个非空即用：
-//   1. 暖缓存 getWorldInfoNames()（已填则零成本，行为同旧版）
+//   1. 暖缓存 getWorldInfoNames()（已填则零成本）
 //   2. TavernHelper（跨分支便携：新 getWorldbookNames / 旧 getLorebooks）
 //   3. 强制刷新 updateWorldInfoList() 再读——/api/worldinfo/list 权威、根治空清单
 async function getAllWorldNames(ctx) {
@@ -8973,9 +9011,8 @@ function syncMobileViewport() {
     // iOS 软键盘不缩小 layout viewport，而是把可视视口整体上移，visualViewport.offsetTop
     // 变正；安卓则是直接缩小 layout（offsetTop≈0，靠 vh 变小自适应）。sheet 是
     // position:fixed（相对 layout viewport 定位），若 top 不叠加 offsetTop，键盘一弹
-    // sheet 就停在 layout 顶部、被推到可视区上方看不见——正是 iOS 用户反馈的
-    // "整个界面被挤出页面、找不到输入框"。叠加 offsetTop 让 sheet 跟随可视视口下移到
-    // 键盘上方；安卓 offsetTop≈0 完全不受影响，属 iOS 定向修复。
+    // sheet 就会停在 layout 顶部并离开可视区。叠加 offsetTop 让 sheet 跟随可视视口移到
+    // 键盘上方；安卓 offsetTop≈0，不受该补偿影响。
     const offsetTop = vv ? Math.max(0, vv.offsetTop) : 0;
     const marginTop = 20 + safeTop;      // sheet 顶到可视视口顶的留白
     const bottomGap = 20 + safeBot;
@@ -9009,12 +9046,8 @@ function syncMobileViewport() {
 }
 
 // ─── Toast (top) ──────────────────────────────────────────────────────────────
-// 批次4决议：toast 暂留 light DOM，不迁 shadow。
-// 理由：sp-toast 类 + text-shadow 清零已免疫大部分 ST 污染；有 zmer-toast-theme-loader
-// 插件接管分支（见 showToast），动了易踩第三方；toast 是短命元素，受污染面最小。
-// TODO(批次5+)：若用户反馈污染再迁——injectToastContainer 的
-// documentElement.insertAdjacentHTML → _spShadow，showToast 的 $('#sp-toast-wrap') → $in，
-// 并复核 zmer 插件分支。
+// toast 容器必须留在 light DOM；检测到第三方主题加载器时，showToast 另走原生 toastr 分支，
+// 由第三方样式作用于原生 toast。全屏提示仍需独立于主窗口显示。
 
 function injectToastContainer() {
     // 带上主题类：#sp-toast-wrap 挂在 <html> 下、在 .sp-root 之外，拿不到 .sp-night/.sp-day
@@ -9055,7 +9088,7 @@ function showToast(msg, onClick, isError = false) {
     setTimeout(() => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); }, holdMs);
 }
 
-// 点行内 actions 已迁入 business/point/actions.js；这里仅保留薄事件转发。
+// 点行内动作由 business/point/actions.js 负责，这里只保留宿主事件转发。
 const triggerTogglePointPin = (...args) => pointActions.togglePin(...args);
 const triggerDeletePointEvent = (...args) => pointActions.deleteEvent(...args);
 

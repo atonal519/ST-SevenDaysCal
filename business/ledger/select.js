@@ -1,12 +1,6 @@
 // ─── 台账（ledger）域 · 检索前置选择器 ────────────────────────────────────────
-// 从 index.js 机械搬移「注入前挑哪几条」的纯逻辑三件套：
-//   scoreLedgerEntry（打分器·RAG 可换点）/ isLedgerSalient（相关度布尔闸）/
-//   selectLedgerForInject（选注入集）。
-// 三者本身是纯函数（只依赖入参 + 彼此），唯一外部依赖是到期/距今口径
-//   ledgerDaysSince / ledgerDueInfo —— 这两个函数仍滞留 index.js（它们另经
-// almTodayAnchor/almDaysUntil 触达历法，且在 5 处非选择器场景另有调用），故不搬，
-// 改用 bindLedgerSelect(env) 注入，避免把历法依赖拖进本模块、也避免反向 import
-// index.js 造成循环依赖。行为与原 index.js 逐字节一致。
+// scoreLedgerEntry、isLedgerSalient 与 selectLedgerForInject 都是纯选择逻辑。到期/距今口径
+// 由 bindLedgerSelect(env) 注入，避免本模块反向依赖 index.js 或携入历法运行态。
 
 let env = null;
 const GENERIC_SCENE_WORDS = new Set(['身体', '状态', '事情', '当前', '情况', '现在', '最近', '这个', '那个', '自己', '人物', '问题']);
@@ -63,7 +57,7 @@ export function isLedgerSalient(entry, sceneText) {
 // 选注入集：先过相关度门槛（isLedgerSalient）→ 只留「此刻确有理由被提起」的条，绝不为凑数硬塞。
 // 相关条 ≤ limit 全带（有几条埋几条·凑不满就不凑）；超 limit 才按 score 降序截前 limit（取最相关的）。空进空出。
 // 静音（暂停埋入）条一律排除：不进注入集 → 连带不进召回（_ledgerInjectEcho 从 picked 派生）。仍是活跃、仍显示在标注池。
-// 【为何要门槛】楼越高活跃越多，旧「无门槛凑满 limit」会把不相干的静默条硬顶进来充数，且静音一条即被第 N+1 名补位——门槛正治这个。
+// 门槛防止活跃池变大后用无关条目硬凑 limit；静音条也不会被下一名自动补位。
 // RAG 口子：将来换外部检索，替换排序来源即可（打分器 scoreLedgerEntry / 门槛 isLedgerSalient 单点可换）。
 export function selectLedgerForInject(entries, sceneText, today, limit = 8) {
     const active  = (entries || []).filter(e => e && e.状态 !== '已了结' && e.静音 !== true);

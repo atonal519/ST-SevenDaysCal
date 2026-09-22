@@ -21,9 +21,7 @@ import { isExternalMode, isExternalReady, isStorageBusy, recordDiagnosticAttempt
 
 registerExternalStorageContext(getContext);
 
-// 依赖注入桥：client.js 不反向 import index.js（避免循环依赖），由 index.js 在启动时注入
-// UI 忙碌态（setFabBusy）、调试面板数据源（setLastDebugPayload）与消息构建器（buildMessages）。
-// 仅搬移网络层时这三点仍属于 index.js 的职责，桥接不改变任何业务逻辑。
+// 依赖注入桥：client.js 不反向 import index.js，UI 忙碌态、调试数据源与消息构建器由宿主注入。
 const _bridge = {
     enabled: pluginEnabled,
     setFabBusy: () => {},

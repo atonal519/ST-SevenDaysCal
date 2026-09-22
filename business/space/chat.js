@@ -52,6 +52,7 @@ export function createSpaceChat(env = {}) {
             const widgetContext = {
                 ...(Array.isArray(messages?.pointBaselines) ? { pointBaselines: messages.pointBaselines } : {}),
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
+                ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
             };
             if (!repository.replace(target, appendSpaceAssistant(history(), reply, widgetContext))) {
                 diagnostic.rejected(new Error('space reply persistence failed'), { phase: 'save', reasonCode: 'space-save-failed' });
@@ -64,6 +65,7 @@ export function createSpaceChat(env = {}) {
             env.ui?.appendMessage?.('ai', reply, history().length - 1, {
                 pointBaselines: savedReply?.pointBaselines,
                 lineBaselines: savedReply?.lineBaselines,
+                expectedWidgetKind: savedReply?.expectedWidgetKind,
                 legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
             });
             return Object.freeze({ status: 'updated', reply });

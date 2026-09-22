@@ -1,8 +1,6 @@
 // ─── 刻度（ledger）域 · 渲染 / 编辑 / 批量交互 ────────────────────────────────
-// 从 index.js 迁入「轴面板刻度页」整套：条目行/内联编辑窗/批量条/暗账列表。
-// 按 Option B 独立成 ledger 渲染子模块；ledger 数据层位于同域 repository.js。
-// axis 编排器（axis/panel 的 renderAlmanacPanel）经本模块导出的 renderLedgerSheet/renderLedgerEditor 调用；
-// 本模块反向经 env 调 renderAlmanacPanel（避免与 axis/panel 形成 ESM 循环 import）。
+// ledger 数据层位于同域 repository.js。axis 面板调用本模块渲染列表与编辑器；本模块通过 env
+// 请求外层面板重绘，避免与 axis/panel 形成 ESM 循环 import。
 //
 // 依赖：
 //  · 直接 import（叶子/姊妹纯模块，无循环）：utils/dom(转义)、runtime/settings(getSettings)、
@@ -11,10 +9,7 @@
 //    $in, showToast, splitCnList, spConfirm, syncLatestAlmanacBlock, renderAlmanacPanel,
 //    getLedgerCaptureInterval, isCapturingLedger(), isJudgingLedger()
 //
-// 【bug 修复·迁移完整性】原 renderLedgerSheet 内 `${on ? ...}` 的 `on` 为未定义标识符
-//  （渲染刻度页即抛 ReferenceError，属所迁移 runtime 链路的现有阻断 bug）。按 sp-ledger-auto-toggle
-//  的 change 处理器（写 getSettings().ledgerCaptureEnabled）判定，正确来源为 s.ledgerCaptureEnabled，
-//  已在迁移时修正。除此之外行为逐字节保持不变。
+// 自动标注开关的唯一来源是 settings.ledgerCaptureEnabled；渲染层不持有第二份状态。
 
 import { escapeHtml, escapeAttr } from '../../utils/dom.js';
 import { getSettings } from '../../runtime/settings.js';
@@ -25,15 +20,14 @@ import * as ledger from './repository.js';
 let env = null;
 export function bindLedgerRender(e) { env = e; }
 
-// ── 本模块自持的刻度渲染态（原 index.js 模块级变量，随渲染层一并迁入）──
+// ── 本模块自持的刻度渲染态 ──
 let _ledgerEditor = null;       // { id, advanced } 内联编辑窗，null=未开
 let _ledgerArchiveOpen = false; // 归档折叠区展开态
 let _batchScope = null;         // 当前批量 scope（null=未进入批量）
 let _batchSelected = new Set(); // 批量选中 id 集
 // 退出批量并清空选择（供 execBatch 收尾、以及外部 CHAT_CHANGED 复位调用）。
 export function batchReset() { _batchScope = null; _batchSelected = new Set(); }
-// 整体复位刻度渲染态（供 index.js 的 CHAT_CHANGED / 切档 / 退面板复位调用，等价原 index.js
-// `_ledgerEditor=null; _ledgerArchiveOpen=false; batchReset();` 三连）。
+// CHAT_CHANGED、切档或退出面板时统一复位编辑、归档展开与批量选择。
 export function resetLedgerRenderState() { _ledgerEditor = null; _ledgerArchiveOpen = false; batchReset(); }
 // 批量态访问器（供 axis/panel 的事件层读写：进入/退出/勾选/全选）。
 export function getBatchScope() { return _batchScope; }

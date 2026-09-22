@@ -1,7 +1,7 @@
 // ─── 轴（axis）域 · 注入文本构造 ──────────────────────────────────────────────
 // getAlmanacInjectText：给 buildMessages 反哺点/线/大纲的历文本（历自己不进主楼）。
 // 纯函数——只依赖 data.js（历法/条目/标签工具）与 anchor.js（今天锚点/距今），无 index.js 内部依赖，
-// 故直接 import、无需 env 注入。行为与原 index.js 逐字节一致。
+// 故直接 import、无需 env 注入。
 
 import {
     loadAlmanac, loadCalDesc, almDayOfYear, almClampInt, calYearLen, almItemCoversDoy,
@@ -11,7 +11,7 @@ import { almTodayAnchor, almDaysUntil } from './anchor.js';
 
 // 供 buildMessages 反哺点/线/大纲的文本（历自己不进主楼）。空则返回 ''。
 // 三段式：以「当前剧情日期」为锚 → 近期将至（未来 N 天内 + 进行中，带倒计时，给点/线明确抓手）→ 全年其他（背景）。
-// 只有带「今天 + 还有几天」AI 才判得出哪个日子临近；旧版只按月日死序列全年、无锚点，故点/线对临近日子毫无反应。
+// 同时提供“今天”和倒计时，保证消费者能区分临近日期与全年背景。
 export function getAlmanacInjectText() {
     const items = loadAlmanac();
     if (!items.length) return '';

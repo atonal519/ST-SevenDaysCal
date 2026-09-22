@@ -1,13 +1,10 @@
 // ─── 轴（axis）域 · 锚点 / 周几 / 距今 / 排序 ────────────────────────────────
-// 从 index.js 机械搬移「今天是历上哪天、周几、距下一个日子还有几天、将至排序」这套
-// 锚点解析核心。逐字节保持原行为。
-//
 // 依赖分两类：
 //  ① 纯数据/历法层 —— 直接从姊妹叶子模块 import（无循环风险）：
 //     data.js(历法/月日/条目工具/almDateFromChat 等)、cn-date.js、store.js、point/parse.js、
 //     extensions.js(getContext)、memory.js。
 //  ② index.js 内部跨域读取器 —— 经 bindAxisAnchor(env) 注入，模块绝不反向 import index.js
-//     （沿用 point/render、ledger/select 的 env/bind 解耦模式，破除 axis→index.js 循环依赖）：
+//     通过 env/bind 解耦，避免 axis→index.js 循环依赖：
 //        getDateAnchor, charStableKey, getLinesCacheKey, parseLines, TERMINAL_STAGES, getCacheKey
 //  柏宝书 globalThis.STBaiBaiBook 为全局，直接读。
 

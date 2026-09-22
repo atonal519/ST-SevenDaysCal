@@ -14,6 +14,10 @@ export function appendSpaceAssistant(history, content, context = null) {
     const message = { role: 'assistant', content };
     if (Array.isArray(context?.pointBaselines)) message.pointBaselines = context.pointBaselines;
     if (Array.isArray(context?.lineBaselines)) message.lineBaselines = context.lineBaselines;
+    // 预期卡型随 assistant 历史保存，刷新或重绘仍按原请求校验；旧历史缺字段时保持宽松兼容。
+    if (['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget'].includes(context?.expectedWidgetKind)) {
+        message.expectedWidgetKind = context.expectedWidgetKind;
+    }
     return [...history, message];
 }
 

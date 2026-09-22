@@ -1,12 +1,6 @@
-// store.js — 构画统一存储层（点/线/面/间/虚线/历/历法/日期锚 → chat_metadata）
-//
-// 背景：点(schedule)/线(lines)/面(outline)/面讨论(creative-chat)/间(space-chat) 原本散落在
-// localStorage（key = sp-cache-{chatId}-{kind}-{scope}，见 state.js），换浏览器/清缓存就丢，
-// 且从不随 chat 文件走、不跨设备。本模块把它们收进 chat_metadata 的单个顶层 key `sp-store`，
-// 跟 chat 文件一起被酒馆序列化到服务端 data/ 目录——脱离浏览器、跨设备、只留最新版。
-//
-// 记忆(sp-memory)、棱永久层(sp-theater) 各自已在 chat_metadata 里独立成 key、各有 schema，
-// 本模块不碰它们；锚(收藏)是全局的、走 /api/files，也不在这。
+// store.js — 点、线、面、间、虚线、历法与日期锚的统一逻辑存储层。
+// `sp-store` 逻辑根可承载于普通聊天 metadata 或外置后端；localStorage 只保留旧数据迁移源和
+// 设备级草稿。sp-memory、sp-theater、sp-ledger 与全局坐标各自有独立仓库，不由本模块改写。
 //
 // 数据形状（子键 = `{kind}-{scope}`，scope = user | char-<encodeURIComponent(name)>）：
 //   chat_metadata['sp-store'] = {
@@ -54,7 +48,7 @@ const isInternalKind = kind => INTERNAL_KINDS.includes(String(kind || ''));
 
 // 复用 state.js 的 scope 规则：char 视角且有名字 → char-<enc>，否则 user。
 function scopeOf(view, charName) {
-    // .trim() 对齐 state.js normalizeScopePart，保证运行时子键与迁移搬过来的子键完全一致。
+    // scope 先 trim，保证运行时子键与旧数据迁移后使用同一规范键。
     return (view === 'char' && charName)
         ? `char-${encodeURIComponent(String(charName).trim())}`
         : 'user';
@@ -91,7 +85,7 @@ function store(create = false) {
     // 将来 bump schema 时写路径会误判「已是最新」而跳过迁移，数据停在旧结构却挂新版本号。
     // 故读路径原样返回（version 保持磁盘值），迁移一律推到下一次写路径（在此补迁移逻辑）。
     if (create && s.version !== SCHEMA_VERSION) {
-        // v1 是初版，无历史结构要迁移；未来 bump 时在此补齐。
+        // schema 升级时在写路径补齐结构。
         claimOrdinaryRootOwnership();
         s.version = SCHEMA_VERSION;
         persist();
@@ -314,7 +308,7 @@ export function hasAnyData() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  读 / 写 / 删（对外主 API，替换掉散落的 localStorage 调用）
+//  读 / 写 / 删（对外主 API）
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // value 直接是对象/数组（不再 JSON.stringify）——chat_metadata 存活对象，由酒馆存档时统一序列化。
@@ -753,9 +747,9 @@ export function formatBytes(bytes) {
 
 export { STORE_KEY, SCHEMA_VERSION };
 
-// ===== 共享 store 访问原语（Phase 2 从 index.js 搬入，原封不动 + 命名空间/闭包机械适配）=====
-// keyDesc/readStore/writeStore/removeStore 是全体业务域共用的存取入口；
-// keyDesc 的 view/charName 缺省时回退到当前视图/角色，二者仍是 index.js 的视图态，故用 getter 桥注入（同 api/client.js 的 bindApiClient 模式）。
+// ===== 共享 store 访问原语 =====
+// keyDesc/readStore/writeStore/removeStore 是业务域共用入口。view/charName 缺省时通过注入的 getter
+// 读取当前视图，避免存储层反向依赖 index.js。
 let _getCurrentView = () => 'user';
 let _getCharViewName = () => null;
 export function bindStoreViewFallback(getCurrentView, getCharViewName) {

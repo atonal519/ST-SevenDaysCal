@@ -1,4 +1,4 @@
-// runtime/settings.js — 设置数据读写 + 开关 + API 预设。Phase 0 从 index.js 机械搬移（业务逻辑不变）。
+// runtime/settings.js — 设置数据读写、功能开关与 API 预设。
 import { extension_settings } from '../../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../../script.js';
 
@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS = {
     ledgerInlineEnabled : true, // 标注池·楼内框开关：AI 楼挂「标注池」（活跃暗历条目 + 打捞/更新/锁定/归档操作）；与注入 ledgerInject 解耦、与用户楼召回(recallInlineEnabled)各自独立；默认开
     recallInlineEnabled : true, // 召回·楼内框开关：用户楼挂「召回」框（本回合注入回显·丰富版：类型+标题+起始+推测应至状态）；与 AI 楼标注池独立、与注入解耦；默认开
     inlineRenderEnabled : true, // 楼内渲染框·主开关：关掉则整框不渲（点/线/轴/标注池/召回子开关一并失效）；默认开。子开关只在主开关开时才起作用
-    // 楼内仪表盘：布局固定（今头 + 历/点/线三区），无需配序；旧的 inlineOrder 已随仪表盘重构退役。
+    // 楼内仪表盘固定为今头 + 历/点/线三区，不提供自定义排序。
     // 楼内统一框·渲染深度：按最近 N 个 AI 楼确定窗口，窗口覆盖其间用户楼；最新 AI/用户楼读活态，其余读快照。
     // 0 或缺 = 跟随酒馆助手 render_depth（读不到再退 INLINE_RENDER_DEPTH_FALLBACK）。默认 0=跟随。
     inlineRenderDepth: 0,

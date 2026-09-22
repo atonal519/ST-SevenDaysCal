@@ -1,6 +1,4 @@
-// 轴（日历/历法/刻度）视图与生成状态 —— Phase 2 数据层归位：从 index.js 模块级 let 搬入。
-// 可变状态容器对象：index.js 通过 axisState.X 读写，纯机械引用替换（almanacMode -> axisState.almanacMode），
-// 未改任何业务逻辑（读写点/顺序/控制流完全一致），仅规避 ES 模块导入绑定不可重赋值的限制。
+// 轴（日历/历法/刻度）的共享可变视图与生成状态；使用对象属性供宿主读写，避免重赋 ESM 导入绑定。
 export const axisState = {
     almanacMode: false,              // 历（日历）视图是否激活
     isGeneratingAlmanac: false,

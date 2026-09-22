@@ -15,8 +15,7 @@ function normalizeTextareaRows(value) {
 }
 
 // 通用决策弹窗只管理自身遮罩和 Promise 生命周期；业务判断与持久化留给调用方。
-// removeOverlay（可选）：注入"移除已存在 overlay"的实现——宿主迁入 shadow 后，light DOM 的
-// $() 查不到 overlay，由调用方提供（如 () => $in('#sp-addon-dialog').remove()）。
+// removeOverlay（可选）：宿主使用独立 shadow 时必须注入正确查询根；否则默认用全局 $() 移除。
 export function createDialogManager({ $, mount, getRootClass = () => '', subscribeContextChange = () => () => {}, removeOverlay = null } = {}) {
     if (typeof $ !== 'function' || !mount?.appendChild) throw new TypeError('弹窗管理器缺少 DOM 依赖');
     const purgeOverlay = removeOverlay || (() => $(`#${OVERLAY_ID}`).remove());

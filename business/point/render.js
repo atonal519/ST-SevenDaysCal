@@ -1,9 +1,5 @@
 // ─── 点（日程）域 · 渲染层 ────────────────────────────────────────────────────
-// 从 index.js 机械搬移 renderSchedule / renderEvent / scheduleDayCtx / scheduleDayLabel，
-// 以及 TYPE_META / SP_JUMP_HINT_POINT 两个常量。仍滞留在 index.js 的轴域函数
-// almTodayAnchor / almWeekdayRef / almWeekdayFor 与共享 makeInjectBtn 通过 bindPointRender(env)
-// 注入，避免反向 import index.js 造成循环依赖（其余依赖——store / axisState / 历法数据 /
-// escape / weatherChipHtml——均为已拆模块，直接 import）。
+// 日期锚、星期与共享注入按钮由 bindPointRender(env) 提供，避免渲染层反向依赖 index.js。
 import { parseCalendar, buildPointInjectText } from './parse.js';
 import { isGregorian } from '../calendar/date.js';
 import { buildScheduleDateContext, scheduleDateAtOffset, scheduleWeekdayAtOffset, formatPointDate } from './date-context.js';
@@ -37,13 +33,11 @@ export function scheduleDayCtx(startDate = null, calendarOverride = null, weekda
     const anchor = startDate && !(startDate instanceof Date) ? startDate : env.almTodayAnchor();
     return { cal, ref, anchorDoy: almDayOfYear(anchor.month, anchor.day, cal), dateContext: buildScheduleDateContext(cal, startDate || anchor, ref) };
 }
-// 点条第 i 天 → {month, day, wd(0..6,周日索引)}。公历分支与旧 `new Date(startDate)+i` 逐字节等价；
-// 自定义历法从共享今天锚点 seed、逐日在本历法内步进，令点条与历/今头同源同锚。
+// 点条第 i 天 → {month, day, wd(0..6,周日索引)}。自定义历法从共享今天锚点逐日步进，
+// 令点条与历/今头同源同锚。
 export function scheduleDayLabel(i, startDate, ctx) {
     if (isGregorian(ctx.cal)) {
-        // 月/日仍按公历步进（跨月/闰日正确）；但周几改用年-free 锚 almWeekdayFor，不用 startDate.getDay()——
-        // startDate 的年份是 forceStartDate 钉的 POINT_ANCHOR_YEAR（固定闰年、纯为拿月日），其 getDay() 是假年
-        // 周几，会和用户设定的现实周几错位（bug：2021/8/20 周五显示成 2024 的周二）。历也走同一锚，两者一致。
+        // 月日按公历步进；星期必须使用故事锚。startDate 的固定年份只用于月日与闰日，不能决定剧情星期。
         const d = new Date(startDate); d.setDate(d.getDate() + i);
         const month = d.getMonth() + 1, day = d.getDate();
         return { month, day, wd: scheduleWeekdayAtOffset(ctx.dateContext, i) ?? env?.almWeekdayFor?.(month, day, ctx.ref, ctx.cal) ?? null };
@@ -95,8 +89,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
     const refreshBusy = axisState._almSyncingPoint ? ' sp-refresh-busy' : '';
     // char 视角头部多一个 📌：把当前 char 固定/取消固定到 TA▾ 抽屉（查看与固定解耦，此为唯一固定动作）。
     const isPinned = perspective === 'char' && store.isPinnedChar(String(userName || '').trim());
-    // 固定态只用**颜色**区分，图标恒 fa-solid fa-thumbtack：FA 免费版无 fa-regular fa-thumbtack，
-    // 用 regular 会静默回落到 solid → 固定/未固定长得一模一样（老 bug「图标没变化」）。照 .sp-alm-today-pin 套路。
+    // 固定态只用颜色区分；免费版 Font Awesome 没有可用的 regular thumbtack，图标恒用 solid。
     const pinBtn = perspective === 'char'
         ? `<button class="sp-panel-refresh sp-point-pin-char${isPinned ? ' sp-pinned' : ''}" data-name="${escapeAttr(String(userName || '').trim())}" title="${isPinned ? '已固定·点击取消固定' : '固定 TA 到 TA▾ 抽屉'}"><i class="fa-solid fa-thumbtack"></i></button>`
         : '';

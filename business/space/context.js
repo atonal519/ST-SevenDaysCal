@@ -11,7 +11,7 @@ const POINT_RX = /(?:日程|日历|待办|点卡片?|第\s*\d+\s*条\s*点|(?:�
 const LINE_RX = /(?:事件线|剧情线|线索|伏笔|线卡片?|第\s*\d+\s*条\s*线|(?:当前|现有|已有|所有)(?:的)?线(?=$|[\s，。？！、；：]|要|里|再|改|修|调|重|简|详|短|长)|(?:有哪些|有几(?:个|条)|多少(?:个|条))线|(?:这个|那个)线(?=(?:$|[\s，。？！、；：]|要怎么|怎么|如何|显示|加|改|删|存|落地))|(?:往|向)线里|(?:做|新建|加|新增|添加|创建|生成|记录|保存|落地|修改|查看|看看|列出|给我(?:做|来)?|来)(?:一|一个|一条|个|条)?线(?=$|[\s，。？！、；：]|然后|并|再|和))/;
 const ERA_RX = /(?:整套(?:的)?历|历法|纪年|年号|月名|月份结构|月份数量|月(?:份)?数|一年(?:有|几|多少|改成|设为|调整为)?[一二三四五六七八九十百\d]*个月|每(?:个)?月(?:都)?(?:天数|(?:有|几|多少)天|(?:(?:改|调整|设置|设)(?:为|成))?[零〇一二两三四五六七八九十百\d]+天)|历法卡片?)/;
 const UNIQUE_HELP_RX = /(?:悬浮球|悬浮按钮|潜伏注入|构画设置|构画开关|构画功能|模块教程)/;
-const HELP_MODULE_RX = /(?:构画|点卡片?|线卡片?|事件线|轴模块|刻度|面模块|间模块|棱|坐标|历法)/;
+const HELP_MODULE_RX = /(?:构画|点卡片?|线卡片?|事件线|轴模块|轴(?:历)?卡片|刻度|面模块|间模块|棱|坐标|历法)/;
 const BARE_HELP_MODULE_RX = /(?:^|[\s，。？！、；：])(?:点|线)(?=(?:要|应该)?(?:怎么|如何|怎样)|会(?:不会)?自动|能不能|可以吗|在哪|没反应|没生效|不生效|没出现|不显示)|(?:怎么|如何|怎样)(?:往|向)(?:点|线)里|(?:怎么|如何|怎样)给(?:点|线)(?:里)?(?:加|添加|新增|写|记录|保存|放)|(?:这个|那个)(?:点|线).{0,8}(?:显示|出现|生效|找不到)/;
 const BARE_HELP_MODULE_MENTION_RX = /(?:^|[\s，。？！、；：]|给|往|向|到|在)(?:点|线)(?=$|[\s，。？！、；：]|里|中|内|上|的|要|应该|该|加|添加|新增|写|记录|保存|放|修改|显示|使用|打开|关闭)/;
 const HELP_ACTION_RX = /(?:加|添加|新增|写|记录|保存|放|修改|显示|使用|打开|关闭)/;
@@ -19,7 +19,7 @@ const OPERATION_HELP_RX = /(?:怎么|如何|怎样|在哪|能不能|可以吗|�
 const WHY_OPERATION_RX = /(?:为什么|为何|为啥).{0,16}(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭)|(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭).{0,16}(?:为什么|为何|为啥)/;
 const SETTINGS_HELP_RX = /(?:设置|开关|注入).{0,12}(?:怎么|如何|在哪|没反应|没生效|不生效|找不到)|(?:怎么|如何|在哪|没反应|没生效|不生效|找不到).{0,12}(?:设置|开关|注入)/;
 const CANONICAL_ITEM_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:这个|那个|当前|现有|已有)(?:的)?(?:点|线)|(?:当前|现有|已有).{0,8}(?:日程|日历|待办|事件线|剧情线|线索|伏笔))/;
-const NO_WRITE_RX = /(?:(?:别|不要|不用|无需|不必|不(?:需要|想|打算|要)|请勿|先别|暂(?:时)?不|取消|停止|禁止)[^，。？！；：,:;!?\n]{0,12}|不(?:再)?)(?:生成|新增|添加|新建|创建|记录|保存|落地|安排|做|写|出|生|插|弄|需要|加|改|修改|调整|设置|设|重做|重写|点|线|历法?|卡片)|(?:只|先)(?:分析|讨论|聊聊|说说|解释)/;
+const NO_WRITE_RX = /(?:(?:别|不要|不用|无需|不必|不(?:需要|想|打算|要)|请勿|先别|暂(?:时)?不|取消|停止|禁止)[^，。？！；：,:;!?\n]{0,12}|不(?:再)?)(?:生成|新增|添加|新建|创建|记录|保存|落地|安排|做|写|出|生|插|弄|需要|加|改|修改|调整|设置|设|重做|重写|点|线|历法?|轴(?:历)?卡片?|卡片)|(?:只|先)(?:分析|讨论|聊聊|说说|解释)/;
 const CANONICAL_EDIT_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:当前|现有|已有)(?:的)?(?:点|线)).{0,12}(?:改|修改|调整|重做|重写|简短|详细|短些|长些)/;
 const LOOSE_POINT_RX = /(?:^|[^\p{L}\p{N}_])点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const LOOSE_LINE_RX = /(?:^|[^\p{L}\p{N}_])线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
@@ -27,9 +27,11 @@ const LOOSE_ALMANAC_RX = /(?:^|[^\p{L}\p{N}_])历(?:卡片)?(?=$|[吗呢吧呀�
 const DIRECT_POINT_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|点(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
 const DIRECT_LINE_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|线(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
 const DIRECT_ALMANAC_REQUEST_RX = /(?:写|生|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|历(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
+const DIRECT_AXIS_CARD_REQUEST_RX = /(?:写|生|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|轴(?:历)?卡片(?:给我|帮我|替我|为我|安排|来|做)/u;
 const DESIRED_POINT_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const DESIRED_LINE_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const DESIRED_ALMANAC_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
+const DESIRED_AXIS_CARD_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const NEGATED_DISCOURSE_THEN_CARD_RX = /(?:别|不要|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再)?(?:讨论|解释|分析|寒暄|评价|说明|聊聊|说说)(?:[，。？！；：,:;!?\s]*直接)*[，。？！；：,:;!?\s]*(?:给我|帮我|替我|为我|请)?(?:写|出|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?(?:点|线|历法?)(?:卡片)?/;
 const SEMANTIC_CARD_RX = /结构化卡片|(?:历|历法)卡片/;
 const PURE_DISCUSSION_RX = /(?:为什么|为何|为啥|是不是|是否|怎么看|如何理解|什么意思|意味着|象征|合理(?:吗|么)|成立(?:吗|么)|怎么样|怎么回事|[？?]|吗$|呢$)/;
@@ -44,9 +46,13 @@ const EXPLICIT_GREETING_RX = /^\s*(?:你好|您好|嗨|哈(?:喽|啰|罗)|早上
 const GENERAL_REQUEST_RX = /^\s*(?:请|麻烦|劳驾|帮|给|把|替|为|我要|我想|想要|需要|能否|可否|可以|生成|新增|添加|新建|创建|记录|记下|保存|安排|修改|调整|重做|重写|整理|梳理|归纳|总结|铺)/;
 
 const moduleMatches = message => {
+    // “轴/轴历卡片”默认指具体日期 almanac_widget；只有明确出现历法、纪年或月份结构时才归入
+    // era_widget。该优先级先于后续歧义判断，避免同一句被识别为两种轴卡。
     const era = ERA_RX.test(message);
     const explicitObject = CANONICAL_ITEM_RX.test(message);
-    const almanac = /(?:重要日期|具体日期|节日|生日|纪念日|年历|历卡片?)/.test(message) || (!era && !explicitObject && /日期/.test(message));
+    const almanac = /(?:重要日期|具体日期|节日|生日|纪念日|年历)/.test(message)
+        || (!era && /(?:历卡片?|轴(?:历)?卡片)/.test(message))
+        || (!era && !explicitObject && /日期/.test(message));
     return Object.freeze({ schedule_widget: POINT_RX.test(message), line_widget: LINE_RX.test(message), almanac_widget: almanac, era_widget: era });
 };
 
@@ -56,7 +62,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const semanticModules = Object.freeze({
         schedule_widget: modules.schedule_widget || LOOSE_POINT_RX.test(message) || DIRECT_POINT_REQUEST_RX.test(message) || DESIRED_POINT_RX.test(message),
         line_widget: modules.line_widget || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
-        almanac_widget: modules.almanac_widget || LOOSE_ALMANAC_RX.test(message) || DIRECT_ALMANAC_REQUEST_RX.test(message) || DESIRED_ALMANAC_RX.test(message),
+        almanac_widget: modules.almanac_widget || LOOSE_ALMANAC_RX.test(message) || DIRECT_ALMANAC_REQUEST_RX.test(message) || DESIRED_ALMANAC_RX.test(message) || (!modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message))),
         era_widget: modules.era_widget,
     });
     const semanticKinds = Object.keys(semanticModules).filter(kind => semanticModules[kind]);
@@ -73,9 +79,12 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const helpQuestion = faq && operationalQuestion && !delegatedCardRequest;
     const hasWrite = WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
     const writeKinds = !helpQuestion && !noWrite && hasWrite ? Object.keys(modules).filter(kind => modules[kind]) : [];
+    const directAxisCardRequest = !noWrite && !modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message));
+    const directAxisEraRequest = !helpQuestion && !noWrite && modules.era_widget && /轴(?:历)?卡片/.test(message) && REQUEST_LANGUAGE_RX.test(message);
     const directSemanticRequest = DIRECT_POINT_REQUEST_RX.test(message)
         || DIRECT_LINE_REQUEST_RX.test(message)
         || DIRECT_ALMANAC_REQUEST_RX.test(message)
+        || directAxisCardRequest
         || DESIRED_POINT_RX.test(message)
         || DESIRED_LINE_RX.test(message)
         || DESIRED_ALMANAC_RX.test(message)
@@ -83,6 +92,12 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const explicitStructuredLanding = directSemanticRequest || (hasWrite && semanticKinds.length > 0);
     if (writeKinds.length > 1 || (!helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
+    }
+    if (!helpQuestion && directAxisCardRequest) {
+        return Object.freeze({ action: 'write', kind: 'almanac_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
+    }
+    if (directAxisEraRequest) {
+        return Object.freeze({ action: 'write', kind: 'era_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
     }
     if (!helpQuestion && !noWrite && RECENT_EDIT_RX.test(message)) {
         const explicitKind = writeKinds[0] || null;
@@ -196,11 +211,15 @@ export function createSpaceContext(env = {}) {
             calDescText: env.readCalendarText?.(target) || '',
             faqText,
             personaOverride: String(env.settings?.()?.spacePersona || '').trim(),
+            lineDirection: env.lineDirection?.(ctx) || 'natural',
             intent,
         });
         const messages = [{ role: 'system', content: system }, ...stripWidgetsForApi(historySnapshot), { role: 'user', content: userMsg }];
         Object.defineProperty(messages, 'pointBaselines', { value: compactPointBaselines(pointScopes), enumerable: false });
         Object.defineProperty(messages, 'lineBaselines', { value: Object.freeze(lineBaselines), enumerable: false });
+        // 本地 transport 元数据，不发送给 API；冻结本轮唯一允许应用的卡型。
+        const expectedWidgetKind = ['write', 'revise-recent'].includes(intent.action) ? intent.kind : null;
+        if (expectedWidgetKind) Object.defineProperty(messages, 'expectedWidgetKind', { value: expectedWidgetKind, enumerable: false });
         return messages;
     };
     return Object.freeze({ buildMessages });

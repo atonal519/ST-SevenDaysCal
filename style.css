@@ -1,8 +1,7 @@
 /*
  * 本文件同时被 light DOM（楼内块 .sp-inline-box 系列）与 shadow DOM（主窗口）加载：
  * 全局注入一份给楼内块，injectModal() 又经 <link rel="stylesheet"> 引一份进 shadow
- * root（浏览器缓存，无感）。改样式注意两处同源——勿删全局份，shadow 那份负责窗口。
- * 2026-08-14 Shadow DOM 隔离改造批次1/5。
+ * root。两处必须引用同一文件：全局份负责楼内块，shadow 份负责主窗口。
  */
 /* ST messageFormatting 会把字面引号保留在 <q> 内；浏览器默认又通过
    q::before/q::after 补一层引号。ST 的全局修正规则进不了本插件的 Shadow DOM，
@@ -17,8 +16,7 @@ q::after {
    经 index.js 动态 <link> 从 zeoseven 引入，unicode-range 分片、font-display:swap）。
    用户在设置里填自定义字体 URL + family 时，index.js 运行期覆写 --sp-font-user + 换 link。
    末尾始终接系统 CJK 栈兜底：网络字体没加载出来时不至于掉成衬线/豆腐块。
-   注：原先此处 @import Google Fonts(Roboto Mono) 已删——国内直连常超时、拖慢首屏；
-   等宽场景改吃系统 mono 栈（下方 --sp-font-mono），不再强制网络加载。 */
+   等宽场景使用系统 mono 栈（下方 --sp-font-mono），避免额外网络字体阻塞首屏。 */
 :root {
     --sp-font-user: "Nowar Rounded TW Wc";
     --sp-font: var(--sp-font-user),
@@ -64,15 +62,14 @@ q::after {
     --sp-fs-180: calc(28.8px  * var(--sp-scale));
     --sp-fs-200: calc(32px    * var(--sp-scale));
 
-    /* —— 控件尺寸令牌：图标按钮方框随字号同步缩放。字号挂 --sp-fs-XX、方框此前漏挂，
-       缩放时字变小、22px 方框不动 → 钮显得过大（渲染框内尤明显）。—— */
+    /* —— 控件尺寸令牌：图标按钮方框随插件字号同步缩放。—— */
     --sp-btn-22: calc(22px * var(--sp-scale));
 
     /* —— 自绘点选控件尺寸令牌：checkbox/radio 自画（appearance:none）后的字形方框边长，
        随插件自身缩放走、脱钩酒馆 Font Scale。toggle 拨杆宽＝此值 × 1.8。 —— */
     --sp-ctrl: calc(16px * var(--sp-scale));
 
-    /* —— 动效令牌：统一交互过渡的时长与缓动，替代散落各处的裸 0.12s/0.15s + 浏览器默认 ease。
+    /* —— 动效令牌：统一交互过渡的时长与缓动。
        三档时长：fast＝点选态反馈（hover/active/色变）；base＝一般属性过渡；enter＝入场/较大位移。
        缓动：standard＝Material 标准收尾（进出都顺，日常首选）；soft＝微回弹（按压松手、小浮现，柔一点）。
        只是令牌，本身不产生任何效果；下方规则按需引用，观感由引用处决定。 */
@@ -149,10 +146,8 @@ q::after {
    --sp-primary/--sp-subtle/--sp-divider，其内胶囊（约定待办徽章、标签、起始/终止
    日期块、标注/更新胶囊描边、锁/归档钮）的 var(--sp-*) 会落空→颜色/描边透明。故与
    FAB 同款纳入本级联（色令牌随 ST 主题走，缺则回退 legacy）。
-   —— 2.6.0 后历/点/线/标注池/召回已合并进单一外壳 .sp-inline-box（召回框亦带此类），
-      故这里只挂 .sp-inline-box：令牌定义在框根、经继承下达各区，替代早期逐区枚举。
-   —— #sp-toast-wrap 同理挂在 <body> 下、在 .sp-root 之外：纳入后 toast 配色改走
-      --sp-surface/--sp-on-surface 令牌，跟随酒馆自适应（原为写死的 #61677A）。 */
+   .sp-inline-box 是历/点/线/标注池/召回共用外壳，令牌由框根继承到各区。
+   #sp-toast-wrap 同样位于 .sp-root 外，必须在此取得随主题变化的 surface 令牌。 */
 .sp-root,
 .sp-fab-btn,
 .sp-inline-box,
@@ -205,13 +200,13 @@ q::after {
     text-shadow: none !important;
 }
 
-/* 基准字号：把这些"根级注入子树"钉在 px 基线（=旧 1rem@16px，随 --sp-scale 缩放），
+/* 基准字号：把这些根级注入子树钉在 16px 基线并随 --sp-scale 缩放，
    彻底脱离酒馆 Font Scale。没显式写 font-size 的后代（部分图标字形 / em 方框）本会
    继承 <html> 根字号→被酒馆放大变形；补基准后一律回落到本插件基线。只挂根容器、不带
    后代 *——靠继承兜底，各处显式 --sp-fs-* 令牌仍优先（继承是最弱来源，不被这条盖掉）。
    ⚠ 与上方令牌/文字阴影两块不同，此块**不可**把区类收拢成 .sp-inline-box：框根 5279 已
      另设 font-size:--sp-fs-78，各区在此直取 --sp-fs-100（0,1,0 压过框根继承来的 78）。
-     若把区类换成 .sp-inline-box，会与框根 78 撞、源序靠后的 78 胜 → 全区基准字缩小。故留旧枚举。 */
+     若只挂 .sp-inline-box，会与框根 78 冲突并缩小全区基准字，故保持逐区选择器。 */
 .sp-root,
 .sp-lines-inline,
 .sp-almanac-inline,
@@ -661,10 +656,8 @@ q::after {
     flex-direction: column;
     overflow: hidden;
     box-sizing: border-box;
-    /* 全局底部留白带：所有视图（点/线/面/间/棱/坐标）统一的收尾边距，正文/输入行
-       不再贴死底边，右下角隐形缩放区也落在这条带里。必须 border-box：否则 padding
-       撑高盒子被 sheet 的 overflow:hidden 裁掉（第一版加在 .sp-content-col 上正因
-       content-box 溢出被裁 → 带子不可见）。可调：越大留白越多。 */
+    /* 所有视图（点/线/面/间/棱/坐标）共用底部留白，右下角隐形缩放区也落在这里。
+       必须使用 border-box，避免 padding 撑高盒子后被 sheet 的 overflow:hidden 裁掉。 */
     padding-bottom: 14px;
 }
 /* 桌面端：四周留白带（手机端不碰，维持上面「仅底部留白带」）。上下比左右略薄一点，
@@ -2181,8 +2174,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow-wrap: anywhere;
 }
 .sp-toast-show  { opacity: 1; transform: translateY(0); }
-/* 报错 toast：不改底色/字色（曾把底色取成重点色→红底红字看不清）。统一同一套底色，
-   只用左侧一道红边条示意「这是报错」——toast 是为了看清，不玩花样。 */
+/* 报错 toast 沿用普通底色与字色，只用左侧红边表达错误，保证正文对比度。 */
 .sp-toast-error {
     border-left: 3px solid var(--sp-danger, #e05555);
 }
@@ -2320,9 +2312,6 @@ select.sp-input { appearance: none; cursor: pointer; }
         right : 14px;
     }
 }
-
-/* ─── (View toggle styles removed — replaced by .sp-sub-toggle / .sp-side-tab
-       defined higher up.  Kept nothing here; .sp-view-btn is only a JS hook now.) ── */
 
 /* ─── Char picker ────────────────────────────────────────────────────────────── */
 .sp-char-picker {
@@ -2664,8 +2653,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-overflow: ellipsis;
     white-space  : nowrap;
 }
-/* 面·线名独占一行：storyline 名（「xxxx线」）原挤在头部行末、被右侧图标组压成省略号。
-   拎出头部、单独成行后完整显示；inline-block 让蓝胶囊只贴合文字、不撑满整行。
+/* 面·线名独占一行完整显示；inline-block 让蓝胶囊只贴合文字、不撑满整行。
    （区别于共享类 .sp-beat-line——那个仍供线模块头部内的类型字段做截断用。） */
 .sp-beat-linerow {
     display      : inline-block;
@@ -2893,9 +2881,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink: 0;
     align-items: flex-end;   /* textarea 长高时，发送/清空按钮贴底对齐 */
 }
-/* （历史）此处曾给桌面输入行加额外右距，用来避开右下角 44px 方形捕捉区。现在缩放
-   把手已隐形、只右下角三角命中，加上 .sp-main 四周等距留白把整个模块内缩，发送键早已
-   不落入命中区 → 取消额外右距，输入行左右对称、正好居中。移动端一直走常规 10px。 */
+/* 输入行保持左右对称；右下角缩放把手只占三角命中区，不需要额外右侧留白。 */
 .sp-chat-input-row .sp-input { flex: 1; font-size: var(--sp-fs-82); padding: 5px 10px; }
 /* 聊天输入框自增高：单行起步，随内容长高（autoGrowTextarea 设 height），
    到 max-height 封顶后转内部滚动，不再撑破面板。 */
@@ -3604,9 +3590,8 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 
 /* ─── Confirm overlay (used by memory prompts + rebuild) ─────────────────────── */
-/* 一元素一职：#sp-confirm 自己就是全屏 fixed 遮罩，直接挂 <body>。
-   不再套外层 layer——之前套壳导致 finish 只删 $ov 却漏删外层，残留 layer
-   吃掉全屏点击（"删完后整个界面/整个酒馆卡死"）。现在 remove 一次即彻底清空。
+/* #sp-confirm 自身就是直接挂在 <body> 的全屏 fixed 遮罩，不得再套额外点击层；移除本元素
+   必须同时释放整层交互。
    pointer-events:auto 显式覆盖：移动端 .sp-root 是 pointer-events:none
    （只有 .sp-sheet 才 re-enable），本元素虽然挂 .sp-root 类拿 --sp-* 变量，
    但必须自行打开交互，否则会"看得见点不动、点击穿透到下层"。 */
@@ -4052,7 +4037,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : #d98a3d;
     border-color : #d98a3d;
 }
-/* 暗历「标注 / 更新」文字胶囊：原来是俩图标按钮、用户看不懂，改纯文字俩字、更省地方。 */
+/* 刻度「标注 / 更新」使用紧凑文字胶囊，避免仅靠图标表达动作。 */
 .sp-ledger-pill {
     border-radius: 999px;
     padding      : 3px 11px;
@@ -4611,7 +4596,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* 全屏时去掉 .sp-sheet 的 transform：transform 会让 sheet 成为 fixed 的包含块，全屏内容便只铺满
    sheet 而非视口。仅桌面需要（桌面 sheet 是右侧窄面板，须逃出到视口）；手机 sheet 本就近整屏、且靠
-   left:50%+translateX(-50%) 居中，去 transform 会右移半屏（回归 bug），故 desktop-only。 */
+   left:50%+translateX(-50%) 居中，去掉 transform 会右移半屏，故仅桌面启用。 */
 @media (min-width: 641px) {
     .sp-sheet.sp-fs-flat { transform: none !important; }
 }
@@ -5037,10 +5022,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     transition     : background .15s, transform .1s;
 }
 .sp-anchor-item-card:hover  { background: var(--sp-surface-high); transform: translateY(-1px); }
-/* 承接原「楼号 · 预览 · 时间」单行；tags 行渲染在其上方（卡片顶端），无标签则整行塌陷 */
+/* 楼号、预览与时间同排；tags 位于卡片顶端，无标签时整行塌陷。 */
 .sp-anchor-item-main        { display: flex; align-items: baseline; gap: 8px; width: 100%; }
 .sp-anchor-item-tags        { display: flex; flex-wrap: wrap; gap: 4px; }
-.sp-anchor-item-tags:empty  { display: none; }   /* 无标签卡片与改动前逐像素一致 */
+.sp-anchor-item-tags:empty  { display: none; }   /* 无标签时不占布局空间 */
 .sp-anchor-item-floor       { flex-shrink: 0; font-size: var(--sp-fs-72); font-weight: 700; color: var(--sp-primary); }
 .sp-anchor-item-preview {
     flex               : 1;
@@ -5499,10 +5484,15 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-today-month { width: auto !important; min-width: 78px; max-width: min(132px, 38vw); flex: 0 1 132px; text-align: left; text-overflow: ellipsis; }
 .sp-alm-today-calibration-title { white-space: nowrap; flex-shrink: 0; }
 .sp-alm-today-weekday { width: 78px !important; max-width: 78px; flex: 0 1 78px; }
+.sp-alm-today-editing {
+    flex-wrap: wrap;
+    row-gap : 4px;
+}
+/* 编辑行按面板宽度换行；操作组整体保留，避免保存／取消按钮被挤窄。 */
+.sp-alm-today-editing .sp-alm-today-acts,
+.sp-alm-today-editing .sp-alm-today-acts .sp-icon-btn { flex-shrink: 0; }
 @media (max-width: 520px) {
-    .sp-alm-today-editing { flex-wrap: wrap; row-gap: 4px; }
     .sp-alm-time-context .sp-alm-today-editing > .sp-alm-today-calibration-title { flex: 0 0 100%; }
-    .sp-alm-today-editing .sp-alm-today-acts { margin-left: auto; }
 }
  /* 时间戳·只读行：今天条下方一行，回显主楼 AI 每楼隐形时间戳（起→止），比今天条更素 */
 .sp-alm-clock {
@@ -5795,7 +5785,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     align-items    : center;
     justify-content: center;
     font-size      : var(--sp-fs-72);
-    /* 条目操作钮：对齐点/线/面主面板范式——平时隐藏、hover/点击整行才浮现（原为 0.6 常显）。 */
+    /* 条目操作钮平时隐藏，hover 整行时再浮现。 */
     opacity        : 0;
     transition     : opacity 0.12s, color 0.12s, background 0.12s;
 }
@@ -6359,9 +6349,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     background    : transparent;
     overflow      : visible;
 }
-/* 历 summary 提为通栏头栏（原缩在右列、今头上方左侧留空白，现铺满顶行上方填掉那块空白）。
-   点它折叠整个历单元（今头+清单+六格条一起收起）。样式沿用 .sp-inline-summary 基类
-   （7px 10px），与点/线小表头完全对齐——故此处不再单独覆写 padding/opacity。 */
+/* 历 summary 是通栏头栏，点击后折叠整个历单元（今头、清单与六格条）。
+   样式沿用 .sp-inline-summary，与点/线小表头对齐。 */
 /* 顶行：方形今头（左）+ 即将到来清单（右·占满剩余）。六格条在本行下方满宽（同属历单元）。 */
 .sp-dash-top {
     display     : flex;
@@ -6374,7 +6363,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 今头（masthead）：正方形大日期块，整个面板的门面。历 summary 已提为上方通栏头栏，本行右列
    只剩即将到来清单 ≈ 今头方形高。用「定宽 + aspect-ratio:1 推高」保证恒为正方形（比 stretch
    推宽稳，后者可能退回按内容宽算成长方形）；align-self:center 让右列偶尔更高时今头上下居中、
-   不在下方留单边空白（呼应之前「大头下方空白」的诉求）。 */
+   避免右列略高时在下方留下单边空白。 */
 .sp-dash-today {
     flex          : 0 1 auto;
     width         : fit-content;
@@ -6712,7 +6701,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     outline-offset: -2px;
 }
 
-/* 展开内容继续保留原数据结构，但去掉日期方卡和格子卡片的仪表盘观感。 */
+/* 展开内容保留现有数据结构，以线性脉络样式呈现日期和格子内容。 */
 .sp-inline-box.sp-dash .sp-dash-top {
     align-items: stretch;
     gap        : 9px;
@@ -6793,7 +6782,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 
 /* ── 历面板批量模式（日历条目删 / 活跃刻度归档 / 归档刻度删）────────────────── */
-/* 普通态只有一个入口，靠右贴齐所在独立行；批量态保留原有全选/计数/操作布局。 */
+/* 普通态只有一个靠右入口；批量态显示全选、计数与操作。 */
 .sp-batch-bar:not(.sp-batch-active) { justify-content: flex-end; }
 /* 批量工具条：入口钮或（全选 + 已选计数 + 退出 + 执行）横排，退出/执行推到最右。 */
 .sp-batch-bar {

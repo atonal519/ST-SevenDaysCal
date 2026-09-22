@@ -1,4 +1,4 @@
-// business/axis/data.js — Phase 2b-1: axis 低风险纯数据函数/常量/helper（机械搬移，逻辑零改动）
+// business/axis/data.js — axis 的纯数据函数、常量与模板数据。
 import { keyDesc, readStore, writeStore, writeStoreConfirmed } from '../../store.js';
 import { getSettings } from '../../runtime/settings.js';
 import { saveSettingsDebounced } from '../../../../../../script.js';
@@ -221,7 +221,7 @@ function parseAlmanacWidget(raw) {
         if (!mm) {
             // 续行救援：提示词要求「说明单行不换行」，但模型对长说明常忍不住折行。
             // 非 Item 行不是垃圾，而是上一条说明被换行截断的尾巴——接回上一条 note，
-            // 别再像旧版那样静默丢弃（老症状：几条较长的纪念日说明只显示到折行处）。
+            // 接回上一条 note，避免长说明的续行被静默丢弃。
             const cont = cleaned;
             if (cont && out.length) out[out.length - 1].note = (out[out.length - 1].note + cont).trim();
             continue;
@@ -431,7 +431,7 @@ function saveCalendarTemplates(list) {
     saveSettingsDebounced();
 }
 
-// Phase 2b-2: 次一级数据函数 / 模板绑定簇（纯数据，无跨域依赖）
+// 历法模板与角色绑定的纯数据函数。
 function calendarTemplateId() { return 'ct' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 function renameCalendarTemplate(list, id, name) {
@@ -450,8 +450,7 @@ function sortCalendarTemplatesForCurrent(list, currentTemplateId) {
         .map(item => item.template);
 }
 
-// Phase 2b-3: 独立的数据/注入层函数（扫聊天取最近日期；无跨域污染源）
-// 从最新楼往回扫、命中即返回 → 取到的是「最近一处」写明的日期，贴合「现在」；扫描上限兜住超长聊天。
+// 聊天日期读取：从最新楼回扫最近一处明确日期，并限制超长聊天的扫描量。
 function almDateFromChat(explicitWeekdayOnly = false, cal = loadCalDesc()) {
     const msgs = getContext().chat || [];
     let scanned = 0;

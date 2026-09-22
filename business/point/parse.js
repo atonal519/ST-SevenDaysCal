@@ -1,6 +1,5 @@
 // ─── 点（日程）域 · 文本 codec / 存取辅助（纯函数，零跨域依赖）────────────────────
-// 从 index.js 机械搬移。全部为 <calendar_widget> 点日程结构的文本↔对象互转与读写辅助，
-// 无 DOM / store / 历法(axis) 依赖。渲染层（renderSchedule 等）见 ./render.js，生成 prompt 见 ./prompt.js。
+// 负责 <calendar_widget> 点日程结构的文本与对象互转；无 DOM、store 或 axis 依赖。
 import { calendarDate, formatCalendarDate, isGregorian, parseCalendarDate, validateCalendarDate } from '../calendar/date.js';
 import { stripRecordWrappers } from '../utils/record-wrappers.js';
 import { normalizePointAdultMode, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';

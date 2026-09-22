@@ -1,4 +1,4 @@
-// utils/format.js — 格式化/图标/脱敏纯函数。Phase 0 从 index.js 机械搬移。
+// utils/format.js — 格式化、图标与脱敏纯函数。
 import { escapeHtml } from './dom.js';
 
 

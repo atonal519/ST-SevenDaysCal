@@ -426,8 +426,7 @@ export function createInlineFeature(env = {}) {
         let top = '', almStripRow = '';
         if (alm) {
             // 历整块：满宽 summary 头（点它折叠整个历单元）+ [方形今头 + 即将到来清单] 行 + 满宽六格条。
-            // summary 提到顶行上方通栏铺满（原来缩在右列、今头上方左侧留空白）；今头与清单/六格条一起
-            // 挂在 details 内，随历折叠一并收起——原生 <details> 折叠即隐藏，不再需要 :has() 联动隐藏六格条。
+            // summary 占满通栏；今头、清单与六格条一起放入 details，依靠原生折叠同步收起。
             const dashTop  = `<div class="sp-dash-top">${dashMastheadHtml(snap, floorClock, resolvedCalendar, localWeekdayRef)}<div class="sp-inline-body sp-alm-inline-body">${alm.upHtml}</div></div>`;
             const stripRow = alm.stripHtml ? `<div class="sp-alm-strip-region">${alm.stripHtml}</div>` : '';
             top = `<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>${alm.summary}${dashTop}${stripRow}${collapseControl('历模块')}</details>`;

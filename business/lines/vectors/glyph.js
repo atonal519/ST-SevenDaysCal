@@ -10,7 +10,7 @@ const POOL_NODE = Object.freeze({
 });
 const NODE_ORDER = Object.freeze(['setting', 'subject', 'timing', 'relation', 'resource', 'external']);
 
-/** Build the compact six-node model used by the original sigil preview. */
+/** Build the compact six-node model used by the sigil preview. */
 export function vectorGlyphModel(value) {
     const parsed = parseVectorCue(value);
     if (!parsed || parsed.length !== 3) return null;

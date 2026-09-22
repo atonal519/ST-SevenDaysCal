@@ -1,4 +1,4 @@
-// utils/dom.js — 纯 HTML/文本工具（无状态、无 DOM 依赖）。Phase 0 从 index.js 机械搬移。
+// utils/dom.js — 无状态、无 DOM 依赖的 HTML 与文本工具。
 
 
 export function escapeHtml(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }

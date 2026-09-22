@@ -8,6 +8,27 @@ export function createSpaceRenderer(env = {}) {
         if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
         return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
     }).filter(Boolean);
+    const widgetName = kind => ({
+        schedule_widget: '点卡片', line_widget: '线卡片', almanac_widget: '轴（历）卡片', era_widget: '历法卡片',
+    }[kind] || '结构化卡片');
+    const invalidWidgetCard = (kind, body, message = '') => `<div class="sp-space-widget-card sp-space-widget-card-error" data-kind="error">
+        <div class="sp-space-widget-head"><span class="sp-space-widget-badge"><i class="fa-solid fa-triangle-exclamation"></i> ${escape(widgetName(kind))}无法应用</span></div>
+        <div class="sp-space-widget-body">
+            <div class="sp-space-widget-desc">${escape(message || 'AI 返回的卡片字段不完整或格式无效。请编辑原问题后重发。')}</div>
+            ${String(body || '').trim() ? `<div class="sp-raw">${escape(body).replace(/\n/g, '<br>')}</div>` : ''}
+        </div>
+    </div>`;
+    const parseAlmanacBody = body => {
+        try { return env.parseAlmanac?.(body) || []; } catch { return []; }
+    };
+    const parseEraBody = body => {
+        try { return env.parseEra?.(body) || null; } catch { return null; }
+    };
+    const widgetBodyValid = widget => {
+        if (widget.kind === 'almanac_widget') return parseAlmanacBody(widget.body).length > 0;
+        if (widget.kind === 'era_widget') return !!parseEraBody(widget.body);
+        return true;
+    };
     const widgetCard = (kind, body, wid, editIdx = null, owner = null, legacyPointOwner = false, readOnly = false) => {
         const readOnlyAction = readOnly
             ? '<div class="sp-space-widget-readonly"><i class="fa-solid fa-lock"></i> 导入的历史卡片，仅供查看</div>'
@@ -79,8 +100,8 @@ export function createSpaceRenderer(env = {}) {
         </div>`;
         }
         if (kind === 'almanac_widget') {
-            const items = env.parseAlmanac?.(body) || [];
-            if (!items.length) return '';
+            const items = parseAlmanacBody(body);
+            if (!items.length) return invalidWidgetCard(kind, body);
             const calendar = env.loadCalendar?.();
             const labels = { festival: '节日', birthday: '生日', anniversary: '纪念日', custom: '自定义' };
             return items.map((item, index) => {
@@ -105,8 +126,8 @@ export function createSpaceRenderer(env = {}) {
             }).join('');
         }
         if (kind === 'era_widget') {
-            const desc = env.parseEra?.(body);
-            if (!desc) return '';
+            const desc = parseEraBody(body);
+            if (!desc) return invalidWidgetCard(kind, body);
             const months = desc.months.map(month => `<span class="sp-space-widget-eramonth">${escape(month.name)}·${month.days}天</span>`).join('');
             return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="era">
             <div class="sp-space-widget-head">
@@ -136,10 +157,35 @@ export function createSpaceRenderer(env = {}) {
         if (role === 'ai') {
             const parsed = extractWidgets(content);
             contentHtml = parsed.text ? env.formatAi?.(parsed.text) ?? escape(parsed.text).replace(/\n/g, '<br>') : '';
-            widgetCards = parsed.widgets.map(widget => {
-                const wid = registerWidget?.(widget, messageContext);
-                return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true);
-            }).join('');
+            // 预期卡型是本轮应用白名单。原回复文字始终保留；错类、额外类或无效卡只显示错误，
+            // 不注册应用动作。旧历史没有该字段时继续按原有宽松渲染。
+            const expected = messageContext.expectedWidgetKind;
+            if (expected) {
+                const matching = parsed.widgets.filter(widget => widget.kind === expected);
+                const wrong = parsed.widgets.find(widget => widget.kind !== expected);
+                if (!matching.length) {
+                    widgetCards = wrong
+                        ? invalidWidgetCard(expected, wrong.body, `本轮需要${widgetName(expected)}，AI 却返回了${widgetName(wrong.kind)}；该卡片未开放应用。请编辑原问题后重发。`)
+                        : invalidWidgetCard(expected, '', `AI 回复里没有完整的${widgetName(expected)}标签，因此本轮没有生成可应用卡片。原回复已保留，请编辑原问题后重发。`);
+                } else {
+                    const applicable = matching.filter(widgetBodyValid);
+                    widgetCards = applicable.map(widget => {
+                        const wid = registerWidget?.(widget, messageContext);
+                        return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true);
+                    }).join('');
+                    const invalid = matching.find(widget => !widgetBodyValid(widget));
+                    if (invalid) {
+                        widgetCards += invalidWidgetCard(expected, invalid.body);
+                    } else if (wrong) {
+                        widgetCards += invalidWidgetCard(expected, wrong.body, `本轮需要${widgetName(expected)}，AI 还返回了额外的${widgetName(wrong.kind)}；额外卡片未开放应用。请编辑原问题后重发。`);
+                    }
+                }
+            } else {
+                widgetCards = parsed.widgets.map(widget => {
+                    const wid = registerWidget?.(widget, messageContext);
+                    return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true);
+                }).join('');
+            }
         } else {
             contentHtml = escape(content).replace(/\n/g, '<br>');
         }

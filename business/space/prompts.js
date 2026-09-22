@@ -1,3 +1,5 @@
+import { lineDirectionContract } from '../lines/direction.js';
+
 export function getSpaceChatPlaceholder() {
     return '局外聊聊：剧情、设定、关系、知识…';
 }
@@ -18,7 +20,7 @@ const widgetLabel = kind => ({
     era_widget: '历法',
 }[kind] || '卡片');
 
-function widgetContract(kind, calDescText) {
+function widgetContract(kind, calDescText, lineDirection = 'natural') {
     if (kind === 'schedule_widget') return [
         `【点卡片理想结构】每张卡片写一条完整 Event，不寒暄、不解释：`,
         `<schedule_widget>Event: type|title|description|time|location|线头动态</schedule_widget>`,
@@ -42,9 +44,10 @@ function widgetContract(kind, calDescText) {
         `- agency=player 仅当下一步必须等待 user 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 user 暂不参与也能自行推进。不得因为事件将来可能影响 user 就标 player。`,
         `- stall 只能是 true / false。stall=true 时 Next 写恢复条件；否则 Next 写真正主动方的紧邻下一步。`,
         `- pin 是本地保留位，一律输出 false。`,
+        lineDirectionContract(lineDirection),
     ].join('\n');
     if (kind === 'almanac_widget') return [
-        `【历卡片理想结构】用卡片记录具体日期；一次多个日期可写多行 Item，不寒暄、不解释：`,
+        `【历卡片理想结构】轴（历）卡片就是记录具体日期／重要日期的卡片；一次多个日期可写多行 Item，不寒暄、不解释：`,
         `<almanac_widget>`,
         `Item: name|type|month|day|days|displayDate|note`,
         `</almanac_widget>`,
@@ -54,7 +57,7 @@ function widgetContract(kind, calDescText) {
         `- displayDate 是给人看的日期写法，无特殊写法留空；note 是一句话说明，可为空。`,
     ].join('\n');
     if (kind === 'era_widget') return [
-        `【历法卡片理想结构】输出完整的一套历法，不寒暄、不解释：`,
+        `【历法卡片理想结构】历法卡片用于整套历法（月份、天数、纪年），不是轴（历）卡片；输出完整的一套历法，不寒暄、不解释：`,
         `<era_widget>`,
         `Era: 纪年名`,
         `Style: numeric 或 classical`,
@@ -68,7 +71,7 @@ function widgetContract(kind, calDescText) {
     return '';
 }
 
-function outputModeBlock(intent = {}, calDescText = '') {
+function outputModeBlock(intent = {}, calDescText = '', lineDirection = 'natural') {
     if (intent.action === 'clarify') {
         return intent.reason === 'missing-recent-widget'
             ? `【本轮输出模式】用户像是在修改上一张卡片，但当前可用历史里没有上一张有效卡片。请用自然语言简短追问要修改哪一类卡片及原内容；不要猜类型，不要输出任何卡片。`
@@ -76,7 +79,7 @@ function outputModeBlock(intent = {}, calDescText = '') {
     }
     if (intent.action === 'semantic-route') {
         const contracts = ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget']
-            .map(kind => widgetContract(kind, calDescText))
+            .map(kind => widgetContract(kind, calDescText, lineDirection))
             .join('\n\n');
         return [
             `【本轮输出模式：语义路由】本地规则无法可靠确定用户是在讨论，还是在用自然语言要求生成结构化卡片。请在本次回答内根据完整语义自行判断，不要因为措辞没命中固定说法就拒绝卡片。`,
@@ -91,7 +94,7 @@ function outputModeBlock(intent = {}, calDescText = '') {
     if (!intent.kind) {
         return `【本轮输出模式】这是普通讨论或只读查询。只用自然语言回答，不生成结构化卡片，不输出无关标签。`;
     }
-    return `【本轮输出模式】用户已明确授权落地或修改${widgetLabel(intent.kind)}卡片。只使用下面这一种结构，不输出其他种类、无关标签、前言或解释；用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText)}`;
+    return `【本轮输出模式】用户已明确授权落地或修改${widgetLabel(intent.kind)}卡片。只使用下面这一种结构，不输出其他种类、无关标签、前言或解释；用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText, lineDirection)}`;
 }
 
 function recentWidgetBlock(intent = {}) {
@@ -118,10 +121,9 @@ function recentWidgetBlock(intent = {}) {
     ].filter(Boolean).join('\n');
 }
 
-export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', intent = {} }) {
-    // 间·人格覆盖：用户填了就用它取代默认「表达分寸」（ADVISOR_TONE_GUIDE）——换的是间的语气/行文/人格色彩，
-    // 但「你是创作顾问、不推进剧情、不扮演角色」那句恒定保留（最高纲领，不能被覆盖，否则 AI 会跑去推剧情/扮演）。
-    // 空白＝用内置 ADVISOR_TONE_GUIDE（现状不变）。override 非 append：填了默认那段就整体让位。
+export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', lineDirection = 'natural', intent = {} }) {
+    // 人格覆盖只替换顾问的语气层；创作顾问身份、不推进剧情和不扮演角色的合同始终保留。
+    // 空白使用内置语气，有值则完整替换内置语气而非追加。
     const ov = String(personaOverride || '').trim();
     const toneBlock = ov
         ? `\n【说话风格·人格】你仍然是上面那位「创作顾问」（这一身份最高、不可动摇：不推进剧情、不扮演故事里的角色、直接答问）；在此前提下，请以下述人格与语气来表达：\n${ov}\n（以上人格只改变语气、用词和行文气质；不得模仿正文里的状态栏、面板、属性框或分隔线。本轮输出形态只服从下方【本轮输出模式】：普通讨论用自然对话，明确获准的合法卡片不得被人格设定禁止。）`
@@ -147,7 +149,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         `- 长度由问题决定：一句能说清的绝不写两句；确实需要展开的（如剧情推演、设定考据），才分点铺陈`,
         `- 直接给结论，避免"其实"、"值得注意的是"、"综上所述"这类铺垫与总结`,
         toneBlock,
-        outputModeBlock(intent, calDescText),
+        outputModeBlock(intent, calDescText, lineDirection),
         recentWidgetBlock(intent),
 
         (pointEditMode || lineEditMode) ? `\n【改现有条目】若用户要改的是上面当前列表里的某条已存在条目：` : '',
