@@ -31,11 +31,20 @@ export function formatCalendarDate({ year = null, eraLabel = '', month, day } = 
     return `${era}${y}${m}${d}日`;
 }
 
-// 纯显示格式化：轴面板只展示人类可读值，不把 date=/time= 等机器字段泄漏给用户。
-// 无法确认结构化值时回退到已转义 raw，保证旧存档仍可读且不会注入 HTML。
+// 纯显示格式化：自定义历法只展示通过当前月序/日数校验的日期；
+// invalid 一律标成待确认，避免旧 raw 再把越界日期伪装成已确认值。公历仍保留旧 raw 兼容。
 export function formatStoryClockMeta(meta, escape = value => String(value ?? ''), calendar = null, monthName = (_cal, month) => `${month}月`) {
     const m = meta && typeof meta === 'object' ? meta : null;
-    if (!m?.valid) return escape(m?.raw || '');
+    if (!m?.valid) {
+        const custom = !!calendar
+            && calendar.kind !== 'gregorian'
+            && calendar.id !== 'default-gregorian'
+            && !!(calendar.kind || calendar.id);
+        if (custom) {
+            return escape(['日期待确认', m?.weekdayText || '', m?.time || ''].filter(Boolean).join(' '));
+        }
+        return escape(m?.raw || '');
+    }
     const date = m.month != null && m.day != null ? formatCalendarDate(m, calendar, monthName) : '';
     const weekday = m.weekdayText || '';
     const time = m.time || '';

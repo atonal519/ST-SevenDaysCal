@@ -38,7 +38,7 @@ export function createAxisTransactionController(env = {}) {
         if (!boundaryCurrent()) return { ok: false, cancelled: true };
         if (anchorConflict && key && latestAnchor && anchorUnchanged) { const fixedMonth = Math.min(Math.max(Number(latestAnchor.month) || 1, 1), env.monthCount(cal)); const fixedDay = Math.min(Math.max(Number(latestAnchor.day) || 1, 1), env.monthDays(cal, fixedMonth)); const result = action === 'delete' ? env.setAnchor?.(key, null) : env.setAnchor?.(key, fixedMonth, fixedDay); if (!result?.ok) return { ok: false, error: '当前聊天无法写入日期锚点' }; }
         if (!boundaryCurrent()) return { ok: false, cancelled: true };
-        axisState._almanacCalMonth = null; axisState._almanacCalDay = null; axisState._almTodayEditing = false; env.syncAlmanac?.(); env.syncSchedule?.(); return { ok: true, cal };
+        axisState._almanacCalMonth = null; axisState._almanacCalDay = null; axisState._almTodayEditing = false; env.syncAlmanac?.(); env.syncSchedule?.(); env.calendarChanged?.(); return { ok: true, cal };
     };
     const applyBound = async ({ notify = true, render = true } = {}) => {
         if (env.pluginEnabled?.() !== true || !env.chatId?.()) return false;
@@ -47,7 +47,7 @@ export function createAxisTransactionController(env = {}) {
         const bindings = env.bindings?.() || {}, templateId = bindings[env.bindingKey?.(bindings, key, env.cards?.())] || ''; if (!templateId) return false;
         const template = (env.templates?.() || []).find(item => item.id === templateId); if (!template) { delete bindings[env.bindingKey?.(bindings, key, env.cards?.())]; env.saveSettings?.(); return false; }
         const chatId = env.chatId?.(); if (env.chatId?.() !== chatId || !env.saveCal?.(env.clone?.(template))) throw new Error('当前聊天无法写入角色默认历法');
-        axisState._almanacCalMonth = null; axisState._almanacCalDay = null; env.syncAlmanac?.(chatId); env.syncSchedule?.(chatId); if (render) env.render?.(); if (notify && env.notifyMode?.() === 'full') env.toast?.(`已采用角色默认历法：${template.name}`); return true;
+        axisState._almanacCalMonth = null; axisState._almanacCalDay = null; env.syncAlmanac?.(chatId); env.syncSchedule?.(chatId); env.calendarChanged?.(); if (render) env.render?.(); if (notify && env.notifyMode?.() === 'full') env.toast?.(`已采用角色默认历法：${template.name}`); return true;
     };
     return { commit, applyBound };
 }

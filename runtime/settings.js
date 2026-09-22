@@ -92,7 +92,8 @@ export const DEFAULT_SETTINGS = {
     theaterStylePrompt   : '',   // 写作 agent 文风提示词
     theaterBeautifyPrompt: '',   // 美化 agent 提示词（空=用内置默认）
     // 坐标（收藏楼层）
-    anchorInlineBtn      : true,               // 楼层头部显示「收藏此楼」入口（关掉则只能从别处收藏，暂无）
+    anchorInlineBtn      : true,               // 原楼层位置的收藏入口；旧配置缺省继续显示
+    anchorMenuBtn        : false,              // 酒馆消息“…”菜单内的收藏入口；仅明确开启时显示
     anchorSizeWarnBytes  : 8 * 1024 * 1024,    // 坐标收藏占用预警阈值（快照带样式偏大，给足余量）
     // 历法模板保存可复用描述符；绑定表以角色 avatar 精确映射模板 id。
     calendarTemplates    : [],

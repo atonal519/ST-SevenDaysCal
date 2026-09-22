@@ -841,6 +841,7 @@ const axisTransactionController = createAxisTransactionController({
     monthCount: cal => calMonthCount(cal), monthDays: (cal, month) => calMonthDays(cal, month), choose: options => customDialog.choose(options), writeBatch: entries => store.writeBatch(entries), setAnchor: (key, month, day) => setDateAnchor(key, month, day),
     syncAlmanac: syncLatestAlmanacBlock, syncSchedule: syncLatestScheduleBlock, pluginEnabled, readCal: () => readStore(getCalDescKey()), readItems: () => readStore(getAlmanacKey())?.items,
     bindings: calendarTemplateBindings, bindingKey: calendarBindingKey, cards: currentCharacterCards, templates: loadCalendarTemplates, clone: cloneCalDesc, saveCal: saveCalDesc, saveSettings: saveSettingsDebounced,
+    calendarChanged: () => refreshStoryClockInjection(),
     render: () => { if (axisState.almanacMode) renderAlmanacPanel(); }, notifyMode: () => getSettings().notifyMode, toast: showToast,
     captureParticipantIdentity, sameParticipantIdentity,
 });
@@ -905,6 +906,8 @@ const storyClockController = createStoryClockController({
     pluginEnabled,
     enabled: () => getSettings().storyClockEnabled !== false,
     settings: getSettings,
+    // 与用户可编辑的 v2 时间戳正文分槽：历法每次刷新现读当前聊天，默认公历不额外注入。
+    calendarContext: () => isGregorianCalendar(loadCalDesc()) ? '' : getCalDescInjectText(),
     peerState: () => extensionStoryClockState({ extensionNames, disabledExtensions: extension_settings.disabledExtensions, extensionSuffix: '/ST-QianQianJie', peerSettings: extension_settings.qianqianjie }),
 });
 const storyClockEnabled = () => getSettings().storyClockEnabled !== false;
@@ -1390,9 +1393,9 @@ const MODULE_INTROS = {
         _iKey('fa-expand',  '全屏浏览', '铺满视口阅读；再次点击或按 Esc 退出') +
         _iSub('［重新生成］沿用当前小剧场的主题／模板再生成一版。可先改标题再点［永久保存］存到本对话；草稿最多 10 条，新稿会挤掉最旧草稿。草稿和永久稿列表里的［删除］只删除对应稿件。'),
     anchor:
-        _iLede('「坐标」收藏的是 AI 楼层正文的副本，方便以后回看，不是完整样式快照。入口受设置 → 通用设置 → 显示与通知管理里的“收藏此楼入口”控制，只会出现在 AI 楼；收藏后可立即选择标签，再点同一枚按钮会取消收藏。') +
+        _iLede('「坐标」收藏的是 AI 楼层正文的副本，方便以后回看，不是完整样式快照。入口受设置 → 通用设置 → 显示与通知管理里的“收藏按钮位置”控制，可放在原楼层位置、消息“…”菜单或两处同时显示；收藏后可立即选择标签，再点任一入口会取消收藏。') +
         _iSub('收藏夹按角色 → 聊天 → 楼层分组，可用标签筛选和管理。删除收藏只删副本，不会删除或改动原楼层。') +
-        _iSvgKey(_coordinateIntroSvg, '坐标形收藏', 'AI 楼上的这枚坐标形按钮：点击收藏，再次点击取消收藏') +
+        _iSvgKey(_coordinateIntroSvg, '坐标形收藏', 'AI 楼原位置或消息“…”菜单里的这枚按钮：点击收藏，再次点击取消收藏') +
         _iSub('［标签管理］可新建、改名、改色或删除标签，删标签不会删收藏。收藏全文右上角的［⛶］进入全屏，［×］删除这份收藏副本。'),
 };
 
@@ -2471,6 +2474,7 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
         });
     } else {
         try { coordinateRuntime?.feature?.close?.(); } catch {}
+        try { coordinateRuntime?.feature?.scanButtons?.(); } catch {}
         $(`#${FAB_ID}`).css('display', 'none');
         try { _clearAllInlineBoxes(); } catch {}
         _abortAllBackground({ abortStorageMigration: characterExcluded });
@@ -3260,7 +3264,7 @@ function injectModal() {
                                 </div>
                             </details>
 
-                            <!-- 显示管理：两个总开关（收藏此楼入口 / 楼内渲染框），渲染框下四个子开关（点·线·轴·标注打捞）。都不注入 AI、不请求 API，纯只读展示。 -->
+                            <!-- 显示管理：收藏入口有两个可独立多选的位置；楼内渲染框下有点、线、轴、标注打捞等子开关。都不注入 AI、不请求 API，纯只读展示。 -->
                             <details class="sp-settings-section" id="sp-display-section">
                                 <summary class="sp-settings-section-title">显示与通知管理</summary>
                                 <div class="sp-settings-section-body">
@@ -3269,10 +3273,16 @@ function injectModal() {
                                         <input type="checkbox" id="sp-adult-blur-enabled" ${getSettings().adultBlurEnabled !== false ? 'checked' : ''}>
                                         <span>默认模糊成人内容</span>
                                     </label>
+                                    <div class="sp-cfg-group" style="margin-top:10px">收藏按钮位置（可多选）</div>
                                     <label class="sp-mode-opt">
                                         <input type="checkbox" id="sp-anchor-inline-btn" ${getSettings().anchorInlineBtn !== false ? 'checked' : ''}>
-                                        <span>收藏此楼入口</span>
+                                        <span>楼层原位置</span>
                                     </label>
+                                    <label class="sp-mode-opt">
+                                        <input type="checkbox" id="sp-anchor-menu-btn" ${getSettings().anchorMenuBtn === true ? 'checked' : ''}>
+                                        <span>消息“…”菜单</span>
+                                    </label>
+                                    <p class="sp-cfg-hint">可同时开启或全部关闭；关闭入口不会删除已有收藏。</p>
 
                                     <label class="sp-mode-opt" style="margin-top:10px">
                                         <input type="checkbox" id="sp-inline-render-enabled" ${getSettings().inlineRenderEnabled !== false ? 'checked' : ''}>
@@ -4554,9 +4564,10 @@ function injectModal() {
         getSettings().notifyMode = $in('input[name="sp-notify-mode"]:checked').val();
         saveSettingsDebounced();
     });
-    // 锚：楼层收藏入口开关——on → 补按钮；off → 清掉所有已注入按钮
-    $in('#sp-anchor-inline-btn').on('change', function () {
-        getSettings().anchorInlineBtn = this.checked;
+    // 收藏入口位置独立保存；任一项变化都立即按当前组合重扫已有楼层。
+    $inAll('#sp-anchor-inline-btn, #sp-anchor-menu-btn').on('change', function () {
+        const key = this.id === 'sp-anchor-menu-btn' ? 'anchorMenuBtn' : 'anchorInlineBtn';
+        getSettings()[key] = this.checked;
         saveSettingsDebounced();
         coordinateRuntime?.feature?.scanButtons();
     });
@@ -6249,7 +6260,7 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         ? `【本世界观·重要日期（历）】以下是这个世界的既定节日、生日、纪念日等重要日子，已按「当前剧情日期」标注倒计时；每条冒号后的「说明」是该日子的既定设定（由来、涉及人物阵营、习俗活动、持续天数等），是背景事实。\n${almanacText}\n\n★ 推演点/线/大纲时：凡列在【近期将至】里的日子（未来数日内或进行中），应**主动**把它纳入近期剧情——依据其「说明」里的设定生成与之相关的铺垫、筹备、事件或人物动向，让故事顺着该世界的历法自然推进；【全年其他重要日子】作为背景，时间线接近时再纳入考量。\n★ 务必尊重每条「说明」里的既定设定，据此展开合理、可延续的剧情；说明里没写到的细节可以合理补完，但**不得编造与既定设定冲突的内容**。`
         : '';
 
-    // 历法（纪年/月份结构）：供构画生成与讨论上下文使用，不做主楼常驻注入；避免自定义历法被公历月份/天数覆盖。
+    // 历法（纪年/月份结构）：构画生成与讨论直接读取此块；主楼时间戳通过独立实时槽使用同一份当前历法。
     const calDescText = getCalDescInjectText();
     const calDescBlock = calDescText
         ? `【本世界观·现行历法（纪年）】${calDescText}\n推演点/线/大纲涉及日期时，一律以此历法为准（月份数、每月天数、纪年名），不要默认套用公历的 12 月 / 31 日。`

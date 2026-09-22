@@ -166,6 +166,7 @@ export function storyClockNarrativeBody(message) {
         : text;
 }
 export const STORY_CLOCK_KEY = 'sdc_story_clock';
+export const STORY_CLOCK_CALENDAR_KEY = 'sdc_story_clock_calendar';
 export const STORY_CLOCK_DEPTH = 0;
 export const DEFAULT_STORY_CLOCK_PROMPT = [
     '【故事时间戳 SDC｜每楼附加元数据】',
@@ -188,6 +189,15 @@ export function buildStoryClockPrompt(settings = {}) {
     const raw = typeof settings.storyClockPrompt === 'string' ? settings.storyClockPrompt : '';
     if (!raw.trim()) return `${DEFAULT_STORY_CLOCK_PROMPT}\n${STORY_CLOCK_MACHINE_CONTRACT}`;
     return raw;
+}
+export function buildStoryClockCalendarContext(description = '') {
+    const text = String(description || '').trim();
+    if (!text) return '';
+    return [
+        '【现行自定义历法｜故事时间戳实时数据】',
+        text,
+        '本楼故事时间戳的日期字段须使用上面实际配置的正式月名和日数，并保留既有时间戳格式。每月最后一天的下一天进入下一个配置月；正文已经明确写出合法日期时，各时间戳边界须分别与对应正文时刻一致，不得保留上一月的越界日期。',
+    ].join('\n');
 }
 export function latestStoryClock(context, limit = 100) {
     const messages = context?.chat || []; let scanned = 0;
@@ -268,19 +278,32 @@ export function createStoryClockController(options = {}) {
         const context = options.context?.();
         const setPrompt = context?.setExtensionPrompt;
         if (typeof setPrompt !== 'function') return { status: 'unavailable' };
-        const clear = () => setPrompt(STORY_CLOCK_KEY, '');
+        const managesCalendarContext = typeof options.calendarContext === 'function';
+        const clear = () => {
+            setPrompt(STORY_CLOCK_KEY, '');
+            if (managesCalendarContext) setPrompt(STORY_CLOCK_CALENDAR_KEY, '');
+        };
         const settings = options.settings?.() || {};
         const active = options.pluginEnabled?.() === true && options.enabled?.() === true;
         const custom = typeof settings.storyClockPrompt === 'string' && settings.storyClockPrompt.trim().length > 0;
         const peer = options.peerState?.() || {};
         if (!active) { clear(); return { status: 'cleared', inject: false }; }
-        if (!custom && peer.active === true && peer.custom === true) { clear(); return { status: 'adapted-peer-custom', inject: false }; }
         const pt = context.constants?.promptTypes?.IN_CHAT ?? 1;
         const pr = context.constants?.promptRoles?.SYSTEM ?? 0;
+        const calendarPrompt = managesCalendarContext ? buildStoryClockCalendarContext(options.calendarContext?.()) : '';
+        if (managesCalendarContext) setPrompt(STORY_CLOCK_CALENDAR_KEY, calendarPrompt, pt, STORY_CLOCK_DEPTH, false, pr);
+        if (!custom && peer.active === true && peer.custom === true) {
+            setPrompt(STORY_CLOCK_KEY, '');
+            return { status: 'adapted-peer-custom', inject: false, calendarInject: !!calendarPrompt };
+        }
         setPrompt(STORY_CLOCK_KEY, buildStoryClockPrompt(settings), pt, STORY_CLOCK_DEPTH, false, pr);
-        return { status: custom ? 'custom' : 'injected', inject: true };
+        return { status: custom ? 'custom' : 'injected', inject: true, calendarInject: !!calendarPrompt };
     };
-    return { refresh, clear: () => { const context = options.context?.(); context?.setExtensionPrompt?.(STORY_CLOCK_KEY, ''); } };
+    return { refresh, clear: () => {
+        const context = options.context?.();
+        context?.setExtensionPrompt?.(STORY_CLOCK_KEY, '');
+        if (typeof options.calendarContext === 'function') context?.setExtensionPrompt?.(STORY_CLOCK_CALENDAR_KEY, '');
+    } };
 }
 export function extensionStoryClockState({ extensionNames = [], disabledExtensions = [], extensionSuffix, peerSettings } = {}) {
     const extensionId = extensionNames.find(name => String(name).endsWith(extensionSuffix)) || null;

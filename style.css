@@ -4926,6 +4926,24 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border         : 0;
     font           : inherit;
 }
+/* 宿主菜单是不可换行 flex；菜单入口需保留普通 flex 占位，避免通用按钮定位或收缩让图标重叠。 */
+#chat .mes .sp-anchor-btn.mes_button[data-sp-anchor-entry="menu"],
+#chat .mes .sp-anchor-btn.mes_button[data-sp-anchor-entry="menu"]:hover {
+    display        : inline-flex;
+    flex           : 0 0 auto;
+    align-items    : center;
+    justify-content: center;
+    box-sizing     : border-box;
+    position       : static !important;
+    inset          : auto !important;
+    transform      : none !important;
+    min-width      : calc(1em + 6px);
+    min-height     : calc(1em + 2px);
+    padding        : 1px 3px;
+}
+#chat .mes .sp-anchor-btn.mes_button[data-sp-anchor-entry="menu"] .sp-anchor-btn-svg {
+    flex: 0 0 1em;
+}
 .sp-anchor-btn:not(.mes_button):hover { opacity: 1; transform: translateY(-1px); }
 .sp-anchor-btn.mes_button:hover       { opacity: 1; }
 .sp-anchor-btn-svg                    { display: block; pointer-events: none; }

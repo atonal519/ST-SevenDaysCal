@@ -314,7 +314,8 @@ export function createInlineFeature(env = {}) {
         else if ((m = s.match(/(\d{1,2})\s*[时點点]/)))     time = `${+m[1]}时`;
         return { year, month, day, time };
     }
-    // 组窄条「今 …」那截：{ todayHtml(含 .sp-dash-sum-today 壳), timeHtml(时刻尾巴，贴天气后) }。
+    // 组窄条「今 …」那截：自定义历法只信通过当前月序/日数校验的结构化戳；
+    // 越界或无精确日期时回退已确认锚点，不能把 raw/公历数字回退冒充成今天。
     function clockHeadParts(isLatest, a, anchorWd, floorClock = null, calendarOverride = undefined) {
         const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
         const format = options => formatStoryClockHeadParts({ anchor: a, anchorWeekday: anchorWd, calendar: renderCalendar, monthName: calMonthName, escapeHtml, ...options });
@@ -332,6 +333,10 @@ export function createInlineFeature(env = {}) {
             const weekdayText = clockMeta.weekdayIndex == null ? (anchorWd || '星期未记录') : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
             return format({ clockMeta: { ...clockMeta, weekdayText }, tip });
         }
+        const customCalendar = renderCalendar
+            && renderCalendar.kind !== 'gregorian'
+            && renderCalendar.id !== 'default-gregorian';
+        if (customCalendar) return fallback;
         const p = stampDate(stamp);
         if (!p) return format({ rawStamp: stamp, tip });   // 古风/无法解析 → 原样抬
         return format({ stampDate: p, tip });
