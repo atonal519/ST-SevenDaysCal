@@ -5982,6 +5982,7 @@ function selectAnimaSlices(slices, query, limit) {
 async function getAnimaMemText(opts = {}) {
     const th = globalThis.TavernHelper;
     if (!th || typeof th.getChatWorldbookName !== 'function' || typeof th.getWorldbook !== 'function') {
+        if (opts.strict) throw new Error('Anima 记忆接口未就绪');
         if (!getMemText._animaWarned) {
             getMemText._animaWarned = true;
             console.info('[7dayscal] 选了 Anima 记忆源但酒馆助手(TavernHelper)接口未就绪，本次生成无历史注入');
@@ -5989,10 +5990,10 @@ async function getAnimaMemText(opts = {}) {
         return '';
     }
     let wbName = null;
-    try { wbName = await th.getChatWorldbookName('current'); } catch {}
+    try { wbName = await th.getChatWorldbookName('current'); } catch (error) { if (opts.strict) throw error; }
     if (!wbName) return '';
     let entries = null;
-    try { entries = await th.getWorldbook(wbName); } catch { return ''; }
+    try { entries = await th.getWorldbook(wbName); } catch (error) { if (opts.strict) throw error; return ''; }
     if (!Array.isArray(entries)) return '';
 
     const all = [];
@@ -6404,16 +6405,111 @@ const axisWidgetActions = createAxisWidgetActions({
     notifyEra: cal => { if (getSettings().notifyMode !== 'off') showToast(`历法已更新：${cal.era ? cal.era + '·' : ''}${calendarSummary(cal)}`); },
 });
 
-async function composeCreativeChatMessages({ target, userMsg, historySnapshot }) {
+function captureCreativeChatMemorySelection() {
+    const settings = getSettings();
+    const source = settings.useQianQianJie ? 'qianqianjie'
+        : settings.useAnima ? 'anima'
+            : settings.useDatabase ? 'database'
+                : settings.useBaiBaiBook ? 'bai-bai-book' : 'builtin';
+    const databaseTarget = source === 'database' ? captureDatabaseMemoryTarget() : null;
+    return Object.freeze({
+        source,
+        sourceEpoch: memorySourceEpoch,
+        databaseWorldbookName: databaseTarget ? (databaseTarget.selectedName || databaseTarget.primaryName) : '',
+    });
+}
+
+function creativeChatMemorySelectionCurrent(selection) {
+    const current = captureCreativeChatMemorySelection();
+    return selection.source === current.source
+        && selection.sourceEpoch === current.sourceEpoch
+        && selection.databaseWorldbookName === current.databaseWorldbookName;
+}
+
+function outlineChatMemoryError(message) {
+    const error = new Error(message);
+    error.outlineChatMessage = `本次未携带故事记忆，未发送给 AI：${message}`;
+    return error;
+}
+
+async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
+    const ensureCurrent = () => {
+        if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        if (!creativeChatMemorySelectionCurrent(selection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
+    };
+    let text = '';
+    let alreadyCapped = false;
+    if (selection.source === 'qianqianjie') {
+        const operationToken = Symbol('outline-chat-memory');
+        const preflight = await memoryPreCheckConfirm({ signal, contextSnapshot: ctx, operationToken });
+        ensureCurrent();
+        if (preflight === false) throw Object.assign(new Error('memory preflight cancelled or stale'), { name: 'AbortError' });
+        if (!preflight?.proceed || !preflight.memorySnapshot) {
+            throw outlineChatMemoryError(preflight?.memoryError || '千千结记忆尚未就绪');
+        }
+        if (!qianQianJieGenerationSnapshotCurrent(preflight.memorySnapshot, operationToken, ctx)) {
+            throw Object.assign(new Error('memory snapshot stale'), { name: 'AbortError' });
+        }
+        text = preflight.memorySnapshot.text;
+    } else if (selection.source === 'database') {
+        const result = await databaseMemoryAccess.result({ query: userMsg });
+        ensureCurrent();
+        if (result.status !== 'ready' || !result.text) throw outlineChatMemoryError(databaseMemoryDiagnostic(result));
+        text = result.text;
+    } else if (selection.source === 'anima') {
+        try { text = await getAnimaMemText({ query: userMsg, strict: true }); }
+        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`Anima 记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
+        ensureCurrent();
+        if (!text.trim()) throw outlineChatMemoryError('Anima 当前聊天没有可注入的摘要');
+    } else if (selection.source === 'bai-bai-book') {
+        const api = globalThis.STBaiBaiBook;
+        if (!api || typeof api.getInjectedHistory !== 'function') throw outlineChatMemoryError('柏宝书读取接口未就绪');
+        let injected;
+        try { injected = api.getInjectedHistory(); }
+        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`柏宝书记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
+        ensureCurrent();
+        if (injected?.coverage?.complete === false) {
+            const missing = injected.coverage.missingAiFloors?.length ?? '?';
+            const proceed = await spConfirm({
+                title: '柏宝书记忆未覆盖完整',
+                body: `柏宝书报告缺 ${missing} 楼摘要（missingAiFloors）。`,
+                note: '继续讨论会使用当前柏宝书历史（可能不完整）。你也可以先去柏宝书补齐。',
+                confirmText: '继续讨论',
+                cancelText: '取消',
+            });
+            ensureCurrent();
+            if (!proceed) throw Object.assign(new Error('memory read cancelled'), { name: 'AbortError' });
+        }
+        text = String(injected?.relativeText || '');
+        if (!text.trim()) throw outlineChatMemoryError('柏宝书当前没有可注入的历史记忆');
+    } else {
+        const preflight = await memoryPreCheckConfirm({ signal, contextSnapshot: ctx });
+        ensureCurrent();
+        if (!preflight) throw Object.assign(new Error('memory preflight cancelled'), { name: 'AbortError' });
+        try { text = await getMemText({ query: userMsg }); }
+        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`内置故事记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
+        alreadyCapped = true;
+    }
+    ensureCurrent();
+    return alreadyCapped ? text : _capMemText(text, false);
+}
+
+async function composeCreativeChatMessages({ target, userMsg, historySnapshot, signal }) {
     const ctx      = getContext();
+    const memorySelection = captureCreativeChatMemorySelection();
     const userName = ctx.name1 || '用户';
     const charName = ctx.name2 || '角色';
     const outlineCtx = outlineFeature.repository.readRaw(target);
     const { personaDesc, authorNote } = readCardExtras(ctx);
     const almanacText = getAlmanacInjectText();
     const calDescText = getCalDescInjectText();
+    const memText = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection });
+    if (!creativeChatMemorySelectionCurrent(memorySelection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
     const wiContext = await buildWorldInfoContext(ctx);
     const recentCtx = await buildRecentChatContext(ctx);
+    if (signal?.aborted || !creativeChatMemorySelectionCurrent(memorySelection)) {
+        throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
+    }
     const sys = buildCreativeChatSystemPrompt({
         userName,
         charName,
@@ -6424,6 +6520,7 @@ async function composeCreativeChatMessages({ target, userMsg, historySnapshot })
         recentCtx,
         almanacText,
         calDescText,
+        memText,
     });
     // 历史快照已包含刚写入的 user turn；末尾再追加一次是当前生产合同，禁止在本轮去重。
     return [{ role: 'system', content: sys }, ...historySnapshot, { role: 'user', content: userMsg }];

@@ -56,7 +56,7 @@ const ADVISOR_TONE_GUIDE = [
     `这些规则只约束与用户讨论时的顾问口吻，不限制所创作的大纲内容；合理的强烈情绪、冲突、危机或大开大合应按剧情需要充分呈现。当用户明确要求某种表达风格时，以用户要求为准。`,
 ].join('\n');
 
-export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', recentCtx = '', almanacText = '', calDescText = '' }) {
+export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', recentCtx = '', almanacText = '', calDescText = '', memText = '' }) {
     const outlineSection = outlineRaw
         ? `\n当前大纲：\n${outlineRaw}\n`
         : '\n当前还没有既定大纲，可先从灵感、剧情走向、角色关系、人物设定或世界观想法开始讨论。\n';
@@ -73,6 +73,7 @@ export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc 
         wiContext,
         almanacText ? `【本世界观·重要日期（历）】一年之中的既定节日、生日、纪念日（按月日排序）：\n${almanacText}\n讨论剧情走向或排布大纲时间线时，若临近或涉及这些日子，应自然纳入考量，使故事与该世界的历法自洽。` : '',
         calDescText ? `【本世界观·现行历法（纪年）】${calDescText}\n排布大纲时间线、给节点推演时间时，以此历法为准（月份数、每月天数、纪年名），不要默认套用公历。` : '',
+        memText ? `【故事记忆库】\n${memText}` : '',
         recentCtx,
         `请以创作顾问身份回答，不要扮演任何角色。默认优先围绕剧情发展、设定补完、角色关系与灵感发散来回应。只有当用户明确要求你"写大纲"、明确要求输出大纲，或使用“生成面”“写面”“给一版面”“输出面”等同义的明确指令时，才输出完整大纲，并使用 <outline_widget>...</outline_widget> 包裹；普通讨论、比较、构思或询问方案时，不强制输出大纲；其他时间不要输出 <outline_widget> 标签。`,
         `【这只是供讨论对比的草稿】你在对话框里给出的大纲**不会自动生效**，是否覆盖上层的正式大纲，由用户自行点击"应用此面"按钮决定。因此：不要在回复里声称大纲"已更新/已应用/已保存"，也不要因为"怕覆盖"就偷工减料、只给片段——正常完整地输出即可，应用与否交给用户。`,

@@ -62,13 +62,19 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
             doc.querySelectorAll('#chat .sp-anchor-btn').forEach(el => el.remove());
             return;
         }
+        const hasExternalMenuEntry = menuEnabled && Array.from(doc.querySelectorAll('#chat .sp-anchor-btn[data-sp-anchor-entry="menu"]') || []).some(button => {
+            const classes = String(button.className || '').split(/\s+/).filter(Boolean);
+            const mes = button.closest?.('.mes');
+            return classes[0] === 'sp-anchor-menu-btn' && mes && button.parentElement === mes.querySelector?.('.mes_buttons');
+        });
         const isTauriTavern = globalThis.__TAURITAVERN__?.abiVersion >= 1;
         const hasTrustedId = rebindMessageId !== null && rebindMessageId !== undefined && Number.isInteger(Number(rebindMessageId));
         doc.querySelectorAll('#chat .mes[is_user="false"]').forEach(mes => {
             const inlineTarget = isTauriTavern
                 ? mes.querySelector('.mes_buttons')
                 : (mes.querySelector('.mes_buttons, .extraMesButtons, .name_text') || mes.querySelector('.mes_block') || mes);
-            const menuTarget = mes.querySelector('.extraMesButtons');
+            const actionBar = hasExternalMenuEntry ? mes.querySelector('.mes_buttons') : null;
+            const menuTarget = actionBar || mes.querySelector('.extraMesButtons');
             const trusted = hasTrustedId && Number(mes.getAttribute('mesid')) === Number(rebindMessageId);
             const ensureButton = (entry, enabled, target, asMesButton) => {
                 const matches = buttonsFor(mes).filter(button => button.getAttribute?.('data-sp-anchor-entry') === entry);
@@ -80,7 +86,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                 }
                 if (!button && !target) return;
                 const active = button || doc.createElement('button');
-                // 只在新建时挂载；移动既有节点会触发 chat observer 循环，也会覆盖第三方在同楼内的排序。
+                // 只在新建时挂载；移动既有节点会触发 chat observer 循环，也会覆盖第三方排序。
                 if (!button) {
                     active.type = 'button';
                     active.className = entry === 'menu' ? 'sp-anchor-menu-btn sp-anchor-btn' : 'sp-anchor-inline-btn sp-anchor-btn';

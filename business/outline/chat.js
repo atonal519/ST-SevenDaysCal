@@ -104,7 +104,7 @@ export function createOutlineChat({
                 openSettings?.();
                 throw makeDiagnosticError('config-missing');
             }
-            const messages = await buildMessages?.({ target, userMsg, historySnapshot });
+            const messages = await buildMessages?.({ target, userMsg, historySnapshot, signal: controller.signal });
             if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
             const reply = await postCompletion?.({
                 config,
@@ -134,7 +134,7 @@ export function createOutlineChat({
             if (!currentAndOwned(task)) return { status: 'cancelled' };
             if (!repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
             if (error?.name !== 'AbortError') {
-                ui?.appendMessage?.('system', `发送失败：${diagnosticMessage(error)}`);
+                ui?.appendMessage?.('system', error?.outlineChatMessage || `发送失败：${diagnosticMessage(error)}`);
             }
             finish(task);
             return error?.name === 'AbortError' ? { status: 'cancelled' } : { status: 'failed', error };
