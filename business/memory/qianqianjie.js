@@ -1,6 +1,5 @@
 export const QIANQIANJIE_BRIDGE_KEY = 'qqj_v3_public_bridge_v1';
 export const QIANQIANJIE_READ_TIMEOUT_MS = 15000;
-const QIANQIANJIE_PROMPT_CACHE_VERSION = 1;
 
 const clean = (value, maximum = 500) => String(value ?? '')
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -29,19 +28,12 @@ function emptyResult(status, message, extra = {}) {
     return Object.freeze({ status, text: '', message: clean(message), ...extra });
 }
 
-export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextProvider, isSelected = () => true, readCache = () => null, writeCache = () => {}, readTimeoutMs = QIANQIANJIE_READ_TIMEOUT_MS } = {}) {
+export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextProvider, isSelected = () => true, readTimeoutMs = QIANQIANJIE_READ_TIMEOUT_MS } = {}) {
     if (typeof contextProvider !== 'function') throw new TypeError('千千结记忆适配器缺少宿主上下文');
     const selected = () => {
         try { return isSelected() === true; } catch { return false; }
     };
     const currentBridge = () => globalRef?.[QIANQIANJIE_BRIDGE_KEY];
-    let lastReady = null;
-    const validCache = (value, identity) => value?.schemaVersion === QIANQIANJIE_PROMPT_CACHE_VERSION
-        && typeof value.text === 'string' && value.text.trim()
-        && sameQianQianJieHostIdentity(value.hostIdentity, identity);
-    const cachedResult = (value, api) => Object.freeze({
-        status: 'ready', text: value.text, message: '', identity: value.sourceIdentity ?? null, reader: api,
-    });
     function status() {
         const api = currentBridge();
         if (!api || api.schemaVersion !== 1 || api.kind !== 'qqj-public-memory-bridge' || typeof api.getPromptSnapshot !== 'function') {
@@ -57,7 +49,7 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
         const before = captureQianQianJieHostIdentity(contextProvider());
         const api = currentBridge();
         if (!api || api.schemaVersion !== 1 || api.kind !== 'qqj-public-memory-bridge' || typeof api.getPromptSnapshot !== 'function') {
-            return emptyResult('api-unavailable', '检测不到千千结轻量记忆接口');
+            return emptyResult('api-unavailable', '检测不到千千结轻量记忆接口', { identity: before, reader: api });
         }
         if (!selected()) return emptyResult('stale', '记忆源已切换');
         if (signal?.aborted) return emptyResult('cancelled', '本次记忆读取已取消');
@@ -87,8 +79,8 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
             });
         } catch (error) {
             if (error?.name === 'AbortError') return emptyResult('cancelled', '本次记忆读取已取消');
-            if (error?.name === 'TimeoutError') return emptyResult('timed-out', '等待千千结记忆超时');
-            return emptyResult('read-failed', error?.message || '千千结记忆读取失败');
+            if (error?.name === 'TimeoutError') return emptyResult('timed-out', '等待千千结记忆超时', { identity: before, reader: api });
+            return emptyResult('read-failed', error?.message || '千千结记忆读取失败', { identity: before, reader: api });
         }
         const sourceIdentity = value?.identity;
         const after = captureQianQianJieHostIdentity(contextProvider());
@@ -110,37 +102,12 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
                 .join('\n\n')
             : '';
         if (value?.status === 'ready' && text) {
-            const record = Object.freeze({
-                schemaVersion: QIANQIANJIE_PROMPT_CACHE_VERSION,
-                hostIdentity: before,
-                sourceIdentity: sourceIdentity ?? null,
-                text,
-                savedAt: Date.now(),
-            });
-            lastReady = Object.freeze({ ...record, api });
-            const ownerGuard = () => selected() && currentBridge() === api
-                && sameQianQianJieHostIdentity(before, captureQianQianJieHostIdentity(contextProvider()));
-            try { await Promise.resolve(writeCache(record, { ownerGuard })); } catch { /* current result stays usable */ }
-            if (signal?.aborted) return emptyResult('cancelled', '本次记忆读取已取消');
-            const current = captureQianQianJieHostIdentity(contextProvider());
-            if (!selected() || currentBridge() !== api || !sameQianQianJieHostIdentity(before, current)) {
-                return emptyResult('stale', '读取期间当前聊天或记忆源已变化');
-            }
             return Object.freeze({ status: 'ready', text, message: '', identity: sourceIdentity ?? null, reader: api });
         }
         if (['disabled', 'error', 'api-unavailable'].includes(value?.status)) {
             return emptyResult(value.status, value?.message || '千千结当前不可用', { identity: sourceIdentity ?? null, reader: api });
         }
         const status = value?.status === 'ready' ? 'empty' : value?.status || 'empty';
-        if (['empty', 'not-ready', 'unavailable'].includes(status)) {
-            if (lastReady?.api === api && validCache(lastReady, after)) return cachedResult(lastReady, api);
-            let persisted = null;
-            try { persisted = readCache(); } catch { /* absent cache stays an honest empty result */ }
-            if (validCache(persisted, after)) {
-                lastReady = Object.freeze({ ...persisted, api });
-                return cachedResult(lastReady, api);
-            }
-        }
         return emptyResult(status, value?.message || '当前聊天暂无千千结已准备的前情与召回材料', { identity: sourceIdentity ?? null, reader: api });
     }
     return Object.freeze({ status, result, reader: currentBridge, async text(options) { return (await result(options)).text; } });

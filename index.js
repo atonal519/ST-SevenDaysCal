@@ -1953,6 +1953,7 @@ jQuery(async () => {
     // Reset view state and reload cache on chat switch
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = async () => {
+        clearMemoryCheckFeedback();
         // 切聊是构画的硬失败边界：先统一推进 epoch/revision，再无条件清掉所有聊天态任务。
         const previousChatId = activeChatBoundaryIdentity?.chatId ?? null;
         const previousBoundaryEpoch = chatBoundaryEpoch;
@@ -2670,7 +2671,7 @@ function getLedgerJudgeInterval() {
 
 // 时间戳总开关不受 injectEnabled 统辖，只受 pluginEnabled 与自身开关控制。
 
-// 时间戳提示词要求以上楼 end 为推进基准，并输出可回读的绝对时间；粒度到小时，年份可写可略。
+// 默认时间戳提示词要求沿用可靠故事纪年；开局或中途缺少纪年时结合现有剧情设定，并输出带年份的起止日期。
 
 // 用户设置非空时整段替换内置提示词；留空使用当前内置默认。关闭时清空注入，重复刷新保持幂等。
 
@@ -3260,6 +3261,7 @@ function injectModal() {
                                         <button id="sp-mem-fill" class="sp-mem-btn">补齐缺失</button>
                                         <button id="sp-mem-rebuild" class="sp-mem-btn sp-mem-btn-danger">推翻重构</button>
                                     </div>
+                                    <p id="sp-mem-check-feedback" class="sp-cfg-hint" role="status" aria-live="polite"></p>
                                     </div>
                                 </div>
                             </details>
@@ -4977,6 +4979,44 @@ function checkMemoryMigrationNotice() {
 // 千千结分支同时返回绑定本次 owner 的只读快照；其它记忆源仍沿用 boolean 协议。
 const QQJ_MEMORY_SNAPSHOT_VERSION = 1;
 let memorySourceEpoch = 0;
+
+let memoryCheckFeedbackBoundary = null;
+
+function captureMemoryCheckFeedbackBoundary() {
+    const ctx = getContext();
+    const settings = getSettings();
+    return {
+        chatId: ctx?.chatId ?? null,
+        metadata: ctx?.chatMetadata ?? null,
+        source: [settings.useBaiBaiBook, settings.useAnima, settings.useDatabase, settings.useQianQianJie].map(Boolean).join(':'),
+        excluded: currentCharacterExcluded(ctx),
+    };
+}
+
+function sameMemoryCheckFeedbackBoundary(left, right) {
+    return !!left && !!right
+        && left.chatId === right.chatId
+        && left.metadata === right.metadata
+        && left.source === right.source
+        && left.excluded === right.excluded;
+}
+
+function clearMemoryCheckFeedback() {
+    $in('#sp-mem-check-feedback').text('');
+    memoryCheckFeedbackBoundary = null;
+}
+
+function syncMemoryCheckFeedbackBoundary() {
+    if (memoryCheckFeedbackBoundary && !sameMemoryCheckFeedbackBoundary(memoryCheckFeedbackBoundary, captureMemoryCheckFeedbackBoundary())) {
+        clearMemoryCheckFeedback();
+    }
+}
+
+function setMemoryCheckFeedback(message) {
+    $in('#sp-mem-check-feedback').text(message);
+    memoryCheckFeedbackBoundary = captureMemoryCheckFeedbackBoundary();
+}
+
 function createQianQianJieGenerationSnapshot({ result, operationToken, participantIdentity, hostIdentity, sourceEpoch }) {
     return Object.freeze({
         version: QQJ_MEMORY_SNAPSHOT_VERSION,
@@ -5012,10 +5052,28 @@ async function memoryPreCheckConfirm(request = {}) {
         const result = await qianQianJieMemoryAccess.result({ signal: request.signal });
         if (request.signal?.aborted || result.status === 'cancelled' || result.status === 'stale') return false;
         const boundary = { participantIdentity, hostIdentity, sourceEpoch };
-        if (!qianQianJieGenerationBoundaryCurrent(boundary, contextSnapshot)) return false;
-        if (result.status !== 'ready') return Object.freeze({ proceed: false, memoryError: qianQianJieMemoryDiagnostic(result) });
+        const current = () => {
+            const live = getContext();
+            return !request.signal?.aborted
+                && result.reader === qianQianJieMemoryAccess.reader()
+                && sameParticipantIdentity(participantIdentity, captureParticipantIdentity(live))
+                && qianQianJieGenerationBoundaryCurrent(boundary, live);
+        };
+        if (!current()) return false;
+        if (result.status === 'empty') {
+            const confirmed = await spConfirm({
+                title: '千千结当前没有可用记忆',
+                body: '千千结本轮没有准备可用的前情或召回材料。',
+                note: '确认后将改用当前聊天最近最多 6 条可见 AI 回复；没有千千结记忆文本会注入。',
+                confirmText: '改用最近 6 楼',
+                cancelText: '取消',
+            });
+            if (!confirmed || !current()) return false;
+        } else if (result.status !== 'ready') {
+            return Object.freeze({ proceed: false, memoryError: qianQianJieMemoryDiagnostic(result) });
+        }
         const snapshot = createQianQianJieGenerationSnapshot({ result, operationToken: request.operationToken, participantIdentity, hostIdentity, sourceEpoch });
-        if (!qianQianJieGenerationSnapshotCurrent(snapshot, request.operationToken, contextSnapshot)) return false;
+        if (!qianQianJieGenerationSnapshotCurrent(snapshot, request.operationToken, getContext())) return false;
         return Object.freeze({ proceed: true, memorySnapshot: snapshot });
     }
     // Anima mode: warn only if TavernHelper is missing or the chat-bound
@@ -5084,13 +5142,15 @@ async function memoryPreCheckConfirm(request = {}) {
     }
     const report = memory.getHealthReport();
     // No memory data yet is OK (fresh chat) — only warn when there ARE issues
-    const hasPending = report.pending > 0 || report.permaFailed > 0 || report.strippedEmpty > 0 || report.paused;
+    const hasPending = report.pending > 0 || report.permaFailed > 0 || report.strippedEmpty > 0 || report.shortGroups > 0 || report.legacyNeedsRebuild || report.paused;
     if (!hasPending) return true;
     const lines = [];
     if (report.paused) lines.push('• 记忆系统已暂停（连续失败或单楼超过 3 次）');
     if (report.pending > 0)    lines.push(`• 有 ${report.pending} 楼待摘要`);
     if (report.permaFailed > 0) lines.push(`• 有 ${report.permaFailed} 楼摘要永久失败（需手动补齐）`);
     if (report.strippedEmpty > 0) lines.push(`• 有 ${report.strippedEmpty} 组净化后正文几乎为空（请重查「保留标签」设置）`);
+    if (report.shortGroups > 0) lines.push(`• 有 ${report.shortGroups} 组楼层都短于摘要长度设置，未调用模型`);
+    if (report.legacyNeedsRebuild) lines.push('• 旧记忆章节没有可验证的来源清单，可能遗漏隐藏楼；原内容仍保留，请手动确认后重构以校准覆盖范围');
     if (report.busy)           lines.push('• 记忆系统正在后台生成');
     return spConfirm({
         title  : '记忆库不完整',
@@ -6077,8 +6137,6 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
     globalRef: globalThis,
     contextProvider: getContext,
     isSelected: () => getSettings().useQianQianJie === true,
-    readCache: () => readStore(keyDesc('qqj-prompt-cache', 'user', '')),
-    writeCache: (value, options) => writeStoreConfirmed(keyDesc('qqj-prompt-cache', 'user', ''), value, options),
 });
 
 // Alternate sources are mutually exclusive (enforced in bindMemoryHandlers); each
@@ -6284,13 +6342,15 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
     // historyLimit=0 → 完全不喂历史（history 为空），只留 system + prompt。
     const allMsgs = ctx.chat ?? [];
     let history = [];
-    if (historyLimit > 0) {
+    const effectiveHistoryLimit = opts.memorySnapshot?.source === 'qianqianjie'
+        && opts.memorySnapshot.status === 'empty' && historyLimit === 3 ? 6 : historyLimit;
+    if (effectiveHistoryLimit > 0) {
         // 标签清洗（全局 keepTags/extraTags）：先剥标签结构、再替换变量占位符，
         // 免得展开出的内容里的尖括号被当成标签。点/线/面主生成经此统一清洗，
         // 与记忆采集(memory.getAiFloors)、间/面讨论(buildRecentChatContext)同口径。
         const s = getSettings();
         const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
-        history = selectVisibleChatHistory(allMsgs, historyLimit, { excludedAssistant: opts.excludedAssistant, mapMessage: m => ({
+        history = selectVisibleChatHistory(allMsgs, effectiveHistoryLimit, { excludedAssistant: opts.excludedAssistant, mapMessage: m => ({
             role   : m.is_user ? 'user' : 'assistant',
             content: substituteParams(sanitizeGenerationContextText(m.mes ?? '', { reroll: opts.reroll, stripTags: value => memory.stripTags(value, stripOpts) })),
         }) });
@@ -6451,6 +6511,8 @@ async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
             throw Object.assign(new Error('memory snapshot stale'), { name: 'AbortError' });
         }
         text = preflight.memorySnapshot.text;
+        alreadyCapped = true;
+        return { text, recentFallback: preflight.memorySnapshot.status === 'empty' };
     } else if (selection.source === 'database') {
         const result = await databaseMemoryAccess.result({ query: userMsg });
         ensureCurrent();
@@ -6491,7 +6553,7 @@ async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
         alreadyCapped = true;
     }
     ensureCurrent();
-    return alreadyCapped ? text : _capMemText(text, false);
+    return { text: alreadyCapped ? text : await _capMemText(text, false), recentFallback: false };
 }
 
 async function composeCreativeChatMessages({ target, userMsg, historySnapshot, signal }) {
@@ -6503,10 +6565,11 @@ async function composeCreativeChatMessages({ target, userMsg, historySnapshot, s
     const { personaDesc, authorNote } = readCardExtras(ctx);
     const almanacText = getAlmanacInjectText();
     const calDescText = getCalDescInjectText();
-    const memText = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection });
+    const memoryRead = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection });
+    const memText = memoryRead.text;
     if (!creativeChatMemorySelectionCurrent(memorySelection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
     const wiContext = await buildWorldInfoContext(ctx);
-    const recentCtx = await buildRecentChatContext(ctx);
+    const recentCtx = await buildRecentChatContext(ctx, 6, memoryRead.recentFallback ? Infinity : 2500);
     if (signal?.aborted || !creativeChatMemorySelectionCurrent(memorySelection)) {
         throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
     }
@@ -7771,6 +7834,7 @@ async function renderDatabaseWorldbookSelector(identity, revision, ctx) {
 }
 
 function renderMemorySection() {
+    syncMemoryCheckFeedbackBoundary();
     const databaseUiRevision = ++_databaseMemoryUiRevision;
     const s = getSettings();
     const useBbb   = !!s.useBaiBaiBook;
@@ -7908,12 +7972,17 @@ async function renderAnimaStatus() {
 }
 
 
-function refreshMemoryStatus() {
+function refreshMemoryStatus(healthReport = null) {
+    syncMemoryCheckFeedbackBoundary();
     if (currentCharacterExcluded()) {
         $in('#sp-mem-status').html('<div class="sp-mem-alert sp-mem-alert-info">当前角色卡已排除；不会读取、补齐或重构这段单聊的记忆。</div>');
         return;
     }
-    const r = memory.getHealthReport();
+    const r = healthReport || memory.getHealthReport();
+    if (r.unavailable) {
+        $in('#sp-mem-status').html(`<div class="sp-mem-alert sp-mem-alert-info">${escapeHtml(r.lastError || '当前聊天的记忆数据不可用，无法统计。')}</div>`);
+        return;
+    }
     if (!r.paused) memoryPauseNoticeShown = false;
     const rows = [
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">AI 楼总数</span><span class="sp-mem-stat-v">${r.totalAi}</span></div>`,
@@ -7925,7 +7994,11 @@ function refreshMemoryStatus() {
     ];
     if (r.strippedEmpty > 0) rows.splice(5, 0,
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">标签致空</span><span class="sp-mem-stat-v sp-mem-warn">${r.strippedEmpty}</span></div>`);
+    if (r.shortGroups > 0) rows.splice(5, 0,
+        `<div class="sp-mem-stat"><span class="sp-mem-stat-k">楼层过短</span><span class="sp-mem-stat-v sp-mem-warn">${r.shortGroups}</span></div>`);
     if (r.strippedEmpty > 0) rows.push(`<div class="sp-mem-alert">⚠ 有 ${r.strippedEmpty} 组净化后正文几乎为空，请重查「保留标签」设置（非模型问题，无需换模型）。</div>`);
+    if (r.legacyNeedsRebuild) rows.push('<div class="sp-mem-alert">⚠ 旧记忆章节可能遗漏隐藏楼，且旧章节范围无法核实；旧内容会继续注入，需手动确认后重构。</div>');
+    if (r.shortGroups > 0) rows.push(`<div class="sp-mem-alert">⚠ 有 ${r.shortGroups} 组楼层都短于摘要长度设置，未调用模型，也未计为已完成。</div>`);
     if (r.paused) rows.push(`<div class="sp-mem-alert">⚠ 记忆系统已暂停：${escapeHtml(r.lastError || '连续失败')}。点补齐或重构以恢复。</div>`);
     if (r.busy)   rows.push(`<div class="sp-mem-alert sp-mem-alert-info">🔄 记忆系统正在后台工作</div>`);
     $in('#sp-mem-status').html(rows.join(''));
@@ -8087,14 +8160,29 @@ function bindMemoryHandlers() {
         try { showToast('已恢复内置默认（跟随插件更新）'); } catch {}
     });
     $in('#sp-mem-check').on('click', function () {
-        if (currentCharacterExcluded()) return;
-        const r = memory.getHealthReport();
-        refreshMemoryStatus();
-        showToast(`记忆完整性：AI 楼 ${r.totalAi}，稳定组 ${r.totalGroups}，完成 ${r.withL0}，待补 ${r.pending}，失败 ${r.permaFailed}，净化空组 ${r.strippedEmpty}`);
+        syncMemoryCheckFeedbackBoundary();
+        if (currentCharacterExcluded()) {
+            refreshMemoryStatus();
+            setMemoryCheckFeedback('当前角色卡已排除，未检查这段单聊的记忆完整性。');
+            return;
+        }
+        try {
+            const r = memory.getHealthReport();
+            refreshMemoryStatus(r);
+            if (r.unavailable) {
+                setMemoryCheckFeedback(`完整性检查未完成：${r.lastError || '当前聊天的记忆数据不可用。'}`);
+                return;
+            }
+            const latestNote = r.latestFloorPending ? '；最新一组暂缓摘要' : '';
+            setMemoryCheckFeedback(`检查完成：AI 楼 ${r.totalAi}，已覆盖 ${r.withL0}/${r.totalGroups} 个稳定组，待补 ${r.pending}${latestNote}。`);
+        } catch (error) {
+            setMemoryCheckFeedback(`完整性检查未完成：${diagnosticMessage(error)}`);
+        }
     });
     $in('#sp-mem-fill').on('click', async function () {
         if (currentCharacterExcluded()) return;
         if ($(this).prop('disabled')) return;
+        clearMemoryCheckFeedback();
         setMemoryProgressVisible(true);
         $(this).prop('disabled', true);
         try {
@@ -8102,7 +8190,10 @@ function bindMemoryHandlers() {
                 updateMemoryProgress(current, total, aborted);
                 if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
             });
-            showToast(result?.aborted ? '补齐已中止，未完成的分组没有计入成功' : '补齐完成');
+            showToast(result?.legacyNeedsRebuild ? '旧记忆章节需要手动确认后重构；补齐没有覆盖这些旧章节'
+                : result?.aborted ? '补齐已中止，未完成的分组没有计入成功'
+                    : result?.unresolvedGroups ? `补齐结束：仍有 ${result.unresolvedGroups} 组没有有效摘要（可能是短楼或净化为空）`
+                        : `补齐完成${result?.l1Generated ? `，新增 ${result.l1Generated} 章 L1` : ''}`);
         } catch (err) {
             showToast('补齐失败：' + diagnosticMessage(err), null, true);
         } finally {
@@ -8124,6 +8215,7 @@ function bindMemoryHandlers() {
         });
         if (!ok) return;
         if ($(this).prop('disabled')) return;
+        clearMemoryCheckFeedback();
         setMemoryProgressVisible(true);
         $(this).prop('disabled', true);
         try {
@@ -8131,7 +8223,7 @@ function bindMemoryHandlers() {
                 updateMemoryProgress(current, total, aborted, phase);
                 if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
             });
-            if (!result?.aborted) showToast('重构完成');
+            if (!result?.aborted) showToast(result?.unresolvedGroups ? `重构完成，但有 ${result.unresolvedGroups} 组没有有效摘要（短楼或净化为空）` : '重构完成');
             else if (result.saveState === 'confirmed') showToast('已在保存阶段中止，但重构结果已确认落盘并生效');
             else if (result.saveState === 'unknown') showToast('已在保存阶段中止，写入结果未确认；请刷新后核实当前记忆', null, true);
             else showToast('已中止，已还原到重构前的记忆');

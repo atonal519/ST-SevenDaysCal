@@ -29,8 +29,8 @@ export const DEFAULT_SETTINGS = {
     // 时间戳·时间锚点体系（只受 pluginEnabled + 自身开关统辖，独立于线/面注入闸）：强制主楼 AI 每楼正文首尾打时间戳
     // <!-- SDC-start … --> / <!-- SDC-end … -->，构画回读作时间源。默认开——全插件时间地基。
     storyClockEnabled: true,
-    storyClockPrompt : '',       // 时间戳提示词正文；空=用内置完整默认，非空按 storyClockPromptVersion 解释
-    storyClockPromptVersion: 0,  // 0/缺省=旧版基础正文+机器合同；2=用户编辑的完整文本，按原样注入
+    storyClockPrompt : '',       // 时间戳提示词正文；空=用内置完整默认，非空正文按原样注入
+    storyClockPromptVersion: 0,  // 历史兼容字段；当前默认/自定义行为由 storyClockPrompt 是否为空决定
     themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
     uiScale: 1.0,        // 界面字号缩放倍率：--sp-scale 的持久值（设置里 −/＋ 步进，默认 1.0＝100%），脱钩酒馆 Font Scale
     adultBlurEnabled: true, // 成人点线默认模糊（纯显示偏好）
