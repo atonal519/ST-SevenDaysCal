@@ -17,6 +17,7 @@ import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
 import { captureMetadataIntentBefore, createBestEffortMetadataSaver, createTargetMetadataSaver, createTargetSnapshotRefresher, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
+import { createTauriTavernMetadataSaver } from './runtime/tauritavern-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
@@ -271,6 +272,20 @@ const portableMetadataSaver = createTargetMetadataSaver({
     coreModule: scriptCore,
     ownedRoots: ['/sp-store', '/sp-theater'],
 });
+let tauriTavernMetadataSaver = null;
+function getTauriTavernMetadataSaver() {
+    const host = globalThis.__TAURITAVERN__ || globalThis.window?.__TAURITAVERN__;
+    if (!host || typeof scriptCore.enqueueChatSave !== 'function' || typeof scriptCore.persistedChatMetadata !== 'function') return null;
+    if (!tauriTavernMetadataSaver) tauriTavernMetadataSaver = createTauriTavernMetadataSaver({
+        host,
+        enqueueChatSave: scriptCore.enqueueChatSave,
+        persistedChatMetadata: scriptCore.persistedChatMetadata,
+        getContext,
+        // TT owns this transport module; loading it lazily leaves native Luker startup unchanged.
+        loadTransport: () => import('../../../chat-payload-transport.js'),
+    });
+    return tauriTavernMetadataSaver;
+}
 const getLedgerTarget = () => {
     try { return typeof scriptCore.resolveChatStateTarget === 'function' ? scriptCore.resolveChatStateTarget() : null; }
     catch { return null; }
@@ -309,6 +324,13 @@ store.bindStoreMetadataPersistence({
                 intentBefore: captureMetadataIntentBefore(options.liveMetadata, options.intentPaths),
             });
         }
+        const tauriTavernSaver = getTauriTavernMetadataSaver();
+        const boundedIntent = !!options.signal || Number.isFinite(Number(options.deadlineAt));
+        if (tauriTavernSaver?.supported && boundedIntent) return tauriTavernSaver.commit(current, {
+            ...options,
+            ownerGuard,
+            intentBefore: captureMetadataIntentBefore(options.liveMetadata, options.intentPaths),
+        });
         try {
             return await ledgerMetadataSaverReady.commit(current, { ...options, target, ownerGuard, rootKey: 'sp-store' });
         } catch (error) {

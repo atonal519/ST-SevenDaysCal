@@ -59,6 +59,16 @@ const MESSAGES = Object.freeze({
 
 export function diagnosticMessage(error, options = {}) {
     const code = classifyGenerationError(error, options);
+    const save = error?.saveResult;
+    if (code === 'save' && save?.reason === 'unsupported-core-contract' && save?.commitState === 'not-dispatched') {
+        return '未发出保存：当前宿主缺少可用的安全保存接口，原有线没有被本次候选覆盖。请确认宿主兼容后再试。';
+    }
+    if (code === 'save' && save?.commitState === 'unknown') {
+        return '保存请求已开始，但宿主尚未返回确认。请刷新当前聊天核实保存结果，确认前不要重复生成。';
+    }
+    if (code === 'save' && save?.commitState === 'conflict') {
+        return '保存前发现当前线已变化，本次候选未覆盖；请刷新当前聊天后再继续。';
+    }
     let message = MESSAGES[code] || MESSAGES.unknown;
     if (code === 'server') {
         const status = Number(error?.status ?? options.status);

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { captureMetadataIntentBefore, createBestEffortMetadataSaver, createTargetMetadataSaver, createTargetSnapshotRefresher, dispatchTargetMetadataWithRefresh } from '../../runtime/target-metadata-save.js';
 import { safeSaveDiagnosticFields, sanitizeDiagnosticRecord, readDiagnosticTrace } from '../../runtime/diagnostic-trace.js';
-import { safeDiagnosticLog } from '../../api/diagnostics.js';
+import { diagnosticMessage, safeDiagnosticLog } from '../../api/diagnostics.js';
+import { createTauriTavernMetadataSaver } from '../../runtime/tauritavern-metadata-save.js';
 import { createLinesGenerationController } from './controller.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 import { createDeadlineSignal } from '../../runtime/deadline.js';
@@ -305,9 +306,130 @@ test('save diagnostic fields redact unknown reasons and character identity throu
     assert.deepEqual(fields, { saveReason: 'owned-conflict', commitState: 'conflict', httpStatus: 409, savePath: '/sp-store/data/lines-char-<redacted>' });
     const record = sanitizeDiagnosticRecord(fields); assert.equal(record.savePath, fields.savePath); assert.equal(record.saveReason, 'owned-conflict');
     assert.equal(safeSaveDiagnosticFields({ path: '/sp-store/data/diagnostics-v1/floors' }).savePath, '/sp-store/data/diagnostics-v1/floors');
+    assert.equal(safeSaveDiagnosticFields({ reason: 'unsupported-core-contract', commitState: 'not-dispatched' }).saveReason, 'unsupported-core-contract');
     const unknown = safeDiagnosticLog('lines', 'save', { saveResult: { reason: 'private-secret-body', commitState: 'private-state', path: '/private/path' } });
     assert.equal(unknown.saveReason, 'unknown'); assert.equal(unknown.commitState, 'unknown'); assert.equal(unknown.savePath, undefined);
     assert.doesNotMatch(JSON.stringify(unknown), /private|secret|body/);
+    assert.match(diagnosticMessage(Object.assign(new Error('save'), { diagnosticCode: 'save', saveResult: { reason: 'unsupported-core-contract', commitState: 'not-dispatched' } }), { phase: 'save' }), /未发出保存.*宿主缺少/);
+    assert.match(diagnosticMessage(Object.assign(new Error('save'), { diagnosticCode: 'save', saveResult: { reason: 'save-interrupted-after-dispatch', commitState: 'unknown' } }), { phase: 'save' }), /保存请求已开始.*确认前不要重复生成/);
+});
+
+function tauriSaverFixture({ group = false, transport = async () => undefined, freshContext = false } = {}) {
+    const liveMetadata = { 'sp-store': { version: 1, data: { 'lines-user': { raw: 'old', ts: 1 }, 'outline-user': { raw: 'outline-old' } } }, integrity: 'live-integrity' };
+    const context = group
+        ? { chatId: 'group-chat-file', groupId: 'group-object-id', chatMetadata: liveMetadata, characters: [], characterId: null }
+        : { chatId: 'character-chat-file', characterId: 0, characters: [{ name: ' Fixture Character ', avatar: ' fixture.png ', avatar_url: 'different-avatar-url.png' }], chatMetadata: liveMetadata };
+    let tail = Promise.resolve(); let queueCalls = 0; const transportCalls = [];
+    const enqueueChatSave = task => {
+        queueCalls++;
+        const queued = tail.then(task);
+        tail = queued.then(() => undefined, () => undefined);
+        return queued.then(() => undefined);
+    };
+    const saver = createTauriTavernMetadataSaver({
+        host: {}, enqueueChatSave, getContext: () => freshContext ? { ...context } : context,
+        persistedChatMetadata: overrides => ({ ...context.chatMetadata, ...overrides }),
+        loadTransport: async () => ({
+            saveCharacterChatMetadata: async args => { transportCalls.push({ kind: 'character', args }); return transport(args); },
+            saveGroupChatMetadata: async args => { transportCalls.push({ kind: 'group', args }); return transport(args); },
+        }),
+    });
+    const path = '/sp-store/data/lines-user';
+    const stagedContext = { ...context, chatMetadata: structuredClone(liveMetadata) };
+    stagedContext.chatMetadata['sp-store'].data['lines-user'] = { raw: 'candidate', ts: 2 };
+    const options = { liveMetadata, intentPaths: [path], intentBefore: captureMetadataIntentBefore(liveMetadata, [path]), ownerGuard: () => true };
+    return { saver, context, liveMetadata, stagedContext, options, transportCalls, queueCalls: () => queueCalls, enqueueChatSave, waitQueue: () => tail };
+}
+
+test('TT metadata-only saver binds character and group targets and merges the latest root in its single queue callback', async () => {
+    for (const group of [false, true]) {
+        const h = tauriSaverFixture({ group });
+        let release; const gate = new Promise(resolve => { release = resolve; });
+        const blocker = h.enqueueChatSave(async () => gate);
+        h.liveMetadata['sp-store'].data['outline-user'] = { raw: 'latest outline' };
+        const pending = h.saver.commit(h.stagedContext, h.options);
+        release(); await blocker;
+        const result = await pending;
+        assert.equal(result.ok, true); assert.equal(result.commitState, 'confirmed');
+        assert.equal(h.transportCalls.length, 1); assert.equal(h.queueCalls(), 2);
+        const call = h.transportCalls[0]; assert.equal(call.kind, group ? 'group' : 'character');
+        if (group) assert.deepEqual(call.args, { id: 'group-chat-file', chatMetadata: call.args.chatMetadata });
+        else assert.deepEqual({ characterName: call.args.characterName, avatarUrl: call.args.avatarUrl, fileName: call.args.fileName }, { characterName: ' Fixture Character ', avatarUrl: ' fixture.png ', fileName: 'character-chat-file' });
+        assert.equal(call.args.chatMetadata['sp-store'].data['lines-user'].raw, 'candidate');
+        assert.equal(call.args.chatMetadata['sp-store'].data['outline-user'].raw, 'latest outline');
+        assert.equal(call.args.chatMetadata.integrity, 'live-integrity');
+        assert.equal(h.liveMetadata['sp-store'].data['lines-user'].raw, 'old', 'adapter does not publish before the store confirms the commit');
+    }
+});
+
+test('TT queued cancellation, deadline and target/key drift are not dispatched after the queue opens', async () => {
+    for (const mode of ['abort', 'deadline', 'deadline-only', 'target', 'chat-ref', 'avatar', 'conflict']) {
+        const h = tauriSaverFixture(); let release; const gate = new Promise(resolve => { release = resolve; });
+        const blocker = h.enqueueChatSave(async () => gate);
+        const controller = new AbortController();
+        const options = { ...h.options, signal: mode === 'deadline-only' ? undefined : controller.signal, deadlineAt: mode === 'deadline-only' ? Date.now() + 8 : Date.now() + 1000 };
+        const pending = h.saver.commit(h.stagedContext, options);
+        if (mode === 'abort') controller.abort(new Error('synthetic cancel'));
+        if (mode === 'deadline') setTimeout(() => controller.abort(Object.assign(new Error('synthetic deadline'), { name: 'TimeoutError' })), 8);
+        if (mode === 'target') h.context.chatId = 'other-chat-file';
+        if (mode === 'chat-ref') h.context.chat = [{ is_user: false, mes: 'replacement chat' }];
+        if (mode === 'avatar') h.context.characters[0].avatar = 'replacement.png';
+        if (mode === 'conflict') h.liveMetadata['sp-store'].data['lines-user'] = { raw: 'manual', ts: 3 };
+        if (mode === 'abort' || mode === 'deadline' || mode === 'deadline-only') {
+            const result = await pending;
+            assert.equal(result.commitState, 'not-dispatched');
+        }
+        release(); await blocker;
+        if (mode !== 'abort' && mode !== 'deadline' && mode !== 'deadline-only') assert.equal((await pending).dispatched, false);
+        await h.waitQueue();
+        assert.equal(h.transportCalls.length, 0, mode);
+        if (mode === 'conflict') assert.equal((await h.waitQueue()), undefined);
+    }
+});
+
+test('TT target identity accepts fresh getContext wrappers while binding the stable metadata object and actual chat', async () => {
+    const h = tauriSaverFixture({ freshContext: true });
+    const result = await h.saver.commit(h.stagedContext, h.options);
+    assert.equal(result.commitState, 'confirmed');
+    assert.equal(h.transportCalls.length, 1);
+    assert.equal(h.transportCalls[0].args.fileName, 'character-chat-file');
+});
+
+test('TT IPC deadline reports unknown but holds the host queue until the transport truly settles', async () => {
+    let resolveIpc; let dispatched = 0; let laterSaveStarted = false;
+    const h = tauriSaverFixture({ transport: () => { dispatched++; return new Promise(resolve => { resolveIpc = resolve; }); } });
+    const controller = new AbortController();
+    const pending = h.saver.commit(h.stagedContext, { ...h.options, signal: controller.signal, deadlineAt: Date.now() + 1000 });
+    while (!resolveIpc) await new Promise(resolve => setImmediate(resolve));
+    const later = h.enqueueChatSave(async () => { laterSaveStarted = true; });
+    controller.abort(Object.assign(new Error('synthetic deadline'), { name: 'TimeoutError' }));
+    const result = await pending;
+    assert.equal(result.commitState, 'unknown'); assert.equal(result.dispatched, true);
+    assert.equal(dispatched, 1); assert.equal(laterSaveStarted, false);
+    resolveIpc(); await later;
+    assert.equal(laterSaveStarted, true);
+    assert.equal(h.liveMetadata['sp-store'].data['lines-user'].raw, 'old', 'late IPC completion cannot publish through the expired caller');
+});
+
+test('TT deadlineAt alone bounds a pending IPC caller while the callback remains awaited by the host', async () => {
+    let resolveIpc; const h = tauriSaverFixture({ transport: () => new Promise(resolve => { resolveIpc = resolve; }) });
+    const pending = h.saver.commit(h.stagedContext, { ...h.options, deadlineAt: Date.now() + 12 });
+    while (!resolveIpc) await new Promise(resolve => setImmediate(resolve));
+    const result = await pending;
+    assert.equal(result.reason, 'save-interrupted-after-dispatch');
+    assert.equal(result.commitState, 'unknown'); assert.equal(result.dispatched, true);
+    resolveIpc(); await h.waitQueue();
+    assert.equal(h.liveMetadata['sp-store'].data['lines-user'].raw, 'old');
+});
+
+test('TT explicit transport rejection and thrown IPC are unknown and never auto-retried', async () => {
+    for (const transport of [async () => false, async () => { throw new Error('private synthetic failure'); }]) {
+        const h = tauriSaverFixture({ transport });
+        const result = await h.saver.commit(h.stagedContext, h.options);
+        assert.equal(result.ok, false); assert.equal(result.commitState, 'unknown'); assert.equal(result.dispatched, true);
+        assert.equal(h.transportCalls.length, 1);
+        assert.equal(h.liveMetadata['sp-store'].data['lines-user'].raw, 'old');
+    }
 });
 
 test('bounded confirmed writes fail closed when only the legacy host saver exists', async () => {

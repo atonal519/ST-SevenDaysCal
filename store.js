@@ -271,7 +271,11 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
         const ordinaryRootOwner = ordinaryOwnership(metadata, ORDINARY_ROOT);
         const publication = { root: null, installed: false, isOwned: () => ordinaryOwnership(metadata, ORDINARY_ROOT) === ordinaryRootOwner };
         try {
-            const saved = await persistConfirmed(stagedContext, { ...options, ownerGuard, liveMetadata: metadata, publication });
+            const saved = await persistConfirmed(stagedContext, {
+                ...options, ownerGuard, liveMetadata: metadata, publication,
+                // The TT transport can be delayed in the host queue; preserve the existing same-key handoff boundary until dispatch.
+                intentOwnerGuard: () => ordinaryOwnership(metadata, key) === ordinaryOwner,
+            });
             if (saved?.ok !== true) {
                 const error = Object.assign(new Error(saved?.reason || 'store-save-unconfirmed'), { phase: 'save', saveResult: saved || null });
                 if (Number.isInteger(Number(saved?.status))) error.status = Number(saved.status);

@@ -10,6 +10,11 @@ const cleanLabel = value => {
 };
 const splitFields = value => String(value || '').split(/[|｜]/).map(field => field.trim());
 const fieldValue = (text, name) => text.replace(new RegExp(`^${name}\\s*[:：]\\s*`, 'i'), '').trim();
+// Only strip the complete, known display suffix; the local ticket remains the identity/adult source.
+function normalizeTicketId(value) {
+    const match = /^(TICKET-\d+)(?:\s*(?:\((?:SFW|NSFW)\)|（(?:SFW|NSFW)）))?$/i.exec(String(value ?? '').trim());
+    return match ? match[1].toUpperCase() : null;
+}
 export const normalizeLineStage = value => {
     const text = String(value || '').trim();
     if (LINE_STAGES.has(text)) return text;
@@ -82,9 +87,9 @@ function tolerantBlocks(inner) {
     const flush = () => { if (block) blocks.push(block); block = null; };
     for (const raw of stripRecordWrappers(inner, lineAnchorKind, completeLineStructure).split(/\r?\n/)) {
         const text = cleanLabel(raw); if (!text || /^```/.test(text)) continue;
-        if (/^Line\s*[:：]/i.test(text)) { flush(); block = { line: text, ticketId: null, ticketSeen: false, desc: '', next: '', adultSeen: false, lastText: null }; continue; }
+        if (/^Line\s*[:：]/i.test(text)) { flush(); block = { line: text, ticketId: null, ticketSeen: false, ticketDuplicate: false, desc: '', next: '', adultSeen: false, lastText: null }; continue; }
         if (!block) continue;
-        if (/^Ticket\s*[:：]/i.test(text)) { block.ticketSeen = true; block.ticketId = fieldValue(text, 'Ticket').toUpperCase(); block.lastText = null; continue; }
+        if (/^Ticket\s*[:：]/i.test(text)) { if (block.ticketSeen) block.ticketDuplicate = true; block.ticketSeen = true; block.ticketId = fieldValue(text, 'Ticket'); block.lastText = null; continue; }
         if (/^Desc\s*[:：]/i.test(text)) { block.desc = fieldValue(text, 'Desc'); block.lastText = 'desc'; continue; }
         if (/^Next\s*[:：]/i.test(text)) { block.next = fieldValue(text, 'Next'); block.lastText = 'next'; continue; }
         if (/^Adult\s*[:：]/i.test(text)) { block.adultSeen = true; block.lastText = null; continue; }
@@ -117,8 +122,8 @@ export function validateLinesResponse(raw) {
     const model = []; const rejected = [];
     for (const [index, block] of blocks.entries()) {
         const parsed = parseLineRow(block.line);
-        const ticketId = block.ticketSeen && /^TICKET-\d+$/i.test(block.ticketId || '') ? block.ticketId.toUpperCase() : null;
-        const reason = block.ticketSeen && !ticketId ? 'invalid-ticket'
+        const ticketId = block.ticketSeen ? normalizeTicketId(block.ticketId) : null;
+        const reason = block.ticketSeen && (block.ticketDuplicate || !ticketId) ? 'invalid-ticket'
                 : parsed.fieldCount < 6 || !parsed.name || !parsed.when || !block.desc || !block.next ? 'missing-business-field'
                     : null;
         if (reason) { rejected.push({ index, reason }); continue; }

@@ -294,6 +294,43 @@ test('ticket protocol rejects missing duplicate unknown and old-line IDs without
     const c = createLinesGenerationController({ owners: createTaskOwnerManager(), chatId: () => 'protocol-chat', cacheKey: () => 'protocol-key', loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: () => [ticket], buildPrompt: () => 'p', callApi: async () => '<storylines_widget>\nLine: new|推进|筹备|1|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>', commit: () => { commits++; }, cleanup: owner => { owner.status = 'finished'; } });
     assert.equal((await c.run()).status, 'failed'); assert.equal(commits, 0);
 });
+test('ticket category suffixes normalize only complete IDs and never override local ticket binding', () => {
+    const suffixes = ['', ' (SFW)', '(NSFW)', '（SFW）', '（NSFW）', ' (sFw) ', '(nSfW)'];
+    const baseTicket = drawTickets(1, { seed: 'ticket-category-suffixes' })[0];
+    const freshTickets = Array.from({ length: 7 }, (_, index) => ({
+        ...baseTicket,
+        ticketId: `TICKET-${index + 1}`,
+        adultSelection: index === 0 ? { behavior: 'local adult selection' } : null,
+    }));
+    const response = `<storylines_widget>\n${suffixes.map((suffix, index) => `Line: 新线${index + 1}|起线|今天|world|false|false\nTicket: TICKET-${index + 1}${suffix}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`;
+    const checked = validateLinesResponse(response);
+    assert.equal(checked.ok, true);
+    assert.deepEqual(checked.model.map(line => line.ticketId), freshTickets.map(ticket => ticket.ticketId));
+    assert.equal(auditLineEvolution({ generatedLines: checked.model, freshTickets, intent: 'initial' }).ok, true);
+    const bound = bindVectorTickets({ generatedLines: checked.model, freshTickets });
+    assert.deepEqual(bound.map(line => line.adult), [true, false, false, false, false, false, false]);
+    assert.ok(bound.every(line => !Object.hasOwn(line, 'ticketId')));
+
+    const malformed = [
+        'TICKET-1 (adult)',
+        'TICKET-1(SFW）',
+        'TICKET-1（NSFW)',
+        'TICKET-1 (SFW) extra',
+        'TICKET-1 TICKET-2',
+    ];
+    for (const value of malformed) {
+        const result = validateLinesResponse(`<storylines_widget>\nLine: 新线|起线|今天|world|false|false\nTicket: ${value}\nDesc: 状态\nNext: 下一步\n</storylines_widget>`);
+        assert.equal(result.ok, false, value);
+        assert.equal(result.reason, 'invalid-ticket', value);
+    }
+    const duplicate = validateLinesResponse('<storylines_widget>\nLine: 新线|起线|今天|world|false|false\nTicket: TICKET-1\nTicket: TICKET-1 (SFW)\nDesc: 状态\nNext: 下一步\n</storylines_widget>');
+    assert.equal(duplicate.ok, false);
+    assert.equal(duplicate.reason, 'invalid-ticket');
+
+    const unknown = validateLinesResponse('<storylines_widget>\nLine: 新线|起线|今天|world|false|false\nTicket: TICKET-99（NSFW）\nDesc: 状态\nNext: 下一步\n</storylines_widget>');
+    assert.equal(unknown.ok, true, 'suffix normalization does not replace current-ticket membership validation');
+    assert.equal(auditLineEvolution({ generatedLines: unknown.model, freshTickets, intent: 'initial' }).reason, 'evolution-unknown-ticket');
+});
 test('release prompt defines global agency, neutral progression, ideal format, and local 6x3 cues without old quotas', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
     for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '未锁非终态自动线不得超过 8 条', '不设主动方或单轮出生配额', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响变得明确，而非要求事态极端化', '收束＝解决、和解、形成新平衡或事务落定', '淡出＝不再值得持续追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
@@ -450,6 +487,11 @@ test('mixed production prompt keeps every fresh ticket with local ratio allocati
     assert.equal((await controller.run()).status, 'updated');
     for (const ticket of tickets) for (const item of ticket.selections) assert.match(prompt, new RegExp(item.label));
     assert.match(prompt, /SFW 新线|NSFW 新线/);
+    assert.match(prompt, /ID=TICKET-1；分类：SFW 新线/);
+    assert.match(prompt, /ID=TICKET-2；分类：NSFW 新线/);
+    assert.match(prompt, /Ticket: <本轮列出的临时票据 ID>\nDesc:/);
+    assert.match(prompt, /字段中只写纯编号（例如 TICKET-1），不要附分类括号或解释/);
+    assert.doesNotMatch(prompt, /Ticket: <本轮列出的临时票据 ID>（/);
 });
 
 test('dominant pinned reroll retains pinned identity then applies the ratio pool', async () => {
