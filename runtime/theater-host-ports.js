@@ -2,7 +2,7 @@ import { classifyGenerationError, diagnosticMessage } from '../api/diagnostics.j
 
 // 棱宿主端口：所有 theater 专属 DOM/jQuery 操作集中于此。
 export function createTheaterHostPorts(d = {}) {
-    const { $, $in, inEl, documentRef = globalThis.document, getContext, captureTarget, theaterMode, modalId, setBody, loading, escapeHtml, escapeAttr, settings, saveSettingsDebounced, showToast, showPanel, confirm, spConfirm, scriptCore } = d;
+    const { $, $in, inEl, documentRef = globalThis.document, getContext, captureTarget, theaterMode, modalId, setBody, setFailureHtml, loading, escapeHtml, escapeAttr, settings, saveSettingsDebounced, showToast, showPanel, confirm, spConfirm, scriptCore } = d;
     return {
         getChatId: () => getContext()?.chatId, captureTarget: chatId => {
             const captured = captureTarget?.(chatId) || {};
@@ -12,7 +12,7 @@ export function createTheaterHostPorts(d = {}) {
                 metadataSnapshot: captured.metadataSnapshot ?? { ...(getContext()?.chatMetadata || {}) },
             };
         },
-        htmlOptions: () => ({ purifier: globalThis.DOMPurify, documentRef }), escapeHtml, escapeAttr, setBody, loading,
+        htmlOptions: () => ({ purifier: globalThis.DOMPurify, documentRef }), escapeHtml, escapeAttr, setBody, setFailureHtml, loading,
         isOpen: () => theaterMode() && $(`#${modalId()}`).is(':visible'), notifyEnabled: () => settings().notifyMode !== 'off', toast: showToast,
         focus: selector => $in(selector).trigger('focus'), closedSuccess: () => showToast('棱已生成，点击查看', () => { $in('.sp-view-btn[data-view="theater"]').trigger('click'); showPanel(); }), closedFailure: () => showToast('棱生成失败，请重试', null, true),
         showError: (error, options = {}) => { const retryable = options.retryable ?? classifyGenerationError(error) !== 'config-missing'; const retry = retryable ? '<button class="sp-gen-btn sp-theater-retry">重新生成</button>' : ''; setBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${escapeHtml(diagnosticMessage(error))}</p>${retry}<button class="sp-btn sp-theater-back">返回</button></div>`); },

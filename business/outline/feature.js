@@ -7,6 +7,8 @@ import { createOutlineRenderer } from './render.js';
 import { createOutlineRepository } from './repository.js';
 import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline, editOutlineScene } from './schema.js';
 import { createOutlineUi } from './ui.js';
+import { createPanelFailureStore } from '../ui/panel-failure.js';
+import { diagnosticMessage } from '../../api/diagnostics.js';
 
 export function createOutlineFeature(env = {}) {
     let chatRevision = 0;
@@ -31,6 +33,30 @@ export function createOutlineFeature(env = {}) {
         removeStore: env.removeStore,
     });
     const ui = createOutlineUi(env.ui);
+    const failureNotes = createPanelFailureStore({ escapeHtml: env.escapeHtml });
+    let visibleFailureSlot = null;
+    const identityKey = target => JSON.stringify([String(target?.chatId || ''), Number(target?.chatRevision) || 0]);
+    const currentFailureKey = () => identityKey(captureIdentity());
+    const renderFailureNotes = () => ui.setFailureHtml?.(visibleFailureSlot ? failureNotes.html('outline-last', currentFailureKey()) : '');
+    const setFailureNote = (slot, key, text) => { visibleFailureSlot = slot; failureNotes.set('outline-last', key, text); };
+    const clearFailureNote = (slot, key) => { if (visibleFailureSlot !== slot) return false; visibleFailureSlot = null; return failureNotes.clear('outline-last', key); };
+    const failureAttempt = new Map();
+    const runWithFailureNote = async (slot, label, run) => {
+        if ((slot === 'outline-generation' && generation?.busy) || (slot === 'outline-chat' && chat?.busy)) return run();
+        const target = repository.capture(); const targetKey = identityKey(target); const attempt = (failureAttempt.get(slot) || 0) + 1;
+        failureAttempt.set(slot, attempt); clearFailureNote(slot, targetKey); renderFailureNotes();
+        let result;
+        try { result = await run(); }
+        catch (error) { result = { status: 'failed', error }; }
+        if (failureAttempt.get(slot) !== attempt || !repository.isCurrent(target)) return result;
+        if (result?.status === 'failed') {
+            const detail = result.error ? diagnosticMessage(result.error) : result.reason === 'memory-precheck' ? '记忆读取失败，请重试' : '操作失败，请重试';
+            setFailureNote(slot, targetKey, `上次${label}失败：${detail}`);
+        } else if (result?.status === 'updated' && result.uiError) setFailureNote(slot, targetKey, `上次${label}已保存，但面板刷新失败：${diagnosticMessage(result.uiError)}`);
+        else if (['updated', 'unchanged'].includes(result?.status)) clearFailureNote(slot, targetKey);
+        renderFailureNotes();
+        return result;
+    };
     const renderer = createOutlineRenderer({
         escapeHtml: env.escapeHtml,
         cleanText: env.cleanText,
@@ -44,11 +70,13 @@ export function createOutlineFeature(env = {}) {
         settings: env.settings,
         injectEnabled: env.injectEnabled,
         cleanText: env.cleanText,
+        preferences: env.preferences,
     });
     const refreshPanel = (target = repository.capture()) => {
         if (!repository.isCurrent(target)) return;
         const saved = repository.readOutline(target);
         ui.setOutline(saved?.raw ? renderer.render(saved.raw, repository.cursor(target)) : renderer.empty());
+        renderFailureNotes();
     };
     const judge = createOutlineJudge({
         repository,
@@ -65,6 +93,20 @@ export function createOutlineFeature(env = {}) {
         toast: (message, error) => ui.toast(message, error),
         logDiagnostic: env.logDiagnostic,
         isEditing: () => editing,
+        failure: (slot, target, error) => {
+            if (!isCurrent(target)) return;
+            const key = identityKey(target); const label = slot === 'relocate' ? '面定位' : '面自动推进判定';
+            setFailureNote(slot, key, `上次${label}失败：${diagnosticMessage(error)}`); renderFailureNotes();
+        },
+        clearFailure: (slot, target) => {
+            if (!isCurrent(target)) return;
+            clearFailureNote(slot, identityKey(target)); renderFailureNotes();
+        },
+        uiFailure: (slot, target, error) => {
+            if (!isCurrent(target)) return;
+            const label = slot === 'relocate' ? '面定位' : '面自动推进';
+            setFailureNote(slot, identityKey(target), `上次${label}已保存，但面板刷新失败：${diagnosticMessage(error)}`); renderFailureNotes();
+        },
         onCursorChanged: ({ target }) => { if (ui.isOutlineMode()) refreshPanel(target); },
     });
     const generation = createOutlineGeneration({
@@ -78,6 +120,7 @@ export function createOutlineFeature(env = {}) {
         renderer,
         ui,
         settings: env.settings,
+        preferences: env.preferences,
         openSettings: env.openSettings,
         now: env.now,
         isEditing: () => editing,
@@ -156,13 +199,27 @@ export function createOutlineFeature(env = {}) {
             return true;
         },
     });
-    ui.bindControllers({ generation, chat, actions });
+    const generationUi = Object.create(generation);
+    Object.defineProperties(generationUi, {
+        busy: { get: () => generation.busy },
+        trigger: { value: (...args) => runWithFailureNote('outline-generation', '面生成', () => generation.trigger(...args)) },
+        abort: { value: reason => { failureAttempt.set('outline-generation', (failureAttempt.get('outline-generation') || 0) + 1); clearFailureNote('outline-generation', currentFailureKey()); renderFailureNotes(); return generation.abort(reason); } },
+    });
+    const chatUi = Object.create(chat);
+    Object.defineProperties(chatUi, {
+        busy: { get: () => chat.busy },
+        send: { value: message => runWithFailureNote('outline-chat', '面内讨论', () => chat.send(message)) },
+        resendFrom: { value: (index, message) => runWithFailureNote('outline-chat', '面内讨论', () => chat.resendFrom(index, message)) },
+        abort: { value: reason => { failureAttempt.set('outline-chat', (failureAttempt.get('outline-chat') || 0) + 1); clearFailureNote('outline-chat', currentFailureKey()); renderFailureNotes(); return chat.abort(reason); } },
+    });
+    ui.bindControllers({ generation: generationUi, chat: chatUi, actions });
 
     const open = () => {
         ui.setPlaceholder(env.chatPlaceholder?.() || '和 AI 讨论剧情、面或设定…');
         chat.load();
         if (generation.busy) ui.setLoading();
         else refreshPanel();
+        renderFailureNotes();
     };
     const onChatChanged = ({ lastSeen = -1 } = {}) => {
         chatRevision += 1;
@@ -170,11 +227,15 @@ export function createOutlineFeature(env = {}) {
         generation.abort('chat-boundary');
         judge.onChatChanged({ lastSeen });
         chat.onChatChanged();
+        failureNotes.clearAll(); visibleFailureSlot = null; renderFailureNotes();
     };
     const abortAll = (reason = 'manual-abort') => {
         generation.abort(reason);
         judge.abort(reason);
         chat.abort(reason);
+        failureAttempt.set('outline-generation', (failureAttempt.get('outline-generation') || 0) + 1);
+        failureAttempt.set('outline-chat', (failureAttempt.get('outline-chat') || 0) + 1);
+        failureNotes.clearAll(); visibleFailureSlot = null; renderFailureNotes();
     };
     const invalidateStoreKind = kind => {
         if (kind === 'outline') {
@@ -205,8 +266,8 @@ export function createOutlineFeature(env = {}) {
         renderer,
         injection,
         judge,
-        generation,
-        chat,
+        generation: generationUi,
+        chat: chatUi,
         ui,
         actions,
         bindUi: ui.bind,

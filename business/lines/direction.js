@@ -1,5 +1,5 @@
-// 剧情倾向按稳定角色键保存在全局 settings；未知值回落 natural。线生成和开启后的潜伏注入
-// 共用同一合同：只在同样有剧情证据的候选间调整优先级，不改变线 schema，也不强制结果。
+// 剧情倾向按稳定角色键保存在全局 settings；点、线、面生成与面内讨论共用此指导，
+// 开启后也用于线／面潜伏注入。未知值回落 natural；倾向只在有依据的候选间调整优先级。
 export const LINE_DIRECTION_VALUES = Object.freeze(['natural', 'positive', 'conflict', 'tragic']);
 
 export const LINE_DIRECTION_LABELS = Object.freeze({

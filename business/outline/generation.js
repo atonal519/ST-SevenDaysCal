@@ -13,6 +13,7 @@ export function createOutlineGeneration({
     renderer,
     ui,
     settings,
+    preferences,
     openSettings,
     now = () => Date.now(),
     isEditing = () => false,
@@ -57,6 +58,7 @@ export function createOutlineGeneration({
         owner = task;
         busy = true;
         ui?.setLoading('正在读取记忆…');
+        let uiError = null;
         try {
             let precheckResult;
             try { precheckResult = precheck ? await precheck({ signal: controller.signal, operationToken, contextSnapshot: context?.() }) : true; }
@@ -78,7 +80,7 @@ export function createOutlineGeneration({
             }
             const raw = await callApi?.({
                 ctx,
-                prompt: buildOutlinePrompt(userName, charName, 'user'),
+                prompt: buildOutlinePrompt(userName, charName, 'user', preferences?.(ctx)),
                 config,
                 userName,
                 charName,
@@ -109,8 +111,8 @@ export function createOutlineGeneration({
                     ui.setOutline(html);
                     if (settings?.().notifyMode !== 'off') ui.toast?.('面已生成');
                 } else ui?.closedSuccess?.();
-            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
-            return { status: 'updated', raw: normalizedRaw };
+            } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
+            return { status: 'updated', raw: normalizedRaw, ...(uiError ? { uiError } : {}) };
         } catch (error) {
             if (!currentAndOwned(task)) return { status: 'cancelled' };
             if (!repository.matches(target, task.baseline)) return { status: 'cancelled' };

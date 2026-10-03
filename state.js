@@ -56,7 +56,7 @@ const ADVISOR_TONE_GUIDE = [
     `这些规则只约束与用户讨论时的顾问口吻，不限制所创作的大纲内容；合理的强烈情绪、冲突、危机或大开大合应按剧情需要充分呈现。当用户明确要求某种表达风格时，以用户要求为准。`,
 ].join('\n');
 
-export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', recentCtx = '', almanacText = '', calDescText = '', memText = '' }) {
+export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', recentCtx = '', almanacText = '', calDescText = '', memText = '', preferences = {} }) {
     const outlineSection = outlineRaw
         ? `\n当前大纲：\n${outlineRaw}\n`
         : '\n当前还没有既定大纲，可先从灵感、剧情走向、角色关系、人物设定或世界观想法开始讨论。\n';
@@ -79,6 +79,6 @@ export function buildCreativeChatSystemPrompt({ userName, charName, personaDesc 
         `【这只是供讨论对比的草稿】你在对话框里给出的大纲**不会自动生效**，是否覆盖上层的正式大纲，由用户自行点击"应用此面"按钮决定。因此：不要在回复里声称大纲"已更新/已应用/已保存"，也不要因为"怕覆盖"就偷工减料、只给片段——正常完整地输出即可，应用与否交给用户。`,
         editRule,
         ADVISOR_TONE_GUIDE,
-        buildOutlineCreationContract(),
+        buildOutlineCreationContract(preferences),
     ].filter(Boolean).join('\n');
 }

@@ -4,10 +4,11 @@ import { createLinesRuntime } from './runtime.js';
 import { createLinesInjectionController } from './injection.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesActions } from './actions.js';
-import { runGenerationUiEffect } from '../../api/diagnostics.js';
+import { diagnosticMessage, runGenerationUiEffect, safeDiagnosticLog } from '../../api/diagnostics.js';
 import { commitLineWidget } from './widget.js';
 import { createDashedModule } from './dashed.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
+import { traceDiagnosticEvent } from '../../runtime/diagnostic-trace.js';
 import { parseLines, serializeLines, TERMINAL_LINE_STAGES } from './schema.js';
 import { publicCueChips, stripInternalLineLines } from './vectors/codec.js';
 import { vectorGlyphSvg } from './vectors/glyph.js';
@@ -16,6 +17,7 @@ import { buildLineInjectText, inlineState } from './inline.js';
 import { chooseSwipeLayer, floorToFinalize, markEditedFloor } from './strategy.js';
 import { renderActionMenu } from '../utils/action-menu.js';
 import { changeCurrentLineStore, freezeLineStore, generatedLineStore, lineStoreMatches, manualLineStore, normalizeLineGeneratedAt, normalizeLineHistory, restoreLineHistoryVersion, retiredLineStore, snapshotLineStore } from './version-history.js';
+import { createDeadlineSignal, LINES_TIME_LIMITS } from '../../runtime/deadline.js';
 
 const LINE_EDGE_COLORS = Object.freeze({
     ordinary: '#6aab8a',
@@ -35,6 +37,8 @@ const LINE_STAGE_STEPS = Object.freeze({
     '收束': 4,
 });
 
+const escapePanelText = value => String(value ?? '').replace(/[&<>"']/gu, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+
 // 阶段文字已承担可访问的状态语义；四格只是本地视觉刻度，不伪装成百分比进度。
 const lineStageMeterHtml = (stage, color) => {
     const faded = stage === '淡出';
@@ -45,7 +49,7 @@ const lineStageMeterHtml = (stage, color) => {
 
 // 线域组合根：宿主只注入能力与跨域回调；各纯业务子模块不反向读取 index 状态。
 export function createLinesFeature(env = {}) {
-    const runtime = env.runtime || createLinesRuntime({ render: env.render });
+    const runtime = env.runtime || createLinesRuntime({ render: env.render, onBusyChange: env.onBusyChange });
     const owners = env.owners || createTaskOwnerManager();
     const lifecycle = env.lifecycle || createLinesLifecycle();
     if (lifecycle.lastDay == null && typeof env.dayAnchor === 'function') lifecycle.lastDay = env.dayAnchor() ?? null;
@@ -54,8 +58,29 @@ export function createLinesFeature(env = {}) {
     const dashed = env.dashed || (env.dashedEnv && createDashedModule({ ...env.dashedEnv, refreshPanel: () => refreshPanel?.(true), refreshInline: () => syncInline?.() }));
     let historyBusy = false;
     let pendingHistoryRestore = null;
+    let autoAdvanceQueueEpoch = 0;
+    let pendingAutoAdvance = null;
+    let autoAdvancePump = null;
+    // Failure feedback is session UI state only; its owner/chat identity prevents late work from repainting a newer view.
+    let lastGenerationFailure = null;
+    const currentGenerationOwner = owner => {
+        const chatId = env.chatId?.();
+        const chatRevision = owners.currentChatRevision();
+        return owner?.channel === 'lines-generation'
+            && owner.chatId === chatId
+            && owner.chatRevision === chatRevision
+            && runtime.controller === owner.controller
+            && (owners.isCurrent(owner, { chatId, chatRevision })
+                || (owner.controller.signal.reason?.code === 'operation-timeout' && owners.isOwner(owner, { chatId, chatRevision })))
+            && (!owner.participantIdentity || env.sameParticipantIdentity?.(owner.participantIdentity, env.participantIdentity?.()) !== false);
+    };
+    const clearGenerationFailure = () => { lastGenerationFailure = null; };
+    const failureText = (error, reasonCode) => reasonCode === 'evolution-newborn-missing-ticket'
+        ? '上次生成失败：模型漏写了新线的来源编号。原有内容未改变，可以重新生成。'
+        : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
     const generation = env.generation || (env.generationEnv && createLinesGenerationController({
         ...env.generationEnv,
+        timeLimits: env.timeLimits || env.generationEnv.timeLimits,
         owners,
         runtime,
         commit: async (...args) => {
@@ -63,11 +88,29 @@ export function createLinesFeature(env = {}) {
             if ((result === true || result?.ok === true) && !result?.stale && env.dashedEnabled?.() === true) dashed?.run?.();
             return result;
         },
-        onStart: () => { if (env.isPanelActive?.()) refreshPanel?.(); },
+        onStart: owner => {
+            if (!currentGenerationOwner(owner)) return;
+            clearGenerationFailure();
+            if (env.isPanelActive?.()) refreshPanel?.();
+        },
+        onPhase: (owner, _phase, label) => {
+            // Only the current generation owner may repaint the shared loading label after an async boundary.
+            if (!owner?.controller || owner.controller.signal.aborted
+                || runtime.controller !== owner.controller
+                || !owners.isCurrent(owner, { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision() })) return;
+            runtime.start(owner.controller, label);
+            if (env.isPanelActive?.()) refreshPanel?.();
+        },
         cleanup: (owner, chatId, options) => cleanupOwner(owner, chatId, options),
+        fail: (error, options = {}) => {
+            const { owner, reasonCode } = options;
+            if (currentGenerationOwner(owner)) lastGenerationFailure = { chatId: owner.chatId, chatRevision: owner.chatRevision, text: failureText(error, reasonCode) };
+            env.generationEnv.fail?.(error, options);
+        },
     }));
     const actions = env.actions || (env.actionsEnv && createLinesActions({
         ...env.actionsEnv,
+        timeLimits: env.timeLimits || env.actionsEnv.timeLimits,
         isBusy: () => runtime.busy || historyBusy,
         resetCounter: () => { lifecycle.counter = 0; },
         render: raw => renderLines(raw),
@@ -75,8 +118,13 @@ export function createLinesFeature(env = {}) {
         refreshPanel: () => refreshPanel?.(),
         refreshInline: () => syncInline?.(),
         beginPreflight: () => {
+            clearGenerationFailure();
             const participantIdentity = env.participantIdentity?.() || null;
             const owner = owners.create('lines-preflight', { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision(), participantIdentity });
+            owner.deadlineAt = Date.now() + (env.timeLimits?.totalMs ?? LINES_TIME_LIMITS.totalMs);
+            owner.preparationDeadlineAt = Math.min(owner.deadlineAt, Date.now() + (env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs));
+            owner.deadlineTimer = setTimeout(() => owner.controller.abort(Object.assign(new Error('lines-total-timeout'), { name: 'TimeoutError', code: 'operation-timeout' })), Math.max(0, owner.deadlineAt - Date.now()));
+            owner.controller.signal.addEventListener('abort', () => clearTimeout(owner.deadlineTimer), { once: true });
             owner.contextSnapshot = env.contextSnapshot?.() || null;
             runtime.start(owner.controller, '正在读取记忆…');
             if (env.isPanelActive?.()) refreshPanel?.();
@@ -84,6 +132,7 @@ export function createLinesFeature(env = {}) {
         },
         preflightCurrent: owner => owners.isCurrent(owner, { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision() }) && (!owner.participantIdentity || env.sameParticipantIdentity?.(owner.participantIdentity, env.participantIdentity?.()) !== false),
         finishPreflight: (owner, failure = null) => {
+            clearTimeout(owner.deadlineTimer);
             owners.finish(owner);
             if (runtime.finish(owner.controller) && env.isPanelActive?.()) {
                 if (failure) renderBody(env.preflightError?.(failure) || env.empty?.());
@@ -91,6 +140,7 @@ export function createLinesFeature(env = {}) {
             }
         },
         invalidatePreflight: (reason = 'manual-abort') => owners.invalidate('lines-preflight', reason),
+        onBusy: () => env.actionsEnv?.toast?.('线仍在准备或生成中，请稍后再试'),
         runGenerate: (...args) => generation?.run?.(...args),
     }));
     const adultBlurEnabled = () => env.getSettings?.().adultBlurEnabled !== false;
@@ -166,7 +216,7 @@ export function createLinesFeature(env = {}) {
         const summary = `<summary class="sp-inline-summary"><span class="sp-inline-title">线</span><span class="sp-inline-count${view.empty ? ' sp-inline-empty' : ''}">${summaryText}</span>${controls}</summary>`;
         return `${summary}${body || dashedSub ? `<div class="sp-inline-body" data-lines-inject-text="${env.escapeAttr?.(view.injectText) || ''}">${body}${dashedSub}</div>` : ''}`;
     };
-    const appendInlineBlock = async (messageId, shouldAdvance) => {
+    const appendInlineBlock = async (messageId, shouldAdvance, trigger = null) => {
         const expectedChatId = env.chatId?.();
         const expectedEpoch = env.boundaryEpoch?.();
         const boundaryCurrent = () => env.chatId?.() === expectedChatId && (expectedEpoch === undefined || env.boundaryEpoch?.() === expectedEpoch);
@@ -175,7 +225,7 @@ export function createLinesFeature(env = {}) {
         let result = { status: 'skipped', reason: shouldAdvance ? 'unavailable' : 'not-requested' };
         if (shouldAdvance && !runtime.busy && cfg?.url && cfg?.key) {
             const swipeId = Number(env.swipeId?.(messageId) ?? 0);
-            result = await generation?.run?.(true, { mesId: Number(messageId), swipeId }) || result;
+            result = await generation?.run?.(true, { mesId: Number(messageId), swipeId }, null, null, null, trigger) || result;
         } else if (shouldAdvance && runtime.busy) {
             result = { status: 'skipped', reason: 'busy' };
         } else if (shouldAdvance && (!cfg?.url || !cfg?.key)) {
@@ -186,6 +236,62 @@ export function createLinesFeature(env = {}) {
         if (shouldAdvance) env.refreshInlineWindow?.(true);
         env.freezeSnapshot?.(messageId);
         return result;
+    };
+    const showAutoAdvanceFailure = (intent, message) => {
+        if (env.chatId?.() !== intent.chatId || owners.currentChatRevision() !== intent.chatRevision) return;
+        lastGenerationFailure = { chatId: intent.chatId, chatRevision: intent.chatRevision, text: `上次自动推进未完成：${message}` };
+        if (env.isPanelActive?.()) refreshPanel();
+    };
+    const drainAutoAdvances = async () => {
+        while (pendingAutoAdvance) {
+            const intent = pendingAutoAdvance;
+            pendingAutoAdvance = null;
+            if (intent.queueEpoch !== autoAdvanceQueueEpoch) continue;
+            const stillCurrent = () => env.chatId?.() === intent.chatId
+                && owners.currentChatRevision() === intent.chatRevision
+                && (intent.boundaryEpoch === undefined || env.boundaryEpoch?.() === intent.boundaryEpoch)
+                && String(env.floorSignature?.(intent.messageId) || '') === intent.floorSignature;
+            if (!stillCurrent()) continue;
+            if (Date.now() >= intent.deadlineAt) { showAutoAdvanceFailure(intent, '排队期间已超时，请手动重新生成'); continue; }
+            if (runtime.busy || historyBusy || actions?.isPreparing?.()) {
+                traceDiagnosticEvent('lines-auto-advance-skipped', { module: 'lines', channel: 'lines', status: 'skipped', reasonCode: 'manual-owner-busy' });
+                continue;
+            }
+            const result = await appendInlineBlock(intent.messageId, true, intent);
+            if (intent.queueEpoch !== autoAdvanceQueueEpoch) continue;
+            if (result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+            else if (result?.status === 'skipped') traceDiagnosticEvent('lines-auto-advance-skipped', { module: 'lines', channel: 'lines', status: 'skipped', reasonCode: result.reason === 'busy' ? 'manual-owner-busy' : 'trigger-unavailable' });
+        }
+    };
+    const enqueueAutoAdvance = (messageId, credential) => {
+        const contextSnapshot = credential?.contextSnapshot || env.contextSnapshot?.() || { chat: env.chat?.() || [] };
+        const floor = contextSnapshot?.chat?.[Number(messageId)];
+        const floorSignature = String(credential?.floorSignature || env.floorSignature?.(messageId) || '');
+        const intent = {
+            messageId: Number(messageId), swipeId: Number(env.swipeId?.(messageId) ?? 0),
+            chatId: credential?.chatId ?? env.chatId?.(),
+            chatRevision: credential?.chatRevision ?? owners.currentChatRevision(),
+            boundaryEpoch: credential?.boundaryEpoch ?? env.boundaryEpoch?.(),
+            floorSignature, contextSnapshot,
+            participantIdentity: credential?.participantIdentity || env.participantIdentity?.() || null,
+            deadlineAt: credential?.deadlineAt || (Date.now() + (env.timeLimits?.totalMs ?? LINES_TIME_LIMITS.totalMs)),
+            preparationDeadlineAt: credential?.preparationDeadlineAt || Math.min(credential?.deadlineAt || Infinity, Date.now() + (env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs)),
+            queueEpoch: autoAdvanceQueueEpoch,
+        };
+        if (!floor || !floorSignature) return { status: 'skipped', reason: 'missing-floor-snapshot' };
+        // A pending automatic turn is coalesced to the newest captured floor; its deadline starts at receipt.
+        pendingAutoAdvance = intent;
+        if (!autoAdvancePump) autoAdvancePump = drainAutoAdvances().catch(error => {
+            const diagnostic = safeDiagnosticLog('lines', 'request', error, { background: true });
+            console.warn('[SP lines failure]', diagnostic);
+        }).finally(() => { autoAdvancePump = null; if (pendingAutoAdvance) enqueuePump(); });
+        return { status: 'started' };
+    };
+    const enqueuePump = () => {
+        if (!autoAdvancePump) autoAdvancePump = drainAutoAdvances().catch(error => {
+            const diagnostic = safeDiagnosticLog('lines', 'request', error, { background: true });
+            console.warn('[SP lines failure]', diagnostic);
+        }).finally(() => { autoAdvancePump = null; if (pendingAutoAdvance) enqueuePump(); });
     };
     const syncInline = expectedChatId => {
         if (expectedChatId != null && env.chatId?.() !== expectedChatId) return;
@@ -199,9 +305,20 @@ export function createLinesFeature(env = {}) {
         const next = generatedLineStore(baselineStore, raw, Date.now());
         if (!next.changed) return true;
         const writer = env.writeStoreConfirmed || env.writeStore;
-        const stored = await writer?.(key, next.value, { ownerGuard: () => env.chatId?.() === chatId && (!owner || owners.isCurrent(owner, { chatId, chatRevision: owner.chatRevision })) && (canonicalMatches(baselineStore) || canonicalMatches(next.value)) });
+        const saveDeadline = createDeadlineSignal({ signal: owner?.controller?.signal, deadlineAt: owner?.deadlineAt, timeoutMs: env.timeLimits?.saveMs ?? LINES_TIME_LIMITS.saveMs, reason: 'lines-save-timeout' });
+        let stored;
+        try {
+            stored = await writer?.(key, next.value, {
+                signal: saveDeadline.signal,
+                deadlineAt: saveDeadline.deadlineAt,
+                safeSnapshotRefresh: true,
+                reportPhase: owner?.reportPhase,
+                ownerGuard: () => !saveDeadline.signal.aborted && env.chatId?.() === chatId && (!owner || owners.isCurrent(owner, { chatId, chatRevision: owner.chatRevision })) && (canonicalMatches(baselineStore) || canonicalMatches(next.value)),
+            });
+        } finally { saveDeadline.dispose(); }
         if (!(stored === true || stored?.ok === true)) return stored || false;
         if (stored?.stale) return { ...stored, ok: true };
+        if (currentGenerationOwner(owner)) clearGenerationFailure();
         const ui = await runGenerationUiEffect(() => {
             runtime.cache(raw);
             if (swipeCtx?.mesId != null) {
@@ -219,7 +336,9 @@ export function createLinesFeature(env = {}) {
         return ui.ok ? true : { ok: true, uiError: ui.error };
     };
     const cleanupOwner = (owner, chatId, { preserveFailureUi = false } = {}) => {
-        if (!owners.isCurrent(owner, { chatId })) return false;
+        const timedOutOwner = owner?.controller?.signal?.reason?.code === 'operation-timeout'
+            && owners.isOwner(owner, { chatId, chatRevision: owner.chatRevision });
+        if (!owners.isCurrent(owner, { chatId }) && !timedOutOwner) return false;
         runtime.finish(owner.controller);
         owners.finish(owner);
         if (env.isPanelActive?.() && !preserveFailureUi) refreshPanel();
@@ -244,11 +363,17 @@ export function createLinesFeature(env = {}) {
         const target = retiredLineStore(baseline, raw, Date.now()).value;
         const writer = env.writeStoreConfirmed || env.writeStore;
         let stored;
+        const saveDeadline = createDeadlineSignal({ deadlineAt: credential.deadlineAt, timeoutMs: env.timeLimits?.saveMs ?? LINES_TIME_LIMITS.saveMs, reason: 'lines-terminal-save-timeout' });
         try {
-            stored = await writer?.(credential.cacheKey, target, { ownerGuard: () => floorCredentialCurrent(credential) && (canonicalMatches(baseline) || canonicalMatches(target)) });
+            stored = await writer?.(credential.cacheKey, target, {
+                signal: saveDeadline.signal,
+                deadlineAt: saveDeadline.deadlineAt,
+                safeSnapshotRefresh: true,
+                ownerGuard: () => !saveDeadline.signal.aborted && floorCredentialCurrent(credential) && (canonicalMatches(baseline) || canonicalMatches(target)),
+            });
         } catch {
             return false;
-        }
+        } finally { saveDeadline.dispose(); }
         if (!(stored === true || stored?.ok === true) || stored?.stale || !floorCredentialCurrent(credential)) return false;
         runtime.cache(raw);
         if (env.isPanelActive?.()) refreshPanel(true);
@@ -256,6 +381,9 @@ export function createLinesFeature(env = {}) {
         return true;
     };
     const abortGeneration = ({ restore = true, reason = 'manual-abort' } = {}) => {
+        autoAdvanceQueueEpoch++;
+        pendingAutoAdvance = null;
+        clearGenerationFailure();
         actions?.invalidatePreflight?.(reason);
         const owner = owners.invalidate('lines-generation', reason);
         runtime.abort(reason);
@@ -311,15 +439,25 @@ export function createLinesFeature(env = {}) {
         }
         const credential = lifecycle.consumeFloor(mid, env.chatId?.());
         if (!credential) { await appendInlineBlock(mid, false); return; }
-        if (!autoSuppressed) await retirePreviousTerminalLines(credential);
-        if (!floorCredentialCurrent(credential)) return;
+        const contextSnapshot = !autoSuppressed && env.getMode?.() === 'turns'
+            ? (env.contextSnapshot?.() || { chat: env.chat?.() || [] })
+            : null;
+        const triggerCredential = contextSnapshot ? {
+            ...credential,
+            contextSnapshot,
+            floorSignature: String(env.floorSignature?.(mid) || ''),
+            deadlineAt: Date.now() + (env.timeLimits?.totalMs ?? LINES_TIME_LIMITS.totalMs),
+            preparationDeadlineAt: Date.now() + (env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs),
+        } : credential;
+        if (!autoSuppressed) await retirePreviousTerminalLines(triggerCredential);
+        if (!floorCredentialCurrent(triggerCredential)) return;
         lifecycle.lastSeenMaxMesId = mid;
         let advance = false;
         const mode = env.getMode?.();
         if (!autoSuppressed && mode === 'days') lifecycle.holdConfirmedFloor(credential);
         else if (!autoSuppressed && mode === 'turns') advance = lifecycle.advanceCounter({ mode, interval: env.getInterval?.() }).shouldAdvance;
-        const result = await appendInlineBlock(mid, advance);
-        if (advance && result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+        if (advance) { enqueueAutoAdvance(mid, triggerCredential); return; }
+        await appendInlineBlock(mid, false);
     };
     const onDateAftermath = async ({ chatId = env.chatId?.(), messageId, day } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false || env.getMode?.() !== 'days') return false;
@@ -328,8 +466,18 @@ export function createLinesFeature(env = {}) {
         if (!credential || day == null) return false;
         const advance = lifecycle.detectInGameDayChange({ day, decide: env.dayAdvance });
         if (!advance) { await appendInlineBlock(mid, false); return false; }
-        const result = await appendInlineBlock(mid, true);
-        if (result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+        const contextSnapshot = env.contextSnapshot?.() || { chat: env.chat?.() || [] };
+        const trigger = {
+            chatId: credential.chatId,
+            chatRevision: owners.currentChatRevision(),
+            boundaryEpoch: env.boundaryEpoch?.(),
+            participantIdentity: env.participantIdentity?.() || null,
+            contextSnapshot,
+            floorSignature: String(env.floorSignature?.(mid) || ''),
+            deadlineAt: Date.now() + (env.timeLimits?.totalMs ?? LINES_TIME_LIMITS.totalMs),
+            preparationDeadlineAt: Date.now() + (env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs),
+        };
+        enqueueAutoAdvance(mid, trigger);
         return true;
     };
     const onSwiped = async ({ mesId, info } = {}) => {
@@ -509,7 +657,13 @@ export function createLinesFeature(env = {}) {
         };
     };
     const renderBody = body => {
-        env.renderPanelDom?.({ toolbar: dashed?.toolbarHtml?.({ onEvents: sheet === 'events', lineBusy: runtime.busy ? ' sp-refresh-busy' : '', generationBusy: runtime.busy, ...historyToolbarState() }), body: sheet === 'dashed' ? dashed?.panelHtml?.() : String(body || '') });
+        const failure = lastGenerationFailure?.chatId === env.chatId?.() && lastGenerationFailure?.chatRevision === owners.currentChatRevision()
+            ? lastGenerationFailure
+            : null;
+        const escapedFailure = failure ? (env.escapeHtml?.(failure.text) ?? escapePanelText(failure.text)) : '';
+        const failureHint = failure ? `<div class="sp-cfg-hint sp-lines-generation-failure" role="status">${escapedFailure}</div>` : '';
+        const panelBody = `${failureHint}${sheet === 'dashed' ? dashed?.panelHtml?.() || '' : String(body || '')}`;
+        env.renderPanelDom?.({ toolbar: dashed?.toolbarHtml?.({ onEvents: sheet === 'events', lineBusy: runtime.busy ? ' sp-refresh-busy' : '', generationBusy: runtime.busy, ...historyToolbarState() }), body: panelBody });
     };
     const refreshPanel = (force = false) => {
         const raw = env.readRaw?.() || '';
@@ -571,5 +725,6 @@ export function createLinesFeature(env = {}) {
         onChatChanged: ({ lastSeen = -1 } = {}) => { pendingHistoryRestore = null; actions?.invalidatePreflight?.('chat-boundary'); abortGeneration({ restore: false, reason: 'chat-boundary' }); lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
         renderBody,
         refreshPanel,
+        awaitAutoAdvances: async () => { while (autoAdvancePump) await autoAdvancePump; },
     };
 }

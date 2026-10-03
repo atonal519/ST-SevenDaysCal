@@ -1,7 +1,7 @@
 import { parseOutline } from './schema.js';
 import { buildOutlineInjectionText, OUTLINE_INJECT_DEPTH, OUTLINE_INJECT_KEY } from './prompts.js';
 
-export function createOutlineInjection({ repository, context, settings, injectEnabled, cleanText } = {}) {
+export function createOutlineInjection({ repository, context, settings, injectEnabled, cleanText, preferences } = {}) {
     const clear = () => {
         const ctx = context?.();
         if (typeof ctx?.setExtensionPrompt === 'function') ctx.setExtensionPrompt(OUTLINE_INJECT_KEY, '');
@@ -33,7 +33,7 @@ export function createOutlineInjection({ repository, context, settings, injectEn
         const promptRole = ctx.constants?.promptRoles?.SYSTEM ?? 0;
         ctx.setExtensionPrompt(
             OUTLINE_INJECT_KEY,
-            buildOutlineInjectionText(beats, cursor, cleanText),
+            buildOutlineInjectionText(beats, cursor, cleanText, preferences?.(ctx)),
             promptType,
             OUTLINE_INJECT_DEPTH,
             false,

@@ -66,6 +66,8 @@ export function createDateDetectionController(options = {}) {
         const md = options.storyDate?.(); if (!md) return { status: 'no-date', reason: 'missing-date' };
         const ownerIdentity = { ...identity(), floor: clock.floor, participantIdentity: options.captureParticipantIdentity?.() || null };
         const applied = apply(options.charKey?.(options.context()), md, true, ownerIdentity, 'sdc', { suppressAftermath });
+        if (applied.status === 'failed') options.failure?.(new Error(applied.reason || '日期锚点保存失败'), ownerIdentity, '日期写入');
+        else if (applied.status === 'updated' || applied.status === 'unchanged' || applied.status === 'calibration-held') options.clearFailure?.(ownerIdentity);
         if (weekdayDisplayChanged && !suppressAftermath && (applied.status === 'unchanged' || applied.status === 'calibration-held')) options.aftermath?.();
         return applied.status === 'failed' ? { status: 'write-failed', reason: applied.reason, date: md } : { status: applied.status === 'updated' ? 'updated' : 'handled', date: md };
     };
@@ -75,14 +77,17 @@ export function createDateDetectionController(options = {}) {
         if (busy) return { status: 'skipped' };
         const participantIdentity = options.captureParticipantIdentity?.() || null;
         const ctx = options.context(); const charKey = options.charKey?.(ctx); if (!charKey) return { status: 'skipped' };
+        const ownerIdentity = { ...identity(), participantIdentity };
+        options.clearFailure?.(ownerIdentity);
         const cfg = options.config?.();
         if (!cfg?.url || !cfg?.key) {
             const error = makeDiagnosticError('config-missing');
+            options.failure?.(error, ownerIdentity, '日期判定');
             options.logDiagnostic?.(safeDiagnosticLog('axis', 'request', error, { background: true }));
             if (options.settings?.().notifyMode === 'full') options.toast?.('剧情日期自动确认失败，请先配置 API', null, true);
             return { status: 'failed', error };
         }
-        const ownerIdentity = { ...identity(), participantIdentity }; const ctrl = new AbortController(); abortController = ctrl; busy = true;
+        const ctrl = new AbortController(); abortController = ctrl; busy = true;
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
@@ -92,6 +97,7 @@ export function createDateDetectionController(options = {}) {
             if (!md) {
                 if (/^(?:未知|无法确定)[。.!！]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'date-explicit-unknown' }); diagnostic.committed({ reasonCode: 'date-no-change' }); generationCommitted = true; return { status: 'unresolved' }; }
                 const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'date-format-unrecognized' });
+                options.failure?.(error, ownerIdentity, '日期判定');
                 options.logDiagnostic?.(safeDiagnosticLog('axis-date', 'parse', error, { background: true }));
                 if (options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期自动确认失败：${diagnosticMessage(error)}`, null, true);
                 return { status: 'failed', error };
@@ -108,6 +114,8 @@ export function createDateDetectionController(options = {}) {
             diagnostic.committed({ reasonCode: result.status === 'updated' ? 'date-saved' : 'date-no-change' });
             generationCommitted = true;
             if (result.status === 'committed-stale') return { status: 'cancelled', reason: 'committed-but-stale', committed: true, date: md };
+            if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
+            options.clearFailure?.(ownerIdentity);
             if (result.status === 'updated') {
                 if (options.settings?.().notifyMode === 'full') await runGenerationUiEffect(() => options.toast?.(`剧情日期已自动更新为 ${options.monthName?.(md.month)}${md.day}日 · 请注意查看`), { diagnostic, reasonCode: 'date-toast-failed' });
                 await runGenerationUiEffect(() => options.aftermath?.(), { diagnostic, reasonCode: 'date-ui-refresh-failed' });
@@ -115,6 +123,7 @@ export function createDateDetectionController(options = {}) {
             return ctrl.signal.aborted ? { status: 'cancelled' } : { ...result, date: md };
         } catch (error) {
             if (abortController !== ctrl || error?.name === 'AbortError' || externalSignal?.aborted || !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
+            options.failure?.(error, ownerIdentity, error?.phase === 'save' ? '日期写入' : '日期判定');
             const phase = error?.phase || 'request';
             options.logDiagnostic?.(safeDiagnosticLog('axis', phase, error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期自动确认失败：${diagnosticMessage(error)}`, null, true); return { status: 'failed', reason: phase === 'save' ? 'save' : undefined, error };
         } finally {
@@ -123,5 +132,5 @@ export function createDateDetectionController(options = {}) {
             else remove();
         }
     };
-    return { run, reland, apply, applyConfirmed, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; lastWeekdayDisplaySignature = undefined; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
+    return { run, reland, apply, applyConfirmed, abort: (reason = 'manual-abort') => { options.clearFailure?.(); abortController?.abort(reason); }, reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; lastWeekdayDisplaySignature = undefined; options.clearFailure?.(); }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }

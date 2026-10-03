@@ -86,7 +86,10 @@ export function createOutlineChat({
                 .slice(-repository.historyCap)
                 .map(message => Object.freeze({ ...message })),
         );
-        if (!repository.writeHistory(target, historySnapshot, before)) return { status: 'cancelled' };
+        if (!repository.writeHistory(target, historySnapshot, before)) {
+            if (repository.isCurrent(target) && repository.sameHistory(target, before)) return { status: 'failed', error: makeDiagnosticError('save', { phase: 'save' }) };
+            return { status: 'cancelled' };
+        }
         history = historySnapshot;
         historyTarget = target;
         if (historySnapshot.length !== before.length + 1) ui?.renderHistory?.(history);
@@ -118,8 +121,11 @@ export function createOutlineChat({
             const nextHistory = [...historySnapshot, { role: 'assistant', content: reply }].slice(-repository.historyCap);
             diagnostic.accepted({ phase: 'response' });
             if (!repository.writeHistory(target, nextHistory, historySnapshot)) {
-                diagnostic.rejected(new Error('outline chat persistence failed'), { phase: 'save', reasonCode: 'outline-chat-save-failed' });
-                return { status: 'cancelled' };
+                if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
+                const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'outline-chat-save-failed' });
+                ui?.appendMessage?.('system', '发送失败：回复保存未确认，请重试');
+                finish(task);
+                return { status: 'failed', error };
             }
             diagnostic.committed({ phase: 'save' });
             history = nextHistory;

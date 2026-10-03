@@ -7,6 +7,8 @@ import { drawAdultSelections, allocateAdultPools } from './adult.js';
 import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
 import { freezeLineStore, lineStoreMatches } from './version-history.js';
+import { traceDiagnosticEvent } from '../../runtime/diagnostic-trace.js';
+import { LINES_TIME_LIMITS, waitForSignal } from '../../runtime/deadline.js';
 
 const LINES_GENERATION_LEASES = Symbol.for('st-seven-days-cal.lines-generation-leases');
 
@@ -21,21 +23,32 @@ function generationLeases() {
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
     const participantCurrent = identity => !identity || env.sameParticipantIdentity?.(identity, env.participantIdentity?.()) !== false;
-    const run = async (silent = false, swipeCtx = null, travelContext = null, preflightOwner = null, memoryContext = null) => {
+    const run = async (silent = false, swipeCtx = null, travelContext = null, preflightOwner = null, memoryContext = null, triggerContext = null) => {
         const diagnostic = createGenerationDiagnosticScope('lines', { background: silent });
         if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
-        const chatId = env.chatId();
-        const chatRevision = owners.currentChatRevision();
+        const chatId = triggerContext?.chatId ?? env.chatId();
+        const chatRevision = triggerContext?.chatRevision ?? owners.currentChatRevision();
         if (preflightOwner && !owners.isCurrent(preflightOwner, { chatId, chatRevision })) return { status: 'cancelled', reason: 'stale-preflight' };
-        const participantIdentity = preflightOwner?.participantIdentity || env.participantIdentity?.() || null;
-        const contextSnapshot = preflightOwner?.contextSnapshot || env.contextSnapshot?.() || null;
+        const participantIdentity = triggerContext?.participantIdentity || preflightOwner?.participantIdentity || env.participantIdentity?.() || null;
+        const contextSnapshot = triggerContext?.contextSnapshot || preflightOwner?.contextSnapshot || env.contextSnapshot?.() || null;
+        const triggerCurrent = () => !triggerContext || (env.chatId() === chatId
+            && owners.currentChatRevision() === chatRevision
+            && (triggerContext.boundaryEpoch === undefined || env.boundaryEpoch?.() === triggerContext.boundaryEpoch)
+            && String(env.floorSignature?.(triggerContext.messageId) || '') === triggerContext.floorSignature);
+        if (!triggerCurrent() || (triggerContext?.deadlineAt && Date.now() >= triggerContext.deadlineAt)) return { status: 'cancelled', reason: 'stale-or-expired-trigger' };
         if (!participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-participant' };
         const leases = generationLeases();
         const leaseKey = `${String(chatId ?? '')}::${chatRevision}`;
         if (leases.has(leaseKey)) return { status: 'skipped', reason: 'busy' };
         const leaseToken = Object.freeze({});
         leases.set(leaseKey, leaseToken);
+        // Abort must free this chat's lease immediately; the token check keeps a late old finally from clearing a newer run.
+        const releaseLease = () => { if (leases.get(leaseKey) === leaseToken) leases.delete(leaseKey); };
         let owner = null;
+        let totalTimer = null;
+        let preparationTimer = null;
+        let parentSignal = null;
+        let abortFromPreflight = null;
         let travelAbort = null;
         let abortFromTravel = null;
         let generationCommitted = false;
@@ -43,8 +56,41 @@ export function createLinesGenerationController(env = {}) {
         try {
             owner = owners.create('lines-generation', { chatId, chatRevision, participantIdentity, intent: swipeCtx?.forceReroll || swipeCtx?.reroll ? 'reroll' : (travelContext ? 'time-travel' : 'advance') });
             owner.contextSnapshot = contextSnapshot;
-            env.runtime?.start(owner.controller, '正在推演线'); env.onStart?.(owner);
+            owner.memoryOperationToken = memoryContext?.memoryOperationToken || preflightOwner?.token || owner.token;
+            owner.deadlineAt = preflightOwner?.deadlineAt || triggerContext?.deadlineAt || (Date.now() + (env.timeLimits?.totalMs ?? LINES_TIME_LIMITS.totalMs));
+            const preparationDeadlineAt = preflightOwner?.preparationDeadlineAt || triggerContext?.preparationDeadlineAt
+                || Math.min(owner.deadlineAt, Date.now() + (env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs));
+            parentSignal = preflightOwner?.controller?.signal;
+            abortFromPreflight = () => owner.controller.abort(parentSignal?.reason || new DOMException('The operation was aborted.', 'AbortError'));
+            if (parentSignal?.aborted) abortFromPreflight();
+            else parentSignal?.addEventListener('abort', abortFromPreflight, { once: true });
+            totalTimer = preflightOwner ? null : setTimeout(() => owner.controller.abort(Object.assign(new Error('lines-total-timeout'), { name: 'TimeoutError', code: 'operation-timeout' })), Math.max(0, owner.deadlineAt - Date.now()));
+            preparationTimer = setTimeout(() => owner.controller.abort(Object.assign(new Error('lines-preparation-timeout'), { name: 'TimeoutError', code: 'operation-timeout' })), Math.max(0, Math.min(preparationDeadlineAt, owner.deadlineAt) - Date.now()));
             const signal = owner.controller.signal;
+            signal.addEventListener('abort', releaseLease, { once: true });
+            const phaseLabels = {
+                materials: '正在准备线素材…',
+                'message-assembly': '正在组织请求材料…',
+                'world-info': '正在准备世界书…',
+                'world-info-books': '正在读取世界书条目…',
+                'world-info-activation': '正在激活世界书…',
+                memory: '正在读取记忆…',
+                model: '正在等待模型…',
+                'save-queue': '正在等待保存队列…',
+                'save-patch': '正在准备保存内容…',
+                'save-fetch': '正在保存线…',
+                'save-receipt': '正在确认保存结果…',
+            };
+            const reportPhase = phase => {
+                if (signal.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId) return;
+                const safePhase = String(phase || 'unknown').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'unknown';
+                // The API client reports this only after buildMessages (including world info and memory) has settled.
+                if (safePhase === 'model' && preparationTimer !== null) { clearTimeout(preparationTimer); preparationTimer = null; }
+                traceDiagnosticEvent('lines-generation-stage', { module: 'lines', channel: 'lines', status: 'preparing', phase: safePhase, chatRevision });
+                env.onPhase?.(owner, safePhase, phaseLabels[safePhase] || '正在准备请求…');
+            };
+            env.runtime?.start(owner.controller, phaseLabels.materials); env.onStart?.(owner);
+            reportPhase('materials');
             travelAbort = travelContext?.signal;
             abortFromTravel = () => owner.controller.abort('time-travel-cancel');
             travelAbort?.addEventListener('abort', abortFromTravel, { once: true });
@@ -64,14 +110,14 @@ export function createLinesGenerationController(env = {}) {
             const previousRaw = isReroll || promptLines.length !== sourceLines.length ? serializeLines(promptLines) : sourceRaw;
             const promptRaw = isReroll ? '' : previousRaw;
             let drawer = env.drawTickets; let capacity = Number(env.vectorCapacity);
-            if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
+            if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
             const adultMode = typeof env.adultMode === 'function' ? env.adultMode(participantIdentity) : env.adultMode;
             const isInitial = sourceLines.length === 0;
             const intent = isReroll ? 'reroll' : isInitial ? 'initial' : 'advance';
             const ticketCount = Math.min(capacity, AUTO_LINE_SEED_CAPACITY);
-            const freshTickets = await drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision });
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId) return { status: 'cancelled', reason: 'stale-owner' };
+            const freshTickets = await waitForSignal(drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision }), signal);
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
             const activeLines = sourceLines.filter(line => line.name && !line.pin && !TERMINAL_LINE_STAGES.has(line.stage));
             const allocatorBase = isReroll ? { activeCount: 0, activeAdultCount: 0 } : { activeCount: activeLines.length, activeAdultCount: activeLines.filter(line => line.adult).length };
             const pools = adultMode === 'off' ? null : allocateAdultPools(adultMode, freshTickets.length, allocatorBase);
@@ -87,28 +133,31 @@ export function createLinesGenerationController(env = {}) {
             const vectorContext = { intent, retained: isReroll ? [] : promptLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : promptLines.filter(line => !line.cue).map(line => line.name), rerollNames: isReroll ? [...new Set(sourceLines.filter(line => !line.pin).map(line => line.name.trim()).filter(Boolean))] : [], pinnedBackground: sourceLines.filter(line => line.pin), freshTickets: adultTickets, adultSelections };
             const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext, participantIdentity, contextSnapshot);
             if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
+            reportPhase('message-assembly');
             const beforeCall = env.readSaved() || {};
             if (!lineStoreMatches(beforeCall, commitBaseline.store)) return { status: 'cancelled', reason: 'stale-baseline' };
-            const raw = await env.callApi(prompt, signal, {
+            const raw = await waitForSignal(env.callApi(prompt, signal, {
                 ...(travelContext || {}),
                 ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}),
                 promptMode: 'creative',
                 diagnosticModule: 'lines',
                 diagnosticSink: diagnostic.sink,
                 diagnosticContext: { owner: owner.token, channel: owner.channel, chatRevision, floor: swipeCtx?.mesId },
+                onGenerationPhase: reportPhase,
+                memoryOperationToken: owner.memoryOperationToken,
                 ...(memoryContext?.memorySnapshot ? { memorySnapshot: memoryContext.memorySnapshot, memoryOperationToken: memoryContext.memoryOperationToken } : {}),
-            }, participantIdentity, contextSnapshot);
+            }, participantIdentity, contextSnapshot), signal);
             if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity) || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
             const checked = validateLinesResponse(raw);
             if (!checked.ok) {
                 const parseRejected = ['empty', 'incomplete-or-extraneous', 'text-outside-line', 'no-lines'].includes(checked.reason);
                 const code = parseRejected ? 'parse' : checked.reason === 'invalid-field' ? 'invalid-fields' : 'invalid-structure';
                 const error = diagnostic.rejected(makeDiagnosticError(code, { phase: parseRejected ? 'parse' : 'validation' }), { phase: parseRejected ? 'parse' : 'validation', reasonCode: checked.reason });
-                env.fail?.(error, { silent }); return { status: 'failed', reason: checked.reason };
+                env.fail?.(error, { silent, owner, reasonCode: checked.reason }); return { status: 'failed', reason: checked.reason };
             }
             const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets, intent });
-            if (!audit.ok) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: audit.reason }); env.fail?.(error, { silent }); return { status: 'failed', reason: audit.reason }; }
+            if (!audit.ok) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: audit.reason }); env.fail?.(error, { silent, owner, reasonCode: audit.reason }); return { status: 'failed', reason: audit.reason }; }
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
             if (!lineStoreMatches(latest, commitBaseline.store)) return { status: 'cancelled', reason: 'stale-baseline' };
@@ -120,11 +169,13 @@ export function createLinesGenerationController(env = {}) {
             const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_CAPACITY });
             if (capacityResult.dropped > 0) {
                 const error = diagnostic.rejected(makeDiagnosticError('invalid-structure', { phase: 'validation' }), { phase: 'validation', reasonCode: 'evolution-auto-capacity-overflow' });
-                env.fail?.(error, { silent }); return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
+                env.fail?.(error, { silent, owner, reasonCode: 'evolution-auto-capacity-overflow' }); return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
             }
             const resultModel = capacityResult.model;
             diagnostic.accepted({ phase: 'validation', reasonCode: 'lines-valid' });
             let commitResult;
+            reportPhase('save-queue');
+            owner.reportPhase = reportPhase;
             try { commitResult = await env.commit(serializeLines(resultModel), { silent, owner, swipeCtx, travelContext, commitBaseline }); }
             catch (cause) {
                 if (cause?.diagnosticCode === 'save') throw cause;
@@ -141,12 +192,17 @@ export function createLinesGenerationController(env = {}) {
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };
-            if (owner && (!owners.isCurrent(owner, { chatId, chatRevision }) || !participantCurrent(participantIdentity))) return { status: 'cancelled', reason: 'stale-owner' };
+            const operationTimedOut = error?.name === 'TimeoutError' || error?.code === 'operation-timeout';
+            const stillOwnsAbortedTimeout = operationTimedOut && owners.isOwner(owner, { chatId, chatRevision });
+            if (owner && ((!owners.isCurrent(owner, { chatId, chatRevision }) && !stillOwnsAbortedTimeout) || !participantCurrent(participantIdentity))) return { status: 'cancelled', reason: 'stale-owner' };
             if (error?.diagnosticCode === 'memory-stale') { preserveFailureUi = true; env.memoryFailure?.(error); return { status: 'failed', error }; }
-            if (env.chatId() === chatId && participantCurrent(participantIdentity)) env.fail?.(error, { silent });
+            if (env.chatId() === chatId && participantCurrent(participantIdentity)) env.fail?.(error, { silent, owner, reasonCode: error?.reasonCode || error?.diagnosticCode || 'generation-failed' });
             return { status: 'failed', error };
         } finally {
             const cleanup = () => {
+                if (totalTimer !== null) clearTimeout(totalTimer);
+                if (preparationTimer !== null) clearTimeout(preparationTimer);
+                parentSignal?.removeEventListener?.('abort', abortFromPreflight);
                 if (abortFromTravel) travelAbort?.removeEventListener('abort', abortFromTravel);
                 if (owner) { env.runtime?.finish(owner.controller); env.cleanup?.(owner, chatId, { preserveFailureUi }); }
             };
@@ -154,6 +210,7 @@ export function createLinesGenerationController(env = {}) {
                 if (generationCommitted) await runGenerationUiEffect(cleanup, { diagnostic, reasonCode: 'lines-cleanup-failed' });
                 else cleanup();
             } finally {
+                owner?.controller?.signal?.removeEventListener('abort', releaseLease);
                 if (leases.get(leaseKey) === leaseToken) leases.delete(leaseKey);
             }
         }

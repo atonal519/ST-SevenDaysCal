@@ -13,7 +13,7 @@ function promptSnapshot(overrides = {}) {
     };
 }
 
-function harness({ snapshot = promptSnapshot(), read, bridge = {} } = {}) {
+function harness({ snapshot = promptSnapshot(), read, bridge = {}, writeCache = () => ({ ok: true, commitState: 'confirmed' }), readCache = () => null } = {}) {
     const context = { chatId: 'chat-a', characterId: 0, characters: [{ avatar: 'character-a.png' }], userAvatar: 'persona-a.png' };
     const calls = { prompt: 0, full: 0, structured: 0 };
     const api = {
@@ -24,7 +24,7 @@ function harness({ snapshot = promptSnapshot(), read, bridge = {} } = {}) {
     };
     const globalRef = { [QIANQIANJIE_BRIDGE_KEY]: api };
     let selected = true;
-    const access = createQianQianJieMemoryAccess({ globalRef, contextProvider: () => context, isSelected: () => selected });
+    const access = createQianQianJieMemoryAccess({ globalRef, contextProvider: () => context, isSelected: () => selected, writeCache, readCache });
     return { access, api, calls, context, globalRef, deselect: () => { selected = false; } };
 }
 
@@ -194,4 +194,28 @@ test('qianqianjie reports synchronous and asynchronous prompt failures without f
         assert.equal(result.message, 'prompt-read-failed');
         assertNoLegacyReads(fixture);
     }
+});
+
+test('successful recall is returned before bounded cache persistence and timed-out late writes stay unconfirmed', async () => {
+    let resolveFirst; let writeCount = 0; let secondWriteStarted = false;
+    const fixture = harness({ writeCache: (_record, options) => {
+        writeCount++;
+        assert.equal(options.signal instanceof AbortSignal, true);
+        assert.equal(options.safeSnapshotRefresh, true, 'cache saves use the abort-safe fixed-target refresh port');
+        if (writeCount === 1) return new Promise(resolve => { resolveFirst = resolve; });
+        secondWriteStarted = true;
+        return Promise.resolve({ ok: true, commitState: 'confirmed' });
+    } });
+    const first = await fixture.access.result({ cacheWriteTimeoutMs: 12 });
+    assert.equal(first.status, 'ready');
+    assert.equal(first.text, '召回材料');
+    assert.equal(first.cachePersisted, false, 'a pending write is never reported as confirmed');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const second = await fixture.access.result({ cacheWriteTimeoutMs: 100 });
+    assert.equal(second.status, 'ready');
+    for (let turn = 0; !secondWriteStarted && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(secondWriteStarted, true, 'a timed-out cache task releases its private queue');
+    resolveFirst?.({ ok: true, commitState: 'confirmed' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(writeCount, 2);
 });

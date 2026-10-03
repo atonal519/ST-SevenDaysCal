@@ -1,3 +1,5 @@
+import { createDeadlineSignal, LINES_TIME_LIMITS, waitForSignal } from '../../runtime/deadline.js';
+
 export const QIANQIANJIE_BRIDGE_KEY = 'qqj_v3_public_bridge_v1';
 export const QIANQIANJIE_READ_TIMEOUT_MS = 15000;
 const QIANQIANJIE_RECALL_CACHE_VERSION = 2;
@@ -60,6 +62,7 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
         status: 'ready',
         text: `【千千结上次成功召回】\n${value.recallText}`,
         cached: true,
+        cachePersisted: value.cachePersisted !== false,
         message: diagnostic || '本轮没有新的可用召回，正在使用上次成功召回',
         identity: value.sourceIdentity ?? null,
         reader: api,
@@ -87,7 +90,7 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
         } catch { return emptyResult('not-ready', '千千结只读接口暂未就绪'); }
     }
 
-    async function result({ signal = null, timeoutMs = readTimeoutMs } = {}) {
+    async function result({ signal = null, timeoutMs = readTimeoutMs, cacheWriteTimeoutMs = LINES_TIME_LIMITS.recallCacheMs } = {}) {
         const sequence = ++requestSequence;
         const sourceEpoch = currentSourceEpoch();
         const before = captureIdentity();
@@ -152,23 +155,28 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
                 recallText,
                 savedAt: Date.now(),
             });
-            const ownerGuard = () => !signal?.aborted && selected() && currentBridge() === api
+            // 正文材料只依赖本轮已读取的内容；缓存持久化排在旁路队列，不延长前台预检。
+            const cacheDeadline = createDeadlineSignal({ signal, timeoutMs: cacheWriteTimeoutMs, reason: 'qqj-cache-save-timeout' });
+            const cacheOwnerGuard = () => !cacheDeadline.signal.aborted && !signal?.aborted && selected() && currentBridge() === api
                 && currentSourceEpoch() === sourceEpoch && sameRequest(before, captureIdentity())
                 && sequence === latestSuccessfulSequence;
-            let cachePersisted = false;
+            lastReady = Object.freeze({ ...record, api, cachePersisted: false });
             const write = cacheWriteQueue.then(async () => {
-                if (!ownerGuard()) return null;
-                return writeCache(record, { ownerGuard });
+                if (!cacheOwnerGuard()) return { ok: false, reason: 'cache-write-stale', commitState: 'not-dispatched', dispatched: false };
+                return await waitForSignal(writeCache(record, { ownerGuard: cacheOwnerGuard, signal: cacheDeadline.signal, deadlineAt: cacheDeadline.deadlineAt, safeSnapshotRefresh: true }), cacheDeadline.signal);
             });
             cacheWriteQueue = write.then(() => undefined, () => undefined);
-            try { cachePersisted = (await write)?.ok === true; } catch { /* this turn can still use the newly read recall */ }
-            if (signal?.aborted) return emptyResult('cancelled', '本次记忆读取已取消');
-            if (!selected() || currentBridge() !== api || currentSourceEpoch() !== sourceEpoch || !sameRequest(before, captureIdentity())) return emptyResult('stale', '读取期间当前聊天或记忆源已变化');
-            if (sequence !== latestSuccessfulSequence) return emptyResult('stale', '已有更新的千千结召回结果');
-            lastReady = Object.freeze({ ...record, api });
+            write.then(saved => {
+                cacheDeadline.dispose();
+                const confirmed = saved?.ok === true && saved?.commitState === 'confirmed';
+                if (cacheOwnerGuard()) lastReady = Object.freeze({ ...record, api, cachePersisted: confirmed });
+            }, error => {
+                cacheDeadline.dispose();
+                if (cacheOwnerGuard()) lastReady = Object.freeze({ ...record, api, cachePersisted: false });
+            });
             return Object.freeze({
-                status: 'ready', text: recallText, cached: false, cachePersisted,
-                message: cachePersisted ? '' : '本轮召回可用，但未能确认跨刷新保存',
+                status: 'ready', text: recallText, cached: false, cachePersisted: false,
+                message: '本轮召回可用，缓存保存待确认',
                 identity: sourceIdentity ?? null, reader: api,
             });
         }

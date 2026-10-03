@@ -12,6 +12,41 @@ const STRING_FIELDS = new Set([
     'event', 'module', 'requestId', 'chatId', 'previousChatId', 'currentChatId',
     'owner', 'channel', 'status', 'errorClass', 'abortReason', 'phase', 'reasonCode', 'finishReason',
 ]);
+const SAVE_REASONS = new Set([
+    'stale-before-queue', 'stale-before-fetch', 'stale-after-build', 'stale-before-save',
+    'missing-latest-integrity', 'owned-root-conflict', 'owned-conflict', 'invalid-operation',
+    'network', 'created-response', 'invalid-success-payload', 'cache-helper-error', 'adapter-error',
+    'metadata-capture-failed', 'saveMetadata-rejected', 'store-save-unconfirmed', 'missing-chat',
+    'external-not-ready', 'missing-key', 'official-saveMetadata-unavailable', 'target-chat-mismatch',
+    'official-saveMetadata-failed',
+    'put-result-unknown', 'merged-into-pending', 'revision-conflict', 'root-conflict',
+    'stale-before-dispatch',
+    'stale-before-queue-callback', 'stale-before-rebase', 'patch-build-failed', 'snapshot-read-failed',
+    'save-interrupted-before-dispatch', 'cancelled-while-queued', 'save-interrupted-after-dispatch',
+    'response-body-unconfirmed', 'put-result-unknown', 'revision-conflict',
+    'snapshot-current', 'snapshot-empty', 'snapshot-refreshed', 'snapshot-refresh-empty', 'snapshot-refresh-failed',
+    'confirmed-after-owner-stale', 'stale-after-save', 'stale-after-queue-callback', 'stale-before-save',
+]);
+const COMMIT_STATES = new Set(['confirmed', 'not-dispatched', 'conflict', 'unknown', 'legacy-unconfirmed']);
+
+// 保存诊断只保留协议枚举、HTTP 状态及已知存储位置；角色 scope 和未知异常正文不外泄。
+export function safeSaveDiagnosticFields(saved = {}) {
+    saved = saved && typeof saved === 'object' ? saved : {};
+    const result = {};
+    if (saved.reason !== undefined) result.saveReason = SAVE_REASONS.has(saved.reason) || /^http-[1-5][0-9]{2}$/.test(String(saved.reason)) ? String(saved.reason) : 'unknown';
+    if (saved.commitState !== undefined) result.commitState = COMMIT_STATES.has(saved.commitState) ? saved.commitState : 'unknown';
+    const status = Number(saved.status ?? saved.httpStatus);
+    if (Number.isInteger(status) && status >= 100 && status <= 599) result.httpStatus = status;
+    const path = String(saved.path ?? saved.savePath ?? '');
+    const known = path.match(/^\/sp-store\/data\/(lines-user|lines-char-[^/]+|diagnostics-v1)(?:\/.*)?$/);
+    if (known) {
+        const suffix = path.slice(`/sp-store/data/${known[1]}`.length);
+        const safeSuffix = /^\/(?:floors|raw|ts|generatedAt|history|cursor|html)(?:\/[0-9]+)?$/.test(suffix) ? suffix : '';
+        result.savePath = `/sp-store/data/${known[1].startsWith('lines-char-') ? 'lines-char-<redacted>' : known[1]}${safeSuffix}`;
+    }
+    else if (path === '/sp-store' || path === '/sp-ledger') result.savePath = path;
+    return result;
+}
 const INTEGER_FIELDS = new Set([
     'chatRevision', 'previousChatRevision', 'boundaryEpoch', 'previousBoundaryEpoch',
     'floor', 'messageId', 'httpStatus', 'attempt', 'retryDelayMs', 'durationMs', 'timeoutSec',
@@ -82,6 +117,7 @@ export function sanitizeDiagnosticRecord(input = {}, now = () => Date.now()) {
     for (const key of BOOLEAN_FIELDS) {
         if (typeof input[key] === 'boolean') record[key] = input[key];
     }
+    Object.assign(record, safeSaveDiagnosticFields({ reason: input.saveReason, commitState: input.commitState, httpStatus: input.httpStatus, savePath: input.savePath }));
     if (!record.event) record.event = 'unknown';
     if (!record.module) record.module = 'unknown';
     return Object.freeze(record);

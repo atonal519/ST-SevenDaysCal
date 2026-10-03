@@ -15,8 +15,12 @@ export function createSpaceChat(env = {}) {
     const send = async userMsg => {
         if (busy) return Object.freeze({ status: 'busy' });
         const target = repository.capture();
-        const appended = appendSpaceUser(history(), userMsg);
-        if (!repository.replace(target, appended.history)) return Object.freeze({ status: 'stale' });
+        const before = history();
+        const appended = appendSpaceUser(before, userMsg);
+        if (!repository.replace(target, appended.history)) {
+            if (repository.isCurrent(target) && JSON.stringify(history()) === JSON.stringify(before)) return Object.freeze({ status: 'failed', error: makeDiagnosticError('save', { phase: 'save' }) });
+            return Object.freeze({ status: 'stale' });
+        }
         if (appended.trimmed) env.ui?.renderHistory?.(history());
         else env.ui?.appendMessage?.('user', userMsg, history().length - 1);
         busy = true;
@@ -54,9 +58,9 @@ export function createSpaceChat(env = {}) {
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
             };
             if (!repository.replace(target, appendSpaceAssistant(history(), reply, widgetContext))) {
-                diagnostic.rejected(new Error('space reply persistence failed'), { phase: 'save', reasonCode: 'space-save-failed' });
+                const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'space-save-failed' });
                 env.ui?.appendMessage?.('system', '发送失败：回复保存失败，请重试');
-                return Object.freeze({ status: 'failed', error: new Error('space reply persistence failed') });
+                return Object.freeze({ status: 'failed', error });
             }
             diagnostic.committed({ phase: 'save' });
             env.ui?.endThinking?.(thinking);
@@ -70,7 +74,7 @@ export function createSpaceChat(env = {}) {
             return Object.freeze({ status: 'updated', reply });
         } catch (error) {
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'space-request-failed' });
-            if (abortController === controller && repository.isCurrent(target) && error?.name !== 'AbortError') {
+            if (abortController === controller && !controller.signal.aborted && repository.isCurrent(target) && error?.name !== 'AbortError') {
                 env.ui?.appendMessage?.('system', `发送失败：${diagnosticMessage(error)}`);
                 return Object.freeze({ status: 'failed', error });
             }

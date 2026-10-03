@@ -1,8 +1,9 @@
 // Per-chat optional BaiNiaoData storage.  Chat metadata keeps only a locator;
 // current business roots, bounded diagnostics and historical snapshots stay in
 // separate records so ordinary edits never upload the full snapshot history.
-import { sanitizeDiagnosticRecord } from './diagnostic-trace.js';
+import { safeSaveDiagnosticFields, sanitizeDiagnosticRecord } from './diagnostic-trace.js';
 import { createNativeExternalChatHostBridge } from './external-chat-host-bridge.js';
+import { waitForSignal } from './deadline.js';
 
 export const EXTERNAL_MARKER_KEY = 'sp-storage';
 export const EXTERNAL_NAMESPACE = 'st-sevendayscal';
@@ -23,7 +24,7 @@ let changeListener = () => {};
 function freshActive() {
     return {
         chatId: '', mode: 'chat', status: 'chat', marker: null, target: null,
-        current: null, diagnostics: null, records: new Map(), queue: Promise.resolve(), pendingCurrent: null,
+        current: null, diagnostics: null, records: new Map(), queue: Promise.resolve(), queueSequence: 0, confirmedOverlays: [], pendingCurrent: null,
         error: null, migration: null, generation: 0,
     };
 }
@@ -153,14 +154,16 @@ function backendUrl(collection, recordId = '') {
 
 async function requestJson(url, options = {}) {
     const externalSignal = options.signal;
+    const deadlineAt = Number.isFinite(Number(options.deadlineAt)) ? Number(options.deadlineAt) : Infinity;
+    const { deadlineAt: _deadlineAt, ...requestOptions } = options;
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     if (externalSignal?.aborted) onAbort();
     else externalSignal?.addEventListener?.('abort', onAbort, { once: true });
-    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(20_000, deadlineAt - Date.now())));
     try {
-        const response = await binding.fetchImpl(url, { cache: 'no-cache', headers: headers(), ...options, signal: controller.signal });
-        const payload = await response.json().catch(() => null);
+        const response = await waitForSignal(binding.fetchImpl(url, { cache: 'no-cache', headers: headers(), ...requestOptions, signal: controller.signal }), controller.signal);
+        const payload = await waitForSignal(Promise.resolve(response.json()).catch(() => null), controller.signal);
         if (!response.ok) throw Object.assign(new Error(payload?.message || `白鳥数据后端 HTTP ${response.status}`), { status: response.status, code: payload?.error || `http-${response.status}`, payload });
         return payload;
     } catch (error) {
@@ -187,10 +190,10 @@ export async function probeExternalBackend() {
     } catch (error) { return { ok: false, error, reason: error.code || 'unavailable' }; }
 }
 
-async function getRecord(collection, recordId, signal) { return requestJson(backendUrl(collection, recordId), { signal }); }
-async function listRecords(collection) { return requestJson(backendUrl(collection)); }
-async function putRecord(collection, recordId, data, expectedRevision, signal) {
-    return requestJson(backendUrl(collection, recordId), { method: 'PUT', body: JSON.stringify({ data, expectedRevision }), signal });
+async function getRecord(collection, recordId, signal, deadlineAt) { return requestJson(backendUrl(collection, recordId), { signal, deadlineAt }); }
+async function listRecords(collection, signal, deadlineAt) { return requestJson(backendUrl(collection), { signal, deadlineAt }); }
+async function putRecord(collection, recordId, data, expectedRevision, signal, deadlineAt) {
+    return requestJson(backendUrl(collection, recordId), { method: 'PUT', body: JSON.stringify({ data, expectedRevision }), signal, deadlineAt });
 }
 async function deleteRecord(collection, recordId, expectedRevision) {
     return requestJson(backendUrl(collection, recordId), { method: 'DELETE', body: JSON.stringify({ expectedRevision }) });
@@ -249,35 +252,77 @@ export async function loadExternalChat({ force = false } = {}) {
     notify(); return storageStatus();
 }
 
-function enqueue(task, { mergePending = null } = {}) {
+function enqueue(task, { mergePending = null, signal = null, deadlineAt = Infinity, allowMerge = true } = {}) {
     const state = active;
+    const sequence = ++state.queueSequence;
+    let started = false;
     const queued = state.queue.then(() => {
         if (active !== state || !activeMatches()) throw Object.assign(new Error('外置存储尚未加载或已切换聊天'), { code: 'external-not-ready' });
+        if (signal?.aborted || Date.now() >= deadlineAt) throw Object.assign(new DOMException('外置写入已取消或超时', 'AbortError'), { code: 'operation-timeout' });
         if (state.status !== 'ready') {
-            if (state.status === 'unavailable' && state.pendingCurrent && typeof mergePending === 'function') return mergePending(state);
+            if (allowMerge && state.status === 'unavailable' && state.pendingCurrent && typeof mergePending === 'function') return mergePending(state);
             throw Object.assign(new Error('外置存储尚未加载或已切换聊天'), { code: 'external-not-ready' });
         }
-        return task(state);
+        started = true;
+        return task(state, sequence);
     });
     state.queue = queued.catch(() => {});
-    return queued;
+    if (!signal) return queued;
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback, value) => {
+            if (settled) return;
+            settled = true; signal.removeEventListener('abort', onAbort); callback(value);
+        };
+        const onAbort = () => {
+            if (!started) finish(resolve, { ok: false, reason: 'cancelled-while-queued', dispatched: false, commitState: 'not-dispatched' });
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+        queued.then(value => finish(resolve, value), error => finish(reject, error));
+    });
 }
 
-function applySavedCurrent(state, envelope, data, saved) {
+function mergeConcurrentValue(base, current, saved) {
+    if (same(current, base)) return clone(saved);
+    if (same(saved, base)) return clone(current);
+    const isRecord = value => value && typeof value === 'object' && !Array.isArray(value);
+    if (!isRecord(base) || !isRecord(current) || !isRecord(saved)) return clone(current);
+    const result = {};
+    const keys = new Set([...Object.keys(base), ...Object.keys(current), ...Object.keys(saved)]);
+    for (const key of keys) {
+        const hasBase = Object.hasOwn(base, key); const hasCurrent = Object.hasOwn(current, key); const hasSaved = Object.hasOwn(saved, key);
+        if (!hasCurrent) {
+            if (hasBase && !hasSaved) continue;
+            if (hasSaved) result[key] = clone(saved[key]);
+            continue;
+        }
+        if (!hasSaved) {
+            if (hasBase && same(current[key], base[key])) continue;
+            result[key] = clone(current[key]);
+            continue;
+        }
+        result[key] = mergeConcurrentValue(hasBase ? base[key] : undefined, current[key], saved[key]);
+    }
+    return result;
+}
+
+function applySavedCurrent(state, envelope, data, saved, { baseData = null } = {}) {
     if (state.current === envelope && same(envelope.data, data)) state.current = saved;
+    else if (baseData && state.current) state.current = { ...saved, data: mergeConcurrentValue(baseData, state.current.data, saved.data ?? data) };
     else state.current = { ...state.current, revision: saved.revision, generationId: saved.generationId, createdAt: saved.createdAt, updatedAt: saved.updatedAt };
     state.records.set(state.marker.currentRecord || 'current', saved);
     state.error = null;
     if (active === state) notify();
 }
 
-async function currentReadBack(pending, { allowList = false } = {}) {
+async function currentReadBack(pending, { allowList = false, signal = null, deadlineAt = Infinity } = {}) {
     try {
-        return await getRecord(pending.collection, pending.recordId);
+        return await getRecord(pending.collection, pending.recordId, signal, deadlineAt);
     } catch {
         if (!allowList) return null;
         try {
-            const records = await listRecords(pending.collection);
+            const records = await listRecords(pending.collection, signal, deadlineAt);
             return Array.isArray(records) ? records.find(item => item?.recordId === pending.recordId) || null : null;
         } catch { return null; }
     }
@@ -345,20 +390,41 @@ async function retryPendingCurrent(state) {
     finally { if (state.pendingCurrent === pending) pending.retry = null; }
 }
 
-async function saveCurrentNow(state, data, ownerGuard = () => true) {
+function applyConfirmedOverlays(state, data, sequence) {
+    const merged = cleanCurrentData(data);
+    for (const overlay of state.confirmedOverlays) {
+        if (sequence > overlay.throughSequence) continue;
+        const values = merged.roots?.[overlay.rootKey]?.data;
+        if (!values || typeof values !== 'object') continue;
+        const had = Object.hasOwn(values, overlay.key);
+        if (had !== overlay.beforeHad || (had && !same(values[overlay.key], overlay.beforeValue))) continue;
+        if (overlay.afterHad) values[overlay.key] = clone(overlay.afterValue);
+        else delete values[overlay.key];
+    }
+    return merged;
+}
+
+function retainConfirmedOverlay(state, intent, sequence) {
+    if (intent && state.queueSequence > sequence) state.confirmedOverlays.push({ ...intent, throughSequence: state.queueSequence });
+}
+
+async function saveCurrentNow(state, data, ownerGuard = () => true, sequence = 0) {
     if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched' };
     const envelope = state.current;
     const expectedRevision = Number(envelope?.revision) || 0;
     const recordId = state.marker.currentRecord || 'current';
+    const mergedData = applyConfirmedOverlays(state, data, sequence);
     try {
-        const saved = await putRecord(state.marker.collection, recordId, data, expectedRevision);
-        applySavedCurrent(state, envelope, data, saved);
+        const saved = await putRecord(state.marker.collection, recordId, mergedData, expectedRevision);
+        applySavedCurrent(state, envelope, mergedData, saved);
+        state.confirmedOverlays = state.confirmedOverlays.filter(item => sequence < item.throughSequence);
         return { ok: true, stale: !ownerGuard(), dispatched: true, commitState: 'confirmed', revision: saved.revision };
     } catch (error) {
-        const pending = { data: clone(data), dispatchedData: clone(data), expectedRevision, ownerGuards: [ownerGuard], chatId: state.chatId, collection: state.marker.collection, recordId, retry: null };
+        const pending = { data: clone(mergedData), dispatchedData: clone(mergedData), expectedRevision, ownerGuards: [ownerGuard], chatId: state.chatId, collection: state.marker.collection, recordId, retry: null };
         const readBack = await matchingCurrentReadBack(pending);
         if (readBack) {
-            applySavedCurrent(state, envelope, data, readBack);
+            applySavedCurrent(state, envelope, mergedData, readBack);
+            state.confirmedOverlays = state.confirmedOverlays.filter(item => sequence < item.throughSequence);
             return { ok: true, stale: !ownerGuard(), dispatched: true, confirmedAfterUnknown: true, commitState: 'confirmed', revision: readBack.revision };
         }
         if (active === state && activeMatches()) {
@@ -368,6 +434,72 @@ async function saveCurrentNow(state, data, ownerGuard = () => true) {
         }
         if (error.status === 409) throw error;
         return { ok: false, reason: 'put-result-unknown', dispatched: true, commitState: 'unknown', error };
+    }
+}
+
+// Confirmed feature writes stage external roots privately and keep the queue transaction bounded.
+// Once PUT dispatches, cancellation is reported as unknown; it never publishes or retries a late candidate.
+async function saveCurrentBoundedNow(state, data, ownerGuard = () => true, { signal = null, deadlineAt = Infinity, intent = null, sequence = 0 } = {}) {
+    if (!ownerGuard() || signal?.aborted || Date.now() >= deadlineAt) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+    const envelope = state.current;
+    const baseData = cleanCurrentData(envelope?.data);
+    if (intent) {
+        const baseline = baseData.roots?.[intent.rootKey]?.data || {};
+        const had = Object.hasOwn(baseline, intent.key);
+        if (had !== intent.beforeHad || (had && !same(baseline[intent.key], intent.beforeValue))) {
+            return { ok: false, reason: 'owned-conflict', commitState: 'conflict', dispatched: false };
+        }
+        const values = data.roots?.[intent.rootKey]?.data;
+        if (!values || typeof values !== 'object') return { ok: false, reason: 'owned-root-missing', commitState: 'conflict', dispatched: false };
+        if (intent.afterHad) values[intent.key] = clone(intent.afterValue);
+        else delete values[intent.key];
+    }
+    const expectedRevision = Number(envelope?.revision) || 0;
+    const recordId = state.marker.currentRecord || 'current';
+    const uncertain = (reason = 'put-result-unknown') => {
+        if (active === state && activeMatches()) {
+            state.pendingCurrent = null;
+            state.status = 'unavailable';
+            state.error = '外置写入结果未确认，请刷新后核实；未自动重试';
+            notify();
+        }
+        return { ok: false, reason, dispatched: true, commitState: 'unknown' };
+    };
+    const markStaleConfirmed = () => {
+        if (active === state && activeMatches()) {
+            state.pendingCurrent = null;
+            state.status = 'unavailable';
+            state.error = '外置写入已确认，但当前线任务已过期；请刷新核对';
+            notify();
+        }
+        return { ok: true, stale: true, dispatched: true, commitState: 'confirmed' };
+    };
+    let dispatched = false;
+    try {
+        if (!ownerGuard() || signal?.aborted || Date.now() >= deadlineAt) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+        dispatched = true;
+        const saved = await putRecord(state.marker.collection, recordId, data, expectedRevision, signal, deadlineAt);
+        if (!saved || !Number.isInteger(Number(saved.revision))) return uncertain('response-body-unconfirmed');
+        if (!ownerGuard() || signal?.aborted || Date.now() >= deadlineAt || active !== state || !activeMatches()) return markStaleConfirmed();
+        applySavedCurrent(state, envelope, data, saved, { baseData });
+        retainConfirmedOverlay(state, intent, sequence);
+        return { ok: true, stale: !ownerGuard(), dispatched: true, commitState: 'confirmed', revision: saved.revision };
+    } catch (error) {
+        if (!dispatched) return { ok: false, reason: 'external-save-not-dispatched', commitState: 'not-dispatched', dispatched: false };
+        if (signal?.aborted || Date.now() >= deadlineAt || error?.code === 'timeout') return uncertain('put-result-unknown');
+        if (error?.status === 409) {
+            if (active === state && activeMatches()) { state.error = '外置数据发生并发冲突，已停止写入；请刷新后重试'; state.status = 'unavailable'; notify(); }
+            return { ok: false, reason: 'revision-conflict', dispatched: true, commitState: 'conflict', status: 409 };
+        }
+        const pending = { data, dispatchedData: data, expectedRevision, chatId: state.chatId, collection: state.marker.collection, recordId };
+        const readBack = await matchingCurrentReadBack(pending, { signal, deadlineAt });
+        if (readBack && !signal?.aborted && Date.now() < deadlineAt) {
+            if (!ownerGuard() || active !== state || !activeMatches()) return markStaleConfirmed();
+            applySavedCurrent(state, envelope, data, readBack, { baseData });
+            retainConfirmedOverlay(state, intent, sequence);
+            return { ok: true, stale: !ownerGuard(), dispatched: true, confirmedAfterUnknown: true, commitState: 'confirmed', revision: readBack.revision };
+        }
+        return uncertain('put-result-unknown');
     }
 }
 
@@ -382,7 +514,7 @@ function mergePendingCurrent(state, data, ownerGuard) {
 }
 
 // Returns null for ordinary chat storage so callers keep their existing save path.
-export function persistExternalRoots({ confirmed = false, ownerGuard = () => true } = {}) {
+export function persistExternalRoots({ confirmed = false, ownerGuard = () => true, signal = null, deadlineAt = Infinity, stagedData = null, intent = null } = {}) {
     if (isStorageBusy()) {
         const rejected = Promise.reject(Object.assign(new Error('构画正在迁移，写入已暂停'), { code: 'migration-busy' }));
         rejected.catch(() => {}); return confirmed ? rejected : false;
@@ -392,10 +524,19 @@ export function persistExternalRoots({ confirmed = false, ownerGuard = () => tru
         const rejected = Promise.reject(Object.assign(new Error(active.error || '外置存储不可用'), { code: 'external-not-ready' }));
         rejected.catch(() => {}); return confirmed ? rejected : false;
     }
-    const data = cleanCurrentData(active.current?.data);
-    const operation = enqueue(state => saveCurrentNow(state, data, ownerGuard), { mergePending: state => mergePendingCurrent(state, data, ownerGuard) });
+    const bounded = confirmed && (!!signal || Number.isFinite(Number(deadlineAt)));
+    if (bounded && (signal?.aborted || Date.now() >= deadlineAt)) return Promise.resolve({ ok: false, reason: 'cancelled-while-queued', dispatched: false, commitState: 'not-dispatched' });
+    const data = cleanCurrentData(stagedData || active.current?.data);
+    const operation = enqueue((state, sequence) => bounded
+        ? saveCurrentBoundedNow(state, cleanCurrentData(state.current?.data), ownerGuard, { signal, deadlineAt, intent, sequence })
+        : saveCurrentNow(state, data, ownerGuard, sequence), {
+        mergePending: state => mergePendingCurrent(state, data, ownerGuard), signal, deadlineAt, allowMerge: !bounded,
+    });
     if (!confirmed) operation.catch(() => {});
-    return confirmed ? operation : true;
+    return confirmed ? operation.catch(error => {
+        if (signal?.aborted || Date.now() >= deadlineAt) return { ok: false, reason: 'cancelled-while-queued', dispatched: false, commitState: 'not-dispatched' };
+        throw error;
+    }) : true;
 }
 
 // 便携包导入专用：先在独立副本上替换所选 root，再以 current record 的 revision
@@ -541,21 +682,15 @@ function normalizeDiagnosticFloors(floors, ctx = context()) {
     });
 }
 
-async function persistDiagnosticsNow(state = active, capturedData = null) {
-    if (state.mode === 'external') {
-        const envelope = state.diagnostics; const data = capturedData || cleanDiagnosticsData(envelope?.data);
-        const saved = await putRecord(state.marker.collection, state.marker.diagnosticsRecord || 'diagnostics', data, Number(envelope?.revision) || 0);
-        if (state.diagnostics === envelope && same(envelope.data, data)) state.diagnostics = saved;
-        else state.diagnostics = { ...state.diagnostics, revision: saved.revision, generationId: saved.generationId, createdAt: saved.createdAt, updatedAt: saved.updatedAt };
-        state.records.set(state.marker.diagnosticsRecord || 'diagnostics', saved); return;
-    }
+async function persistDiagnosticsNow() {
     const ctx = context(); const root = normalRoot('sp-store', true, () => ({ version: 1, data: {} }));
     if (!root.data || typeof root.data !== 'object') root.data = {};
     root.data[DIAGNOSTICS_DATA_KEY] = { schemaVersion: 1, floors: clone(active.diagnostics?.data?.floors || getExternalDiagnostics()) };
     // Diagnostics are fail-open and must not add business-commit writes. ST's
     // debounced metadata path persists them during ordinary chat use; minimal
     // unit/legacy hosts without it retain only the in-memory bounded record.
-    const result = ctx?.saveMetadataDebounced?.(); result?.catch?.(() => {});
+    // Chat-mode request diagnostics stay in the live root until an ordinary user/chat save.
+    // Triggering ST's unbounded whole-chat debounce here could occupy its global write queue ahead of line commits.
 }
 
 function updateDiagnostics(mutator) {
@@ -567,14 +702,10 @@ function updateDiagnostics(mutator) {
         active.diagnostics ||= { revision: 0, data: cleanDiagnosticsData() };
         active.diagnostics.data.floors = normalizeDiagnosticFloors(next);
     }
-    if (isExternalMode()) {
-        const state = active; const data = cleanDiagnosticsData(state.diagnostics?.data);
-        enqueue(boundState => persistDiagnosticsNow(boundState, data)).catch(error => {
-            if (active !== state) return;
-            console.warn('[SP storage] 外置诊断日志保存失败', error);
-        });
-    }
-    else persistDiagnosticsNow().catch(() => {});
+    // Diagnostics are not an independent business write. Keep them in this runtime and in the
+    // existing local safe trace; a later normal confirmed save may carry chat-mode records.
+    // In external mode, do not let per-event retention writes queue ahead of line/current-root commits.
+    if (!isExternalMode()) persistDiagnosticsNow().catch(() => {});
     return true;
 }
 
@@ -610,13 +741,13 @@ export function recordDiagnosticTransport({ requestId, module, ok, rawResponse =
     });
 }
 
-export function recordDiagnosticResult({ requestId, module, event, status, phase, reasonCode, errorClass } = {}) {
+export function recordDiagnosticResult({ requestId, module, event, status, phase, reasonCode, errorClass, saveReason, commitState, httpStatus, savePath } = {}) {
     return updateDiagnostics(floors => {
         for (const floor of floors) {
             const attempt = floor.attempts?.[String(module)];
             if (attempt?.requestId !== requestId) continue;
             const result = attempt.result && typeof attempt.result === 'object' ? attempt.result : { processing: 'pending', commit: 'pending', ui: 'pending', events: [] };
-            const detail = { event: String(event || ''), status: String(status || event || 'unknown'), ...(phase ? { phase: String(phase) } : {}), ...(reasonCode ? { reasonCode: String(reasonCode) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}) };
+            const detail = { event: String(event || ''), status: String(status || event || 'unknown'), ...(phase ? { phase: String(phase) } : {}), ...(reasonCode ? { reasonCode: String(reasonCode) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}), ...safeSaveDiagnosticFields({ reason: saveReason, commitState, httpStatus, savePath }) };
             result.events = [...(Array.isArray(result.events) ? result.events : []), detail].slice(-8);
             if (event === 'generation-accepted') result.processing = 'accepted';
             else if (event === 'generation-rejected') {

@@ -237,7 +237,7 @@ export function createSpaceContext(env = {}) {
             calDescText,
             faqText,
             personaOverride,
-            lineDirection: env.lineDirection?.(ctx) || 'natural',
+            preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' },
             intent,
         });
         const messages = [{ role: 'system', content: system }, ...historyMessages, { role: 'user', content: userMsg }];

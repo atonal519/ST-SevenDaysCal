@@ -1,6 +1,7 @@
 import { deleteLine, togglePin, editLineFields } from './mutations.js';
 import { parseLines } from './schema.js';
 import { manualLineStore } from './version-history.js';
+import { createDeadlineSignal, LINES_TIME_LIMITS, waitForSignal } from '../../runtime/deadline.js';
 
 export function createLinesActions(env = {}) {
     let preparing = null;
@@ -8,21 +9,35 @@ export function createLinesActions(env = {}) {
     let editToken = null;
     const refresh = () => { env.setCached?.(env.render?.(env.readRaw?.() || '')); env.refreshPanel?.(); env.refreshInline?.(); };
     const runExclusive = async (silent, options) => {
-        if (preparing || editing || env.isBusy?.()) return;
+        if (preparing || editing || env.isBusy?.()) { if (!silent) env.onBusy?.(); return; }
         const reservation = env.beginPreflight?.() || Object.freeze({ token: Symbol('lines-preflight') });
         preparing = reservation;
         let preflightFailure = null;
+        const preparationDeadline = createDeadlineSignal({
+            signal: reservation.controller?.signal,
+            deadlineAt: reservation.preparationDeadlineAt || reservation.deadlineAt || Date.now() + LINES_TIME_LIMITS.totalMs,
+            timeoutMs: env.timeLimits?.preparationMs ?? LINES_TIME_LIMITS.preparationMs,
+            reason: 'lines-preparation-timeout',
+        });
         try {
-            const precheck = await env.precheck?.({ signal: reservation.controller?.signal, operationToken: reservation.token, participantIdentity: reservation.participantIdentity, contextSnapshot: reservation.contextSnapshot });
+            const precheck = await waitForSignal(env.precheck?.({ signal: preparationDeadline.signal, deadlineAt: preparationDeadline.deadlineAt, operationToken: reservation.token, participantIdentity: reservation.participantIdentity, contextSnapshot: reservation.contextSnapshot }), preparationDeadline.signal);
             if (!precheck) return;
             if (preparing !== reservation || env.preflightCurrent?.(reservation) === false) return { status: 'cancelled', reason: 'stale-preflight' };
             if (precheck.proceed === false) { preflightFailure = precheck.memoryError; return { status: 'failed', reason: 'memory-precheck' }; }
+            // Generation inherits this same absolute preparation deadline; do not restart it here.
+            preparationDeadline.dispose();
             return await env.runGenerate?.(silent, options, null, reservation, precheck?.memorySnapshot ? { memorySnapshot: precheck.memorySnapshot, memoryOperationToken: reservation.token } : null);
-        } catch {
-            if (reservation.controller?.signal?.aborted) return { status: 'cancelled', reason: 'aborted' };
+        } catch (error) {
+            if (preparing !== reservation || env.preflightCurrent?.(reservation) === false) return { status: 'cancelled', reason: 'stale-preflight' };
+            if (reservation.controller?.signal?.aborted && !reservation.controller.signal.reason?.code) return { status: 'cancelled', reason: 'aborted' };
+            if (error?.name === 'TimeoutError' || error?.code === 'operation-timeout') {
+                preflightFailure = '准备线素材超时，请重试';
+                return { status: 'failed', reason: 'preparation-timeout', error };
+            }
             preflightFailure = '记忆读取失败，请重试';
             return { status: 'failed', reason: 'memory-precheck' };
         } finally {
+            preparationDeadline.dispose();
             if (preparing === reservation) {
                 preparing = null;
                 env.finishPreflight?.(reservation, preflightFailure);
@@ -63,7 +78,8 @@ export function createLinesActions(env = {}) {
             env.write?.(manualLineStore(saved, result.raw).value); refresh(); env.toast?.(result.model[Number(index)]?.pin ? '已锁定这条线' : '已解锁这条线');
         },
         async generate() { return runExclusive(false, { reroll: true }); },
-        async advance() { return runExclusive(env.silent?.(), undefined); },
+        // This action is bound only to explicit advance buttons; panel visibility must not mute its feedback.
+        async advance() { return runExclusive(false, undefined); },
         async reroll() { return runExclusive(false, { reroll: true }); },
         isEditing: () => editing,
         invalidatePreflight(reason = 'manual-abort') {

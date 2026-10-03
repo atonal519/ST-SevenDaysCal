@@ -17,9 +17,13 @@ export function createOutlineJudge({
     onCursorChanged,
     toast,
     logDiagnostic,
+    failure = () => {},
+    clearFailure = () => {},
+    uiFailure = () => {},
     isEditing = () => false,
 } = {}) {
     let owner = null;
+    let ownerVersion = 0;
     let busy = false;
     let lastJudgedMessageId = -1;
     let messageCounter = 0;
@@ -39,7 +43,7 @@ export function createOutlineJudge({
     };
     const makeOwner = (target, baseline) => {
         const controller = new AbortController();
-        const next = Object.freeze({ controller, target, baseline });
+        const next = Object.freeze({ controller, target, baseline, version: ++ownerVersion });
         owner = next;
         busy = true;
         return next;
@@ -69,6 +73,7 @@ export function createOutlineJudge({
         const current = beats[cursor - 1];
         const next = beats[cursor];
         const task = makeOwner(target, baseline);
+        clearFailure('judge-advance', target);
         try {
             const ctx = context?.();
             const config = loadConfig?.() || {};
@@ -96,6 +101,7 @@ export function createOutlineJudge({
             const decision = String(answer || '').replace(/\s+/g, '').replace(/[。.!！]+$/u, '');
             if (!/^(?:推进|未推进|没推进|不推进|无推进)$/u.test(decision)) {
                 const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-judge-format' });
+                if (currentAndOwned(task) && repository.matches(target, baseline)) failure('judge-advance', target, error);
                 finish(task); logDiagnostic?.(safeDiagnosticLog('outline', 'parse', error, { background: true }));
                 if (settings?.().notifyMode === 'full') toast?.(`面自动推进判定失败：${diagnosticMessage(error)}`, true);
                 return { status: 'failed', error };
@@ -112,19 +118,21 @@ export function createOutlineJudge({
             if (!(stored === true || stored?.ok === true)) {
                 if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
                 const status = Number(stored?.status); const saveError = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (stored && typeof stored === 'object') saveError.saveResult = stored; const error = diagnostic.rejected(saveError, { phase: 'save', reasonCode: 'outline-cursor-save-rejected' });
+                if (currentAndOwned(task) && repository.matches(target, baseline)) failure('judge-advance', target, error);
                 finish(task); if (settings?.().notifyMode === 'full') toast?.(`面自动推进失败：${diagnosticMessage(error)}`, true); return { status: 'failed', error };
             }
             diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
             if (stored?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true }; }
             finish(task);
             try { if (settings?.().notifyMode === 'full') toast?.('面已自动推进到下一节点 · 请注意查看'); notifyChanged(task, saved.raw, cursor + 1); }
-            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
+            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); if (repository.isCurrent(target) && ownerVersion === task.version) uiFailure('judge-advance', target, error); }
             return { status: 'updated' };
         } catch (error) {
             if (!currentAndOwned(task)) return { status: 'cancelled' };
             if (!repository.matches(target, baseline)) return { status: 'cancelled' };
             finish(task);
             if (error?.name === 'AbortError' || !repository.isCurrent(target)) return { status: 'cancelled' };
+            failure('judge-advance', target, error);
             logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true }));
             if (settings?.().notifyMode === 'full') toast?.(`面自动推进判定失败：${diagnosticMessage(error)}`, true);
             return { status: 'failed', error };
@@ -144,10 +152,11 @@ export function createOutlineJudge({
         if (!beats.length || current < 1) return { status: 'skipped' };
         const ctx = context?.();
         const config = loadConfig?.() || {};
-        if (!config.url || !config.key) { const error = makeDiagnosticError('config-missing'); logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true })); return { status: 'failed', error }; }
+        if (!config.url || !config.key) { const error = makeDiagnosticError('config-missing'); clearFailure('relocate', target); failure('relocate', target, error); logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true })); return { status: 'failed', error }; }
         abort();
         const baseline = outlineBaseline(saved);
         const task = makeOwner(target, baseline);
+        clearFailure('relocate', target);
         const removeBridge = bridgeAbortSignal?.(externalSignal, task.controller) || (() => {});
         try {
             if (externalSignal?.aborted || task.controller.signal.aborted) return { status: 'cancelled' };
@@ -176,11 +185,12 @@ export function createOutlineJudge({
             diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
             if (stored?.stale || !currentAndOwned(task) || externalSignal?.aborted) return { status: 'cancelled', reason: 'committed-but-stale', committed: true };
             try { notifyChanged(task, saved.raw, next); }
-            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
+            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); if (repository.isCurrent(target) && ownerVersion === task.version) uiFailure('relocate', target, error); }
             return { status: 'updated' };
         } catch (error) {
             if (!currentAndOwned(task) || error?.name === 'AbortError' || externalSignal?.aborted) return { status: 'cancelled' };
             if (!repository.matches(target, baseline)) return { status: 'cancelled' };
+            failure('relocate', target, error);
             logDiagnostic?.(safeDiagnosticLog('outline', 'request', error, { background: true }));
             return { status: 'failed', error };
         } finally {

@@ -2435,6 +2435,29 @@ select.sp-input { appearance: none; cursor: pointer; }
     max-width     : 100%;
     box-sizing    : border-box;
 }
+/* 失败提示位于无内边距列表中，左右对齐正文卡片并为前后内容留出呼吸空间。 */
+.sp-lines-list > .sp-lines-generation-failure {
+    padding       : 10px 16px 8px;
+    margin        : 0;
+    line-height   : 1.5;
+    overflow-wrap : anywhere;
+    box-sizing    : border-box;
+}
+.sp-lines-list > .sp-panel-failure-hint { padding: 10px 16px 8px; }
+.sp-panel-failure-hint {
+    margin: 0;
+    color: var(--sp-subtle);
+    font-size: var(--sp-fs-75);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    box-sizing: border-box;
+}
+.sp-outline-failure-slot > .sp-panel-failure-hint { padding: 10px 16px 8px; }
+.sp-space-failure-slot > .sp-panel-failure-hint { padding: 10px 12px 8px; }
+.sp-theater-failure-slot > .sp-panel-failure-hint { padding: 10px 14px 8px; }
+.sp-anchor-body > .sp-panel-failure-hint { padding: 10px 12px 8px; }
+.sp-almanac-wrap > .sp-panel-failure-hint { padding: 10px 12px 8px; }
+.sp-body > .sp-panel-failure-hint { padding: 10px 16px 8px; }
 .sp-lines-list::-webkit-scrollbar       { width: 4px; }
 .sp-lines-list::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
 

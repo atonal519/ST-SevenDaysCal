@@ -9,13 +9,14 @@ import {
 } from './state.js';
 import * as memory from './memory.js';
 import { createTheaterRuntime } from './business/theater/runtime.js';
+import { createPanelFailureStore, createPanelFailureRecency } from './business/ui/panel-failure.js';
 import { createCoordinateRuntime } from './business/coordinate/runtime.js';
 import { enterCoordinateSidebar } from './business/coordinate/ui.js';
 import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
-import { createBestEffortMetadataSaver, createTargetMetadataSaver, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
+import { captureMetadataIntentBefore, createBestEffortMetadataSaver, createTargetMetadataSaver, createTargetSnapshotRefresher, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
@@ -186,7 +187,7 @@ import { createLedgerJudgeController } from './business/ledger/judge.js';
 import { createLedgerInlineRenderer } from './business/ledger/inline.js';
 import { createLedgerSnapshotBridge } from './business/ledger/snapshot.js';
 import { createLedgerActions } from './business/ledger/actions.js';
-import { bindLedgerEvents, createLedgerDeletedHandler, formatLedgerCaptureFeedback } from './business/ledger/events.js';
+import { bindLedgerEvents, createLedgerDeletedHandler, formatLedgerCaptureFeedback, formatLedgerJudgeFeedback } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
 import { ledgerOwnerIdentity, sameLedgerOwner } from './business/ledger/owner.js';
 import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerLatestAiFloorId, ledgerFloorDateContext, ledgerAiFloorRecords, ledgerHistoricalAiFloorRecords, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
@@ -252,6 +253,20 @@ const ledgerMetadataSaverReady = (() => {
     const advanced = createTargetMetadataSaver({ coreModule: scriptCore });
     return advanced?.supported ? advanced : createBestEffortMetadataSaver({ context: getContext });
 })();
+const refreshLineTargetSnapshot = createTargetSnapshotRefresher({
+    coreModule: scriptCore,
+    syncActiveIntegrity: (target, metadata) => {
+        const resolved = scriptCore.resolveChatStateTarget();
+        const sameTarget = resolved && (target.is_group
+            ? resolved.is_group && String(resolved.id || '') === String(target.id || '')
+            : !resolved.is_group && String(resolved.avatar_url || '') === String(target.avatar_url || '') && String(resolved.file_name || '') === String(target.file_name || ''));
+        if (!sameTarget) return;
+        const live = getContext?.()?.chatMetadata;
+        if (!live || typeof live !== 'object') return;
+        if (typeof metadata.integrity === 'string' && metadata.integrity.trim()) live.integrity = metadata.integrity.trim();
+        else delete live.integrity;
+    },
+});
 const portableMetadataSaver = createTargetMetadataSaver({
     coreModule: scriptCore,
     ownedRoots: ['/sp-store', '/sp-theater'],
@@ -269,7 +284,7 @@ ledger.bindLedgerMetadataPersistence({
         if (typeof saver.commit === 'function') return saver.commit(current, { ...options, target, ownerGuard: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
         const after = { ...(current?.chatMetadata || {}) };
         if (current?.chatMetadata?.['sp-ledger']) after['sp-ledger'] = current.chatMetadata['sp-ledger'];
-        return dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata: after, refresh: scriptCore.refreshChatWriteSnapshotsFromServer, isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
+        return dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata: after, refresh: options.safeSnapshotRefresh ? refreshLineTargetSnapshot : scriptCore.refreshChatWriteSnapshotsFromServer, isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)), signal: options.signal, deadlineAt: options.deadlineAt });
     },
 });
 store.bindStoreMetadataPersistence({
@@ -285,8 +300,13 @@ store.bindStoreMetadataPersistence({
                 saver: ledgerMetadataSaverReady,
                 target,
                 afterMetadata: after,
-                refresh: scriptCore.refreshChatWriteSnapshotsFromServer,
+                refresh: options.safeSnapshotRefresh ? refreshLineTargetSnapshot : scriptCore.refreshChatWriteSnapshotsFromServer,
                 isCurrent: ownerGuard,
+                signal: options.signal,
+                deadlineAt: options.deadlineAt,
+                reportPhase: options.reportPhase,
+                intentPaths: options.intentPaths,
+                intentBefore: captureMetadataIntentBefore(options.liveMetadata, options.intentPaths),
             });
         }
         try {
@@ -356,7 +376,7 @@ function createTheaterHostFeature() {
         settings: () => { const s = getSettings(); return { theaterStylePrompt: typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '', theaterBeautifyPrompt: typeof s.theaterBeautifyPrompt === 'string' ? s.theaterBeautifyPrompt : '' }; },
         onDiagnostic: diagnostic => { console.warn('[SP theater]', diagnostic); if (getSettings().notifyMode === 'full') showToast('小剧场美化失败，已保留原稿', null, true); },
         stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); }, renderAiMessageHtml,
-        ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore }),
+        ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), setFailureHtml: html => $in('#sp-theater-failure-slot').html(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore }),
     });
     return runtime.feature;
 }
@@ -511,6 +531,12 @@ const pointController = createPointController({
     setBody,
     loading: loadingHtml,
     showPrecheckError: message => setBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button></div>`),
+    recordFailure: (owner, operation, error) => {
+        const target = pointPanelTarget(owner?.view, owner?.charName, owner?.chatId, owner?.chatRevision);
+        panelFailures.set('point', target, `上次${operation}失败：${typeof error === 'string' ? error : diagnosticMessage(error)}`);
+        if (pointPanelTarget() === target && $(`#${MODAL_ID}`).is(':visible')) { $in('#sp-body > .sp-panel-failure-hint').remove(); setBody($in('#sp-body').html() || ''); }
+    },
+    clearFailure: owner => panelFailures.clear('point', owner ? pointPanelTarget(owner.view, owner.charName, owner.chatId, owner.chatRevision) : pointPanelTarget()),
     abortAuto: () => { _autoRegenSchedAbort?.abort('superseded-owner'); },
     context: getContext,
     captureContext: captureGenerationContext,
@@ -629,8 +655,31 @@ const reconcileLedgerSources = async (owner = null) => {
     try { return await ledger.reconcileEntriesAtomic(sources, getContext()?.chat?.length || 0, owner); }
     catch (error) { logSourceError(error, error.planSummary); return { changed: false, summary: error.planSummary || {}, phase: error.phase || 'source-save-failed', error }; }
 };
+let ledgerCaptureFailureAttempt = 0;
+let ledgerJudgeFailureAttempt = 0;
+const captureLedgerFailureOwner = () => ledgerOwnerIdentity(getContext() || {});
+const ledgerFailureTarget = owner => JSON.stringify([String(owner?.chatId ?? ''), String(owner?.participant ?? '')]);
+const currentLedgerFailureTarget = () => ledgerFailureTarget(captureLedgerFailureOwner());
+async function runLedgerCaptureWithFeedback(manual, travelContext) {
+    if (ledgerCaptureController.isBusy) return ledgerCaptureController.run(manual, travelContext);
+    const owner = captureLedgerFailureOwner(); const target = ledgerFailureTarget(owner);
+    const pending = ledgerCaptureController.run(manual, travelContext);
+    const started = ledgerCaptureController.isBusy;
+    const attempt = ++ledgerCaptureFailureAttempt;
+    if (started) { clearAxisFailure('ledger-capture', target); if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); }
+    let result;
+    try { result = await pending; }
+    catch (error) { result = { status: 'failed', reason: error?.phase || 'capture-failed', error }; }
+    if (attempt === ledgerCaptureFailureAttempt && target === currentLedgerFailureTarget() && sameLedgerOwner(owner, captureLedgerFailureOwner()) && !['source-stale-chat', 'superseded'].includes(result?.reason) && result?.stale !== true) {
+        const feedback = formatLedgerCaptureFeedback(result);
+        if (feedback.error) setAxisFailure('ledger-capture', target, `上次刻度标注失败：${feedback.message}`);
+        else if (started && ['updated', 'unchanged'].includes(result?.status)) clearAxisFailure('ledger-capture', target);
+        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+    }
+    return result;
+}
 const runLedgerCaptureStep = (manual = false, travelContext = null) => pluginEnabled()
-    ? ledgerCaptureController.run(manual, travelContext)
+    ? runLedgerCaptureWithFeedback(manual, travelContext)
     : Promise.resolve({ status: 'skipped', reason: 'plugin-disabled' });
 const ledgerInjectionController = createLedgerInjectionController({
     context: getContext,
@@ -675,8 +724,26 @@ const ledgerJudgeController = createLedgerJudgeController({
     refreshInline: refreshInlineWindow,
     render: () => { if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); },
 });
+async function runLedgerJudgeWithFeedback(manual, travelContext) {
+    if (ledgerJudgeController.isBusy) return ledgerJudgeController.run(manual, travelContext);
+    const owner = captureLedgerFailureOwner(); const target = ledgerFailureTarget(owner);
+    const pending = ledgerJudgeController.run(manual, travelContext);
+    const started = ledgerJudgeController.isBusy;
+    const attempt = ++ledgerJudgeFailureAttempt;
+    if (started) { clearAxisFailure('ledger-judge', target); if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel(); }
+    let result;
+    try { result = await pending; }
+    catch (error) { result = { status: 'failed', reason: error?.phase || 'judge-failed', error }; }
+    if (attempt === ledgerJudgeFailureAttempt && target === currentLedgerFailureTarget() && sameLedgerOwner(owner, captureLedgerFailureOwner()) && !['source-stale-chat', 'superseded'].includes(result?.reason) && result?.stale !== true) {
+        const feedback = formatLedgerJudgeFeedback(result);
+        if (feedback.error) setAxisFailure('ledger-judge', target, `上次刻度判定失败：${feedback.message}`);
+        else if (started && ['updated', 'unchanged'].includes(result?.status)) clearAxisFailure('ledger-judge', target);
+        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
+    }
+    return result;
+}
 const runLedgerJudgeStep = (manual = false, travelContext = null) => pluginEnabled()
-    ? ledgerJudgeController.run(manual, travelContext)
+    ? runLedgerJudgeWithFeedback(manual, travelContext)
     : Promise.resolve({ status: 'skipped', reason: 'plugin-disabled' });
 const ledgerInlineRenderer = createLedgerInlineRenderer({
     settings: getSettings,
@@ -838,6 +905,16 @@ const axisGenerationController = createAxisGenerationController({
     sync: syncLatestAlmanacBlock, render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
     notify: (message, generated) => { if (generated) { if (axisState.almanacMode) { if (getSettings().notifyMode !== 'off') showToast(message); } else showToast(message, () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); }); } else if (getSettings().notifyMode !== 'off') showToast(message); },
     error: (error, supplement) => showToast(`${supplement ? '补录失败：' : '轴生成失败：'}${diagnosticMessage(error)}`, null, true),
+    failure: (error, supplement, chatId) => {
+        const target = panelFailureTarget(chatId, pointTaskOwners.currentChatRevision());
+        setAxisFailure(supplement ? 'axis-supplement' : 'axis-generation', target, `上次${supplement ? '纪念日补录' : '轴生成'}失败：${diagnosticMessage(error)}`);
+        if (axisState.almanacMode) renderAlmanacPanel();
+    },
+    clearFailure: (supplement, chatId = getContext()?.chatId) => {
+        const slots = supplement === undefined ? ['axis-generation', 'axis-supplement'] : [supplement ? 'axis-supplement' : 'axis-generation'];
+        for (const slot of slots) clearAxisFailure(slot, panelFailureTarget(chatId, pointTaskOwners.currentChatRevision()));
+        if (axisState.almanacMode) renderAlmanacPanel();
+    },
     missingApi: () => { if (!settingsOpen) toggleSettings(); showToast('请先在设置中填写自定义 API', null, true); },
     missingChat: () => showToast('请先打开一个聊天', null, true),
     confirm: () => spConfirm({ title: '重新生成节日', body: '将按当前世界观重新铺一整年的既定日期。已锁定的条目和你手动添加的日期会保留，未锁定的 AI 条目会被替换。', confirmText: '生成', cancelText: '取消' }),
@@ -879,6 +956,10 @@ const renderAlmanacPanel = createAxisPanel({
     almRenderWdHint,
     loadingHtml,
     _almGenLabel: () => axisState._almGenLabel,
+    failureHtml: mode => {
+        if (mode === 'ledger-list') return axisFailureRecency.html('ledger', currentLedgerFailureTarget());
+        return axisFailureRecency.html('axis', panelFailureTarget(getContext()?.chatId, pointTaskOwners.currentChatRevision()));
+    },
 });
 
 // Time travel orchestration stays at the host boundary: the controller is
@@ -960,6 +1041,15 @@ const dateDetectionController = createDateDetectionController({
     settings: getSettings,
     monthName: month => calMonthName(loadCalDesc(), month),
     toast: showToast,
+    failure: (error, ownerIdentity, operation) => {
+        const target = panelFailureTarget(ownerIdentity?.chatId, pointTaskOwners.currentChatRevision());
+        setAxisFailure('axis-date', target, `上次${operation}失败：${diagnosticMessage(error)}`);
+        if (axisState.almanacMode) renderAlmanacPanel();
+    },
+    clearFailure: ownerIdentity => {
+        clearAxisFailure('axis-date', panelFailureTarget(ownerIdentity?.chatId ?? getContext()?.chatId, pointTaskOwners.currentChatRevision()));
+        if (axisState.almanacMode) renderAlmanacPanel();
+    },
     logDiagnostic: diagnostic => console.warn('[SP axis failure]', diagnostic),
     aftermath: () => runAnchorAftermath(),
     captureParticipantIdentity,
@@ -1555,6 +1645,17 @@ async function selectPointWidgetOwner({ edit = false } = {}) {
     return charName ? { view: 'char', charName } : null;
 }
 
+// Visible failure notes stay in memory for this loaded chat UI and never enter module storage.
+const panelFailures = createPanelFailureStore({ escapeHtml });
+const axisFailureRecency = createPanelFailureRecency(panelFailures);
+const setAxisFailure = (slot, target, text) => {
+    axisFailureRecency.set(slot === 'ledger-capture' || slot === 'ledger-judge' ? 'ledger' : 'axis', slot, target, text);
+};
+const clearAxisFailure = (slot, target) => {
+    return axisFailureRecency.clear(slot === 'ledger-capture' || slot === 'ledger-judge' ? 'ledger' : 'axis', slot, target);
+};
+const panelFailureTarget = (chatId = getContext()?.chatId, revision = null) => JSON.stringify([String(chatId ?? ''), revision]);
+const pointPanelTarget = (view = currentView, charName = charViewName, chatId = getContext()?.chatId, revision = pointTaskOwners.currentChatRevision()) => JSON.stringify([String(chatId ?? ''), revision, String(view || 'user'), String(view === 'char' ? charName || '' : '')]);
 let settingsOpen   = false;
 let dragState      = null;
 let resizeState    = null;
@@ -1580,12 +1681,19 @@ const linesFeature = createLinesFeature({
     contextSnapshot: captureGenerationContext,
     isEditing: () => manualEditing.lines,
     readSaved: () => readStore(getLinesCacheKey()) || {},
-    writeStore, writeStoreConfirmed, readRaw: () => readStore(getLinesCacheKey())?.raw || '',
+    writeStore,
+    // 线只提交目标版本；共根的诊断、其它业务与 ledger 采用队列执行时的最新值。
+    writeStoreConfirmed: (key, value, options = {}) => writeStoreConfirmed(key, value, {
+        ...options,
+        intentPaths: key ? [`/sp-store/data/${store.subKey(key.kind, key.view, key.charName).replace(/~/g, '~0').replace(/\//g, '~1')}`] : [],
+    }),
+    readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.store && typeof baseline.store === 'object') writeStore(key, baseline.store); else if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
     loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
     refreshInlineWindow: refreshInlineWindow,
     freezeSnapshot: freezeSnapshotToFloor,
     isPanelActive: () => linesMode, notifyMode: () => getSettings().notifyMode,
+    onBusyChange: busy => setFabBusy(busy),
     toast: (message, error) => showToast(message, null, error),
     dialog: customDialog,
     storageStatus,
@@ -1616,6 +1724,7 @@ const linesFeature = createLinesFeature({
         context: () => getContext(), settings: getSettings, enabled: injectEnabled,
         adultMode: () => getAdultMode(charStableKey(getContext())),
         direction: () => getLineDirection(charStableKey(getContext())),
+        scale: () => getScale(charStableKey(getContext())),
         readRaw: () => readStore(getLinesCacheKey())?.raw || '',
         promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
     },
@@ -1631,7 +1740,8 @@ const linesFeature = createLinesFeature({
     dashedEnabled: () => getSettings().dashedEnabled === true,
     generationEnv: {
         isEditing: () => manualEditing.lines,
-        chatId: () => getContext().chatId, loadConfig: loadCfg,
+        chatId: () => getContext().chatId, boundaryEpoch: () => chatBoundaryEpoch,
+        floorSignature: _floorSig, loadConfig: loadCfg,
         adultMode: identity => getAdultMode(identity?.characterKey || charStableKey(getContext())),
         readSaved: () => readStore(getLinesCacheKey()) || {},
         participantIdentity: captureParticipantIdentity,
@@ -1664,6 +1774,10 @@ const outlineFeature = createOutlineFeature({
     writeStoreConfirmed,
     removeStore,
     settings: getSettings,
+    preferences: ctx => {
+        const characterKey = charStableKey(ctx);
+        return { scale: getScale(characterKey), direction: getLineDirection(characterKey) };
+    },
     pluginEnabled,
     injectEnabled,
     loadConfig: loadCfg,
@@ -1694,6 +1808,7 @@ const outlineFeature = createOutlineFeature({
         copyText: copyPlainText,
         injectToInput: injectToST,
         setOutline: html => setOutlineBody(html),
+        setFailureHtml: html => $in('#sp-outline-failure-slot').html(html),
         loading: loadingHtml,
         isOutlineMode: () => outlineMode,
         isPanelVisible: () => $(`#${MODAL_ID}`).is(':visible'),
@@ -1720,7 +1835,10 @@ const spaceFeature = createSpaceFeature({
     contextEnv: {
         context: getContext,
         settings: getSettings,
-        lineDirection: ctx => getLineDirection(charStableKey(ctx)),
+        preferences: ctx => {
+            const characterKey = charStableKey(ctx);
+            return { scale: getScale(characterKey), direction: getLineDirection(characterKey) };
+        },
         readOutline: () => outlineFeature.readRaw(),
         readPointScopes: () => store.listScheduleScopes(),
         numberedPoints: numberedPointList,
@@ -1755,6 +1873,7 @@ const spaceFeature = createSpaceFeature({
         query: $in,
         element: inEl,
         escapeHtml,
+        setFailureHtml: html => $in('#sp-space-failure-slot').html(html),
         autoGrow: autoGrowTextarea,
         copyText: copyPlainText,
         confirm: spConfirm,
@@ -1964,6 +2083,7 @@ jQuery(async () => {
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = async () => {
         clearMemoryCheckFeedback();
+        axisFailureRecency.clearAll();
         // 切聊是构画的硬失败边界：先统一推进 epoch/revision，再无条件清掉所有聊天态任务。
         const previousChatId = activeChatBoundaryIdentity?.chatId ?? null;
         const previousBoundaryEpoch = chatBoundaryEpoch;
@@ -2157,8 +2277,9 @@ jQuery(async () => {
         // Master switch: linesEnabled=false disables auto-advance + inline block
         if (getSettings().linesEnabled === false) return;
         const mid = Number(messageId);
-        await linesFeature.onCharacterRendered({ messageId: mid, type, autoSuppressed: isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES) });
-        return;
+        const autoSuppressed = isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES);
+        // 宿主按顺序等待渲染监听；线处理及确认保存结束后，再让后置的日期善后继续。
+        await linesFeature.onCharacterRendered({ messageId: mid, type, autoSuppressed });
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.char);
     if (_stListeners.timeTravel) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.timeTravel);
@@ -3459,12 +3580,13 @@ function injectModal() {
                                     <details class="sp-settings-section" id="sp-adult-scale-section">
                                         <summary class="sp-settings-section-title">剧情倾向、成人内容与叙事尺度</summary>
                                         <div class="sp-settings-section-body">
-                                            <p class="sp-cfg-group" id="sp-scale-hint">叙事尺度（按角色保存）</p>
+                                            <p class="sp-cfg-group" id="sp-scale-hint">创作关注尺度（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-scale-row"><!-- populated when settings opens --></div>
+                                            <p class="sp-cfg-hint">影响点、线、面的新生成与面内创作讨论；尺度决定观察焦点，不改变冲突强度或时间速度。线／面潜伏注入需分别开启各自开关后才会采用当前设置。</p>
                                             <hr class="sp-mem-divider">
-                                            <p class="sp-cfg-group">剧情倾向（按角色保存）</p>
+                                            <p class="sp-cfg-group">剧情走向倾向（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-line-direction-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">影响线的生成与推进；开启“线 · 潜伏注入”后，也会指导主楼剧情。倾向只在符合现有证据的走向中调整优先级。</p>
+                                            <p class="sp-cfg-hint">影响点、线、面的新生成与面内创作讨论；只在事实、动机、时间与因果均支持的合理走向中调整优先级。线／面潜伏注入需分别开启各自开关后才会采用当前设置；用户本轮明确要求优先。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">成人剧情模式（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-adult-row"><!-- populated when settings opens --></div>
@@ -3605,6 +3727,7 @@ function injectModal() {
                                 <span class="sp-schedule-label" id="sp-outline-node-count">0 个节点</span>
                                 <button class="sp-panel-refresh sp-refresh-outline" title="重新生成面" aria-label="重新生成面"><i class="fa-solid fa-rotate-right"></i></button>
                             </div>
+                            <div class="sp-outline-failure-slot" id="sp-outline-failure-slot"></div>
                             <div class="sp-outline-beats" id="sp-outline-beats">
                                 <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
                             </div>
@@ -3629,6 +3752,7 @@ function injectModal() {
                         </div>
 
                         <div class="sp-space-wrap sp-outline-chat" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
+                            <div class="sp-space-failure-slot" id="sp-space-failure-slot"></div>
                             <div class="sp-chat-msgs" id="sp-space-msgs"></div>
                             <div class="sp-chat-input-row">
                                 <button id="sp-space-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
@@ -3638,6 +3762,7 @@ function injectModal() {
                         </div>
 
                         <div class="sp-theater-wrap" id="sp-theater-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
+                            <div class="sp-theater-failure-slot" id="sp-theater-failure-slot"></div>
                             <div class="sp-theater-body" id="sp-theater-body"></div>
                         </div>
 
@@ -4337,12 +4462,14 @@ function injectModal() {
         if (!charKey) return;
         setScale(charKey, this.value);
         refreshLinesInjection();
+        outlineFeature.injection.refresh();
     });
     $in('#sp-line-direction-row').on('change.autoSave', 'input[name="sp-line-direction"]', function () {
         const charKey = charStableKey(getContext());
         if (!charKey) return;
         setLineDirection(charKey, this.value);
         refreshLinesInjection();
+        outlineFeature.injection.refresh();
     });
     $in('#sp-adult-row').on('change.autoSave', 'input[name="sp-lines-adult-mode"]', function () {
         const charKey = charStableKey(getContext());
@@ -4966,7 +5093,15 @@ function ensureExcludedCharacterSettingsOnly() {
     return true;
 }
 
-function setBody(html) { $in('#sp-body').html(html); }
+function setBody(html) {
+    const $body = $in('#sp-body').html(String(html || ''));
+    $body.children('.sp-panel-failure-hint').remove();
+    const failureHtml = panelFailures.html('point', pointPanelTarget());
+    if (!failureHtml) return;
+    const $header = $body.find('.sp-schedule-header').first();
+    if ($header.length) $header.after(failureHtml);
+    else $body.prepend(failureHtml);
+}
 
 // ─── Memory pre-check helpers ─────────────────────────────────────────────────
 // Show a one-time toast when memory schema migration wiped this chat's summaries.
@@ -5279,9 +5414,12 @@ function loadingHtml(baseText, abortId) {
     // 柏宝书 / Anima mode has no built-in background queue — never show "补全记忆" text.
     const _ms = getSettings();
     const busy = !_ms.useBaiBaiBook && !_ms.useAnima && !_ms.useDatabase && !_ms.useQianQianJie && memory.isMemoryBusy();
+    const label = String(baseText || '').trim().replace(/[.…]+$/u, '').trim();
+    const action = label.replace(/^正在/u, '').trim();
+    // Callers may already provide an ellipsis or a complete “正在…” label; normalize once without forcing an extra “中”.
     const text = busy
-        ? `正在补全记忆并${baseText}…`
-        : `${baseText}中…`;
+        ? `正在补全记忆，并${action || label}…`
+        : `${label}…`;
     return `<div class="sp-loading">
         <div class="sp-spinner"></div>
         <p class="sp-loading-text">${escapeHtml(text)}</p>
@@ -5317,7 +5455,9 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
         if (!settingsOpen) toggleSettings();
         throw makeDiagnosticError('config-missing');
     }
-    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }), travelContext);
+    // 生成使用本轮捕获角色的设置，避免异步任务切换角色后串入另一角色偏好。
+    const characterKey = charStableKey(ctx);
+    const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }, { scale: getScale(characterKey), direction: getLineDirection(characterKey) }), travelContext);
     const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'creative', diagnosticModule: 'point', diagnosticSink };
     apiOpts.pointView = perspective;
     if (memoryContext?.memorySnapshot) {
@@ -5510,15 +5650,15 @@ function setDateAnchor(charKey, month, day, source = 'explicit', options = {}) {
 }
 
 // ─── Per-character narrative scale ──────────────────────────────────────────
-// Controls the granularity of storyline events. 'auto' means the LLM decides
-// from card context; explicit values override that.
+// Guides the observation focus for point/line/outline creation and outline discussion;
+// enabled line/outline injections consume the same per-character value. It does not set pace.
 // Stored: extension_settings[PLUGIN_ID].scale = { [charStableKey/avatar]: 'auto'|'macro'|'meso'|'micro' }
 const SCALE_VALUES = ['auto', 'macro', 'meso', 'micro'];
 const SCALE_LABELS = {
     auto : '自动（由 AI 依据剧情判断）',
-    macro: '宏观（阴谋 / 势力 / 天下大势）',
+    macro: '宏观（既有势力 / 制度 / 世界变化）',
     meso : '中观（家族 / 组织 / 职场 / 学派）',
-    micro: '微观（人际 / 情感 / 日常）',
+    micro: '微观（行动 / 关系 / 成长 / 日常）',
 };
 
 function getLineDirectionMap() {
@@ -5882,15 +6022,8 @@ function worldInfoActivationEntries(result, mode) {
 const WORLD_INFO_SCAN_BUDGET = 60000;
 let lastWorldInfoFailureNoticeKey = '';
 
-async function countWorldInfoTokens(text) {
+function estimateWorldInfoTokens(text) {
     const value = String(text || '');
-    try {
-        const counter = getContext()?.getTokenCountAsync;
-        if (typeof counter === 'function') {
-            const total = Number(await counter.call(getContext(), value));
-            if (Number.isFinite(total) && total >= 0) return { tokens: total, exact: true };
-        }
-    } catch {}
     let bytes = 0;
     if (typeof TextEncoder === 'function') bytes = new TextEncoder().encode(value).length;
     else for (let i = 0; i < value.length; i++) {
@@ -5901,6 +6034,18 @@ async function countWorldInfoTokens(text) {
         else bytes += 3;
     }
     return { tokens: bytes, exact: false };
+}
+
+async function countWorldInfoTokens(text) {
+    const value = String(text || '');
+    try {
+        const counter = getContext()?.getTokenCountAsync;
+        if (typeof counter === 'function') {
+            const total = Number(await counter.call(getContext(), value));
+            if (Number.isFinite(total) && total >= 0) return { tokens: total, exact: true };
+        }
+    } catch {}
+    return estimateWorldInfoTokens(value);
 }
 
 function notifyWorldInfoActivationFailure(ctx) {
@@ -6122,12 +6267,17 @@ function worldInfoTitleSupplementAllows(entry, triggerText, ctx) {
     return true;
 }
 
-async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '', triggerMode = 'query', referenceHistory } = {}) {
+async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '', triggerMode = 'query', referenceHistory, onGenerationPhase, signal } = {}) {
+    const reportPhase = phase => { try { onGenerationPhase?.(phase); } catch {} };
+    const throwIfAborted = () => { if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError'); };
+    reportPhase('world-info-books');
     const scanEntries = triggerText !== undefined ? await getCharBookEntries(ctx, { includeExcluded: true }) : null;
+    throwIfAborted();
     const excluded = getWiExcludeSet();
     const entries = scanEntries
         ? scanEntries.filter(entry => !hasWiExcluded(entry.source, excluded))
         : await getCharBookEntries(ctx);
+    throwIfAborted();
     const selection = ensureCurrentWiSelection(ctx, entries);
     const selected = entries
         .filter(e => worldInfoSelectionAllows(selection, e.key))
@@ -6170,11 +6320,15 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
             return typeof ctx?.substituteParams === 'function' ? ctx.substituteParams(raw) : raw;
         })].join('\n');
         scanBudgetTokens = (await countWorldInfoTokens(content)).tokens + scanEntries.length * 2 + 2;
+        throwIfAborted();
     }
+    reportPhase('world-info-activation');
     const activation = await resolveWorldInfoActivation(ctx, coreChat, {
         independentTrigger: effectiveTriggerText !== undefined,
         scanBudgetTokens,
     });
+    // The host activation can finish after the caller timed out; suppress stale error UI/logs and all later work.
+    throwIfAborted();
     if (activation.failed) {
         notifyWorldInfoActivationFailure(ctx);
         console.warn('[构画] 世界书激活失败诊断', {
@@ -6208,7 +6362,8 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
     }
     if (!candidates.length) return '';
     const result = `【世界书】\n${candidates.join('\n\n')}`;
-    const estimate = await countWorldInfoTokens(result);
+    // Final diagnostics are observational only: never wait for the host tokenizer after selection; send chosen entries unchanged.
+    const estimate = estimateWorldInfoTokens(result);
     console.info('[构画] 世界书注入诊断', {
         candidateCount: candidates.length,
         activatedCount: activation.keys.size,
@@ -6451,6 +6606,9 @@ function outlineWorldInfoTriggerText(history) {
 // historyLimit：喂给这次调用的「最近可见 AI 楼」条数上限。默认 3。
 // 传 0 = 完全不喂近景，只靠 system 块（人设/卡描述/世界书/记忆库）。
 async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, opts = {}) {
+    const throwIfAborted = () => { if (opts.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError'); };
+    const reportPhase = phase => { if (!opts.signal?.aborted) { try { opts.onGenerationPhase?.(phase); } catch {} } };
+    throwIfAborted();
     const char = ctx.characters?.[ctx.characterId] ?? {};
     // 正文窗口及其清洗只在此处生成一次，世界书标题触发复用模型将收到的同一数组。
     let history = buildRecentGenerationHistory(ctx, historyLimit, opts);
@@ -6463,10 +6621,16 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
     const outlineTrigger = opts.worldInfoTriggerText === true
         ? outlineWorldInfoTriggerText(history)
         : opts.worldInfoTriggerText;
-    const wiContext = await buildWorldInfoContext(ctx, outlineTrigger === undefined ? undefined : {
-        triggerText: outlineTrigger,
-        triggerMode: opts.worldInfoTriggerText === true ? 'outline-story' : (opts.worldInfoTriggerMode || 'query'),
+    reportPhase('world-info');
+    const wiContext = await buildWorldInfoContext(ctx, {
+        ...(outlineTrigger === undefined ? {} : {
+            triggerText: outlineTrigger,
+            triggerMode: opts.worldInfoTriggerText === true ? 'outline-story' : (opts.worldInfoTriggerMode || 'query'),
+        }),
+        onGenerationPhase: opts.onGenerationPhase,
+        signal: opts.signal,
     });
+    throwIfAborted();
     const { personaDesc, authorNote: rawAuthorNote } = readCardExtras(ctx);
     const authorNote = rawAuthorNote;
 
@@ -6479,8 +6643,10 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         const rawSnapshotText = snapshot.text;
         rawMemText = rawSnapshotText;
     } else {
-        rawMemText = await getMemText({ full: opts.fullMemory, query: prompt });
+        reportPhase('memory');
+        rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken });
     }
+    throwIfAborted();
     const memText = sanitizeGenerationContextText(rawMemText, { reroll: opts.reroll });
     const memPerspective = opts.pointView === 'char' ? charName : opts.pointView === 'user' ? userName : null;
     const memBlock = memText
@@ -6713,6 +6879,8 @@ async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
 
 async function composeCreativeChatMessages({ target, userMsg, historySnapshot, signal }) {
     const ctx      = getContext();
+    const characterKey = charStableKey(ctx);
+    const preferences = { scale: getScale(characterKey), direction: getLineDirection(characterKey) };
     const memorySelection = captureCreativeChatMemorySelection();
     const userName = ctx.name1 || '用户';
     const charName = ctx.name2 || '角色';
@@ -6758,6 +6926,7 @@ async function composeCreativeChatMessages({ target, userMsg, historySnapshot, s
         almanacText,
         calDescText,
         memText,
+        preferences,
     });
     // 历史快照已包含刚写入的 user turn；末尾再追加一次是当前生产合同，禁止在本轮去重。
     return [{ role: 'system', content: sys }, ...historySnapshot, { role: 'user', content: userMsg }];

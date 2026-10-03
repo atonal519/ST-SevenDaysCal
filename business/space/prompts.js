@@ -1,4 +1,4 @@
-import { lineDirectionContract } from '../lines/direction.js';
+import { narrativePreferenceContract } from '../narrative-preferences.js';
 
 export function getSpaceChatPlaceholder() {
     return '局外聊聊：剧情、设定、关系、知识…';
@@ -20,7 +20,7 @@ const widgetLabel = kind => ({
     era_widget: '历法',
 }[kind] || '卡片');
 
-function widgetContract(kind, calDescText, lineDirection = 'natural') {
+function widgetContract(kind, calDescText, preferences = {}) {
     if (kind === 'schedule_widget') return [
         `【点卡片理想结构】每张卡片写一条完整 Event，不寒暄、不解释：`,
         `<schedule_widget>Event: type|title|description|time|location|线头动态</schedule_widget>`,
@@ -29,6 +29,7 @@ function widgetContract(kind, calDescText, lineDirection = 'natural') {
         `- type 只能是 main / hidden / bond。`,
         `- description 至少 30 字，使用生活化口吻。`,
         `- 线头动态写与此事件相关的其他角色同期动态，可为空。`,
+        narrativePreferenceContract(preferences),
     ].join('\n');
     if (kind === 'line_widget') return [
         `【线卡片理想结构】每张卡片写一条完整 Line，不寒暄、不解释：`,
@@ -44,7 +45,7 @@ function widgetContract(kind, calDescText, lineDirection = 'natural') {
         `- agency=player 仅当下一步必须等待 user 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 user 暂不参与也能自行推进。不得因为事件将来可能影响 user 就标 player。`,
         `- stall 只能是 true / false。stall=true 时 Next 写恢复条件；否则 Next 写真正主动方的紧邻下一步。`,
         `- pin 是本地保留位，一律输出 false。`,
-        lineDirectionContract(lineDirection),
+        narrativePreferenceContract(preferences),
     ].join('\n');
     if (kind === 'almanac_widget') return [
         `【历卡片理想结构】轴（历）卡片就是记录具体日期／重要日期的卡片；一次多个日期可写多行 Item，不寒暄、不解释：`,
@@ -71,7 +72,7 @@ function widgetContract(kind, calDescText, lineDirection = 'natural') {
     return '';
 }
 
-function outputModeBlock(intent = {}, calDescText = '', lineDirection = 'natural') {
+function outputModeBlock(intent = {}, calDescText = '', preferences = {}) {
     if (intent.action === 'clarify') {
         return intent.reason === 'missing-recent-widget'
             ? `【本轮输出模式】用户像是在修改上一张卡片，但当前可用历史里没有上一张有效卡片。请用自然语言简短追问要修改哪一类卡片及原内容；不要猜类型，不要输出任何卡片。`
@@ -79,10 +80,11 @@ function outputModeBlock(intent = {}, calDescText = '', lineDirection = 'natural
     }
     if (intent.action === 'semantic-route') {
         const contracts = ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget']
-            .map(kind => widgetContract(kind, calDescText, lineDirection))
+            .map(kind => widgetContract(kind, calDescText, preferences))
             .join('\n\n');
         return [
             `【本轮输出模式：语义路由】本地规则无法可靠确定用户是在讨论，还是在用自然语言要求生成结构化卡片。请在本次回答内根据完整语义自行判断，不要因为措辞没命中固定说法就拒绝卡片。`,
+            `- 下方点／线卡片合同中的剧情倾向与叙事尺度，只在本轮确实输出或修改对应点／线卡片时适用。若你选择普通讨论或解释，就按用户问题和已有材料直接回答；不要把偏好当作回答立场，也不要强制改变讨论内容的走向或观察范围。轴／历法卡片与刻度内容不套用这些偏好。`,
             `- 若用户是在直接要求、命令、委托，或表达希望把内容生成、整理、转换、输出为点、线、历、历法卡片，即使措辞口语、缩略、倒装、使用“出/生/插/写”等动词，或没有标准生成动词，也要选择对应的唯一卡片合同。`,
             `- 正向例子：“出一条线”“给我生个线”“插个线”“给我写一条线”“给我做个点”“把这句话用结构化卡片输出成线”“把这句话用结构化卡片输出成点”。这些都应按请求的唯一类型输出卡片，不得当成普通讨论。`,
             `- 若只是提问、评价、讨论、提及词语、引用示例，或否定/暂缓生成，只用自然语言回答，不输出任何卡片。例如：“他这个是不是触及到底线了”“这是不是有点恶心”“不要生成一条线，先聊聊”。`,
@@ -94,7 +96,7 @@ function outputModeBlock(intent = {}, calDescText = '', lineDirection = 'natural
     if (!intent.kind) {
         return `【本轮输出模式】这是普通讨论或只读查询。只用自然语言回答，不生成结构化卡片，不输出无关标签。`;
     }
-    return `【本轮输出模式】用户已明确授权落地或修改${widgetLabel(intent.kind)}卡片。只使用下面这一种结构，不输出其他种类、无关标签、前言或解释；用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText, lineDirection)}`;
+    return `【本轮输出模式】用户已明确授权落地或修改${widgetLabel(intent.kind)}卡片。只使用下面这一种结构，不输出其他种类、无关标签、前言或解释；用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText, preferences)}`;
 }
 
 function recentWidgetBlock(intent = {}) {
@@ -121,7 +123,8 @@ function recentWidgetBlock(intent = {}) {
     ].filter(Boolean).join('\n');
 }
 
-export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', lineDirection = 'natural', intent = {} }) {
+export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', authorNote = '', outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', preferences = {}, lineDirection = 'natural', intent = {} }) {
+    const activePreferences = { ...preferences, direction: preferences.direction || lineDirection };
     // 人格覆盖只替换顾问的语气层；创作顾问身份、不推进剧情和不扮演角色的合同始终保留。
     // 空白使用内置语气，有值则完整替换内置语气而非追加。
     const ov = String(personaOverride || '').trim();
@@ -149,7 +152,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         `- 长度由问题决定：一句能说清的绝不写两句；确实需要展开的（如剧情推演、设定考据），才分点铺陈`,
         `- 直接给结论，避免"其实"、"值得注意的是"、"综上所述"这类铺垫与总结`,
         toneBlock,
-        outputModeBlock(intent, calDescText, lineDirection),
+        outputModeBlock(intent, calDescText, activePreferences),
         recentWidgetBlock(intent),
 
         (pointEditMode || lineEditMode) ? `\n【改现有条目】若用户要改的是上面当前列表里的某条已存在条目：` : '',
@@ -166,6 +169,7 @@ export const SPACE_HELP_FACTS = `【构画·功能与设置速查（你据此回
 · 【拿不准就别编，铁律】只回答这份速查覆盖到、或你有明确依据的内容；速查没写到、或你不确定的构画细节，老实说"这条我不太确定，建议打开对应模块，再点主面板标题旁的小问号看说明"，**绝不凭大模型常识编造构画的功能、开关或用法**——宁可说不知道，也别给个听着合理的错答案误导用户。
 · 【面板与设置入口】点屏幕上的「构画」悬浮球打开主面板；左侧页签依次是点、轴、线、面、间、棱、坐标。切到模块后，主面板标题旁的圆圈问号显示该模块教程。悬浮球的显示开关是标题栏右上角的**空心圆点**图标（悬停名“悬浮按钮”），**它不在设置里**；藏起后可从酒馆扩展／魔杖菜单再次打开构画。齿轮进入设置：最上方是「启用构画」「时间戳」，下面四个折叠分组是通用设置／注入与内容设置／推进设置／数据设置。
 · 【潜伏注入总原则】只有**三家**能潜伏注入主楼 AI：线、面、刻度。总闸在设置→注入与内容设置→潜伏注入总开关，名称是「允许潜伏注入主楼 AI（线 / 面 / 刻度）」；还必须同时开启对应模块自己的注入开关。点和轴的日期／历法不潜伏注入。卡片菜单里的「注入」只是把文字放进酒馆输入框，等用户确认后发送，不是后台注入。
+· 【创作关注尺度与剧情倾向】设置→剧情倾向、成人内容与叙事尺度，尺度和倾向均按角色保存，应用于后续点／线／面生成及面内创作讨论；用户本轮明确创作要求优先。尺度只改变观察焦点：宏观看已有势力与世界变化，中观看已有组织／家族／职场／学派等群体，微观看人物行动／关系／成长／日常，自动随材料选择；它不代表时间速度或冲突强度，也不要求为适配尺度制造新人物、阴谋或灾难。剧情倾向只在证据、动机、时间与因果都支持的合理走向间调整优先级。开启线或面各自的潜伏注入后，当前设置才会随相应注入指导主楼；点不潜伏注入。
 · 【时间戳与故事星期】时间戳是全局时间锚点，包含星期判定。设置最上方的「时间戳」默认开，由主楼 AI 根据提示词随回复输出，构画只负责读取、解析和展示，不会自行生成；是否出现、格式是否完整及时间是否合理，取决于主楼模型是否遵循提示词和主楼剧情质量，主楼未输出或格式不完整时构画无法凭空补出可靠时间，可能导致时间判断失真。完整提示词编辑在设置→通用设置→提示词与标签；当前 AI 楼的开始／结束时间戳完整时，它优先决定今天与星期，缺失或不完整就显示“星期未记录”，不拿现实年份硬猜。用户亲自设置的「校准故事时间」是兜底锚；后续完整时间戳会自动接管，「恢复自动」会立即重新判断当前楼。
 · 【点】从故事“今天”开始安排我／TA 接下来 3 天的事项，并另列“未来”，不是人物此刻状态卡。默认不随日期自动重排，也不潜伏注入；手动点刷新即可更新。设置→推进设置→日期与点里的「点：后台自动跟随「今天」」可在今天变化后后台重排（多一次 API），但结果仍不会喂给主楼 AI。刷新会覆盖未锁旧数据。头部图钉「固定 TA」只把 TA 留在 TA▾ 抽屉，不是锁事项。每条的 ⋮ 菜单含编辑／锁定／注入／删除；点的锁定只保证同名事项刷新时不被删除，时间和说明仍可能随新剧情推进。
 · 【轴·三页】「即将到来」按距今排列日期，「日历」按月查看，「刻度」管理随时间变化的账。日期工具：＋「添加」手动录日期；魔杖「生成节日」按世界观重做一整年，保留手动项和锁定项、替换未锁 AI 日期；爱心加号「补录纪念日」只追加新浮现的重大里程碑，可能一条也没有，新增项自动锁定；日历图标「历法管理」编辑月份、天数、纪年与模板。日期条目的锁／笔／垃圾桶分别是锁定、编辑、删除。换历法若现有日期失效，会先让用户选取消、删除冲突日期或自动修正；不会暗中乱改。

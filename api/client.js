@@ -60,6 +60,18 @@ function throwIfPreAborted(signal) {
     throw new DOMException('The operation was aborted.', 'AbortError');
 }
 
+// Message assembly can await host-owned storage; stop this caller on abort while consuming any late rejection.
+function awaitAbortable(value, signal) {
+    if (!signal) return Promise.resolve(value);
+    throwIfPreAborted(signal);
+    const pending = Promise.resolve(value);
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
 function rethrowBodyReadAbort(error, externalSignal, internalSignal) {
     if (error?.name === 'AbortError') throw error;
     if (externalSignal?.aborted || internalSignal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
@@ -357,9 +369,14 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
 }
 
 export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal = null, historyLimit = 3, opts = {}) {
-    const messages = await _bridge.buildMessages(ctx, prompt, userName, charName, historyLimit, opts);
+    const requestSignal = normalizeAbortSignal(signal);
+    throwIfPreAborted(requestSignal);
+    const messages = await awaitAbortable(_bridge.buildMessages(ctx, prompt, userName, charName, historyLimit, { ...opts, signal: requestSignal }), requestSignal);
+    throwIfPreAborted(requestSignal);
+    try { opts.onGenerationPhase?.('model'); } catch {}
+    throwIfPreAborted(requestSignal);
     // opts.temperature：可选，机械/创作按需覆盖（历生成抬温让次要节日与风味更发散）；未给则跟随预设。
-    return postChatCompletion({ cfg, messages, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal, userName, charName, allowEmptyOutput: opts.allowEmptyOutput === true, promptMode: opts.promptMode, diagnosticModule: opts.diagnosticModule, diagnosticChannel: opts.diagnosticChannel, diagnosticContext: opts.diagnosticContext, diagnosticSink: opts.diagnosticSink });
+    return postChatCompletion({ cfg, messages, temperature: Number.isFinite(opts.temperature) ? opts.temperature : GEN_TEMPERATURE, signal: requestSignal, userName, charName, allowEmptyOutput: opts.allowEmptyOutput === true, promptMode: opts.promptMode, diagnosticModule: opts.diagnosticModule, diagnosticChannel: opts.diagnosticChannel, diagnosticContext: opts.diagnosticContext, diagnosticSink: opts.diagnosticSink });
 }
 
 // Called by memory.js — minimal wrapper around user's configured API.

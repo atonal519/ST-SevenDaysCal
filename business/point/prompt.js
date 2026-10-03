@@ -1,6 +1,8 @@
 // ─── 点（日程）域 · 生成 prompt ───────────────────────────────────────────────
 // 纯字符串拼装，不依赖 DOM、store 或历法运行态。
-export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null, adultContext = null) {
+import { narrativePreferenceContract } from '../narrative-preferences.js';
+
+export function buildPrompt(userName, charName, perspective = 'user', pinned = null, calendar = null, adultContext = null, preferences = {}) {
     const subject   = perspective === 'char' ? charName : userName;
     const companion = perspective === 'char' ? userName : charName;
     const pins = Array.isArray(pinned) ? pinned.filter(e => e?.title?.trim()) : [];
@@ -26,6 +28,7 @@ NSFW 票只适用于明确成年且自愿的虚构角色；对应 Event 必须�
 - bond（红线）：${subject} 与某人的关系变化，不限爱情，也可包括亲情、盟友、敌意、债务或依赖
 
 以 ${subject} 自身目标为核心，可按剧情证据涉及 ${companion} 或第三方；不强绑互动，不默认爱情。
+${narrativePreferenceContract(preferences)}
 ${adultBlock}
 理想输出顺序为 Day 1 → Day 2 → Day 3 → Future → </calendar_widget>。目标总展示数量为 14 条：Day 1、Day 2、Day 3 各 3 条，Future 5 条；已锁定事件也占对应栏目的名额。不得把同一事件拆碎、换标题复述或凭空凑数；可从 ${subject} 自身事务、第三方行动、阵营或生活层面扩展真正独立的事项。
 

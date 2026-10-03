@@ -149,7 +149,10 @@ export function bindStoreMetadataPersistence(adapter = null) {
 }
 
 async function persistConfirmed(boundContext, options = {}) {
-    const external = persistExternalRoots({ confirmed: true, ownerGuard: options.ownerGuard });
+    const external = persistExternalRoots({
+        confirmed: true, ownerGuard: options.ownerGuard, signal: options.signal, deadlineAt: options.deadlineAt,
+        stagedData: options.externalStagedData, intent: options.externalIntent,
+    });
     if (external !== null) return await external;
     if (confirmedMetadataPersistence) return confirmedMetadataPersistence.commit(boundContext, options);
     const ctx = boundContext || getContext?.();
@@ -201,13 +204,34 @@ function deferOrdinaryPersist(ctx, metadata) {
 // confirmed 写入必须把「私有 staging → 固定目标保存 → 成功结算/失败回滚」作为一个整体
 // 按 metadata root 串行。普通写仍同步更新 live 数据，但它的宿主整 root 快照也要等同一队列
 // settle 后再抓取，避免夹带失败值或用旧快照覆盖刚确认的值。
-function serializeConfirmedMetadata(metadata, operation) {
+function serializeConfirmedMetadata(metadata, operation, signal = null) {
     const previous = confirmedMetadataQueues.get(metadata) || Promise.resolve();
-    const queued = previous.then(operation, operation);
+    let started = false;
+    const run = () => {
+        if (signal?.aborted) return { ok: false, reason: 'cancelled-before-metadata-queue', commitState: 'not-dispatched', dispatched: false };
+        started = true;
+        return operation();
+    };
+    const queued = previous.then(run, run);
     confirmedMetadataQueues.set(metadata, queued);
     const clear = () => { if (confirmedMetadataQueues.get(metadata) === queued) confirmedMetadataQueues.delete(metadata); };
     queued.then(clear, clear);
-    return queued;
+    if (!signal) return queued;
+    // A cancelled queue tail may settle its caller early, but the queued callback remains a no-op
+    // until its predecessor releases. Once this transaction starts, its own bounded save must settle first.
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener('abort', onAbort);
+            callback(value);
+        };
+        const onAbort = () => { if (!started) finish(resolve, { ok: false, reason: 'cancelled-before-metadata-queue', commitState: 'not-dispatched', dispatched: false }); };
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+        queued.then(value => finish(resolve, value), error => finish(reject, error));
+    });
 }
 
 export async function writeDataConfirmed(kind, view, charName, value, options = {}) {
@@ -216,24 +240,18 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
     if (!ctx || !chatId || !ctx.chatMetadata) return { ok: false, reason: 'missing-chat', commitState: 'not-dispatched', dispatched: false };
     const metadata = ctx.chatMetadata;
     const externalGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => getContext?.()?.chatId === chatId;
-    const ownerGuard = () => getContext?.()?.chatMetadata === metadata && externalGuard();
+    const ownerGuard = () => !options.signal?.aborted && getContext?.()?.chatMetadata === metadata && externalGuard();
     if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
     if (isExternalMode()) {
         const s = store(true);
         if (!s) return { ok: false, reason: 'external-not-ready', commitState: 'not-dispatched', dispatched: false };
         const key = subKey(kind, view, charName);
-        const beforeHad = Object.prototype.hasOwnProperty.call(s.data, key);
-        const before = beforeHad ? cloneStoreValue(s.data[key]) : undefined;
-        if (value == null) delete s.data[key]; else s.data[key] = value;
-        try {
-            const saved = await persistConfirmed(ctx, { ...options, ownerGuard });
-            if (saved?.commitState === 'unknown') return saved;
-            if (saved?.ok !== true || saved?.commitState !== 'confirmed') throw Object.assign(new Error(saved?.reason || 'store-save-unconfirmed'), { phase: 'save', saveResult: saved });
-            return saved;
-        } catch (error) {
-            if (beforeHad) s.data[key] = before; else delete s.data[key];
-            error.phase ||= 'save'; throw error;
-        }
+        const beforeHad = Object.hasOwn(s.data, key);
+        const beforeValue = beforeHad ? cloneStoreValue(s.data[key]) : undefined;
+        return persistConfirmed(ctx, {
+            ...options, ownerGuard,
+            externalIntent: { rootKey: STORE_KEY, key, beforeHad, beforeValue, afterHad: value != null, afterValue: value == null ? undefined : cloneStoreValue(value) },
+        });
     }
     return serializeConfirmedMetadata(metadata, async () => {
         if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
@@ -259,8 +277,11 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
                 if (Number.isInteger(Number(saved?.status))) error.status = Number(saved.status);
                 throw error;
             }
+            // 服务端确认若属于已过期 owner，只能报告确认事实；旧候选不得再发布到当前 live root。
+            if (!ownerGuard()) return { ...saved, stale: true, reason: 'committed-but-stale' };
             const currentRoot = metadata[STORE_KEY];
             const ordinaryStillOwned = ordinaryOwnership(metadata, key) === ordinaryOwner;
+            if (!ordinaryStillOwned) return { ...saved, stale: true, reason: 'committed-but-ordinary-write-took-ownership' };
             if (ordinaryStillOwned) {
                 let target = currentRoot;
                 if (!target || typeof target !== 'object') target = metadata[STORE_KEY] = freshStore();
@@ -269,7 +290,7 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
                 if (value == null) delete target.data[key]; else target.data[key] = value;
                 if (!rootExisted && value == null && Object.keys(target.data).length === 0) delete metadata[STORE_KEY];
             }
-            if (!ownerGuard() || !ordinaryStillOwned) return { ...saved, stale: true, reason: 'committed-but-stale' };
+            if (!ownerGuard()) return { ...saved, stale: true, reason: 'committed-but-stale' };
             return saved;
         } catch (error) {
             // fixed saver 从未发布 staging，不能回撤 live 数据。官方兼容路径只在
@@ -292,7 +313,7 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
             error.phase ||= 'save';
             throw error;
         }
-    });
+    }, options.signal);
 }
 
 // sp-store 顶层 key 是否已存在（不含内容判断，也不实例化）。

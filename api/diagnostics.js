@@ -1,6 +1,6 @@
 // Shared, deliberately lossy diagnostics for AI generation paths.
 // Never copy upstream response bodies, URLs, prompts, keys, or model output here.
-import { isDiagnosticRequestId, traceDiagnosticEvent } from '../runtime/diagnostic-trace.js';
+import { isDiagnosticRequestId, safeSaveDiagnosticFields, traceDiagnosticEvent } from '../runtime/diagnostic-trace.js';
 import { recordDiagnosticResult } from '../runtime/external-chat-storage.js';
 
 const CODES = new Set([
@@ -124,6 +124,7 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
     const annotate = error => attachDiagnosticRequest(error, metadata);
     const record = (event, options = {}) => {
         const error = annotate(options.error);
+        const saveDetails = safeSaveDiagnosticFields(error?.saveResult);
         const traced = traceDiagnosticEvent(event, {
             module: safeModule,
             ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
@@ -132,6 +133,7 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
             reasonCode: options.reasonCode,
             errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
             background: defaults.background === true || options.background === true,
+            ...saveDetails,
         });
         if (metadata.requestId) recordDiagnosticResult({
             requestId: metadata.requestId,
@@ -141,6 +143,7 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
             phase: options.phase,
             reasonCode: options.reasonCode,
             errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
+            ...saveDetails,
         });
         return traced;
     };
@@ -178,5 +181,6 @@ export function safeDiagnosticLog(module, phase, error, extra = {}) {
         ...(requestId ? { requestId } : {}),
         ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
         ...(extra.background !== undefined ? { background: !!extra.background } : {}),
+        ...safeSaveDiagnosticFields(error?.saveResult),
     });
 }

@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { validateLinesResponse, parseLineCard, parseLines, serializeLines } from './schema.js';
 import { buildLinesPrompt, LINE_NEXT_RELEASE_CONTRACT } from './prompt.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesFeature } from './feature.js';
+import { createLinesRuntime } from './runtime.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 import { createLinesLifecycle } from './lifecycle.js';
 import { createLinesInjectionController } from './injection.js';
@@ -41,6 +44,31 @@ import { buildLineInjectText, inlineState } from './inline.js';
 const raw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|起线|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
 const freshRaw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
+test('line runtime contributes one balanced FAB busy claim across handoff, abort, and reset', () => {
+    let fabClaims = 0;
+    const changes = [];
+    const runtime = createLinesRuntime({ onBusyChange: busy => { changes.push(busy); fabClaims = Math.max(0, fabClaims + (busy ? 1 : -1)); } });
+    const externalApiClaim = () => { fabClaims++; };
+    const externalApiRelease = () => { fabClaims = Math.max(0, fabClaims - 1); };
+    const preflight = new AbortController(); const generation = new AbortController();
+    externalApiClaim();
+    runtime.start(preflight, 'preflight');
+    runtime.start(generation, 'generation');
+    runtime.start(generation, 'validation');
+    assert.equal(fabClaims, 2, 'preflight-to-generation and phase changes keep one line claim beside an API claim');
+    assert.equal(runtime.finish(preflight), false, 'stale preflight finish cannot release the current generation claim');
+    assert.equal(fabClaims, 2);
+    assert.equal(runtime.finish(generation), true);
+    assert.equal(fabClaims, 1, 'line completion leaves the API owner claim intact');
+    externalApiRelease();
+    runtime.start(new AbortController(), 'abort');
+    runtime.abort();
+    assert.equal(fabClaims, 0);
+    runtime.start(new AbortController(), 'reset');
+    runtime.reset();
+    assert.equal(fabClaims, 0, 'reset after a released task cannot underflow the shared count');
+    assert.deepEqual(changes, [true, false, true, false, true, false], 'only busy state edges notify the shared FAB count');
+});
 test('line description edit only changes Desc and normalizes whitespace while preserving identity fields', () => {
     const source = serializeLines([{ name: '线', type: '冲突', stage: '延展', when: '今天', agency: 'player', stall: true, pin: true, adult: true, cue: 'bad', desc: '旧', next: '下一步' }]);
     const result = editLineDescription(source, 0, ' 新的\n  描述 '); assert.equal(result.ok, true); const line = parseLines(result.raw)[0];
@@ -543,6 +571,59 @@ test('line preflight owns visible loading, cancel, inline failure, and one-opera
     assert.equal(failedBodies.at(-1), 'memory-error:读取失败');
 });
 
+test('a stalled line preflight expires on the preparation budget and cannot dispatch late generation', async () => {
+    const owners = createTaskOwnerManager(); let release; let generations = 0; const bodies = [];
+    const feature = createLinesFeature({
+        owners, timeLimits: { totalMs: 500, preparationMs: 8 }, chatId: () => 'prep-timeout', dayAnchor: () => null, isPanelActive: () => true,
+        readRaw: () => '', empty: () => 'empty', loading: label => `loading:${label}`, preflightError: message => `failure:${message}`, renderPanelDom: ({ body }) => bodies.push(body),
+        generation: { run: async () => { generations++; return { status: 'updated' }; } },
+        actionsEnv: { precheck: () => new Promise(resolve => { release = resolve; }) },
+    });
+    const result = await feature.reroll();
+    assert.equal(result.status, 'failed'); assert.equal(result.reason, 'preparation-timeout');
+    assert.equal(feature.runtime.busy, false); assert.equal(generations, 0);
+    release({ proceed: true }); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(generations, 0, 'a late preflight result cannot enter generation');
+    assert.match(bodies.at(-1), /准备线素材超时/);
+});
+
+test('a world-info preparation hang expires before model dispatch and remains visible on the line panel', async () => {
+    const bodies = []; const phases = [];
+    const feature = createLinesFeature({
+        timeLimits: { totalMs: 100, preparationMs: 12 }, chatId: () => 'world-info-timeout', dayAnchor: () => null, isPanelActive: () => true,
+        readRaw: () => '', empty: () => 'empty', loading: label => `loading:${label}`, renderPanelDom: ({ body }) => bodies.push(body),
+        preflightError: message => `preflight:${message}`,
+        actionsEnv: { precheck: async () => ({ proceed: true }) },
+        generationEnv: {
+            chatId: () => 'world-info-timeout', cacheKey: () => 'world-info-timeout', loadConfig: () => ({ url: 'fixture', key: 'fixture' }),
+            readSaved: () => ({ raw: '', ts: 1 }), drawTickets: () => drawTickets(1, { seed: 'world-info-timeout' }), vectorCapacity: 8, buildPrompt: () => 'fixture',
+            callApi: async (_prompt, _signal, options) => { phases.push('world-info'); options.onGenerationPhase('world-info'); await new Promise(() => {}); },
+        },
+    });
+    const result = await feature.reroll();
+    assert.equal(result.status, 'failed'); assert.equal(result.error?.code, 'operation-timeout');
+    assert.deepEqual(phases, ['world-info'], 'no model phase is reported while material preparation is hung');
+    assert.equal(feature.runtime.busy, false);
+    assert.match(bodies.at(-1), /上次生成失败/);
+});
+
+test('the preparation timer is removed when the API client reaches the model phase', async () => {
+    let resolveApi;
+    const controller = createLinesGenerationController({
+        timeLimits: { totalMs: 120, preparationMs: 8 }, owners: createTaskOwnerManager(), chatId: () => 'model-phase', cacheKey: () => 'model-phase',
+        loadConfig: () => ({ url: 'u', key: 'k' }), readSaved: () => ({ raw: '', ts: 1 }), drawTickets: () => drawTickets(1, { seed: 'model-phase' }),
+        vectorCapacity: 8, buildPrompt: () => 'fixture', callApi: async (_prompt, _signal, options) => {
+            options.onGenerationPhase('model');
+            return new Promise(resolve => { resolveApi = resolve; });
+        }, commit: () => {}, runtime: { start() {}, finish() {} },
+    });
+    const task = controller.run(true);
+    while (!resolveApi) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    resolveApi(freshRaw);
+    assert.equal((await task).status, 'updated', 'the model request may outlast preparationMs but remains under totalMs');
+});
+
 test('late line API that ignores abort cannot refresh or freeze the new chat', async () => {
     const owners = createTaskOwnerManager(); let chatId = 'A'; let epoch = 0; let releaseApi; let apiStarted = false;
     const effects = [];
@@ -918,6 +999,129 @@ test('cross-instance generation leases are isolated by chat id', async () => {
     assert.deepEqual((await Promise.all([first, second])).map(result => result.status), ['updated', 'updated']);
 });
 
+test('feature abort releases a hanging generation lease and stale completion cannot clear the next run', async () => {
+    const owners = createTaskOwnerManager(); let saved = { raw: '', ts: 1 }; let calls = 0; let resolveOld; let resolveNew;
+    const effects = [];
+    const feature = createLinesFeature({
+        owners, chatId: () => 'abort-lease-chat', cacheKey: () => 'abort-lease-key', dayAnchor: () => null,
+        isPanelActive: () => true, loading: label => `loading:${label}`, renderPanelDom: ({ body }) => effects.push(body),
+        readSaved: () => saved, readRaw: () => saved.raw,
+        writeStoreConfirmed: async (_key, value, { ownerGuard }) => { if (!ownerGuard()) return { ok: true, stale: true }; saved = value; return { ok: true, value }; },
+        actionsEnv: { precheck: async () => ({ proceed: true }), silent: () => false, toast: message => effects.push(message) },
+        generationEnv: {
+            chatId: () => 'abort-lease-chat', cacheKey: () => 'abort-lease-key', loadConfig: () => ({ url: 'u', key: 'k' }),
+            readSaved: () => saved, drawTickets: () => drawTickets(1, { seed: `abort-lease-${calls}` }), vectorCapacity: 8,
+            buildPrompt: () => 'p',
+            callApi: async () => { calls++; if (calls === 1) return new Promise(resolve => { resolveOld = resolve; }); return new Promise(resolve => { resolveNew = resolve; }); },
+        },
+    });
+    const oldRun = feature.advance();
+    while (!resolveOld) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(feature.runtime.busy, true);
+    assert.equal(feature.runtime.label, '正在组织请求材料…');
+    feature.abortGeneration({ restore: false, reason: 'manual-abort' });
+    assert.equal(feature.runtime.busy, false);
+    const nextRun = feature.advance();
+    while (!resolveNew) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2, 'abort 后同聊天应立即取得新 lease 并进入第二次 API');
+    resolveOld(freshRaw);
+    assert.equal((await oldRun).status, 'cancelled');
+    assert.equal(feature.runtime.busy, true, '旧任务 finally 不得结束新 owner 的可见忙态');
+    assert.deepEqual(await feature.generation.run(), { status: 'skipped', reason: 'busy' }, '旧 finally 不得删除新任务持有的 lease');
+    resolveNew(freshRaw);
+    assert.equal((await nextRun).status, 'updated');
+    const committed = saved.raw;
+    assert.equal(calls, 2);
+    assert.equal(saved.raw, committed, '旧任务迟到成功不能覆盖新提交');
+    assert.equal(feature.runtime.busy, false, '旧 finally 不得改变新任务运行态');
+    assert.ok(effects.some(body => String(body).includes('正在组织请求材料') || String(body).includes('正在准备线素材')));
+});
+
+test('missing newborn ticket remains as escaped top-of-panel feedback without changing the saved lines', async () => {
+    const owners = createTaskOwnerManager();
+    let chatId = 'failure-feedback-chat';
+    let panelOpen = true;
+    let saved = { raw: '', ts: 1 };
+    let apiCalls = 0;
+    let rejectLateApi;
+    let writes = 0;
+    const rendered = [];
+    const toasts = [];
+    const missingTicket = freshRaw.replace('Ticket: TICKET-1\n', '');
+    const feature = createLinesFeature({
+        owners, chatId: () => chatId, cacheKey: () => 'failure-feedback-key', dayAnchor: () => null,
+        isPanelActive: () => panelOpen, loading: label => `<div>loading ${label}</div>`, empty: () => '<div>empty-state</div>',
+        escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+        renderPanelDom: ({ body }) => rendered.push(body),
+        readSaved: () => saved, readRaw: () => saved.raw,
+        writeStoreConfirmed: async (_key, value, { ownerGuard }) => {
+            writes++;
+            if (!ownerGuard()) return { ok: true, stale: true };
+            saved = value;
+            return { ok: true, commitState: 'confirmed', value };
+        },
+        actionsEnv: { precheck: async () => ({ proceed: true }), silent: () => false, toast: message => toasts.push(message) },
+        generationEnv: {
+            chatId: () => chatId, cacheKey: () => 'failure-feedback-key', loadConfig: () => ({ url: 'u', key: 'k' }),
+            readSaved: () => saved, drawTickets: () => drawTickets(1, { seed: `failure-feedback-${apiCalls}` }), vectorCapacity: 8,
+            buildPrompt: () => 'synthetic prompt', callApi: async () => {
+                apiCalls++;
+                if (apiCalls === 3) return new Promise((_resolve, reject) => { rejectLateApi = reject; });
+                return apiCalls === 4 ? freshRaw : missingTicket;
+            },
+            fail: (_error, options) => { if (!options.silent) toasts.push('existing failure notification'); },
+        },
+    });
+
+    assert.deepEqual(await feature.advance(), { status: 'failed', reason: 'evolution-newborn-missing-ticket' });
+    assert.equal(writes, 0);
+    assert.equal(saved.raw, '', 'rejected output leaves the previous empty state untouched');
+    assert.equal(feature.runtime.busy, false, 'the normal cleanup ends the spinner');
+    assert.match(rendered.at(-1), /^<div class="sp-cfg-hint sp-lines-generation-failure" role="status">上次生成失败：模型漏写了新线的来源编号。/);
+    assert.match(rendered.at(-1), /<div>empty-state<\/div>/, 'failure feedback is prepended without replacing the existing empty state');
+    assert.equal(toasts.at(-1), 'existing failure notification', 'the pre-existing failure callback still runs');
+
+    panelOpen = false; feature.refreshPanel();
+    panelOpen = true; feature.refreshPanel();
+    assert.match(rendered.at(-1), /模型漏写了新线的来源编号/, 'closing and reopening the panel preserves this chat-run feedback');
+
+    const silentFailure = await feature.generation.run(true);
+    assert.deepEqual(silentFailure, { status: 'failed', reason: 'evolution-newborn-missing-ticket' });
+    assert.match(rendered.at(-1), /模型漏写了新线的来源编号/, 'silent automatic failures retain the same panel hint');
+    assert.equal(toasts.length, 1, 'silent failure does not add a toast');
+
+    const staleRun = feature.generation.run(true);
+    while (!rejectLateApi) await new Promise(resolve => setImmediate(resolve));
+    feature.abortGeneration({ restore: false, reason: 'manual-abort' });
+    assert.doesNotMatch(rendered.at(-1), /上次生成失败/, 'abort clears the previous session hint');
+    assert.equal((await feature.generation.run(false)).status, 'updated', 'the aborted lease is available to the next attempt');
+    rejectLateApi(new Error('synthetic late failure'));
+    assert.equal((await staleRun).status, 'cancelled');
+    assert.equal(writes, 1);
+    assert.doesNotMatch(rendered.at(-1), /上次生成失败/, 'a successful new run clears stale failure feedback');
+    chatId = 'next-chat'; owners.nextChatRevision(); feature.onChatChanged({ lastSeen: -1 }); feature.refreshPanel();
+    assert.doesNotMatch(rendered.at(-1), /上次生成失败/, 'chat change clears session-only feedback');
+});
+
+test('panel-closed manual advance still gives a light busy hint while preflight waits', async () => {
+    let releasePreflight; const toasts = [];
+    const feature = createLinesFeature({
+        chatId: () => 'closed-panel-busy-chat', dayAnchor: () => null, isPanelActive: () => false,
+        actionsEnv: {
+            silent: () => true,
+            toast: message => toasts.push(message),
+            precheck: () => new Promise(resolve => { releasePreflight = resolve; }),
+        },
+    });
+    const first = feature.advance();
+    while (!releasePreflight) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(feature.runtime.busy, true);
+    await feature.advance();
+    assert.deepEqual(toasts, ['线仍在准备或生成中，请稍后再试']);
+    releasePreflight({ proceed: false });
+    await first;
+});
+
 test('line participant drift blocks dispatch and a stale same-chat lease cannot block a new revision', async () => {
     let participant = { boundaryEpoch: 0, chatId: 'identity-chat', userName: 'A', charName: 'A' };
     let releaseDraw; let apiCalls = 0;
@@ -976,6 +1180,7 @@ function terminalRetirementFeature({ raw, mode = 'manual', interval = 9, status 
         runtime: { busy: false, cache: value => cached.push(value) }, pluginEnabled: () => true,
         getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }), getMode: () => mode, getInterval: () => interval,
         chatId: () => chatId, boundaryEpoch: () => epoch, cacheKey: () => 'retire-key', chat: () => chat,
+        dayAnchor: () => '1-1', dayAdvance: ({ dayAnchor, previousDay }) => ({ shouldAdvance: dayAnchor !== previousDay }),
         readSaved: () => saved, readRaw: () => saved.raw, floorSignature: () => 'sig', loadConfig: () => ({ url: 'u', key: 'k' }), swipeId: () => 0,
         writeStoreConfirmed: async (key, value, options) => {
             writes.push({ key, value });
@@ -1007,6 +1212,7 @@ test('a new normal AI floor retires only prior unlocked terminal lines before an
         const harness = terminalRetirementFeature({ raw: source, mode, interval: 99 });
         assert.equal(harness.feature.onMessageReceived({ messageId: 0, type: 'normal' }), true);
         await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+        await harness.feature.awaitAutoAdvances();
         assert.deepEqual(parseLines(harness.saved().raw).map(line => line.name), ['活线', '锁定终线'], mode);
         assert.equal(harness.writes.length, 1, mode);
         assert.equal(harness.cached.at(-1), harness.saved().raw, mode);
@@ -1019,6 +1225,7 @@ test('terminal retirement stays removed on API failure, keeps new terminal until
     const harness = terminalRetirementFeature({ raw: oldTerminal, mode: 'turns', interval: 1, status: 'failed' });
     harness.feature.onMessageReceived({ messageId: 0, type: 'normal' });
     await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    await harness.feature.awaitAutoAdvances();
     assert.equal(harness.saved().raw, '');
     assert.equal(harness.calls(), 1);
     assert.equal(harness.feature.onMessageReceived({ messageId: 0, type: 'normal' }), false);
@@ -1084,8 +1291,27 @@ test('automatic line success toast is emitted only for an updated generation res
         const harness = automaticLinesFeature(status);
         assert.equal(harness.feature.onMessageReceived({ messageId: 0, type: 'normal' }), true);
         await harness.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+        await harness.feature.awaitAutoAdvances();
         assert.equal(harness.calls(), 1);
         assert.equal(harness.toasts.filter(value => /线已随剧情自动推进/.test(value)).length, status === 'updated' ? 1 : 0, status);
+    }
+});
+
+test('automatic lines accept only new normal floors and reject continuation or other generation types', async () => {
+    for (const type of ['normal']) {
+        const harness = automaticLinesFeature('updated');
+        assert.equal(harness.feature.onMessageReceived({ messageId: 0, type }), true, type);
+        await harness.feature.onCharacterRendered({ messageId: 0, type });
+        await harness.feature.awaitAutoAdvances();
+        assert.equal(harness.calls(), 1, type);
+    }
+
+    for (const type of ['continue', 'appendFinal', 'swipe', 'regenerate', 'quiet', 'impersonate', 'command', 'extension']) {
+        const harness = automaticLinesFeature('updated');
+        assert.equal(harness.feature.onMessageReceived({ messageId: 0, type }), false, type);
+        await harness.feature.onCharacterRendered({ messageId: 0, type });
+        await harness.feature.awaitAutoAdvances();
+        assert.equal(harness.calls(), 0, type);
     }
 });
 
@@ -1094,13 +1320,167 @@ test('date aftermath uses the generation result and repeated same-floor CMR does
     failed.feature.onMessageReceived({ messageId: 0, type: 'normal' });
     await failed.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
     await failed.feature.onDateAftermath({ chatId: 'feature-chat', messageId: 0, day: '1-2' });
+    await failed.feature.awaitAutoAdvances();
     assert.equal(failed.calls(), 1);
     assert.equal(failed.toasts.some(value => /线已随剧情自动推进/.test(value)), false);
 
     const replay = automaticLinesFeature('updated');
     replay.feature.onMessageReceived({ messageId: 0, type: 'normal' });
     await replay.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    await replay.feature.awaitAutoAdvances();
     await replay.feature.onCharacterRendered({ messageId: 0, type: 'normal' });
     assert.equal(replay.calls(), 1, '同楼 CMR 重放不得再次生成');
     assert.equal(replay.toasts.filter(value => /线已随剧情自动推进/.test(value)).length, 1);
+});
+
+function productionCharacterListener(source, linesFeature) {
+    const listener = source.match(/_stListeners\.char\s*=\s*(async\s*)?\(messageId, type\)\s*=>\s*\{([\s\S]*?)\n\s*\};/);
+    assert.ok(listener, 'production CMR listener is present');
+    const body = listener[2];
+    return new Function('pluginEnabled', 'coordinateRuntime', 'scheduleForChatBoundary', 'syncLatestAlmanacBlock', 'syncLatestScheduleBlock', 'getSettings', 'isAutomationSuppressed', 'AUTOMATION_MODULES', 'linesFeature',
+        `return ${listener[1] ? 'async ' : ''}function(messageId, type) {${body}\n}`)(
+        () => true,
+        { feature: { onCharacterRendered() {}, scanButtons() {} } },
+        (callback, delay) => setTimeout(callback, delay),
+        () => {}, () => {}, () => ({ linesEnabled: true }), () => false, { LINES: 'lines' }, linesFeature,
+    );
+}
+
+test('production CMR listener serializes date aftermath after asynchronous terminal retirement', async () => {
+    const index = await fs.readFile(fileURLToPath(new URL('../../index.js', import.meta.url)), 'utf8');
+    const source = retirementRaw([{ name: '旧终线', stage: '收束' }]);
+    let release; const harness = terminalRetirementFeature({
+        raw: source, mode: 'days', save: () => new Promise(resolve => { release = () => resolve({ ok: true }); }),
+    });
+    harness.feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    const charListener = productionCharacterListener(index, harness.feature);
+    let dateResult;
+    const dispatch = (async () => {
+        // The host EventEmitter awaits each listener in registration order.
+        await charListener(0, 'normal');
+        dateResult = await harness.feature.onDateAftermath({ chatId: 'retire-chat', messageId: 0, day: '1-2' });
+    })();
+    for (let turn = 0; !release && turn < 20; turn++) await new Promise(resolve => setTimeout(resolve, 1));
+    if (release) release();
+    await dispatch;
+    assert.equal(harness.writes.length, 1, 'the preceding terminal retirement write must complete');
+    assert.equal(dateResult, true, 'the real production listener must finish floor registration before date aftermath');
+    assert.equal(harness.calls(), 1, 'the date change advances exactly once');
+    assert.equal(await harness.feature.onDateAftermath({ chatId: 'retire-chat', messageId: 0, day: '1-2' }), false);
+    assert.equal(harness.calls(), 1);
+});
+
+test('production CMR listener releases later listeners while turns generation and confirmed save remain pending', async () => {
+    const index = await fs.readFile(fileURLToPath(new URL('../../index.js', import.meta.url)), 'utf8');
+    let releaseModel, releaseSave; let calls = 0, writes = 0;
+    let saved = { raw: '', ts: 1 }; const toasts = [];
+    const feature = createLinesFeature({
+        pluginEnabled: () => true,
+        getSettings: () => ({ linesEnabled: true, notifyMode: 'full' }), getMode: () => 'turns', getInterval: () => 1,
+        loadConfig: () => ({ url: 'u', key: 'k' }), chatId: () => 'serial-chat', cacheKey: () => 'serial-key',
+        chat: () => [{ is_user: false, mes: '正文' }], readSaved: () => saved, readRaw: () => saved.raw,
+        floorSignature: () => 'sig', swipeId: () => 0, toast: value => toasts.push(value),
+        writeStoreConfirmed: (_key, value, { ownerGuard }) => {
+            writes++;
+            return new Promise(resolve => { releaseSave = () => {
+                assert.equal(ownerGuard(), true);
+                saved = value; resolve({ ok: true, commitState: 'confirmed', value });
+            }; });
+        },
+        generationEnv: {
+            chatId: () => 'serial-chat', boundaryEpoch: () => 0, floorSignature: () => 'sig', cacheKey: () => 'serial-key', loadConfig: () => ({ url: 'u', key: 'k' }),
+            readSaved: () => saved, drawTickets: () => drawTickets(1, { seed: 'serial-cmr' }), vectorCapacity: 8,
+            buildPrompt: () => 'synthetic prompt', callApi: () => {
+                calls++; return new Promise(resolve => { releaseModel = () => resolve(freshRaw); });
+            },
+        },
+    });
+    feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    const charListener = productionCharacterListener(index, feature);
+    let laterListenerRan = false;
+    const dispatch = (async () => {
+        await charListener(0, 'normal');
+        laterListenerRan = true;
+    })();
+    try {
+        for (let turn = 0; !releaseModel && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+        assert.equal(typeof releaseModel, 'function', 'the real turns generation controller must start');
+        assert.equal(calls, 1); assert.equal(writes, 0);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(laterListenerRan, true, 'the host may continue while the model request is pending');
+        releaseModel();
+        for (let turn = 0; !releaseSave && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+        assert.equal(typeof releaseSave, 'function', 'the generated lines must reach confirmed persistence');
+        assert.equal(writes, 1); assert.equal(saved.raw, '');
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(laterListenerRan, true, 'the host may continue while confirmed persistence is pending');
+        releaseSave();
+        await dispatch;
+        await feature.awaitAutoAdvances();
+    } finally {
+        if (!laterListenerRan) { releaseModel?.(); releaseSave?.(); }
+    }
+    assert.equal(laterListenerRan, true);
+    assert.match(saved.raw, /主线/);
+    assert.equal(feature.runtime.busy, false);
+    feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    assert.equal(calls, 1);
+    assert.equal(writes, 1);
+    assert.equal(toasts.filter(value => /线已随剧情自动推进/.test(value)).length, 1);
+
+    // A same-floor replay remains guarded after generation and save both settle.
+    feature.onMessageReceived({ messageId: 0, type: 'normal' });
+    await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    assert.equal(calls, 1, '重复 CMR 不得再请求模型');
+});
+
+test('automatic CMR coalesces to the newest captured floor with its original deadline', async () => {
+    let chat = [{ is_user: false, mes: '楼一' }]; let releaseFirst; const runs = [];
+    const runtime = { busy: false, start() { this.busy = true; }, finish() { this.busy = false; return true; }, abort() { this.busy = false; }, cache() {}, setHtml() {} };
+    const feature = createLinesFeature({
+        runtime, pluginEnabled: () => true, getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }),
+        getMode: () => 'turns', getInterval: () => 1, loadConfig: () => ({ url: 'u', key: 'k' }),
+        chatId: () => 'queue-chat', boundaryEpoch: () => 1, chat: () => chat,
+        contextSnapshot: () => ({ chat: chat.map(item => ({ ...item })) }),
+        floorSignature: id => `${id}:${chat[id]?.mes || ''}`, swipeId: () => 0,
+        timeLimits: { totalMs: 10_000 },
+        generation: { run: async (_silent, swipe, _travel, _preflight, _memory, trigger) => {
+            runs.push({ swipe, trigger });
+            if (runs.length === 1) { runtime.busy = true; await new Promise(resolve => { releaseFirst = resolve; }); runtime.busy = false; }
+            return { status: 'updated' };
+        } },
+    });
+    feature.onMessageReceived({ messageId: 0, type: 'normal' }); await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    for (let turn = 0; !releaseFirst && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    chat = [...chat, { is_user: false, mes: '楼二' }];
+    feature.onMessageReceived({ messageId: 1, type: 'normal' }); await feature.onCharacterRendered({ messageId: 1, type: 'normal' });
+    chat = [...chat, { is_user: false, mes: '楼三' }];
+    feature.onMessageReceived({ messageId: 2, type: 'normal' }); await feature.onCharacterRendered({ messageId: 2, type: 'normal' });
+    assert.equal(runs.length, 1, 'the second task does not run concurrently');
+    releaseFirst(); await feature.awaitAutoAdvances();
+    assert.equal(runs.length, 2, 'only the latest pending floor is retained');
+    assert.equal(runs[1].swipe.mesId, 2);
+    assert.equal(runs[1].trigger.contextSnapshot.chat.length, 3, 'the queued task uses the receipt-time chat');
+    assert.ok(runs[1].trigger.deadlineAt <= Date.now() + 10_000, 'deadline was captured before dequeue');
+});
+
+test('aborting the active automatic CMR invalidates its pending tail before it can start', async () => {
+    let chat = [{ is_user: false, mes: '楼一' }]; let releaseFirst; let runs = 0;
+    const runtime = { busy: false, start() { this.busy = true; }, finish() { this.busy = false; return true; }, abort() { this.busy = false; }, cache() {}, setHtml() {} };
+    const feature = createLinesFeature({
+        runtime, pluginEnabled: () => true, getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }),
+        getMode: () => 'turns', getInterval: () => 1, loadConfig: () => ({ url: 'u', key: 'k' }),
+        chatId: () => 'queue-abort-chat', boundaryEpoch: () => 1, chat: () => chat,
+        contextSnapshot: () => ({ chat: chat.map(item => ({ ...item })) }),
+        floorSignature: id => `${id}:${chat[id]?.mes || ''}`, swipeId: () => 0,
+        generation: { run: async () => { runs++; if (runs === 1) { runtime.busy = true; await new Promise(resolve => { releaseFirst = resolve; }); } return { status: 'updated' }; } },
+    });
+    feature.onMessageReceived({ messageId: 0, type: 'normal' }); await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
+    for (let turn = 0; !releaseFirst && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    chat = [...chat, { is_user: false, mes: '楼二' }];
+    feature.onMessageReceived({ messageId: 1, type: 'normal' }); await feature.onCharacterRendered({ messageId: 1, type: 'normal' });
+    feature.abortGeneration({ restore: false, reason: 'manual-abort' });
+    releaseFirst(); await feature.awaitAutoAdvances();
+    assert.equal(runs, 1, 'the invalidated queued floor must not start after abort');
 });

@@ -227,6 +227,7 @@ export function createOutlineUi(host = {}) {
         getInjectText: id => injectTexts.get(String(id)),
         getCopyText: id => copyTexts.get(String(id)),
         setOutline,
+        setFailureHtml: html => host.setFailureHtml?.(html),
         setLoading,
         showGenerationError,
         showPreflightError,

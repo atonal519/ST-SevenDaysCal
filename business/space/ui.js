@@ -194,6 +194,7 @@ export function createSpaceUi(host = {}) {
         emptyMessages,
         beginThinking,
         endThinking,
+        setFailureHtml: html => host.setFailureHtml?.(html),
         setPlaceholder: value => query('#sp-space-input')?.attr?.('placeholder', value),
         clearWidgets: () => widgets.clear(),
         widgetEntries: () => [...widgets.values()],

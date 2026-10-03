@@ -1,6 +1,6 @@
 import { parseLines, TERMINAL_LINE_STAGES } from './schema.js';
 import { adultInjectionGuidance } from './adult.js';
-import { lineDirectionGuidance } from './direction.js';
+import { narrativePreferenceContract } from '../narrative-preferences.js';
 
 export const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
 
@@ -38,7 +38,7 @@ export function activeLines(raw, { includeTerminal = false } = {}) {
     return lines.filter(line => line.name && (includeTerminal || !TERMINAL_STAGES.has(line.stage)));
 }
 
-export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】', adultMode = 'off', direction = 'natural' } = {}) {
+export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】', adultMode = 'off', direction = 'natural', scale = 'auto' } = {}) {
     const items = (Array.isArray(lines) ? lines : []).map(line => {
         const when = String(line.when || '').trim();
         const parts = [`- ${line.name}（${line.stage}${when ? `·${when}` : ''}${line.stall ? '·停滞' : ''}）`];
@@ -50,7 +50,7 @@ export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅�
     return [
         prefix,
         '以下是这个故事水面之下正在发展的伏笔。请把它们当作暗流，在接下来的叙事中自然、含蓄、缓慢地顺势推进：不要生硬提及、不要让角色直接谈论、更不要一次抖开。',
-        lineDirectionGuidance(direction),
+        narrativePreferenceContract({ scale, direction }),
         adultGuidance,
         ...items,
     ].filter(Boolean).join('\n');
