@@ -16,8 +16,6 @@ import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
-import { captureMetadataIntentBefore, createBestEffortMetadataSaver, createTargetMetadataSaver, createTargetSnapshotRefresher, dispatchTargetMetadataWithRefresh } from './runtime/target-metadata-save.js';
-import { createTauriTavernMetadataSaver } from './runtime/tauritavern-metadata-save.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
@@ -41,7 +39,7 @@ import {
 import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom.js';
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, maskKey } from './utils/format.js';
-import { getSettings, parseExcludeParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
+import { getSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
 import { characterCardMatches, effectivePluginEnabled, excludedCharacterSet, isCharacterExcluded, renderCharacterExclusionRows, setCharacterExcluded as updateCharacterExcluded } from './runtime/character-exclusion.js';
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
@@ -51,7 +49,6 @@ import {
     abortMigration,
     bindExternalChatStorage,
     buildCurrentChatDiagnosticPackage,
-    commitNativeMetadataRoots,
     getChatRoot,
     isExternalMode,
     isExternalReady,
@@ -249,97 +246,11 @@ import {
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
 
-// Ledger 优先使用固定聊天目标的 integrity/commitState saver；不支持时回退 best-effort saver，均不支持才保持不可用。
-const ledgerMetadataSaverReady = (() => {
-    const advanced = createTargetMetadataSaver({ coreModule: scriptCore });
-    return advanced?.supported ? advanced : createBestEffortMetadataSaver({ context: getContext });
-})();
-const refreshLineTargetSnapshot = createTargetSnapshotRefresher({
-    coreModule: scriptCore,
-    syncActiveIntegrity: (target, metadata) => {
-        const resolved = scriptCore.resolveChatStateTarget();
-        const sameTarget = resolved && (target.is_group
-            ? resolved.is_group && String(resolved.id || '') === String(target.id || '')
-            : !resolved.is_group && String(resolved.avatar_url || '') === String(target.avatar_url || '') && String(resolved.file_name || '') === String(target.file_name || ''));
-        if (!sameTarget) return;
-        const live = getContext?.()?.chatMetadata;
-        if (!live || typeof live !== 'object') return;
-        if (typeof metadata.integrity === 'string' && metadata.integrity.trim()) live.integrity = metadata.integrity.trim();
-        else delete live.integrity;
-    },
-});
-const portableMetadataSaver = createTargetMetadataSaver({
-    coreModule: scriptCore,
-    ownedRoots: ['/sp-store', '/sp-theater'],
-});
-let tauriTavernMetadataSaver = null;
-function getTauriTavernMetadataSaver() {
-    const host = globalThis.__TAURITAVERN__ || globalThis.window?.__TAURITAVERN__;
-    if (!host || typeof scriptCore.enqueueChatSave !== 'function' || typeof scriptCore.persistedChatMetadata !== 'function') return null;
-    if (!tauriTavernMetadataSaver) tauriTavernMetadataSaver = createTauriTavernMetadataSaver({
-        host,
-        enqueueChatSave: scriptCore.enqueueChatSave,
-        persistedChatMetadata: scriptCore.persistedChatMetadata,
-        getContext,
-        // TT owns this transport module; loading it lazily leaves native Luker startup unchanged.
-        loadTransport: () => import('../../../chat-payload-transport.js'),
-    });
-    return tauriTavernMetadataSaver;
-}
+// 固定目标仅作为外置/输入来源索引；普通 metadata 写入走标准 saveMetadata。
 const getLedgerTarget = () => {
     try { return typeof scriptCore.resolveChatStateTarget === 'function' ? scriptCore.resolveChatStateTarget() : null; }
     catch { return null; }
 };
-ledger.bindLedgerMetadataPersistence({
-    async commit(ctx, options = {}) {
-        const saver = await ledgerMetadataSaverReady;
-        if (!saver?.supported) return { ok: false, reason: saver?.reason || 'metadata-saver-unavailable', commitState: 'not-dispatched' };
-        const current = ctx || getContext?.();
-        const target = options.target || getLedgerTarget();
-        if (typeof saver.commit === 'function') return saver.commit(current, { ...options, target, ownerGuard: options.compensate ? () => true : (options.ownerGuard || (() => true)) });
-        const after = { ...(current?.chatMetadata || {}) };
-        if (current?.chatMetadata?.['sp-ledger']) after['sp-ledger'] = current.chatMetadata['sp-ledger'];
-        return dispatchTargetMetadataWithRefresh({ saver, target, afterMetadata: after, refresh: options.safeSnapshotRefresh ? refreshLineTargetSnapshot : scriptCore.refreshChatWriteSnapshotsFromServer, isCurrent: options.compensate ? () => true : (options.ownerGuard || (() => true)), signal: options.signal, deadlineAt: options.deadlineAt });
-    },
-});
-store.bindStoreMetadataPersistence({
-    async commit(ctx, options = {}) {
-        const current = ctx || getContext?.();
-        const ownerGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => true;
-        const target = options.target || getLedgerTarget();
-        if (!current?.chatId || !ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
-        if (ledgerMetadataSaverReady?.supported && ledgerMetadataSaverReady.mode !== 'legacy-unconfirmed') {
-            const after = { ...(current.chatMetadata || {}) };
-            if (current.chatMetadata?.['sp-store']) after['sp-store'] = current.chatMetadata['sp-store'];
-            return dispatchTargetMetadataWithRefresh({
-                saver: ledgerMetadataSaverReady,
-                target,
-                afterMetadata: after,
-                refresh: options.safeSnapshotRefresh ? refreshLineTargetSnapshot : scriptCore.refreshChatWriteSnapshotsFromServer,
-                isCurrent: ownerGuard,
-                signal: options.signal,
-                deadlineAt: options.deadlineAt,
-                reportPhase: options.reportPhase,
-                intentPaths: options.intentPaths,
-                intentBefore: captureMetadataIntentBefore(options.liveMetadata, options.intentPaths),
-            });
-        }
-        const tauriTavernSaver = getTauriTavernMetadataSaver();
-        const boundedIntent = !!options.signal || Number.isFinite(Number(options.deadlineAt));
-        if (tauriTavernSaver?.supported && boundedIntent) return tauriTavernSaver.commit(current, {
-            ...options,
-            ownerGuard,
-            intentBefore: captureMetadataIntentBefore(options.liveMetadata, options.intentPaths),
-        });
-        try {
-            return await ledgerMetadataSaverReady.commit(current, { ...options, target, ownerGuard, rootKey: 'sp-store' });
-        } catch (error) {
-            const status = Number(error?.status ?? error?.statusCode ?? error?.httpStatus);
-            return { ok: false, reason: Number.isInteger(status) ? `http-${status}` : 'saveMetadata-rejected', ...(Number.isInteger(status) ? { status } : {}), commitState: 'not-dispatched', dispatched: false, error };
-        }
-    },
-});
-
 const pointTaskOwners = createTaskOwnerManager();
 let chatBoundaryEpoch = 0;
 let pendingDateBootstrap = null;
@@ -363,7 +274,7 @@ function captureParticipantIdentity(ctx = getContext()) {
     });
 }
 function sameParticipantIdentity(left, right) {
-    return !!left && !!right && ['boundaryEpoch', 'chatId', 'characterId', 'characterKey', 'personaKey', 'userName', 'charName'].every(key => String(left[key] ?? '') === String(right[key] ?? ''));
+    return !!left && !!right && ['characterId', 'characterKey', 'personaKey', 'userName', 'charName'].every(key => String(left[key] ?? '') === String(right[key] ?? ''));
 }
 function captureGenerationContext(ctx = getContext()) {
     const chat = Array.isArray(ctx?.chat) ? ctx.chat.map(message => ({ ...message, extra: message?.extra && typeof message.extra === 'object' ? { ...message.extra } : message?.extra })) : [];
@@ -372,8 +283,8 @@ function captureGenerationContext(ctx = getContext()) {
 function captureChatBoundary() { return Object.freeze({ epoch: chatBoundaryEpoch, chatId: String(getContext()?.chatId ?? '') }); }
 function isCurrentChatBoundary(boundary) { return !!boundary && boundary.epoch === chatBoundaryEpoch && boundary.chatId === String(getContext()?.chatId ?? ''); }
 function scheduleForChatBoundary(callback, delay) {
-    const boundary = captureChatBoundary();
-    return setTimeout(() => { if (isCurrentChatBoundary(boundary)) callback(boundary); }, delay);
+    // 延迟刷新读取执行时的当前界面状态；单纯切换聊天不取消该 UI 回调。
+    return setTimeout(() => callback(), delay);
 }
 function latestFloorBoundaryIdentity() {
     const ctx = getContext(); const messageId = (ctx?.chat?.length ?? 0) - 1;
@@ -1703,12 +1614,10 @@ const linesFeature = createLinesFeature({
     contextSnapshot: captureGenerationContext,
     isEditing: () => manualEditing.lines,
     readSaved: () => readStore(getLinesCacheKey()) || {},
+    readSavedAt: key => readStore(key) || {},
     writeStore,
-    // 线只提交目标版本；共根的诊断、其它业务与 ledger 采用队列执行时的最新值。
-    writeStoreConfirmed: (key, value, options = {}) => writeStoreConfirmed(key, value, {
-        ...options,
-        intentPaths: key ? [`/sp-store/data/${store.subKey(key.kind, key.view, key.charName).replace(/~/g, '~0').replace(/\//g, '~1')}`] : [],
-    }),
+    // store 在共享确认保存入口内捕获各业务子键意图；共根诊断与旁键不参与该业务写。
+    writeStoreConfirmed,
     readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.store && typeof baseline.store === 'object') writeStore(key, baseline.store); else if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
     loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
@@ -1766,6 +1675,7 @@ const linesFeature = createLinesFeature({
         floorSignature: _floorSig, loadConfig: loadCfg,
         adultMode: identity => getAdultMode(identity?.characterKey || charStableKey(getContext())),
         readSaved: () => readStore(getLinesCacheKey()) || {},
+    readSavedAt: key => readStore(key) || {},
         participantIdentity: captureParticipantIdentity,
         sameParticipantIdentity,
         contextSnapshot: captureGenerationContext,
@@ -2106,7 +2016,7 @@ jQuery(async () => {
     _stListeners.chat = async () => {
         clearMemoryCheckFeedback();
         axisFailureRecency.clearAll();
-        // 切聊是构画的硬失败边界：先统一推进 epoch/revision，再无条件清掉所有聊天态任务。
+        // Chat/revision values remain useful for diagnostics and indexes; CHAT_CHANGED reloads views without cancelling generation results.
         const previousChatId = activeChatBoundaryIdentity?.chatId ?? null;
         const previousBoundaryEpoch = chatBoundaryEpoch;
         const previousChatRevision = pointTaskOwners.currentChatRevision();
@@ -2117,11 +2027,7 @@ jQuery(async () => {
         const chatRevision = pointTaskOwners.nextChatRevision();
         linesFeature.nextChatRevision();
         recordChatBoundary({ previousChatId, currentChatId: activeChatBoundaryIdentity.chatId, previousBoundaryEpoch, boundaryEpoch: chatBoundaryEpoch, previousChatRevision, chatRevision });
-        traceDiagnosticEvent('abort-boundary', { module: 'runtime', chatId: activeChatBoundaryIdentity.chatId, chatRevision, boundaryEpoch: chatBoundaryEpoch, abortReason: 'chat-boundary', status: 'dispatch' });
-        pointTaskOwners.invalidateAll('chat-boundary');
-        pointController.reset('chat-boundary');
         linesFeature.onChatChanged({ lastSeen });
-        memory.abortAll('chat-boundary');
         _timeTravelSelectionSeq++;
         _activeTimeTravelSelection = null;
         _activeSpConfirmCancel?.();
@@ -2129,23 +2035,11 @@ jQuery(async () => {
         customDialog.cancelActive();
         closeActivePortableImportOverlay();
         removeDialogOverlays();
-        timeTravel.clear('chat-boundary');
         clearAutomationClaims();
-        dateCoordinator.clear();
-        dateDetectionController.reset('chat-boundary');
         outlineFeature.onChatChanged({ lastSeen });
         spaceFeature.onChatChanged({ enabled: pluginEnabled() });
-        linesFeature.dashed.abort('chat-boundary');
         theaterFeature.onChatChanged();
-        ledgerCaptureController.reset('chat-boundary');
-        ledgerJudgeController.reset('chat-boundary');
-        invalidateLedgerAutomationQueue();
-        axisGenerationController.reset('chat-boundary');
-        _autoRegenSchedAbort?.abort('chat-boundary'); _autoRegenSchedAbort = null;
-        pointState.isGenerating = false;
-        pointState.scheduleAbortController = null;
-        axisState._almSyncingPoint = false;
-        linesRuntime.reset();
+        linesRuntime.resetDisplay();
         linesFeature.setSheet('events');
         linesFeature.dashed.resetError();
         if (previousChatId != null) linesFeature.clearAllSwipe(previousChatId);
@@ -3257,6 +3151,10 @@ function injectModal() {
                                             </p>
                                             <textarea id="sp-cfg-exclude" class="sp-input sp-exclude-input" rows="2"
                                                       placeholder="如：frequency_penalty&#10;presence_penalty">${escapeHtml((cfg.excludeParams || []).join('\n'))}</textarea>
+                                            <p class="sp-cfg-hint" style="margin-top:8px"><b>附加参数（JSON）</b></p>
+                                            <textarea id="sp-cfg-additional" class="sp-input sp-exclude-input" rows="3"
+                                                      placeholder='{"reasoning_effort":"none"}'>${escapeHtml(cfg.spAdditionalParams || '')}</textarea>
+                                            <p class="sp-cfg-hint">参数写法以服务接口为准；留空使用默认。</p>
                                             <div class="sp-mode-opt" style="margin-top:8px">
                                                 <span>请求超时</span>
                                                 <input id="sp-cfg-timeout" class="sp-input sp-interval-input" type="number" min="5" max="600" value="${escapeAttr(String(cfg.timeoutSec || 180))}">
@@ -4755,6 +4653,13 @@ function injectModal() {
     $in('#sp-cfg-url').on('input change', function () { getSettings().apiUrl = this.value.trim().replace(/\/$/, ''); saveSettingsDebounced(); syncPresetState(); });
     $in('#sp-cfg-model').on('input change', function () { getSettings().apiModel = this.value.trim(); saveSettingsDebounced(); syncPresetState(); });
     $in('#sp-cfg-exclude').on('input change', function () { getSettings().apiExcludeParams = parseExcludeParams(this.value); saveSettingsDebounced(); syncPresetState(); });
+    // JSON 草稿逐字输入不落盘；完成编辑后只保存有效值，错误保留在框内并由预设状态行提示。
+    $in('#sp-cfg-additional').on('input', syncPresetState).on('change', function () {
+        syncPresetState();
+        try { parseAdditionalParams(this.value); } catch { return; }
+        getSettings().apiAdditionalParams = this.value.trim();
+        saveSettingsDebounced();
+    });
     $in('#sp-cfg-timeout').on('input change', function () { const raw = String(this.value ?? '').trim(); const n = Number(raw); syncPresetState(); if (!raw || !Number.isInteger(n) || n < 5 || n > 600) return; getSettings().apiTimeoutSec = n; saveSettingsDebounced(); });
     $in('#sp-cfg-stream').on('change', function () { getSettings().apiStream = this.checked; saveSettingsDebounced(); syncPresetState(); });
     $in('#sp-lines-interval').on('input change', function () { const n = Number(this.value); if (!Number.isInteger(n) || n < 1) return; saveLinesInterval(n); this.value = String(n); });
@@ -5504,10 +5409,8 @@ function charStableKey(ctx) {
 }
 
 async function restoreCurrentCharacterAfterExclusion() {
-    const boundary = captureChatBoundary();
-    const loadingChatId = String(getContext()?.chatId || '');
     await loadExternalChat({ force: true });
-    if (!isCurrentChatBoundary(boundary) || currentCharacterExcluded() || String(getContext()?.chatId || '') !== loadingChatId) return false;
+    if (currentCharacterExcluded()) return false;
     const migration = store.migrateChatFromLocalStorage(getContext().chatId);
     if (migration.status === 'conflict') scheduleForChatBoundary(() => showStoreConflictDialog(migration), 700);
     pointState.cachedSchedule = loadCachedForCurrentChat();
@@ -6314,7 +6217,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
         if (reference.recognized) {
             if (!reference.names.length) {
                 if (Array.isArray(referenceHistory)) {
-                    showToast('无法确认“他们”指哪些人物，请点名，或明确问“全部角色的精神体”。', null, true);
+                    showToast('无法确定你指的是哪些角色，请明确角色姓名，或说明是否指全部角色。', null, true);
                     throw Object.assign(new Error('人物回指不明确，请点名或明确指定全部角色'), {
                         name: 'AbortError', reasonCode: 'world-info-reference-unresolved',
                     });
@@ -7100,13 +7003,12 @@ async function routeChatStorageToAvailableBackend(identity) {
 
 async function handleNewChatStorage() {
     if (currentCharacterExcluded()) return { mode: 'blocked', result: { ok: false, reason: 'character-excluded' } };
-    const boundary = captureChatBoundary();
     const identity = storageChatIdentity();
-    if (!identity || !isCurrentChatBoundary(boundary)) return { mode: 'blocked', result: { ok: false, reason: 'missing-chat' } };
+    if (!identity) return { mode: 'blocked', result: { ok: false, reason: 'missing-chat' } };
     if (sameStorageChatIdentity(newChatStorageAttempt?.identity, identity)) return newChatStorageAttempt.task;
     const task = (async () => {
         const routed = await routeChatStorageToAvailableBackend(identity);
-        if (currentCharacterExcluded() || !storageChatStillCurrent(identity) || !isCurrentChatBoundary(boundary)) return { mode: 'blocked', result: { ...routed.result, ok: false, reason: currentCharacterExcluded() ? 'character-excluded' : 'chat-changed' } };
+        if (currentCharacterExcluded() || !storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ...routed.result, ok: false, reason: currentCharacterExcluded() ? 'character-excluded' : 'chat-changed' } };
         if (routed.mode === 'external') {
             void renderStorageUsage(); void renderCurrentChatStorageMode();
         } else if (routed.mode === 'unknown') {
@@ -7339,7 +7241,7 @@ function mountPortableImportOverlay() {
     overlay.id = 'sp-portable-import-overlay';
     overlay.innerHTML = `<div role="dialog" aria-modal="true" style="width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background:#17191f;color:#f5f5f7;box-shadow:0 20px 70px #000b;font-family:var(--sp-font-user,system-ui)">
         <div style="font-size:18px;font-weight:700;margin-bottom:10px">正在导入所选模块</div>
-        <div data-sp-portable-status style="font-size:14px;line-height:1.65;opacity:.86">正在核对目标数据并确认保存，请稍候…</div>
+        <div data-sp-portable-status style="font-size:14px;line-height:1.65;opacity:.86">正在应用所选模块并更新界面…</div>
         <button data-sp-portable-close type="button" hidden style="margin-top:18px;width:100%;min-height:42px;border:1px solid #ffffff30;border-radius:10px;background:#ffffff10;color:inherit">关闭</button>
     </div>`;
     Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
@@ -7365,61 +7267,38 @@ function mountPortableImportOverlay() {
     };
 }
 
-async function commitPortableImport({ identity, originalRoots, portablePackage, selectedModules, boundary = captureChatBoundary() }) {
-    const importStillCurrent = () => storageChatStillCurrent(identity) && isCurrentChatBoundary(boundary);
-    if (!importStillCurrent()) return { ok: false, reason: 'chat-changed', commitState: 'not-dispatched' };
+async function commitPortableImport({ identity, originalRoots, portablePackage, selectedModules }) {
     const originalPlan = createPortableImportPlan({ roots: originalRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
     if (!originalPlan.ok) return originalPlan;
     if (isExternalMode()) {
         return replaceExternalRootsAtomic({
             expectedRoots: originalPlan.expectedRoots,
             replacementRoots: originalPlan.replacementRoots,
-            ownerGuard: importStillCurrent,
         });
     }
-    if (!portableMetadataSaver.supported) {
-        const saved = await commitNativeMetadataRoots({
-            ownerGuard: importStillCurrent,
-            prepareMetadata: freshMetadata => rebasePortableImportPlan({
-                originalRoots,
-                freshRoots: { 'sp-store': portableClone(freshMetadata['sp-store']), 'sp-theater': portableClone(freshMetadata['sp-theater']) },
-                portablePackage, selectedModules, targetChatId: identity.chatId,
-            }),
-        });
-        if (saved.ok && saved.commitState === 'confirmed' && importStillCurrent()) {
-            for (const [key, value] of Object.entries(saved.replacementRoots)) identity.metadata[key] = portableClone(value);
-        }
-        return saved;
-    }
-    const target = getLedgerTarget();
-    let freshMetadata;
-    try { freshMetadata = portableClone(scriptCore.getChatMetadataSnapshot(target)); }
-    catch { return { ok: false, reason: 'metadata-snapshot-unavailable', commitState: 'not-dispatched' }; }
-    if (!freshMetadata || !importStillCurrent()) return { ok: false, reason: 'chat-changed', commitState: 'not-dispatched' };
-    const freshRoots = { 'sp-store': portableClone(freshMetadata['sp-store']), 'sp-theater': portableClone(freshMetadata['sp-theater']) };
+
+    // The preview/selection is the user confirmation. Rebase those selected roots
+    // against current live metadata, then make one ordinary host save call.
+    const ctx = getContext();
+    if (!ctx) return { ok: false, reason: 'metadata-unavailable', commitState: 'not-dispatched' };
+    ctx.chatMetadata ||= {};
+    const freshRoots = {
+        'sp-store': portableClone(ctx.chatMetadata['sp-store']),
+        'sp-theater': portableClone(ctx.chatMetadata['sp-theater']),
+    };
     const freshPlan = rebasePortableImportPlan({ originalRoots, freshRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
     if (!freshPlan.ok) return freshPlan;
     if (Object.entries(freshPlan.replacementRoots).every(([key, value]) => portableSame(freshRoots[key], value))) {
-        return { ok: true, reason: 'no-change', commitState: 'confirmed', replacementRoots: freshPlan.replacementRoots };
+        return { ok: true, reason: 'no-change', commitState: 'local-applied', replacementRoots: freshPlan.replacementRoots };
     }
-    const afterMetadata = portableClone(freshMetadata);
-    for (const [key, value] of Object.entries(freshPlan.replacementRoots)) afterMetadata[key] = portableClone(value);
-    let saved = await dispatchTargetMetadataWithRefresh({
-        saver: portableMetadataSaver,
-        target,
-        afterMetadata,
-        refresh: scriptCore.refreshChatWriteSnapshotsFromServer,
-        isCurrent: importStillCurrent,
-    });
-    if (saved.commitState === 'unknown' && typeof saved.confirm === 'function') {
-        const confirmed = await saved.confirm();
-        if (confirmed?.confirmed) saved = { ...saved, ok: true, commitState: 'confirmed', confirmedAfterUnknown: true };
-        else if (confirmed?.submitted === false) saved = { ...saved, ok: false, commitState: 'not-dispatched', reason: 'confirmed-not-submitted' };
+    for (const [key, value] of Object.entries(freshPlan.replacementRoots)) ctx.chatMetadata[key] = portableClone(value);
+    try {
+        const pending = ctx.saveMetadata?.();
+        pending?.catch?.(() => {});
+    } catch (error) {
+        return { ok: true, reason: 'save-threw', commitState: 'local-applied', error, replacementRoots: freshPlan.replacementRoots };
     }
-    if (saved.ok && saved.commitState === 'confirmed' && importStillCurrent()) {
-        for (const [key, value] of Object.entries(freshPlan.replacementRoots)) identity.metadata[key] = portableClone(value);
-    }
-    return { ...saved, replacementRoots: freshPlan.replacementRoots };
+    return { ok: true, commitState: 'local-applied', replacementRoots: freshPlan.replacementRoots };
 }
 
 function refreshPortableImportedModules(selectedModules) {
@@ -7459,14 +7338,12 @@ function refreshPortableImportedModules(selectedModules) {
 }
 
 async function importPortableFile(file, identity) {
-    if (!file || !identity || !storageChatStillCurrent(identity)) return;
-    const boundary = captureChatBoundary();
-    const importStillCurrent = () => storageChatStillCurrent(identity) && isCurrentChatBoundary(boundary);
+    if (!file || !identity) return;
     if (file.size > PORTABLE_CHAT_MAX_BYTES) { showToast('数据包超过 8 MB 限制', null, true); return; }
     let text;
     try { text = await file.text(); }
-    catch { if (importStillCurrent()) showToast('无法读取这个文件', null, true); return; }
-    if (!importStillCurrent() || !portableStorageAvailable('导入数据')) return;
+    catch { showToast('无法读取这个文件', null, true); return; }
+    if (!portableStorageAvailable('导入数据')) return;
     const parsed = parsePortableChatPackage(text);
     if (!parsed.ok) { showToast(`导入失败：${parsed.message}`, null, true); return; }
     const portablePackage = parsed.package;
@@ -7478,7 +7355,7 @@ async function importPortableFile(file, identity) {
         confirmText: '检查替换影响', cancelText: '取消',
         validate: value => value.values.length ? '' : '请至少选择一个模块',
     });
-    if (!picked || !importStillCurrent() || !portableStorageAvailable('导入数据')) return;
+    if (!picked || !portableStorageAvailable('导入数据')) return;
     const previewRoots = currentPortableRoots();
     const preview = createPortableImportPlan({ roots: previewRoots, portablePackage, selectedModules: picked.values, targetChatId: identity.chatId });
     if (!preview.ok) { showToast(`导入失败：${preview.message || preview.reason}`, null, true); return; }
@@ -7495,7 +7372,6 @@ async function importPortableFile(file, identity) {
             { value: 'apply', label: '确认导入', primary: true },
         ],
     });
-    if (!importStillCurrent()) return;
     if (decision === 'backup') { await exportPortableModules(picked.values); return; }
     if (decision !== 'apply' || !portableStorageAvailable('导入数据')) return;
     const persistentRoots = currentPersistentRoots();
@@ -7506,7 +7382,6 @@ async function importPortableFile(file, identity) {
     const overlay = mountPortableImportOverlay();
     if (routeBlankReceiver) {
         const routed = await routeChatStorageToAvailableBackend(identity);
-        if (!importStillCurrent()) { overlay.close(); return; }
         if (routed.mode === 'unknown') {
             overlay.unknown('目标聊天的存储位置暂时无法确认。请关闭后刷新当前聊天核实；在确认前不要重复导入。');
             return;
@@ -7521,15 +7396,12 @@ async function importPortableFile(file, identity) {
         }
     }
     let result;
-    try { result = await commitPortableImport({ identity, originalRoots, portablePackage, selectedModules: picked.values, boundary }); }
+    try { result = await commitPortableImport({ identity, originalRoots, portablePackage, selectedModules: picked.values }); }
     catch (error) { result = { ok: false, reason: 'import-failed', error, commitState: 'not-dispatched' }; }
-    if (!importStillCurrent()) { overlay.close(); return; }
-    if (result.ok && result.commitState === 'confirmed') {
+    if (result.ok && ['confirmed', 'local-applied'].includes(result.commitState)) {
         overlay.close();
-        if (importStillCurrent()) {
-            refreshPortableImportedModules(picked.values);
-            showToast(`已导入：${selectedLabels}`);
-        }
+        refreshPortableImportedModules(picked.values);
+        showToast(`已导入：${selectedLabels}`);
         return;
     }
     if (result.commitState === 'unknown') {
@@ -8098,6 +7970,8 @@ function renderModelList(models, filter = '') {
 }
 
 async function fetchModels() {
+    try { parseAdditionalParams($in('#sp-cfg-additional').val()); }
+    catch (error) { showToast(error.message, null, true); return; }
     const rawUrl = $in('#sp-cfg-url').val().trim();
     const key = ($in('#sp-cfg-key').data('real') || $in('#sp-cfg-key').val()).trim();
     if (!rawUrl || !key) { showToast('请先填写 URL 和 Key', null, true); return; }
@@ -9038,6 +8912,7 @@ function readApiInputs() {
         key          : ($k.data('real') || $k.val() || '').trim(),
         model        : $in('#sp-cfg-model').val().trim(),
         excludeParams: parseExcludeParams($in('#sp-cfg-exclude').val()),
+        spAdditionalParams: String($in('#sp-cfg-additional').val() ?? '').trim(),
         timeoutSec   : timeoutValid ? timeout : null,
         timeoutValid,
         stream       : $in('#sp-cfg-stream').is(':checked'),
@@ -9048,6 +8923,7 @@ function apiPresetSnapshotKey(cfg) {
     return JSON.stringify({
         url: cfg?.url || '', key: cfg?.key || '', model: cfg?.model || '',
         excludeParams: Array.isArray(cfg?.excludeParams) ? cfg.excludeParams : [],
+        spAdditionalParams: String(cfg?.spAdditionalParams || '').trim(),
         timeoutSec: Number.isInteger(Number(cfg?.timeoutSec)) ? Number(cfg.timeoutSec) : null, stream: cfg?.stream === true,
     });
 }
@@ -9063,12 +8939,18 @@ function apiInputsDirty() {
 }
 
 function apiInputsSaveable(cfg) {
-    return cfg?.timeoutValid !== false && Number.isInteger(Number(cfg?.timeoutSec)) && Number(cfg.timeoutSec) >= 5 && Number(cfg.timeoutSec) <= 600;
+    return !apiInputsError(cfg);
+}
+
+function apiInputsError(cfg) {
+    try { parseAdditionalParams(cfg?.spAdditionalParams); } catch (error) { return error.message; }
+    return cfg?.timeoutValid !== false && Number.isInteger(Number(cfg?.timeoutSec)) && Number(cfg.timeoutSec) >= 5 && Number(cfg.timeoutSec) <= 600
+        ? '' : '请求超时需填写 5–600 秒';
 }
 
 function saveCurrentAsPreset() {
     const cur = readApiInputs();
-    if (!apiInputsSaveable(cur)) { showPresetHint('请求超时必须填写 5–600 秒，未保存预设'); return null; }
+    if (!apiInputsSaveable(cur)) { showPresetHint(`${apiInputsError(cur)}，未保存预设`); return null; }
     if (!cur.url && !cur.key) { showPresetHint('先填 API 再保存预设'); return null; }
     const name = autoPresetName(cur.url);
     upsertApiPreset(name, cur, null);
@@ -9086,6 +8968,7 @@ function fillApiInputs(p) {
     else       $k.data('real', '').val('');
     $in('#sp-cfg-model').val(p.model || '');
     $in('#sp-cfg-exclude').val((Array.isArray(p.excludeParams) ? p.excludeParams : []).join('\n'));
+    $in('#sp-cfg-additional').val(p.spAdditionalParams || '');
     $in('#sp-cfg-timeout').val(p.timeoutSec || 180);
     $in('#sp-cfg-stream').prop('checked', p.stream === true);
 }
@@ -9126,15 +9009,16 @@ function syncPresetState() {
     const $state = $in('#sp-preset-sync-state');
     if (!$btn.length) return;
     const p = activeApiPreset();
+    const error = apiInputsError(readApiInputs());
     if (p) {
         const dirty = apiInputsDirty();
         const valid = apiInputsSaveable(readApiInputs());
         $btn.text(`更新「${p.name}」`).prop('disabled', !dirty || !valid);
-        $state.text(!valid ? '请求超时需填写 5–600 秒' : dirty ? '尚未更新到预设' : '已与预设同步').toggle(!valid || !!dirty);
+        $state.text(error || (dirty ? '尚未更新到预设' : '已与预设同步')).toggle(!valid || !!dirty);
     } else {
         const valid = apiInputsSaveable(readApiInputs());
         $btn.text('另存为新预设').prop('disabled', !valid);
-        $state.text(valid ? '' : '请求超时需填写 5–600 秒').toggle(!valid);
+        $state.text(error).toggle(!valid);
     }
 }
 
@@ -9152,7 +9036,7 @@ async function confirmPresetSwitch(nextPreset) {
     });
     if (choice === 'save') {
         const currentCfg = readApiInputs();
-        if (!apiInputsSaveable(currentCfg)) { showPresetHint('请求超时必须填写 5–600 秒，未保存预设'); return 'cancel'; }
+        if (!apiInputsSaveable(currentCfg)) { showPresetHint(`${apiInputsError(currentCfg)}，未保存预设`); return 'cancel'; }
         upsertApiPreset(current.name, currentCfg, current.id);
     }
     return choice || 'cancel';
@@ -9170,6 +9054,8 @@ function bindApiPresetEvents() {
         const id = $(this).attr('data-id');
         const p = loadApiPresets().find(x => x.id === id);
         if (!p || p.id === (getSettings().apiPresetActiveId || '')) return;
+        try { parseAdditionalParams(p.spAdditionalParams); }
+        catch (error) { showPresetHint(error.message); return; }
         const decision = await confirmPresetSwitch(p);
         if (decision === 'cancel') return;
         getSettings().apiPresetActiveId = id;
@@ -9227,7 +9113,7 @@ function bindApiPresetEvents() {
         const p = activeApiPreset();
         const cur = readApiInputs();
         if (p) {
-            if (!apiInputsSaveable(cur)) { showPresetHint('请求超时必须填写 5–600 秒，未更新预设'); return; }
+            if (!apiInputsSaveable(cur)) { showPresetHint(`${apiInputsError(cur)}，未更新预设`); return; }
             upsertApiPreset(p.name, cur, p.id);
             renderApiPresetList();
             renderUtilityPresetList();

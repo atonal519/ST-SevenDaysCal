@@ -4,7 +4,7 @@ import { decideLinesCommit } from './generation.js';
 import { bindVectorTickets } from './vectors/bind.js';
 import { createGenerationDiagnosticScope, makeDiagnosticError, runGenerationUiEffect } from '../../api/diagnostics.js';
 import { drawAdultSelections, allocateAdultPools } from './adult.js';
-import { enforceLineCapacity, AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
+import { AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
 import { freezeLineStore, lineStoreMatches } from './version-history.js';
 import { traceDiagnosticEvent } from '../../runtime/diagnostic-trace.js';
@@ -22,7 +22,6 @@ function generationLeases() {
 
 export function createLinesGenerationController(env = {}) {
     const owners = env.owners;
-    const participantCurrent = identity => !identity || env.sameParticipantIdentity?.(identity, env.participantIdentity?.()) !== false;
     const run = async (silent = false, swipeCtx = null, travelContext = null, preflightOwner = null, memoryContext = null, triggerContext = null) => {
         const diagnostic = createGenerationDiagnosticScope('lines', { background: silent });
         if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
@@ -31,12 +30,7 @@ export function createLinesGenerationController(env = {}) {
         if (preflightOwner && !owners.isCurrent(preflightOwner, { chatId, chatRevision })) return { status: 'cancelled', reason: 'stale-preflight' };
         const participantIdentity = triggerContext?.participantIdentity || preflightOwner?.participantIdentity || env.participantIdentity?.() || null;
         const contextSnapshot = triggerContext?.contextSnapshot || preflightOwner?.contextSnapshot || env.contextSnapshot?.() || null;
-        const triggerCurrent = () => !triggerContext || (env.chatId() === chatId
-            && owners.currentChatRevision() === chatRevision
-            && (triggerContext.boundaryEpoch === undefined || env.boundaryEpoch?.() === triggerContext.boundaryEpoch)
-            && String(env.floorSignature?.(triggerContext.messageId) || '') === triggerContext.floorSignature);
-        if (!triggerCurrent() || (triggerContext?.deadlineAt && Date.now() >= triggerContext.deadlineAt)) return { status: 'cancelled', reason: 'stale-or-expired-trigger' };
-        if (!participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-participant' };
+        if (triggerContext?.deadlineAt && Date.now() >= triggerContext.deadlineAt) return { status: 'cancelled', reason: 'expired-trigger' };
         const leases = generationLeases();
         const leaseKey = `${String(chatId ?? '')}::${chatRevision}`;
         if (leases.has(leaseKey)) return { status: 'skipped', reason: 'busy' };
@@ -82,7 +76,7 @@ export function createLinesGenerationController(env = {}) {
                 'save-receipt': '正在确认保存结果…',
             };
             const reportPhase = phase => {
-                if (signal.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId) return;
+                if (signal.aborted || !owners.isCurrent(owner)) return;
                 const safePhase = String(phase || 'unknown').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'unknown';
                 // The API client reports this only after buildMessages (including world info and memory) has settled.
                 if (safePhase === 'model' && preparationTimer !== null) { clearTimeout(preparationTimer); preparationTimer = null; }
@@ -110,14 +104,14 @@ export function createLinesGenerationController(env = {}) {
             const previousRaw = isReroll || promptLines.length !== sourceLines.length ? serializeLines(promptLines) : sourceRaw;
             const promptRaw = isReroll ? '' : previousRaw;
             let drawer = env.drawTickets; let capacity = Number(env.vectorCapacity);
-            if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
+            if (!drawer || !capacity) { const vectors = await import('./vectors/draw.js'); if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner)) return { status: 'cancelled', reason: 'stale-owner' }; drawer ||= vectors.drawTickets; capacity ||= vectors.LEGAL_TICKET_CAPACITY; }
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner)) return { status: 'cancelled', reason: 'stale-owner' };
             const adultMode = typeof env.adultMode === 'function' ? env.adultMode(participantIdentity) : env.adultMode;
             const isInitial = sourceLines.length === 0;
             const intent = isReroll ? 'reroll' : isInitial ? 'initial' : 'advance';
             const ticketCount = Math.min(capacity, AUTO_LINE_SEED_CAPACITY);
             const freshTickets = await waitForSignal(drawer(ticketCount, { random: env.random || (() => Math.random()), seed: owner.id, nonce: owner.chatRevision }), signal);
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId }) || env.chatId() !== chatId || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner)) return { status: 'cancelled', reason: 'stale-owner' };
             const activeLines = sourceLines.filter(line => line.name && !line.pin && !TERMINAL_LINE_STAGES.has(line.stage));
             const allocatorBase = isReroll ? { activeCount: 0, activeAdultCount: 0 } : { activeCount: activeLines.length, activeAdultCount: activeLines.filter(line => line.adult).length };
             const pools = adultMode === 'off' ? null : allocateAdultPools(adultMode, freshTickets.length, allocatorBase);
@@ -132,7 +126,7 @@ export function createLinesGenerationController(env = {}) {
             owner.vectorTickets = adultTickets;
             const vectorContext = { intent, retained: isReroll ? [] : promptLines.filter(line => line.cue), legacyWithoutCue: isReroll ? [] : promptLines.filter(line => !line.cue).map(line => line.name), rerollNames: isReroll ? [...new Set(sourceLines.filter(line => !line.pin).map(line => line.name.trim()).filter(Boolean))] : [], pinnedBackground: sourceLines.filter(line => line.pin), freshTickets: adultTickets, adultSelections };
             const prompt = env.buildPrompt(promptRaw, travelContext, vectorContext, participantIdentity, contextSnapshot);
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity)) return { status: 'cancelled', reason: 'stale-owner' };
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner)) return { status: 'cancelled', reason: 'stale-owner' };
             reportPhase('message-assembly');
             const beforeCall = env.readSaved() || {};
             if (!lineStoreMatches(beforeCall, commitBaseline.store)) return { status: 'cancelled', reason: 'stale-baseline' };
@@ -148,8 +142,8 @@ export function createLinesGenerationController(env = {}) {
                 ...(memoryContext?.memorySnapshot ? { memorySnapshot: memoryContext.memorySnapshot, memoryOperationToken: memoryContext.memoryOperationToken } : {}),
             }, participantIdentity, contextSnapshot), signal);
             if (env.isEditing?.()) return { status: 'cancelled', reason: 'editing' };
-            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner, { chatId, chatRevision }) || env.chatId() !== chatId || !participantCurrent(participantIdentity) || !triggerCurrent()) return { status: 'cancelled', reason: 'stale-owner' };
-            const checked = validateLinesResponse(raw);
+            if (signal.aborted || travelAbort?.aborted || !owners.isCurrent(owner)) return { status: 'cancelled', reason: 'stale-owner' };
+            const checked = validateLinesResponse(raw, { maxCandidates: AUTO_LINE_CAPACITY });
             if (!checked.ok) {
                 const parseRejected = ['empty', 'incomplete-or-extraneous', 'text-outside-line', 'no-lines'].includes(checked.reason);
                 const code = parseRejected ? 'parse' : checked.reason === 'invalid-field' ? 'invalid-fields' : 'invalid-structure';
@@ -161,17 +155,12 @@ export function createLinesGenerationController(env = {}) {
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });
             if (!lineStoreMatches(latest, commitBaseline.store)) return { status: 'cancelled', reason: 'stale-baseline' };
-            const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner, { chatId, chatRevision }) && participantCurrent(participantIdentity) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
+            const decision = decideLinesCommit({ ownerCurrent: owners.isCurrent(owner) && !signal.aborted && !travelAbort?.aborted, validation: checked, baseline: { raw: commitBaseline.raw, ts: commitBaseline.ts }, latest: latestSnapshot });
             if (!decision.ok) return { status: 'cancelled', reason: decision.reason };
             const bound = bindVectorTickets({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             const merged = mergePinned(sourceRaw, serializeLines(bound), { preferPinnedSource: true });
             if (!merged.ok) return { status: 'cancelled', reason: merged.reason };
-            const capacityResult = enforceLineCapacity({ previousLines: parseLines(previousRaw), mergedLines: merged.model, max: AUTO_LINE_CAPACITY });
-            if (capacityResult.dropped > 0) {
-                const error = diagnostic.rejected(makeDiagnosticError('invalid-structure', { phase: 'validation' }), { phase: 'validation', reasonCode: 'evolution-auto-capacity-overflow' });
-                env.fail?.(error, { silent, owner, reasonCode: 'evolution-auto-capacity-overflow' }); return { status: 'failed', reason: 'evolution-auto-capacity-overflow' };
-            }
-            const resultModel = capacityResult.model;
+            const resultModel = merged.model;
             diagnostic.accepted({ phase: 'validation', reasonCode: 'lines-valid' });
             let commitResult;
             reportPhase('save-queue');
@@ -185,18 +174,21 @@ export function createLinesGenerationController(env = {}) {
                 throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'lines-commit-failed' });
             }
             if (commitResult === false || commitResult?.ok === false) { const status = Number(commitResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (commitResult && typeof commitResult === 'object') error.saveResult = commitResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'lines-commit-rejected' }); }
-            diagnostic.committed({ reasonCode: commitResult?.stale ? 'lines-saved-stale' : 'lines-saved' });
+            if (commitResult?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'lines-local-applied' });
+            else diagnostic.committed({ reasonCode: commitResult?.stale ? 'lines-saved-stale' : 'lines-saved' });
             generationCommitted = true;
+            if (commitResult?.uiApplied) diagnostic.uiDisplayed({ reasonCode: 'lines-ui-applied' });
             if (commitResult?.uiError) diagnostic.uiFailed(commitResult.uiError, { reasonCode: 'lines-ui-refresh-failed' });
             if (commitResult?.stale) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, targetDate: travelContext?.targetDate };
             return { status: 'updated', targetDate: travelContext?.targetDate };
         } catch (error) {
             if (error?.name === 'AbortError') return { status: 'cancelled' };
+            diagnostic.rejected(error, { phase: error?.phase || 'prepare', reasonCode: error?.phase || error?.diagnosticCode || 'lines-generation-failed' });
             const operationTimedOut = error?.name === 'TimeoutError' || error?.code === 'operation-timeout';
             const stillOwnsAbortedTimeout = operationTimedOut && owners.isOwner(owner, { chatId, chatRevision });
-            if (owner && ((!owners.isCurrent(owner, { chatId, chatRevision }) && !stillOwnsAbortedTimeout) || !participantCurrent(participantIdentity))) return { status: 'cancelled', reason: 'stale-owner' };
+            if (owner && !owners.isCurrent(owner) && !stillOwnsAbortedTimeout) return { status: 'cancelled', reason: 'stale-owner' };
             if (error?.diagnosticCode === 'memory-stale') { preserveFailureUi = true; env.memoryFailure?.(error); return { status: 'failed', error }; }
-            if (env.chatId() === chatId && participantCurrent(participantIdentity)) env.fail?.(error, { silent, owner, reasonCode: error?.reasonCode || error?.diagnosticCode || 'generation-failed' });
+            env.fail?.(error, { silent, owner, reasonCode: error?.reasonCode || error?.diagnosticCode || 'generation-failed' });
             return { status: 'failed', error };
         } finally {
             const cleanup = () => {
@@ -207,7 +199,7 @@ export function createLinesGenerationController(env = {}) {
                 if (owner) { env.runtime?.finish(owner.controller); env.cleanup?.(owner, chatId, { preserveFailureUi }); }
             };
             try {
-                if (generationCommitted) await runGenerationUiEffect(cleanup, { diagnostic, reasonCode: 'lines-cleanup-failed' });
+                if (generationCommitted) await runGenerationUiEffect(cleanup, { diagnostic, reasonCode: 'lines-cleanup-failed', reportDisplayed: false });
                 else cleanup();
             } finally {
                 owner?.controller?.signal?.removeEventListener('abort', releaseLease);

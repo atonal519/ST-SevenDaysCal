@@ -64,20 +64,17 @@ export function createLinesFeature(env = {}) {
     // Failure feedback is session UI state only; its owner/chat identity prevents late work from repainting a newer view.
     let lastGenerationFailure = null;
     const currentGenerationOwner = owner => {
-        const chatId = env.chatId?.();
-        const chatRevision = owners.currentChatRevision();
         return owner?.channel === 'lines-generation'
-            && owner.chatId === chatId
-            && owner.chatRevision === chatRevision
             && runtime.controller === owner.controller
-            && (owners.isCurrent(owner, { chatId, chatRevision })
-                || (owner.controller.signal.reason?.code === 'operation-timeout' && owners.isOwner(owner, { chatId, chatRevision })))
-            && (!owner.participantIdentity || env.sameParticipantIdentity?.(owner.participantIdentity, env.participantIdentity?.()) !== false);
+            && (owners.isCurrent(owner)
+                || (owner.controller.signal.reason?.code === 'operation-timeout' && owners.isOwner(owner)));
     };
     const clearGenerationFailure = () => { lastGenerationFailure = null; };
     const failureText = (error, reasonCode) => reasonCode === 'evolution-newborn-missing-ticket'
         ? '上次生成失败：模型漏写了新线的来源编号。原有内容未改变，可以重新生成。'
-        : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
+        : reasonCode === 'evolution-auto-capacity-overflow'
+            ? '上次生成失败：候选超过 8 条自动活线容量，未保存，原有内容仍保留。请先整理已结束的线，再手动重试。'
+            : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
     const generation = env.generation || (env.generationEnv && createLinesGenerationController({
         ...env.generationEnv,
         timeLimits: env.timeLimits || env.generationEnv.timeLimits,
@@ -130,7 +127,7 @@ export function createLinesFeature(env = {}) {
             if (env.isPanelActive?.()) refreshPanel?.();
             return owner;
         },
-        preflightCurrent: owner => owners.isCurrent(owner, { chatId: env.chatId?.(), chatRevision: owners.currentChatRevision() }) && (!owner.participantIdentity || env.sameParticipantIdentity?.(owner.participantIdentity, env.participantIdentity?.()) !== false),
+            preflightCurrent: owner => owners.isCurrent(owner),
         finishPreflight: (owner, failure = null) => {
             clearTimeout(owner.deadlineTimer);
             owners.finish(owner);
@@ -217,9 +214,6 @@ export function createLinesFeature(env = {}) {
         return `${summary}${body || dashedSub ? `<div class="sp-inline-body" data-lines-inject-text="${env.escapeAttr?.(view.injectText) || ''}">${body}${dashedSub}</div>` : ''}`;
     };
     const appendInlineBlock = async (messageId, shouldAdvance, trigger = null) => {
-        const expectedChatId = env.chatId?.();
-        const expectedEpoch = env.boundaryEpoch?.();
-        const boundaryCurrent = () => env.chatId?.() === expectedChatId && (expectedEpoch === undefined || env.boundaryEpoch?.() === expectedEpoch);
         if (!shouldAdvance) env.refreshInlineWindow?.(true);
         const cfg = env.loadConfig?.();
         let result = { status: 'skipped', reason: shouldAdvance ? 'unavailable' : 'not-requested' };
@@ -231,14 +225,12 @@ export function createLinesFeature(env = {}) {
         } else if (shouldAdvance && (!cfg?.url || !cfg?.key)) {
             result = { status: 'skipped', reason: 'no-api' };
         }
-        if (!boundaryCurrent()) return result;
         if (shouldAdvance && result?.status !== 'updated') return result;
         if (shouldAdvance) env.refreshInlineWindow?.(true);
         env.freezeSnapshot?.(messageId);
         return result;
     };
     const showAutoAdvanceFailure = (intent, message) => {
-        if (env.chatId?.() !== intent.chatId || owners.currentChatRevision() !== intent.chatRevision) return;
         lastGenerationFailure = { chatId: intent.chatId, chatRevision: intent.chatRevision, text: `上次自动推进未完成：${message}` };
         if (env.isPanelActive?.()) refreshPanel();
     };
@@ -247,10 +239,7 @@ export function createLinesFeature(env = {}) {
             const intent = pendingAutoAdvance;
             pendingAutoAdvance = null;
             if (intent.queueEpoch !== autoAdvanceQueueEpoch) continue;
-            const stillCurrent = () => env.chatId?.() === intent.chatId
-                && owners.currentChatRevision() === intent.chatRevision
-                && (intent.boundaryEpoch === undefined || env.boundaryEpoch?.() === intent.boundaryEpoch)
-                && String(env.floorSignature?.(intent.messageId) || '') === intent.floorSignature;
+            const stillCurrent = () => intent.queueEpoch === autoAdvanceQueueEpoch;
             if (!stillCurrent()) continue;
             if (Date.now() >= intent.deadlineAt) { showAutoAdvanceFailure(intent, '排队期间已超时，请手动重新生成'); continue; }
             if (runtime.busy || historyBusy || actions?.isPreparing?.()) {
@@ -259,7 +248,21 @@ export function createLinesFeature(env = {}) {
             }
             const result = await appendInlineBlock(intent.messageId, true, intent);
             if (intent.queueEpoch !== autoAdvanceQueueEpoch) continue;
+            if (!stillCurrent()) continue;
             if (result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
+            else if (result?.status === 'failed') {
+                if (result.reason === 'evolution-auto-capacity-overflow') {
+                    showAutoAdvanceFailure(intent, '模型候选超过 8 条自动活线容量；未保存，原有线保持不变。请手动重试前整理已结束的线');
+                } else if (lastGenerationFailure?.chatId === intent.chatId && lastGenerationFailure?.chatRevision === intent.chatRevision) {
+                    if (env.isPanelActive?.()) refreshPanel();
+                } else {
+                    showAutoAdvanceFailure(intent, '生成或保存未完成，请查看失败提示并手动重试');
+                }
+            } else if (result?.status === 'cancelled' && result.reason === 'stale-baseline' && stillCurrent()) {
+                showAutoAdvanceFailure(intent, '原有线已发生变化，本次结果未保存，请刷新后手动重试');
+            } else if (result?.status === 'cancelled' && result.reason === 'committed-but-stale' && stillCurrent()) {
+                showAutoAdvanceFailure(intent, '保存已确认，但当前视图归属已变化；请刷新核对最新线');
+            }
             else if (result?.status === 'skipped') traceDiagnosticEvent('lines-auto-advance-skipped', { module: 'lines', channel: 'lines', status: 'skipped', reasonCode: result.reason === 'busy' ? 'manual-owner-busy' : 'trigger-unavailable' });
         }
     };
@@ -306,19 +309,26 @@ export function createLinesFeature(env = {}) {
         if (!next.changed) return true;
         const writer = env.writeStoreConfirmed || env.writeStore;
         const saveDeadline = createDeadlineSignal({ signal: owner?.controller?.signal, deadlineAt: owner?.deadlineAt, timeoutMs: env.timeLimits?.saveMs ?? LINES_TIME_LIMITS.saveMs, reason: 'lines-save-timeout' });
-        let stored;
+        let stored; let saveFailed = false;
         try {
             stored = await writer?.(key, next.value, {
                 signal: saveDeadline.signal,
                 deadlineAt: saveDeadline.deadlineAt,
                 safeSnapshotRefresh: true,
                 reportPhase: owner?.reportPhase,
-                ownerGuard: () => !saveDeadline.signal.aborted && env.chatId?.() === chatId && (!owner || owners.isCurrent(owner, { chatId, chatRevision: owner.chatRevision })) && (canonicalMatches(baselineStore) || canonicalMatches(next.value)),
+                ownerGuard: () => !saveDeadline.signal.aborted && (!owner || owners.isCurrent(owner)) && (canonicalMatches(baselineStore) || canonicalMatches(next.value)),
+                onPersistenceError: () => {
+                    saveFailed = true;
+                    // The ordinary save may reject after generation returned; keep the visible local result and attach the hint only while it is still the live line.
+                    if (!canonicalMatches(next.value)) return;
+                    lastGenerationFailure = { chatId, chatRevision: owner.chatRevision, text: '上次生成后未确认云端保存；当前内容仍在本地，请手动刷新核对。' };
+                    if (env.isPanelActive?.()) refreshPanel(true);
+                },
             });
         } finally { saveDeadline.dispose(); }
         if (!(stored === true || stored?.ok === true)) return stored || false;
         if (stored?.stale) return { ...stored, ok: true };
-        if (currentGenerationOwner(owner)) clearGenerationFailure();
+        if (currentGenerationOwner(owner) && !saveFailed) clearGenerationFailure();
         const ui = await runGenerationUiEffect(() => {
             runtime.cache(raw);
             if (swipeCtx?.mesId != null) {
@@ -330,10 +340,12 @@ export function createLinesFeature(env = {}) {
                 swipeStore.write(chatId, swipeCtx.mesId, rec);
             }
             if (env.isPanelActive?.()) { refreshPanel(true); if (!silent && env.notifyMode?.() !== 'off') env.toast?.('线已生成'); }
-            syncInline(chatId);
+            syncInline();
             if (!env.isPanelActive?.() && !silent) env.toast?.('线已生成，点击查看');
         });
-        return ui.ok ? true : { ok: true, uiError: ui.error };
+        return stored?.commitState === 'local-applied'
+            ? { ...stored, uiApplied: ui.ok, ...(ui.ok ? {} : { uiError: ui.error }) }
+            : { ...(stored && typeof stored === 'object' ? stored : { ok: true }), uiApplied: ui.ok, ...(ui.ok ? {} : { uiError: ui.error }) };
     };
     const cleanupOwner = (owner, chatId, { preserveFailureUi = false } = {}) => {
         const timedOutOwner = owner?.controller?.signal?.reason?.code === 'operation-timeout'
@@ -533,12 +545,10 @@ export function createLinesFeature(env = {}) {
         });
         return entries.map(entry => ({ ...entry, label: `${formatGeneratedAt(entry.generatedAt)} · ${entry.current ? '当前' : '旧版'} · ${historySummary(entry.raw)}` }));
     };
-    const historyBoundaryCurrent = (chatId, boundaryEpoch, baseline) => env.chatId?.() === chatId
-        && (boundaryEpoch === undefined || env.boundaryEpoch?.() === boundaryEpoch)
-        && lineStoreMatches(env.readSaved?.() || {}, baseline);
-    const resyncAfterHistoryFailure = (chatId, boundaryEpoch) => {
-        if (env.chatId?.() !== chatId || (boundaryEpoch !== undefined && env.boundaryEpoch?.() !== boundaryEpoch)) return null;
-        const actual = snapshotLineStore(env.readSaved?.() || {});
+    const historyRead = key => env.readSavedAt?.(key) ?? env.readSaved?.() ?? {};
+    const historyBoundaryCurrent = (_chatId, _boundaryEpoch, baseline, key) => lineStoreMatches(historyRead(key), baseline);
+    const resyncAfterHistoryFailure = (chatId, _boundaryEpoch, key) => {
+        const actual = snapshotLineStore(historyRead(key));
         runtime.cache(String(actual.raw ?? ''));
         if (env.isPanelActive?.()) refreshPanel(true);
         syncInline(chatId);
@@ -550,20 +560,17 @@ export function createLinesFeature(env = {}) {
         return state?.mode === 'external' && (state.pendingCurrent === true || state.status === 'unavailable');
     };
     const historyCommitCurrent = (attempt, baseline) => {
-        if (pendingHistoryRestore !== attempt || env.chatId?.() !== attempt.chatId
-            || (attempt.boundaryEpoch !== undefined && env.boundaryEpoch?.() !== attempt.boundaryEpoch)) return false;
+        if (pendingHistoryRestore !== attempt) return false;
         const state = env.storageStatus?.();
         if (state?.mode === 'external' && (state.pendingCurrent === true || state.status === 'unavailable')) return true;
-        const actual = env.readSaved?.() || {};
+        const actual = historyRead(attempt.storeKey);
         return lineStoreMatches(actual, baseline) || lineStoreMatches(actual, attempt.value);
     };
     const reconcileHistoryStorage = () => {
         const chatId = env.chatId?.();
         const boundaryEpoch = env.boundaryEpoch?.();
-        const actual = snapshotLineStore(env.readSaved?.() || {});
-        const restored = !!pendingHistoryRestore && pendingHistoryRestore.chatId === chatId
-            && (pendingHistoryRestore.boundaryEpoch === undefined || pendingHistoryRestore.boundaryEpoch === boundaryEpoch)
-            && lineStoreMatches(actual, pendingHistoryRestore.value);
+        const actual = snapshotLineStore(historyRead(pendingHistoryRestore?.storeKey));
+        const restored = !!pendingHistoryRestore && lineStoreMatches(actual, pendingHistoryRestore.value);
         if (restored) swipeStore.clearAll(chatId);
         pendingHistoryRestore = null;
         runtime.cache(String(actual.raw ?? ''));
@@ -574,6 +581,7 @@ export function createLinesFeature(env = {}) {
     const openHistory = async () => {
         const chatId = env.chatId?.();
         const boundaryEpoch = env.boundaryEpoch?.();
+        const storeKey = env.cacheKey?.();
         const baseline = freezeLineStore(env.readSaved?.() || {});
         if (!chatId || historyBusy || runtime.busy || actions?.isPreparing?.() || actions?.isEditing?.()) return false;
         if (!normalizeLineHistory(baseline.history, { excludeRaw: baseline.raw }).length) {
@@ -585,7 +593,7 @@ export function createLinesFeature(env = {}) {
         try {
             const choices = historyChoices(baseline);
             for (;;) {
-                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
+                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline, storeKey)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
                 const selectedValue = await env.dialog?.selectOneAsync?.({
                     title: '线的历史版本',
                     body: '按现实生成时间从新到旧排列。',
@@ -595,7 +603,7 @@ export function createLinesFeature(env = {}) {
                 if (!selectedValue) return false;
                 const selected = choices.find(choice => choice.value === selectedValue);
                 if (!selected) return false;
-                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
+                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline, storeKey)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
                 const publicRaw = stripInternalLineLines(selected.raw);
                 const decision = await env.dialog?.choose?.({
                     title: `${selected.current ? '当前版本' : '历史版本'} · ${formatGeneratedAt(selected.generatedAt)}`,
@@ -609,27 +617,27 @@ export function createLinesFeature(env = {}) {
                 if (decision === 'back') continue;
                 if (decision !== 'restore' || selected.current) return false;
                 abortGeneration({ restore: false, reason: 'history-restore' });
-                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
+                if (!historyBoundaryCurrent(chatId, boundaryEpoch, baseline, storeKey)) { env.toast?.('线已变化，请重新打开历史版本', true); return false; }
                 const restored = restoreLineHistoryVersion(baseline, selected.historyIndex, Date.now());
                 if (!restored.ok) { env.toast?.('这个历史版本已不可用，请重新打开', true); return false; }
                 const writer = env.writeStoreConfirmed || env.writeStore;
-                const attempt = Object.freeze({ chatId, boundaryEpoch, value: freezeLineStore(restored.value) });
+            const attempt = Object.freeze({ chatId, boundaryEpoch, storeKey, value: freezeLineStore(restored.value) });
                 pendingHistoryRestore = attempt;
                 let stored;
                 try {
-                    stored = await writer?.(env.cacheKey?.(), restored.value, { ownerGuard: () => historyCommitCurrent(attempt, baseline) });
+                    stored = await writer?.(storeKey, restored.value, { ownerGuard: () => historyCommitCurrent(attempt, baseline) });
                 } catch (error) {
                     const uncertain = historySaveUncertain(error);
                     if (!uncertain && pendingHistoryRestore === attempt) pendingHistoryRestore = null;
-                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch);
+                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
                     env.toast?.(uncertain ? '历史版本保存结果未确认，请到存储管理重试并核实当前线' : lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
                     return false;
                 }
-                const confirmed = stored === true || (stored?.ok === true && stored?.commitState === 'confirmed');
-                if (!confirmed || stored?.stale || env.chatId?.() !== chatId) {
+                const confirmed = stored === true || (stored?.ok === true && ['confirmed', 'local-applied'].includes(stored?.commitState));
+                if (!confirmed || stored?.stale) {
                     const uncertain = historySaveUncertain(stored);
                     if (!uncertain && pendingHistoryRestore === attempt) pendingHistoryRestore = null;
-                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch);
+                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
                     env.toast?.(uncertain ? '历史版本保存结果未确认，请到存储管理重试并核实当前线' : lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
                     return false;
                 }
@@ -643,7 +651,7 @@ export function createLinesFeature(env = {}) {
             }
         } finally {
             historyBusy = false;
-            if (env.isPanelActive?.() && env.chatId?.() === chatId && !historySaveUncertain()) refreshPanel(true);
+            if (env.isPanelActive?.() && !historySaveUncertain()) refreshPanel(true);
         }
     };
     const historyToolbarState = () => {
@@ -722,7 +730,7 @@ export function createLinesFeature(env = {}) {
         isStreaming: () => Date.now() < lifecycle.streamUntil,
         resetCounter: () => { lifecycle.counter = 0; },
         setLastDay: value => { lifecycle.lastDay = value; },
-        onChatChanged: ({ lastSeen = -1 } = {}) => { pendingHistoryRestore = null; actions?.invalidatePreflight?.('chat-boundary'); abortGeneration({ restore: false, reason: 'chat-boundary' }); lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
+        onChatChanged: ({ lastSeen = -1 } = {}) => { pendingHistoryRestore = null; lifecycle.resetChat({ lastSeen, lastDay: env.dayAnchor?.() ?? null }); return env.onChatChanged?.({ lastSeen }); },
         renderBody,
         refreshPanel,
         awaitAutoAdvances: async () => { while (autoAdvancePump) await autoAdvancePump; },

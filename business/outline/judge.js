@@ -108,7 +108,6 @@ export function createOutlineJudge({
             }
             diagnostic.accepted({ phase: 'validation', reasonCode: decision === '推进' ? 'advance' : 'no-advance' });
             if (!shouldAdvanceOutline(answer)) {
-                diagnostic.committed({ reasonCode: 'outline-no-change' });
                 finish(task);
                 return { status: 'unchanged' };
             }
@@ -121,7 +120,8 @@ export function createOutlineJudge({
                 if (currentAndOwned(task) && repository.matches(target, baseline)) failure('judge-advance', target, error);
                 finish(task); if (settings?.().notifyMode === 'full') toast?.(`面自动推进失败：${diagnosticMessage(error)}`, true); return { status: 'failed', error };
             }
-            diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
+            if (stored?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'outline-cursor-local-applied' });
+            else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'outline-cursor-saved' });
             if (stored?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true }; }
             finish(task);
             try { if (settings?.().notifyMode === 'full') toast?.('面已自动推进到下一节点 · 请注意查看'); notifyChanged(task, saved.raw, cursor + 1); }
@@ -174,7 +174,7 @@ export function createOutlineJudge({
             const next = parseOutlineRelocationAnswer(answer, beats.length);
             if (next == null) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-relocation-format' });
             diagnostic.accepted({ phase: 'validation', reasonCode: 'outline-relocation-valid' });
-            if (next === current) { diagnostic.committed({ reasonCode: 'outline-no-change' }); return { status: 'unchanged' }; }
+            if (next === current) return { status: 'unchanged' };
             let stored;
             try { stored = await (repository.setCursorConfirmed || repository.setCursor)(target, next, baseline, { ownerGuard: () => currentAndOwned(task) && !externalSignal?.aborted }); }
             catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-cursor-save-failed' }); }
@@ -182,7 +182,8 @@ export function createOutlineJudge({
                 if (!currentAndOwned(task) || externalSignal?.aborted || !repository.matches(target, baseline)) return { status: 'cancelled' };
                 const status = Number(stored?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (stored && typeof stored === 'object') error.saveResult = stored; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-cursor-save-rejected' });
             }
-            diagnostic.committed({ reasonCode: stored?.stale ? 'outline-cursor-saved-stale' : 'outline-cursor-saved' });
+            if (stored?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'outline-cursor-local-applied' });
+            else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'outline-cursor-saved' });
             if (stored?.stale || !currentAndOwned(task) || externalSignal?.aborted) return { status: 'cancelled', reason: 'committed-but-stale', committed: true };
             try { notifyChanged(task, saved.raw, next); }
             catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); if (repository.isCurrent(target) && ownerVersion === task.version) uiFailure('relocate', target, error); }
@@ -215,7 +216,6 @@ export function createOutlineJudge({
         return true;
     };
     const onChatChanged = ({ lastSeen = -1 } = {}) => {
-        abort();
         lastJudgedMessageId = Number.isFinite(Number(lastSeen)) ? Number(lastSeen) : -1;
         messageCounter = 0;
     };

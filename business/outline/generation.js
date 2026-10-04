@@ -62,12 +62,13 @@ export function createOutlineGeneration({
         try {
             let precheckResult;
             try { precheckResult = precheck ? await precheck({ signal: controller.signal, operationToken, contextSnapshot: context?.() }) : true; }
-            catch {
+            catch (error) {
                 if (!currentAndOwned(task)) return { status: 'cancelled' };
+                diagnostic.rejected(error, { phase: 'prepare', reasonCode: 'memory-precheck-failed' });
                 finish(task); ui?.showPreflightError?.('记忆读取失败，请重试'); return { status: 'failed', reason: 'memory-precheck' };
             }
             if (!precheckResult || !currentAndOwned(task)) { if (finish(task)) renderCurrent(target); return { status: 'cancelled' }; }
-            if (precheckResult.proceed === false) { finish(task); ui?.showPreflightError?.(precheckResult.memoryError); return { status: 'failed', reason: 'memory-precheck' }; }
+            if (precheckResult.proceed === false) { diagnostic.rejected(new Error(String(precheckResult.memoryError || 'memory-precheck-failed')), { phase: 'prepare', reasonCode: 'memory-precheck-rejected' }); finish(task); ui?.showPreflightError?.(precheckResult.memoryError); return { status: 'failed', reason: 'memory-precheck' }; }
             judge?.abort('superseded-owner');
             ui?.setLoading();
             const ctx = context?.();
@@ -101,7 +102,8 @@ export function createOutlineGeneration({
                 if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
                 const status = Number(committed?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (committed && typeof committed === 'object') error.saveResult = committed; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'outline-save-rejected' });
             }
-            diagnostic.committed({ reasonCode: committed?.stale ? 'outline-saved-stale' : 'outline-saved' });
+            if (committed?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'outline-local-applied' });
+            else diagnostic.committed({ reasonCode: committed?.stale ? 'outline-saved-stale' : 'outline-saved' });
             if (committed?.stale || !currentAndOwned(task)) { finish(task); return { status: 'cancelled', reason: 'committed-but-stale', committed: true, raw: normalizedRaw }; }
             finish(task);
             try {
@@ -111,6 +113,7 @@ export function createOutlineGeneration({
                     ui.setOutline(html);
                     if (settings?.().notifyMode !== 'off') ui.toast?.('面已生成');
                 } else ui?.closedSuccess?.();
+                diagnostic.uiDisplayed({ reasonCode: 'outline-ui-applied' });
             } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'outline-ui-refresh-failed' }); }
             return { status: 'updated', raw: normalizedRaw, ...(uiError ? { uiError } : {}) };
         } catch (error) {

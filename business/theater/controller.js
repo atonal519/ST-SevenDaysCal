@@ -24,7 +24,15 @@ export function createTheaterController({ owners, repository, generate, current,
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
             const saved = await repository.pushDraft(owner.chatId, piece);
             if (!saved?.ok) { const saveError = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'theater-draft-save-failed' }); error?.(saveError, owner); return { status: 'failed', reason: 'draft-save', error: saveError }; }
-            diagnostic.committed({ reasonCode: 'theater-draft-saved' }); commit?.(piece, owner); current?.(piece, owner); return { status: 'updated', piece };
+            diagnostic.committed({ reasonCode: 'theater-draft-saved' }); commit?.(piece, owner); current?.(piece, owner);
+            let uiReported = false;
+            const reportUi = (ok, cause) => {
+                if (uiReported) return;
+                uiReported = true;
+                if (ok) diagnostic.uiDisplayed({ reasonCode: 'theater-ui-applied' });
+                else diagnostic.uiFailed(cause || new Error('小剧场结果未能呈现'), { reasonCode: 'theater-ui-render-failed' });
+            };
+            return { status: 'updated', piece, reportUi };
         } catch (err) {
             // 请求可能不遵守 AbortSignal，并在 owner 已换代后抛普通 Error；先验身份，绝不能把 A 的迟到错误反馈到 B。
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };

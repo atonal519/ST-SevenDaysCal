@@ -1,5 +1,5 @@
 // 纯逻辑任务 owner：不依赖宿主 UI、jQuery 或网络。
-// token/revision 均由本模块单调递增，避免同毫秒任务或聊天切换发生碰撞。
+// token 只用于同一操作通道里区分任务替代；revision 仅用于诊断/索引。
 export function createTaskOwnerManager() {
     let nextToken = 0;
     let chatRevision = 0;
@@ -40,8 +40,6 @@ export function createTaskOwnerManager() {
 
     function isOwner(owner, identity = {}) {
         if (!owner || channels.get(owner.channel) !== owner) return false;
-        if (identity.chatId !== undefined && owner.chatId !== identity.chatId) return false;
-        if (identity.chatRevision !== undefined && owner.chatRevision !== identity.chatRevision) return false;
         return true;
     }
 
@@ -51,9 +49,6 @@ export function createTaskOwnerManager() {
 
     function isValid(owner, identity = {}) {
         if (!owner || latest.get(owner.channel) !== owner || owner.status === 'invalidated' || owner.controller.signal.aborted) return false;
-        if (owner.chatRevision !== chatRevision) return false;
-        if (identity.chatId !== undefined && owner.chatId !== identity.chatId) return false;
-        if (identity.chatRevision !== undefined && owner.chatRevision !== identity.chatRevision) return false;
         return true;
     }
 
@@ -94,7 +89,7 @@ export function createTaskOwnerManager() {
 
     function consumePending(owner) {
         const item = pending.get(owner?.channel);
-        if (!item || item.owner !== owner || !isOwner(owner, { chatId: item.chatId, chatRevision: item.chatRevision })) return null;
+        if (!item || item.owner !== owner || !isOwner(owner)) return null;
         pending.delete(owner.channel);
         return item;
     }

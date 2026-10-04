@@ -77,7 +77,7 @@ export function createLedgerJudgeController(options = {}) {
             catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
-            if (parsed?.status === 'none') { diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-explicit-none' }); diagnostic.committed({ reasonCode: 'judge-no-change' }); return { status: 'unchanged', reason: 'none', reconcile, applied: [] }; }
+            if (parsed?.status === 'none') { diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-explicit-none' }); return { status: 'unchanged', reason: 'none', reconcile, applied: [] }; }
             if (parsed?.status === 'invalid') { const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'judge-format-unrecognized' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
             const cal = env.calendar?.(); const applied = [];
             const judgeableIds = new Set(judgeable.map(entry => entry?.id).filter(id => /^L\d+$/.test(String(id || ''))));
@@ -107,21 +107,22 @@ export function createLedgerJudgeController(options = {}) {
             if (!applied.length) {
                 if (rejectedSource) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-source-state-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [], error, feedbackShown: manual }; }
                 if (rejectedFormat) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-fields-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
-                diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-protected' }); diagnostic.committed({ reasonCode: 'judge-no-change' }); return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
+                diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-protected' }); return { status: 'unchanged', reason: 'protected', reconcile, applied: [] };
             }
             diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-valid' });
             let saved = null;
             if (env.applyAtomic) { try { saved = await env.applyAtomic(applied, owner); } catch (error) { const savePhase = error?.phase || 'judge-save-failed'; const status = Number(error?.saveResult?.status); const saveError = makeDiagnosticError('save', { phase: savePhase, ...(Number.isInteger(status) ? { status } : {}) }); if (error?.saveResult) saveError.saveResult = error.saveResult; markLedgerError(saveError, { phase: savePhase }); diagnostic.rejected(saveError, { phase: 'save', reasonCode: savePhase }); throw saveError; } }
             if (env.applyAtomic && !saved?.ok) { const status = Number(saved?.status); const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }), { phase: 'save', reasonCode: 'judge-save-failed' }); if (saved && typeof saved === 'object') error.saveResult = saved; if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'failed', reason: 'judge-save-failed', reconcile, applied: [], error, saveResult: saved, feedbackShown: manual }; }
             if (env.applyAtomic) {
-                diagnostic.committed({ reasonCode: 'judge-saved' });
+                if (saved?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'judge-local-applied' });
+                else if (saved?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'judge-confirmed' });
                 if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, reconcile, applied: [] };
             } else {
                 if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
                 for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
-                diagnostic.committed({ reasonCode: 'judge-saved' });
+                // The fallback updater has no persistence receipt to classify here.
             }
-            try { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
+            try { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); diagnostic.uiDisplayed({ reasonCode: 'judge-ui-applied' }); }
             catch (error) { diagnostic.uiFailed(error, { reasonCode: 'judge-ui-refresh-failed' }); }
             return { status: 'updated', applied: applied.map(change => change.事由), reconcile };
         } catch (error) {

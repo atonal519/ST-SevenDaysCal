@@ -4,6 +4,7 @@
 import { safeSaveDiagnosticFields, sanitizeDiagnosticRecord } from './diagnostic-trace.js';
 import { createNativeExternalChatHostBridge } from './external-chat-host-bridge.js';
 import { waitForSignal } from './deadline.js';
+import { bindLocalDiagnosticsContext, captureLocalGenerationDiagnostic } from './local-diagnostics.js';
 
 export const EXTERNAL_MARKER_KEY = 'sp-storage';
 export const EXTERNAL_NAMESPACE = 'st-sevendayscal';
@@ -73,18 +74,12 @@ async function readHostState(target) {
 
 export function bindExternalChatStorage(options = {}) {
     binding = { ...binding, ...options };
+    bindLocalDiagnosticsContext(binding.getContext);
     binding.nativeHostBridge = options.nativeHostBridge || createNativeExternalChatHostBridge({
         getContext: binding.getContext,
         fetchImpl: (...args) => binding.fetchImpl(...args),
     });
     if (typeof options.onChange === 'function') changeListener = options.onChange;
-}
-
-// 普通导入复用原生桥的固定目标与同一写队列，不经过迁移或外置 marker。
-export async function commitNativeMetadataRoots({ prepareMetadata, ownerGuard = () => true } = {}) {
-    const target = binding.nativeHostBridge?.captureTarget?.();
-    if (!target || typeof prepareMetadata !== 'function') return { ok: false, reason: 'missing-chat-target', dispatched: false, commitState: 'not-dispatched' };
-    return binding.nativeHostBridge.publish({ target, prepareMetadata, ownerGuard, rootKeys: ['sp-store', 'sp-theater'] });
 }
 
 // Host-aware modules register the getter they already depend on, keeping this
@@ -714,7 +709,10 @@ export function refreshDiagnosticRetention(ctx = context()) {
 }
 
 export function recordDiagnosticAttempt({ requestId, module, model, messages, parameters } = {}) {
-    const latest = latestVisibleAi().at(-1); if (!latest || !requestId || !module) return false;
+    const latest = latestVisibleAi().at(-1);
+    if (!requestId || !module) return false;
+    captureLocalGenerationDiagnostic({ requestId, module, startedAt: Date.now(), floor: latest?.floor, replyId: latest?.replyId });
+    if (!latest) return false;
     return updateDiagnostics(floors => {
         let floor = floors.find(item => item.replyId === latest.replyId);
         if (!floor) { floor = { replyId: latest.replyId, floor: latest.floor, attempts: {} }; floors.push(floor); }
@@ -729,6 +727,7 @@ export function recordDiagnosticAttempt({ requestId, module, model, messages, pa
 }
 
 export function recordDiagnosticTransport({ requestId, module, ok, rawResponse = null, errorClass = '', httpStatus = null } = {}) {
+    captureLocalGenerationDiagnostic({ requestId, module, rawResponse: typeof rawResponse === 'string' ? rawResponse : undefined, transport: { status: ok ? 'success' : 'failed', ...(Number.isInteger(Number(httpStatus)) ? { httpStatus: Number(httpStatus) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}) }, ...(ok ? { result: { processing: 'response-received', commit: 'not-requested', ui: 'not-requested', events: [] } } : { result: { processing: 'request-failed', commit: 'not-requested', ui: 'not-requested', events: [] } }) });
     return updateDiagnostics(floors => {
         for (const floor of floors) {
             const attempt = floor.attempts?.[String(module)];
@@ -741,20 +740,23 @@ export function recordDiagnosticTransport({ requestId, module, ok, rawResponse =
     });
 }
 
-export function recordDiagnosticResult({ requestId, module, event, status, phase, reasonCode, errorClass, saveReason, commitState, httpStatus, savePath } = {}) {
+export function recordDiagnosticResult({ requestId, module, event, status, phase, reasonCode, errorClass, privateDetails = {}, saveReason, commitState, httpStatus, savePath } = {}) {
+    const detail = { event: String(event || ''), status: String(status || event || 'unknown'), ...(phase ? { phase: String(phase) } : {}), ...(reasonCode ? { reasonCode: String(reasonCode) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}), ...safeSaveDiagnosticFields({ reason: saveReason, commitState, httpStatus, savePath }) };
+    captureLocalGenerationDiagnostic({ requestId, module, event: { ...detail, ...(privateDetails && typeof privateDetails === 'object' ? privateDetails : {}) } });
     return updateDiagnostics(floors => {
         for (const floor of floors) {
             const attempt = floor.attempts?.[String(module)];
             if (attempt?.requestId !== requestId) continue;
             const result = attempt.result && typeof attempt.result === 'object' ? attempt.result : { processing: 'pending', commit: 'pending', ui: 'pending', events: [] };
-            const detail = { event: String(event || ''), status: String(status || event || 'unknown'), ...(phase ? { phase: String(phase) } : {}), ...(reasonCode ? { reasonCode: String(reasonCode) } : {}), ...(errorClass ? { errorClass: String(errorClass) } : {}), ...safeSaveDiagnosticFields({ reason: saveReason, commitState, httpStatus, savePath }) };
             result.events = [...(Array.isArray(result.events) ? result.events : []), detail].slice(-8);
             if (event === 'generation-accepted') result.processing = 'accepted';
             else if (event === 'generation-rejected') {
                 if (phase === 'save') result.commit = 'failed';
                 else result.processing = 'rejected';
             } else if (event === 'generation-committed') result.commit = 'committed';
+            else if (event === 'generation-locally-applied') result.commit = 'local-applied';
             else if (event === 'generation-ui-failed') result.ui = 'failed';
+            else if (event === 'generation-ui-displayed' && result.ui !== 'failed') result.ui = 'displayed';
             else if (event === 'generation-fallback') result.processing = 'fallback';
             attempt.result = result;
             return floors;

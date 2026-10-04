@@ -55,11 +55,8 @@ export function createAxisDateActions(env = {}) {
         if (env.pending?.()) {
             const confirmed = await env.confirm?.({ title: '发现旧版日期锚点', body: '是否将旧版全局日期仅认领到当前聊天？', confirmText: '认领', cancelText: '取消' });
             if (!confirmed) { env.toast?.('已取消认领，未写入日期', null, true); return { ok: false, reason: 'cancelled' }; }
-            const now = { chatId: env.chatId?.(), floor: env.floor?.(), swipe: env.swipe?.() };
-            if (now.chatId !== ownerIdentity.chatId || now.floor !== ownerIdentity.floor || String(now.swipe ?? '') !== String(ownerIdentity.swipe ?? '')) return { ok: false, reason: 'stale-confirm' };
             stored = storyClock ? (env.repository?.claimCalibration?.(month, day, { refMonth: month, refDay: day, weekday: +weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe }) || { ok: false, reason: 'missing-repository' }) : env.repository?.claim?.(month, day);
         } else {
-            if (env.chatId?.() !== ownerIdentity.chatId || env.floor?.() !== ownerIdentity.floor || String(env.swipe?.() ?? '') !== String(ownerIdentity.swipe ?? '')) return { ok: false, reason: 'stale-confirm' };
             stored = storyClock ? (env.repository?.set?.(month, day, 'calibration', { refMonth: month, refDay: day, weekday: +weekday, floor: ownerIdentity.floor, sourceFloor: ownerIdentity.floor, swipe: ownerIdentity.swipe }) || { ok: false, reason: 'missing-repository' }) : saveAnchor(key, month, day);
         }
         if (!stored?.ok) { env.toast?.('日期保存失败，请重试', null, true); return stored || { ok: false, reason: 'save' }; }

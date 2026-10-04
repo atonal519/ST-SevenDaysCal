@@ -1,5 +1,4 @@
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
-import { createTargetMetadataSaver } from '../../runtime/target-metadata-save.js';
 import { createTheaterRepository } from './repository.js';
 import { createTheaterFeature } from './feature.js';
 import { createTheaterGeneration } from './generation.js';
@@ -13,20 +12,20 @@ import { getChatRoot, isExternalMode, persistExternalRoots, registerExternalStor
 export function createTheaterRuntime(host = {}) {
     registerExternalStorageContext(host.getContext);
     const owners = createTaskOwnerManager();
-    const fixedSaver = createTargetMetadataSaver({ coreModule: host.coreModule, ownedRoots: ['/sp-theater'] });
     const storageSaver = {
-        supported: fixedSaver.supported,
-        capture: (target, after) => target?.external ? { external: true } : fixedSaver.capture?.(target, after),
+        supported: true,
+        capture: target => target?.external ? { external: true } : null,
         dispatch: (captured, options) => captured?.external
             ? persistExternalRoots({ confirmed: true, ownerGuard: options?.isCurrent })
-            : fixedSaver.dispatch?.(captured, options),
-        confirm: captured => captured?.external ? Promise.resolve({ confirmed: false, available: false }) : fixedSaver.confirm?.(captured),
+            : Promise.resolve({ ok: false, commitState: 'not-dispatched' }),
+        confirm: () => Promise.resolve({ confirmed: false, available: false }),
     };
     const captureTarget = (chatId = host.getContext?.()?.chatId) => {
         const context = host.getContext?.(); context.chatMetadata ||= {};
         const external = isExternalMode();
         const metadata = getChatRoot('sp-theater', { create: true, factory: () => ({ version: 1, saved: [] }) });
-        return { chatId, metadata, external, metadataSnapshot: { ...(context.chatMetadata || {}) }, target: external ? { external: true } : host.coreModule?.resolveChatStateTarget?.(), persist: () => external ? persistExternalRoots({ confirmed: true }) : context.saveMetadata?.(), isCurrent: () => host.getContext?.()?.chatId === chatId };
+        // The metadata/file target and its real CAS remain fixed; changing the visible chat is not a cancellation signal.
+        return { chatId, metadata, external, metadataSnapshot: { ...(context.chatMetadata || {}) }, target: external ? { external: true } : host.coreModule?.resolveChatStateTarget?.(), persist: () => external ? persistExternalRoots({ confirmed: true }) : context.saveMetadata?.(), isCurrent: () => true };
     };
     const repository = createTheaterRepository({
         storage: host.storage, metadata: () => captureTarget().metadata, persist: () => host.getContext?.().saveMetadata?.(),

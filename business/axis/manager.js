@@ -51,9 +51,8 @@ export function createCalendarManager(env = {}) {
         const m = ensure(); if (!m) return { ok: false, reason: 'missing-manager' }; captureDraft();
         if (m.draft.months.length <= 1) { m.error = '至少保留一个月份'; render(); return { ok: false, reason: 'minimum' }; }
         const month = m.draft.months[index]; if (!month) return { ok: false, reason: 'missing-month' };
-        const chatIdSnapshot = env.chatId?.();
         const confirmed = await env.confirm?.({ title: '删除月份', body: `确定删除月份「${month.name}」吗？保存历法时会继续检查受影响的纪念日。`, confirmText: '删除', cancelText: '取消' });
-        if (!confirmed || axisState._almanacManager !== m || env.chatId?.() !== chatIdSnapshot) return { ok: false, reason: 'cancelled' };
+        if (!confirmed || axisState._almanacManager !== m) return { ok: false, reason: 'cancelled' };
         m.draft.months.splice(index, 1); m.error = ''; const nextIndex = Math.min(index, m.draft.months.length - 1);
         render({ reveal: { kind: 'month', index: nextIndex }, focus: { kind: 'month', index: nextIndex, selector: '.sp-alm-manager-month-delete' } }); return { ok: true, index: nextIndex };
     };
@@ -81,9 +80,9 @@ export function createCalendarManager(env = {}) {
         const chatId = env.chatId?.(), currentAvatar = env.currentAvatar?.();
         env.setBinding?.(bindings, avatar, nextTemplateId, cards); env.writeBindings?.(bindings); m.bindQuery = '';
         refreshManager({ scope: 'templates', reveal: { kind: 'template', id: m.bindTemplateId, selector: '.sp-alm-manager-bind-search' }, focusBindingId: m.bindTemplateId }); env.save?.();
-        if (nextTemplateId && avatar === currentAvatar && env.chatId?.() === chatId) {
+        if (nextTemplateId && avatar === currentAvatar) {
             await new Promise(resolve => (globalThis.requestAnimationFrame || (callback => setTimeout(callback, 0)))(resolve));
-            const latestCards = env.cards?.(); const stillCurrent = env.chatId?.() === chatId && env.currentAvatar?.() === currentAvatar && env.boundId?.(env.bindings?.() || {}, avatar, latestCards) === nextTemplateId;
+            const latestCards = env.cards?.(); const stillCurrent = env.currentAvatar?.() === currentAvatar && env.boundId?.(env.bindings?.() || {}, avatar, latestCards) === nextTemplateId;
             if (stillCurrent) { try { const applied = await env.applyTemplate?.({ render: false }); if (applied && ensure()) refreshManager({ scope: 'card' }); } catch (error) { env.onApplyError?.(error); } }
         }
         return true;

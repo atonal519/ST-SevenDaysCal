@@ -18,7 +18,7 @@ export function createSpaceChat(env = {}) {
         const before = history();
         const appended = appendSpaceUser(before, userMsg);
         if (!repository.replace(target, appended.history)) {
-            if (repository.isCurrent(target) && JSON.stringify(history()) === JSON.stringify(before)) return Object.freeze({ status: 'failed', error: makeDiagnosticError('save', { phase: 'save' }) });
+            if (JSON.stringify(history()) === JSON.stringify(before)) return Object.freeze({ status: 'failed', error: makeDiagnosticError('save', { phase: 'save' }) });
             return Object.freeze({ status: 'stale' });
         }
         if (appended.trimmed) env.ui?.renderHistory?.(history());
@@ -28,6 +28,7 @@ export function createSpaceChat(env = {}) {
         abortController = controller;
         const thinking = env.ui?.beginThinking?.();
         const diagnostic = createGenerationDiagnosticScope('space');
+        let locallyAppliedReply = null;
         try {
             const config = env.loadConfig?.() || {};
             if (!config.url || !config.key) {
@@ -48,39 +49,52 @@ export function createSpaceChat(env = {}) {
                 diagnosticModule: 'space',
                 diagnosticSink: diagnostic.sink,
             });
-            if (abortController !== controller || controller.signal.aborted || !repository.isCurrent(target)) {
+            if (abortController !== controller || controller.signal.aborted) {
                 return Object.freeze({ status: 'cancelled' });
             }
             diagnostic.accepted({ phase: 'response' });
+            const liveTarget = repository.capture();
+            const changedChat = String(liveTarget?.chatId || '') !== String(target?.chatId || '');
+            const baseHistory = changedChat ? repository.load(liveTarget) : history();
+            const userHistory = changedChat ? appendSpaceUser(baseHistory, userMsg).history : baseHistory;
             const widgetContext = {
                 ...(Array.isArray(messages?.pointBaselines) ? { pointBaselines: messages.pointBaselines } : {}),
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
             };
-            if (!repository.replace(target, appendSpaceAssistant(history(), reply, widgetContext))) {
+            if (!repository.replace(liveTarget, appendSpaceAssistant(userHistory, reply, widgetContext))) {
                 const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'space-save-failed' });
                 env.ui?.appendMessage?.('system', '发送失败：回复保存失败，请重试');
                 return Object.freeze({ status: 'failed', error });
             }
-            diagnostic.committed({ phase: 'save' });
-            env.ui?.endThinking?.(thinking);
-            const savedReply = history().at(-1);
-            env.ui?.appendMessage?.('ai', reply, history().length - 1, {
-                pointBaselines: savedReply?.pointBaselines,
-                lineBaselines: savedReply?.lineBaselines,
-                expectedWidgetKind: savedReply?.expectedWidgetKind,
-                legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
-            });
+            diagnostic.locallyApplied({ phase: 'save', reasonCode: 'space-chat-local-applied' });
+            locallyAppliedReply = reply;
+            try {
+                env.ui?.endThinking?.(thinking);
+                const savedReply = history().at(-1);
+                env.ui?.appendMessage?.('ai', reply, history().length - 1, {
+                    pointBaselines: savedReply?.pointBaselines,
+                    lineBaselines: savedReply?.lineBaselines,
+                    expectedWidgetKind: savedReply?.expectedWidgetKind,
+                    legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
+                });
+                diagnostic.uiDisplayed({ reasonCode: 'space-chat-ui-applied' });
+            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'space-chat-ui-failed' }); }
             return Object.freeze({ status: 'updated', reply });
         } catch (error) {
+            if (locallyAppliedReply !== null) {
+                diagnostic.uiFailed(error, { reasonCode: 'space-chat-post-apply-ui-failed' });
+                return Object.freeze({ status: 'updated', reply: locallyAppliedReply });
+            }
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'space-request-failed' });
-            if (abortController === controller && !controller.signal.aborted && repository.isCurrent(target) && error?.name !== 'AbortError') {
+            if (abortController === controller && !controller.signal.aborted && error?.name !== 'AbortError') {
                 env.ui?.appendMessage?.('system', `发送失败：${diagnosticMessage(error)}`);
                 return Object.freeze({ status: 'failed', error });
             }
             return Object.freeze({ status: 'cancelled', error });
         } finally {
-            env.ui?.endThinking?.(thinking);
+            try { env.ui?.endThinking?.(thinking); }
+            catch (error) { if (locallyAppliedReply !== null) diagnostic.uiFailed(error, { reasonCode: 'space-chat-finish-ui-failed' }); }
             if (abortController === controller) {
                 abortController = null;
                 busy = false;

@@ -224,7 +224,6 @@ export function createOutlineFeature(env = {}) {
     const onChatChanged = ({ lastSeen = -1 } = {}) => {
         chatRevision += 1;
         editing = false;
-        generation.abort('chat-boundary');
         judge.onChatChanged({ lastSeen });
         chat.onChatChanged();
         failureNotes.clearAll(); visibleFailureSlot = null; renderFailureNotes();

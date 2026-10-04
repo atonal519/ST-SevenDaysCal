@@ -8,9 +8,10 @@ export const DEFAULT_SETTINGS = {
     apiUrl  : '',
     apiKey  : '',
     apiModel: '',
+    apiAdditionalParams: '',
     // API 存储快切：把整套 API 配置存成命名预设，多套之间切换。
-    // 每项 {id,name,url,key,model,excludeParams,timeoutSec,stream}——即 loadCfg 的完整快照。
-    // 与上面扁平的 apiUrl/apiKey/... 并存：那六个字段仍是「当前生效」的唯一真源，
+    // 每项保存 loadCfg 的完整快照；spAdditionalParams 归构画所有，其他插件的参数各自保留。
+    // 与上面扁平的 apiUrl/apiKey/... 并存：当前配置字段仍是「当前生效」的唯一真源，
     // 预设是命名快照；切换后立即填入并应用。
     apiPresets       : [],
     apiPresetActiveId: '',   // 上次选中的预设 id，纯 UI 高亮/回显用，不代表已生效
@@ -115,6 +116,29 @@ export function parseExcludeParams(text) {
     return [...new Set(String(text || '').split(/[\n,，]/).map(s => s.trim()).filter(Boolean))];
 }
 
+// 附加 JSON 只覆盖模型参数；连接、认证、消息与输出格式仍由构画请求合同决定。
+const ADDITIONAL_RESERVED_KEYS = new Set(['chat_completion_source', 'reverse_proxy', 'proxy_password', 'custom_url', 'custom_include_body', 'custom_include_headers', 'custom_exclude_body', 'base_url', 'api_key', 'apiKey', 'key', 'headers', 'secret_id', 'secretId', 'model', 'messages', 'prompt', 'json_schema', 'response_format', 'stream']);
+export function parseAdditionalParams(value) {
+    if (value == null || typeof value === 'string' && !value.trim()) return {};
+    if (typeof value !== 'string') throw new TypeError('附加参数须为 JSON 对象。');
+    let parsed;
+    try { parsed = JSON.parse(value); }
+    catch { throw new TypeError('附加参数须为 JSON 对象。'); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError('附加参数须为 JSON 对象。');
+    const validate = item => {
+        if (item === null || ['string', 'boolean'].includes(typeof item)) return;
+        if (typeof item === 'number' && Number.isFinite(item)) return;
+        if (typeof item !== 'object') throw new TypeError('附加参数须为 JSON 对象。');
+        for (const [key, child] of Object.entries(item)) {
+            if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new TypeError('附加参数包含不支持的字段。');
+            validate(child);
+        }
+    };
+    validate(parsed);
+    if (Object.keys(parsed).some(key => ADDITIONAL_RESERVED_KEYS.has(key))) throw new TypeError('附加参数不能覆盖连接、模型、消息或输出格式。');
+    return parsed;
+}
+
 export function normalizeApiTimeout(value) {
     const n = Number(value);
     return Number.isInteger(n) && n >= 5 && n <= 600 ? n : 180;
@@ -126,6 +150,7 @@ export function loadCfg() {
         url          : s.apiUrl   || '',
         key          : s.apiKey   || '',
         model        : s.apiModel || '',
+        spAdditionalParams: s.apiAdditionalParams || '',
         excludeParams: Array.isArray(s.apiExcludeParams) ? s.apiExcludeParams : [],
         // 单次请求超时（秒），默认 180；覆盖建连+读取全程，防 socket hang up 卡死
         timeoutSec   : normalizeApiTimeout(s.apiTimeoutSec),
@@ -142,6 +167,7 @@ export function loadUtilityCfg() {
         url          : p.url   || '',
         key          : p.key   || '',
         model        : p.model || '',
+        spAdditionalParams: p.spAdditionalParams || '',
         excludeParams: Array.isArray(p.excludeParams) ? p.excludeParams : [],
         timeoutSec   : normalizeApiTimeout(p.timeoutSec),
         stream       : p.stream === true,
@@ -149,10 +175,12 @@ export function loadUtilityCfg() {
 }
 
 export function saveCfg(c) {
+    parseAdditionalParams(c.spAdditionalParams);
     const s = getSettings();
     s.apiUrl           = c.url   || '';
     s.apiKey           = c.key   || '';
     s.apiModel         = c.model || '';
+    s.apiAdditionalParams = (c.spAdditionalParams || '').trim();
     s.apiExcludeParams = Array.isArray(c.excludeParams) ? c.excludeParams : [];
     s.apiTimeoutSec    = normalizeApiTimeout(c.timeoutSec);
     s.apiStream        = c.stream === true;
@@ -169,6 +197,7 @@ export function genPresetId() {
 }
 
 export function upsertApiPreset(name, cfg, id) {
+    parseAdditionalParams(cfg?.spAdditionalParams);
     const list = loadApiPresets();
     const timeout = normalizeApiTimeout(cfg?.timeoutSec);
     const snap = {
@@ -180,8 +209,11 @@ export function upsertApiPreset(name, cfg, id) {
         timeoutSec   : timeout,
         stream       : cfg.stream === true,
     };
+    const additional = (cfg.spAdditionalParams || '').trim();
+    if (additional) snap.spAdditionalParams = additional;
     const existing = id ? list.find(p => p.id === id) : null;
-    if (existing) { Object.assign(existing, snap); }
+    // 共享预设只更新本方字段；清空不能遗留旧值，也不能删除 QQJ 或其他插件的字段。
+    if (existing) { Object.assign(existing, snap); if (!additional) delete existing.spAdditionalParams; }
     else { snap.id = genPresetId(); list.push(snap); id = snap.id; }
     getSettings().apiPresets = list;
     getSettings().apiPresetActiveId = id;

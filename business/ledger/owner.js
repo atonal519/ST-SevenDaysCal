@@ -12,7 +12,10 @@ export function ledgerOwnerIdentity(ctx = {}) {
     return { chatId: ctx.chatId || null, revision, messages, swipe: last?.swipe_id ?? last?.mes_id ?? null, participant };
 }
 export const sameLedgerOwner = (a, b) => {
-    if (!a || !b || String(a.chatId || '') !== String(b.chatId || '') || String(a.swipe ?? '') !== String(b.swipe ?? '') || String(a.participant || '') !== String(b.participant || '')) return false;
+    // Chat id and participant metadata are diagnostic/index values, not a gate
+    // for an already-started result. Keep the captured narrative content and
+    // swipe stable so real source edits still invalidate a ledger calculation.
+    if (!a || !b || String(a.swipe ?? '') !== String(b.swipe ?? '')) return false;
     if (String(a.revision || '') === String(b.revision || '')) return true;
     const before = Array.isArray(a.messages) ? a.messages : [], after = Array.isArray(b.messages) ? b.messages : [];
     return before.length > 0 && after.length > before.length

@@ -114,11 +114,14 @@ export function parseLineCard(body) {
     if (parsed.fieldCount < 6 || !parsed.name || !parsed.when || !block.desc || !block.next) return null;
     return normalizeLine({ name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: false, desc: block.desc, next: block.next });
 }
-export function validateLinesResponse(raw) {
+export function validateLinesResponse(raw, { maxCandidates } = {}) {
     if (typeof raw !== 'string' || !raw.trim()) return { ok: false, reason: 'empty' }; let source = raw.trim();
     source = source.replace(/^```(?:text|markdown|xml)?\s*[\r\n]/i, '').replace(/[\r\n]\s*```\s*$/i, '').trim();
     const inner = extractLinesWidget(source); if (inner === null) return { ok: false, reason: 'incomplete-or-extraneous' };
-    const blocks = tolerantBlocks(inner); if (!blocks.length) return { ok: false, reason: 'no-lines' };
+    const parsedBlocks = tolerantBlocks(inner);
+    const limit = Number.isInteger(maxCandidates) && maxCandidates >= 0 ? maxCandidates : null;
+    const blocks = limit === null ? parsedBlocks : parsedBlocks.slice(0, limit);
+    if (!blocks.length) return { ok: false, reason: 'no-lines' };
     const model = []; const rejected = [];
     for (const [index, block] of blocks.entries()) {
         const parsed = parseLineRow(block.line);

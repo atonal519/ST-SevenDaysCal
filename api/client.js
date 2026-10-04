@@ -1,6 +1,6 @@
 import { getContext } from '../../../../extensions.js';
 import { substituteParams } from '../../../../../script.js';
-import { getSettings, pluginEnabled, loadCfg, loadUtilityCfg } from '../runtime/settings.js';
+import { getSettings, pluginEnabled, loadCfg, loadUtilityCfg, parseAdditionalParams } from '../runtime/settings.js';
 import {
     normalizeApiUrl,
     PROTECTED_BODY_KEYS,
@@ -153,9 +153,10 @@ export async function postChatCompletion(options = {}) {
         module: options.diagnosticModule || 'api',
         channel: options.diagnosticChannel || options.diagnosticModule || 'api',
         requestId: createDiagnosticRequestId(startedAt),
+        startedAt,
     };
     let failedRawResponse = null;
-    try { options.diagnosticSink?.(Object.freeze({ requestId: base.requestId, module: base.module })); } catch {}
+    try { options.diagnosticSink?.(Object.freeze({ requestId: base.requestId, module: base.module, startedAt })); } catch {}
     traceDiagnosticEvent('api-start', {
         ...base,
         status: signal?.aborted ? 'pre-aborted' : 'started',
@@ -250,11 +251,22 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
         frequency_penalty     : 0,
     };
     if (Number.isFinite(temperature)) body.temperature = temperature;
+    const additional = parseAdditionalParams(cfg.spAdditionalParams);
     // 剔除参数：把用户指定的字段从 body 删掉，规避不接受这些参数的兼容端点报 400
     // （如哈基米/Gemini 代理不认 frequency_penalty）。固定路由字段受保护，不会被删。
     for (const p of cfg.excludeParams || []) {
         const key = String(p).trim();
-        if (key && !PROTECTED_BODY_KEYS.has(key)) delete body[key];
+        if (key && !PROTECTED_BODY_KEYS.has(key)) { delete body[key]; delete additional[key]; }
+    }
+    if (Object.keys(additional).length) {
+        // OpenAI 宿主通道过滤未知字段；自定义通道才把原生 JSON 参数送至上游。
+        // 排除参数最后生效；凭证取本配置，空参数仍沿原通道，不继承 QQJ 的参数。
+        body.chat_completion_source = 'custom';
+        body.custom_url = normalizeApiUrl(cfg.url);
+        body.custom_include_headers = JSON.stringify({ Authorization: `Bearer ${cfg.key}` });
+        body.custom_include_body = JSON.stringify(additional);
+        delete body.reverse_proxy;
+        delete body.proxy_password;
     }
     recordDiagnosticAttempt({
         requestId: diagnosticTraceBase?.requestId,
@@ -381,7 +393,7 @@ export async function callCustomApi(ctx, prompt, cfg, userName, charName, signal
 
 // Called by memory.js — minimal wrapper around user's configured API.
 // Skips chat history / world info; just sends raw messages array through.
-export async function callMemoryApi(messages, signal = null) {
+export async function callMemoryApi(messages, signal = null, diagnosticSink = null) {
     return postChatCompletion({
         cfg: loadUtilityCfg(),   // 机械任务：可分流到轻量预设（省钱/降配），未设则=主 API
         messages,
@@ -389,6 +401,7 @@ export async function callMemoryApi(messages, signal = null) {
         signal,
         promptMode: PROMPT_MODES.MECHANICAL,
         diagnosticModule: 'memory',
+        diagnosticSink,
     });
 }
 

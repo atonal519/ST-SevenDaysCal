@@ -9,7 +9,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
     const attr = host.escapeAttr || esc;
     const state = { current: null, templates: [], source: null, retry: null, lastRandom: null, bound: false, mountRoot: null, fsEsc: null, imageCleanup: null, settingsRoots: [], generationSeq: 0, templateSeq: 0, abortPending: false };
     const currentChat = () => host.getChatId?.() ?? '';
-    const isCurrent = target => target?.isCurrent ? target.isCurrent() : true;
+    const isCurrent = () => true;
     const body = html => host.setBody?.(html);
     const renderCard = (piece, saved) => `<div class="sp-theater-card" data-id="${attr(piece.id)}"><div class="sp-theater-card-head"><span class="sp-theater-card-title">${esc(piece.title || '(未命名)')}</span><span class="sp-theater-card-time">${esc(piece.ts ? new Date(piece.ts).toLocaleString('zh-CN', { hour12: false }) : '')}</span></div><div class="sp-theater-card-actions"><button class="sp-theater-view" data-id="${attr(piece.id)}">查看</button>${saved ? `<button class="sp-theater-del-saved" data-id="${attr(piece.id)}">删除</button>` : `<button class="sp-theater-promote" data-id="${attr(piece.id)}">永久保存</button><button class="sp-theater-del-draft" data-id="${attr(piece.id)}">删除</button>`}</div></div>`;
     const renderTemplateButtons = templates => templates.length ? templates.map(t => `<button type="button" class="sp-theater-tpl-pick" data-uid="${attr(t.uid)}">${esc(t.title)}</button>`).join('') : '<div class="sp-theater-list-empty">暂无模板，可在设置 · 棱里新增</div>';
@@ -91,13 +91,14 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         if (requestSeq !== state.generationSeq) return result;
         state.abortPending = false;
         if (result?.status === 'updated') {
-            if (currentChat() !== requestChatId) return result;
             state.current = result.piece || state.current;
             if (state.source?.uid === selectedSource?.uid && state.source?.input === selectedSource?.input) state.source = null;
-            if (host.isOpen?.()) { render(); if (host.notifyEnabled?.()) host.toast?.('棱已生成'); }
-            else host.closedSuccess?.();
+            try {
+                if (host.isOpen?.()) { render(); if (host.notifyEnabled?.()) host.toast?.('棱已生成'); }
+                else host.closedSuccess?.();
+                result.reportUi?.(true);
+            } catch (error) { result.reportUi?.(false, error); }
         } else if (result?.status === 'failed') {
-            if (currentChat() !== requestChatId) return result;
             const retryable = classifyGenerationError(result.error) !== 'config-missing';
             state.retry = retryable ? { chatId: requestChatId, input: inputSnapshot, templateSource: requestSource, ...(hasExplicitTitle ? { explicitTitle } : {}) } : null;
             state.source = null;
@@ -105,7 +106,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         } else if (result?.status === 'cancelled' || result?.status === 'stale') {
             // Only an explicit user abort in the same still-open chat restores the
             // panel. CHAT_CHANGED/plugin shutdown/stale owners stay silent.
-            if (result?.reason === 'aborted' && currentChat() === requestChatId && host.isOpen?.()) render();
+            if (result?.reason === 'aborted' && host.isOpen?.()) render();
         }
         return result;
     };
@@ -119,7 +120,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
     };
     const retry = () => {
         const capsule = state.retry;
-        if (!capsule || feature.busy || currentChat() !== capsule.chatId) return false;
+        if (!capsule || feature.busy) return false;
         state.source = capsule.templateSource ? { ...capsule.templateSource } : null;
         host.val?.('#sp-theater-input', capsule.input);
         void generate(capsule.input, Object.prototype.hasOwnProperty.call(capsule, 'explicitTitle') ? { explicitTitle: capsule.explicitTitle } : {});

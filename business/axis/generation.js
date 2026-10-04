@@ -6,13 +6,11 @@ export function validateAlmanacResponse(raw) {
 }
 
 export function createAxisGenerationController(env = {}) {
-    const participantCurrent = participant => !participant || env.sameParticipantIdentity?.(participant, env.captureParticipantIdentity?.()) !== false;
     const run = async (supplement = false, participantLease = null) => {
         const diagnostic = createGenerationDiagnosticScope('axis-generation');
-        const runUi = (callback, reasonCode) => { try { callback?.(); } catch (error) { diagnostic.uiFailed(error, { reasonCode }); } };
+        const runUi = (callback, reasonCode) => { try { callback?.(); diagnostic.uiDisplayed({ reasonCode }); } catch (error) { diagnostic.uiFailed(error, { reasonCode }); } };
         const participant = participantLease || env.captureParticipantIdentity?.() || null;
-        if (!participantCurrent(participant)) return { status: 'cancelled' };
-        const chat = env.context?.(); const chatId = chat?.chatId; const ctrl = axisState.almanacAbortController = new AbortController();
+                const chat = env.context?.(); const chatId = chat?.chatId; const ctrl = axisState.almanacAbortController = new AbortController();
         env.clearFailure?.(supplement, chatId);
         axisState.isGeneratingAlmanac = true; axisState._almGenLabel = supplement ? '正在通读全程·补录纪念日' : '正在编排历法'; env.render?.();
         const cancelOwned = () => {
@@ -33,24 +31,25 @@ export function createAxisGenerationController(env = {}) {
             const apiOptions = supplement
                 ? { fullMemory: true, promptMode: 'creative', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink }
                 : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac', promptMode: 'creative', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink };
-            if (!participantCurrent(participant) || env.context?.().chatId !== chatId) return cancelOwned();
+            if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 3, apiOptions);
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
-            if (!participantCurrent(participant) || env.context?.().chatId !== chatId) return cancelOwned();
+            if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             if (!env.validate?.(raw)) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'almanac-widget-missing' });
             const parsed = env.parse?.(raw) || [];
             if (!supplement && !parsed.length) throw diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'almanac-no-valid-date' });
             if (supplement) {
                 const base = env.loadItems?.() || [], seen = new Set(base.map(env.dedupKey)), added = [];
                 for (const item of parsed) { const key = env.dedupKey(item); if (seen.has(key)) continue; seen.add(key); added.push({ ...item, pin: true }); }
-                if (!participantCurrent(participant) || env.context?.().chatId !== chatId) return cancelOwned();
+                if (axisState.almanacAbortController !== ctrl) return cancelOwned();
                 diagnostic.accepted({ phase: 'validation', reasonCode: added.length ? 'supplement-valid' : 'supplement-empty' });
                 let stored = null;
-                if (added.length) { try { stored = await env.saveItems?.([...base, ...added], { ownerGuard: () => participantCurrent(participant) && env.context?.().chatId === chatId && axisState.almanacAbortController === ctrl }); if (!(stored === true || stored?.ok === true)) throw Object.assign(new Error(stored?.reason || 'save-rejected'), { saveResult: stored }); } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'axis-save-failed' }); } }
-                if (!participantCurrent(participant) || env.context?.().chatId !== chatId || axisState.almanacAbortController !== ctrl) return cancelOwned();
-                diagnostic.committed({ reasonCode: added.length ? 'axis-saved' : 'axis-no-change' });
+                if (added.length) { try { stored = await env.saveItems?.([...base, ...added], { ownerGuard: () => axisState.almanacAbortController === ctrl }); if (!(stored === true || stored?.ok === true)) throw Object.assign(new Error(stored?.reason || 'save-rejected'), { saveResult: stored }); } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'axis-save-failed' }); } }
+                if (axisState.almanacAbortController !== ctrl) return cancelOwned();
+                if (stored?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'axis-supplement-local-applied' });
+                else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'axis-saved' });
                 if (stored?.stale) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true, added }; }
-                if (!participantCurrent(participant) || env.context?.().chatId !== chatId || axisState.almanacAbortController !== ctrl) return cancelOwned();
+                if (axisState.almanacAbortController !== ctrl) return cancelOwned();
                 env.clearFailure?.(supplement, chatId);
                 axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
                 if (added.length) runUi(() => env.sync?.(), 'axis-sync-failed');
@@ -58,14 +57,15 @@ export function createAxisGenerationController(env = {}) {
                 runUi(() => env.notify?.(added.length ? `已补录 ${added.length} 条纪念日` : '通读全程后没有够格补录的新里程碑（这很正常）', added.length > 0), 'axis-notify-failed');
                 return { status: 'updated', added };
             }
-            if (!participantCurrent(participant) || env.context?.().chatId !== chatId) return cancelOwned();
+            if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             diagnostic.accepted({ phase: 'validation', reasonCode: 'almanac-valid' });
             let stored;
-            try { stored = await env.saveItems?.(env.merge?.(env.loadItems?.() || [], parsed), { ownerGuard: () => participantCurrent(participant) && env.context?.().chatId === chatId && axisState.almanacAbortController === ctrl }); if (!(stored === true || stored?.ok === true)) throw Object.assign(new Error(stored?.reason || 'save-rejected'), { saveResult: stored }); } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'axis-save-failed' }); }
-            if (!participantCurrent(participant) || env.context?.().chatId !== chatId || axisState.almanacAbortController !== ctrl) return cancelOwned();
-            diagnostic.committed({ reasonCode: 'axis-saved' });
+            try { stored = await env.saveItems?.(env.merge?.(env.loadItems?.() || [], parsed), { ownerGuard: () => axisState.almanacAbortController === ctrl }); if (!(stored === true || stored?.ok === true)) throw Object.assign(new Error(stored?.reason || 'save-rejected'), { saveResult: stored }); } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'axis-save-failed' }); }
+            if (axisState.almanacAbortController !== ctrl) return cancelOwned();
+            if (stored?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'axis-local-applied' });
+            else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'axis-saved' });
             if (stored?.stale) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true, items: parsed }; }
-            if (!participantCurrent(participant) || env.context?.().chatId !== chatId || axisState.almanacAbortController !== ctrl) return cancelOwned();
+            if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             env.clearFailure?.(supplement, chatId);
             axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
             runUi(() => env.sync?.(), 'axis-sync-failed'); runUi(() => env.render?.(), 'axis-render-failed'); runUi(() => env.notify?.('轴已生成', true), 'axis-notify-failed');
@@ -74,7 +74,7 @@ export function createAxisGenerationController(env = {}) {
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
             axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
             if (error?.name === 'AbortError') { env.render?.(); return { status: 'cancelled' }; }
-            if (participantCurrent(participant) && env.context?.().chatId === chatId) { env.failure?.(error, supplement, chatId, participant); env.render?.(); env.error?.(error, supplement); }
+            { env.failure?.(error, supplement, chatId, participant); env.render?.(); env.error?.(error, supplement); }
             return { status: 'failed', error };
         }
     };
@@ -84,8 +84,7 @@ export function createAxisGenerationController(env = {}) {
         const cfg = env.config?.(); if (!cfg?.url || !cfg?.key) { const error = makeDiagnosticError('config-missing'); env.failure?.(error, supplement, env.context?.().chatId, participant); env.missingApi?.(); return { status: 'failed', reason: 'api' }; }
         if (!env.context?.().chatId) { env.failure?.(makeDiagnosticError('request'), supplement, null, participant); env.missingChat?.(); return { status: 'failed', reason: 'chat' }; }
         if (!supplement && (env.loadItems?.() || []).length) { const ok = await env.confirm?.(); if (!ok) return { status: 'cancelled' }; }
-        if (!participantCurrent(participant)) return { status: 'cancelled' };
-        return run(supplement, participant);
+                return run(supplement, participant);
     };
     const reset = (reason = 'reset') => {
         const ctrl = axisState.almanacAbortController;

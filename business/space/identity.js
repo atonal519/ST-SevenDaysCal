@@ -8,7 +8,5 @@ export function createSpaceIdentity({ chatId = '', chatRevision = 0, historyKey 
 }
 
 export function sameSpaceIdentity(left, right) {
-    return !!left && !!right
-        && left.chatId === right.chatId
-        && left.chatRevision === right.chatRevision;
+    return !!left && !!right;
 }

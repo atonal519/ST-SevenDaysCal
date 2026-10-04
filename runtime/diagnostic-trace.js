@@ -29,7 +29,7 @@ const SAVE_REASONS = new Set([
     'snapshot-current', 'snapshot-empty', 'snapshot-refreshed', 'snapshot-refresh-empty', 'snapshot-refresh-failed',
     'confirmed-after-owner-stale', 'stale-after-save', 'stale-after-queue-callback', 'stale-before-save',
 ]);
-const COMMIT_STATES = new Set(['confirmed', 'not-dispatched', 'conflict', 'unknown', 'legacy-unconfirmed']);
+const COMMIT_STATES = new Set(['confirmed', 'local-applied', 'not-dispatched', 'conflict', 'unknown', 'legacy-unconfirmed']);
 
 // 保存诊断只保留协议枚举、HTTP 状态及已知存储位置；角色 scope 和未知异常正文不外泄。
 export function safeSaveDiagnosticFields(saved = {}) {

@@ -73,8 +73,7 @@ export function createSpaceFeature(env = {}) {
     };
     const onChatChanged = ({ enabled = true } = {}) => {
         chatRevision += 1;
-        chat.abort('chat-boundary');
-        sendAttempt++; failureNotes.clearAll(); renderFailure();
+        failureNotes.clearAll(); renderFailure();
         ui.clearWidgets();
         if (!enabled) return;
         repository.clearMemory();

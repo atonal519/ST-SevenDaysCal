@@ -14,5 +14,5 @@ function freezeKey(value, kind, chatId) {
 }
 
 export function sameOutlineIdentity(left, right) {
-    return !!left && !!right && left.chatId === right.chatId && left.chatRevision === right.chatRevision;
+    return !!left && !!right;
 }

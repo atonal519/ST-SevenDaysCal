@@ -755,6 +755,7 @@ function pointControllerTestEnv({ validation, cachedSchedule = null } = {}) {
     const owners = {
         create: (_kind, details) => ({ ...details, controller: new AbortController() }),
         currentChatRevision: () => 1,
+        isOwner: () => true, isCurrent: owner => !owner.controller.signal.aborted,
         evaluate: () => ({ canCleanup: true, canCommit: true }),
         finish: () => {}, peekPending: () => null, discardPending: () => {}, setPending: () => {},
     };
@@ -805,12 +806,12 @@ test('point combined edit updates desc and npcAction atomically', () => {
     assert.equal(result.ok, true); assert.match(result.raw, /Event: main\|标题\|新描述\|早晨\|地点\|新动态\|true/);
 });
 
-function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null } = {}) {
+function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null, persistenceFailure = null } = {}) {
     const state = { isGenerating: false, scheduleAbortController: null, cachedSchedule: null };
     const records = new Map();
     const targetKey = (scope, name) => `schedule:${scope}:${name}`;
     if (raw) records.set(targetKey(view, char), { raw, ts: 1, userName: view === 'char' ? char : '用户' });
-    let apiCalls = 0; let syncing = false; const writes = [];
+    let apiCalls = 0; let syncing = false; const writes = []; const failureNotes = [];
     const owners = {
         create: (_kind, details) => ({ ...details, controller: new AbortController() }), currentChatRevision: () => 1,
         finish: () => {}, peekPending: () => null, discardPending: () => {}, setPending: () => {},
@@ -824,12 +825,19 @@ function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024
         generate: async () => { apiCalls++; if (generateError) throw generateError; return generated; },
         validate: () => ({ ok: true }), parse: () => ({ days: [], future: null }), bindAdult: value => value,
         mergePinned: (_previous, fresh) => fresh, forceStart: value => value, today: () => ({ month: 8, day: 21 }),
-        canCommit: () => true, render: value => value, write: (key, value) => { records.set(key, value); writes.push([key, value]); return true; }, sync: () => {},
+        canCommit: () => true, render: value => value, write: (key, value) => { records.set(key, value); writes.push([key, value]); return true; },
+        writeConfirmed: (key, value, options = {}) => {
+            records.set(key, value); writes.push([key, value]);
+            if (persistenceFailure === 'sync') options.onPersistenceError?.();
+            else if (persistenceFailure === 'rejected-promise') queueMicrotask(() => options.onPersistenceError?.());
+            return { ok: true, commitState: 'local-applied', value };
+        },
+        recordFailure: (_owner, operation, error) => failureNotes.push({ operation, error }), sync: () => {},
         setCached: value => { state.cachedSchedule = value; }, cached: () => state.cachedSchedule, panelVisible: () => false, setBody: () => {},
         toast: () => {}, notify: () => 'off', monthName: month => `${month}月`, clearBusy: () => {},
         followupState: () => ({ canCleanup: true, canFollowup: false }), shouldFollowup: () => false,
     };
-    return { controller: createPointController(env), records, writes, apiCalls: () => apiCalls };
+    return { controller: createPointController(env), records, writes, failureNotes, apiCalls: () => apiCalls };
 }
 
 test('point date gate makes same month/day and never-generated user schedules zero-API no-ops', async () => {
@@ -866,6 +874,18 @@ test('point manual char refresh generates and writes only its own char scope', a
     assert.equal(harness.records.has('schedule:user:'), false);
 });
 
+test('point local success keeps an early host-save failure hint for sync throw and rejected promise', async () => {
+    for (const persistenceFailure of ['sync', 'rejected-promise']) {
+        const harness = pointBoundaryHarness({ persistenceFailure });
+        const result = await harness.controller.syncPointToToday(false);
+        assert.equal(result.status, 'updated', `${persistenceFailure}: local point remains usable`);
+        assert.equal(harness.writes.length, 1);
+        assert.match(harness.writes[0][1].raw, /新点/);
+        assert.equal(harness.failureNotes.length, 1, `${persistenceFailure}: save failure remains visible after successful local apply`);
+        assert.equal(harness.failureNotes[0].operation, '保存');
+    }
+});
+
 function pointPreflightBoundaryHarness() {
     const owners = createTaskOwnerManager(); const state = { isGenerating: false, scheduleAbortController: null, cachedSchedule: null };
     let chatId = 'A'; let epoch = 0; let userName = '用户A'; let charName = '角色A'; let releasePrecheck; let apiCalls = 0;
@@ -880,24 +900,26 @@ function pointPreflightBoundaryHarness() {
         key: () => 'point', read: () => null, write: () => true, parse: () => ({ days: [], future: null }), calendar: () => null,
         generate: async () => { apiCalls++; return '<calendar_widget></calendar_widget>'; }, validate: () => ({ ok: true }), mergePinned: (_a, b) => b,
         today: () => ({ month: 1, day: 1 }), forceStart: value => value, render: value => value, sync: () => {}, setCached: () => {}, notify: () => 'off',
-        canCommit: owner => owners.isValid(owner, { chatId, chatRevision: owners.currentChatRevision() }) && same(owner.participantIdentity, identity()),
-        canCallback: () => false, adultMode: () => 'off', evaluate: ({ owner }) => ({ canCommit: owners.isValid(owner, { chatId, chatRevision: owners.currentChatRevision() }), canCleanup: true }),
+        canCommit: owner => owners.isValid(owner),
+        canCallback: () => false, adultMode: () => 'off', evaluate: ({ owner }) => ({ canCommit: owners.isValid(owner), canCleanup: true }),
     });
-    return { controller, owners, releasePrecheck, apiCalls: () => apiCalls, switchChat() { chatId = 'B'; userName = '用户B'; charName = '角色B'; epoch++; owners.nextChatRevision(); owners.invalidateAll(); controller.reset(); }, changeParticipant() { userName = '用户B'; charName = '角色B'; } };
+    return { controller, owners, releasePrecheck, apiCalls: () => apiCalls, switchChat() { chatId = 'B'; userName = '用户B'; charName = '角色B'; epoch++; owners.nextChatRevision(); }, changeParticipant() { userName = '用户B'; charName = '角色B'; } };
 }
 
-test('point manual preflight freezes participant identity and chat switch stays zero-dispatch', async () => {
+test('point manual preflight continues through chat and participant changes', async () => {
     const switched = pointPreflightBoundaryHarness();
     const oldRun = switched.controller.triggerGenerate();
     await new Promise(resolve => setImmediate(resolve));
     switched.switchChat(); switched.releasePrecheck(true); await oldRun;
-    assert.equal(switched.apiCalls(), 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(switched.apiCalls(), 1);
 
     const changed = pointPreflightBoundaryHarness();
     const participantRun = changed.controller.triggerGenerate();
     await new Promise(resolve => setImmediate(resolve));
     changed.changeParticipant(); changed.releasePrecheck(true); await participantRun;
-    assert.equal(changed.apiCalls(), 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(changed.apiCalls(), 1);
 });
 
 function pointLateParticipantHarness() {
@@ -926,13 +948,15 @@ function pointLateParticipantHarness() {
     return { controller, effects, waitForApi: async () => { while (!release) await new Promise(resolve => setImmediate(resolve)); }, changeParticipant: () => { participant = { ...participant, personaKey: 'B', userName: '用户B' }; }, release: () => release() };
 }
 
-test('point manual and auto discard a same-chat late response after participant A→B', async () => {
+test('point manual and auto apply a late response after participant A→B', async () => {
     for (const mode of ['manual', 'auto']) {
         const harness = pointLateParticipantHarness();
         const task = mode === 'manual' ? harness.controller.runGenerate() : harness.controller.syncPointToToday(true);
         await harness.waitForApi(); harness.changeParticipant(); harness.release();
         const result = await task;
-        assert.equal(result.status, 'cancelled', mode);
-        assert.deepEqual(harness.effects, { writes: 0, renders: 0, toasts: 0, cached: 0, followups: 0 }, mode);
+        assert.equal(result.status, 'updated', mode);
+        assert.equal(harness.effects.writes, 1, mode);
+        assert.equal(harness.effects.renders, 1, mode);
+        assert.equal(harness.effects.cached, 1, mode);
     }
 });

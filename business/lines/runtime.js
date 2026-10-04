@@ -22,6 +22,7 @@ export function createLinesRuntime({ render = value => value, onBusyChange = () 
         setHtml(html) { cachedHtml = String(html || ''); return cachedHtml; },
         finish(ownerController = controller) { if (ownerController && controller !== ownerController) return false; controller = null; label = ''; setBusy(false); return true; },
         abort(reason = 'manual-abort') { controller?.abort?.(reason); controller = null; label = ''; setBusy(false); },
+        resetDisplay() { cachedRaw = ''; cachedHtml = ''; },
         reset() { controller = null; label = ''; setBusy(false); cachedRaw = ''; cachedHtml = ''; },
     };
 }

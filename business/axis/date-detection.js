@@ -19,10 +19,8 @@ export function storyWeekdayDisplaySignature(clock) {
 export function createDateDetectionController(options = {}) {
     let busy = false; let abortController = null; let lastWeekdayDisplaySignature;
     const identity = () => options.identity?.() || { chatId: options.context()?.chatId || null, floor: null, swipe: null };
-    const sameIdentity = (a, b) => !!a && !!b && String(a.chatId || '') === String(b.chatId || '') && a.floor === b.floor && String(a.swipe ?? '') === String(b.swipe ?? '');
-    const participantCurrent = participant => !participant || options.sameParticipantIdentity?.(participant, options.captureParticipantIdentity?.()) !== false;
-    const ownerCurrent = ownerIdentity => !!ownerIdentity && sameIdentity(ownerIdentity, identity()) && participantCurrent(ownerIdentity.participantIdentity);
-    const current = (ctrl, ownerIdentity, signal) => abortController === ctrl && !ctrl.signal.aborted && !signal?.aborted && ownerCurrent(ownerIdentity);
+    const ownerCurrent = ownerIdentity => !!ownerIdentity;
+    const current = (ctrl, _ownerIdentity, signal) => abortController === ctrl && !ctrl.signal.aborted && !signal?.aborted;
     const apply = (charKey, md, notify = true, ownerIdentity = null, mode = 'api', { suppressAftermath = false } = {}) => {
         if (!charKey || !md) return { status: 'unresolved' };
         if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
@@ -95,7 +93,7 @@ export function createDateDetectionController(options = {}) {
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
             const md = options.parse?.(raw);
             if (!md) {
-                if (/^(?:未知|无法确定)[。.!！]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'date-explicit-unknown' }); diagnostic.committed({ reasonCode: 'date-no-change' }); generationCommitted = true; return { status: 'unresolved' }; }
+                if (/^(?:未知|无法确定)[。.!！]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'date-explicit-unknown' }); return { status: 'unresolved' }; }
                 const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'date-format-unrecognized' });
                 options.failure?.(error, ownerIdentity, '日期判定');
                 options.logDiagnostic?.(safeDiagnosticLog('axis-date', 'parse', error, { background: true }));
@@ -111,7 +109,8 @@ export function createDateDetectionController(options = {}) {
                 const status = Number(result.saveResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (result.saveResult) error.saveResult = result.saveResult;
                 throw diagnostic.rejected(error, { phase: 'save', reasonCode: result.reason || 'date-save-failed' });
             }
-            diagnostic.committed({ reasonCode: result.status === 'updated' ? 'date-saved' : 'date-no-change' });
+            if (result.saveResult?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'date-local-applied' });
+            else if (result.saveResult?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'date-saved' });
             generationCommitted = true;
             if (result.status === 'committed-stale') return { status: 'cancelled', reason: 'committed-but-stale', committed: true, date: md };
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
@@ -128,7 +127,7 @@ export function createDateDetectionController(options = {}) {
             options.logDiagnostic?.(safeDiagnosticLog('axis', phase, error, { background: true })); if (options.settings?.().notifyMode === 'full') options.toast?.(`剧情日期自动确认失败：${diagnosticMessage(error)}`, null, true); return { status: 'failed', reason: phase === 'save' ? 'save' : undefined, error };
         } finally {
             if (abortController === ctrl) { busy = false; abortController = null; }
-            if (generationCommitted) await runGenerationUiEffect(remove, { diagnostic, reasonCode: 'date-cleanup-failed' });
+            if (generationCommitted) await runGenerationUiEffect(remove, { diagnostic, reasonCode: 'date-cleanup-failed', reportDisplayed: false });
             else remove();
         }
     };

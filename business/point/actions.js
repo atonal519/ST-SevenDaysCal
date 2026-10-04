@@ -3,7 +3,6 @@ export function createPointActions(env) {
     let editing = false;
     let editToken = null;
     const eventIdentity = event => JSON.stringify(['type', 'title', 'desc', 'time', 'location', 'npcAction', 'pin', 'adult'].map(key => event?.[key] ?? null));
-    const participantCurrent = participant => !participant || env.sameParticipantIdentity?.(participant, env.captureParticipantIdentity?.()) !== false;
     const restoreActiveDay = dayKey => {
         const tabs = env.inShadow?.('#sp-body .sp-tab'); if (!tabs?.length) return;
         let found = false;
@@ -35,7 +34,6 @@ export function createPointActions(env) {
         env.writeStore(key, { ...saved, raw: result.raw, ts: Date.now() }); rerender(result.raw, saved, view); env.syncLatestScheduleBlock(); env.showToast('已保存点描述');
     }
     async function deleteEvent(dayKey, eventIndex, target = {}) {
-        const chatId = env.chatId?.(); const participant = env.captureParticipantIdentity?.() || null;
         const view = target.view === 'char' ? 'char' : 'user'; const charName = view === 'char' ? String(target.charName || '').trim() : '';
         const key = env.getCacheKey(view, charName); const saved = env.readStore(key); const raw = saved?.raw || '';
         if (!raw) { env.showToast('待办已失效，请刷新面板', null, true); return; }
@@ -43,7 +41,6 @@ export function createPointActions(env) {
         if (!event) { env.showToast('这个点已不存在，请刷新面板', null, true); return; }
         const targetIdentity = eventIdentity(event); const sourceDayNumber = sourceDay?.dayNumber;
         if (!await env.confirm({ title: '删除这个点', body: `将删除「${event.title || '未命名'}」这一条，其它安排保留。此操作不可撤销。`, confirmText: '删除', cancelText: '取消' })) return;
-        if ((env.chatId && env.chatId() !== chatId) || !participantCurrent(participant)) return false;
         const latest = env.readStore(key); const latestRaw = latest?.raw || ''; if (!latestRaw) return false;
         const latestCalendar = env.loadCalendar(); const latestParsed = env.parseCalendar(latestRaw, latestCalendar);
         const latestDayIndex = dayKey === 'future' ? 'future' : latestParsed.days?.findIndex(day => day.dayNumber === sourceDayNumber);
@@ -55,7 +52,6 @@ export function createPointActions(env) {
             latestEventIndex = matches[0];
         }
         if (!latestEvents?.[latestEventIndex] || eventIdentity(latestEvents[latestEventIndex]) !== targetIdentity) return false;
-        if ((env.chatId && env.chatId() !== chatId) || !participantCurrent(participant)) return false;
         const result = env.deletePointEventRaw(latestRaw, latestDayIndex, latestEventIndex, latestCalendar); if (!result.ok) return false;
         env.writeStore(key, { ...latest, raw: result.raw, userName: latest.userName || saved.userName || '用户', ts: Date.now() });
         if (env.currentView() === view && (view !== 'char' || env.currentChar() === charName)) { rerender(result.raw, latest, view); restoreActiveDay(latestDayIndex); }

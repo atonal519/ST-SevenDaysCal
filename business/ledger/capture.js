@@ -92,9 +92,9 @@ export function ledgerSourceAnchor(token, sourceMap) {
     const key = String(token || '').trim(); if (key === 'SET') return { 楼层: null, 历日期: null }; const source = sourceMap?.get(key); if (!source) return null;
     const raw = env.context().chat?.[source.floor]?.mes || ''; const { calendar, clock } = parseFloorClock(raw, source.floor); const date = sideClock(clock, source.token.endsWith('S') ? 'S' : 'E', calendar).date; return date ? { 楼层: source.floor, 历日期: date } : null;
 }
-export function ledgerSourcesStable(sources, chatId) { if (env.context().chatId !== chatId) return false; const chat = env.context().chat || []; return (sources || []).every(source => { const msg = chat[source.floor]; return ledgerNarrativeMessage(msg) && String(msg.mes || '') === source.signature; }); }
+export function ledgerSourcesStable(sources) { const chat = env.context().chat || []; return (sources || []).every(source => { const msg = chat[source.floor]; return ledgerNarrativeMessage(msg) && String(msg.mes || '') === source.signature; }); }
 export function ledgerRecordsStable(records, chatId) {
-    if (env.context().chatId !== chatId) return false; const chat = env.context().chat || [];
+    const chat = env.context().chat || [];
     return (records || []).every(record => { const msg = chat[record.floor]; if (!ledgerNarrativeMessage(msg) || String(msg.mes || '') !== record.signature) return false; const identity = record.identity || {}; if (!!msg.is_user !== !!identity.is_user || !!msg.is_system !== !!identity.is_system) return false; if (String(msg.name || '') !== String(identity.name || '') || String(msg.extra?.type || '') !== String(identity.type || '')) return false; const { calendar, clock } = parseFloorClock(String(msg.mes || ''), record.floor); return (record.sources || []).every(source => { const side = String(source.token || '').endsWith('S') ? 'S' : String(source.token || '').endsWith('E') ? 'E' : ''; if (!side || source.signature !== record.signature) return false; const date = sideClock(clock, side, calendar).date; return !!date && date.month === source.date.month && date.day === source.date.day && (date.year == null || source.date.year == null || date.year === source.date.year) && (date.eraLabel == null || source.date.eraLabel == null || date.eraLabel === source.date.eraLabel); }); });
 }
 export function ledgerRecordCollectionStable(records, chatId, limit = null) {
@@ -255,8 +255,8 @@ const sameCaptureTarget = (a, b) => JSON.stringify(a ?? null) === JSON.stringify
 function createPersistentLedgerCaptureController(options) {
     let busy = false, progress = null, abortController = null;
     const state = () => options.captureState?.() || { initialized: false, checkpoint: null, ledgerRevision: '' };
-    const current = (ctrl, chatId, owner, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted
-        && env.context().chatId === chatId && sameLedgerOwner(owner, ledgerOwnerIdentity(env.context()));
+    const current = (ctrl, _chatId, owner, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted
+        && sameLedgerOwner(owner, ledgerOwnerIdentity(env.context()));
     const clear = ctrl => {
         if (abortController !== ctrl) return;
         busy = false; progress = null; abortController = null; env.setProgress?.(0, 0, ctrl);
@@ -287,6 +287,10 @@ function createPersistentLedgerCaptureController(options) {
         if (state().ledgerRevision !== expectedRevision) throw Object.assign(new Error('ledger-baseline-changed'), { phase: 'capture-stale-chat' });
         return options.applyAtomic({ additions, patches, metaPatch: { initialized, checkpoint } }, owner);
     };
+    const reportSavedState = (diagnostic, saved, reasonCode) => {
+        if (saved?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode });
+        else if (saved?.commitState === 'confirmed') diagnostic.committed({ reasonCode });
+    };
     const rejectedError = (diagnostic, reason, diagnosticCode = 'invalid-fields') => {
         const error = diagnostic.rejected(makeDiagnosticError(diagnosticCode, { phase: 'validation' }), { phase: 'validation', reasonCode: reason });
         error.ledgerReason = reason;
@@ -298,6 +302,7 @@ function createPersistentLedgerCaptureController(options) {
         const ctx = env.context(), charKey = env.charKey?.(ctx);
         if (!charKey) return { status: 'skipped', reason: 'no-character', feedbackShown: false };
         const persisted = state();
+        let lastCommitState = null;
         let resumed = stableCheckpoint(persisted.checkpoint);
         if (persisted.checkpoint && !resumed) return { status: 'failed', reason: 'checkpoint-invalid', feedbackShown: false };
         if (resumed && !manual) return { status: 'needs-confirmation', reason: 'provenance-resume-manual', feedbackShown: false };
@@ -354,8 +359,9 @@ function createPersistentLedgerCaptureController(options) {
                 const parsed = parse(raw);
                 if (!parsed.records.length && !parsed.explicitNone) throw rejectedError(diagnostic, 'capture-fields-unusable', 'parse');
                 if (parsed.explicitNone) {
-                    await save({ initialized: true, checkpoint: null }, owner, persisted.ledgerRevision);
-                    diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-explicit-none' }); diagnostic.committed({ reasonCode: 'capture-no-change' });
+                    const saved = await save({ initialized: true, checkpoint: null }, owner, persisted.ledgerRevision);
+                    lastCommitState = saved?.commitState;
+                    diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-explicit-none' }); reportSavedState(diagnostic, saved, 'capture-initialized');
                     return { status: 'unchanged', reason: 'no-new-event', ignored: parsed.rejected.length, feedbackShown: false };
                 }
                 const recentMap = ledgerSourceMap(visibleRecords.slice(-CAPTURE_FLOORS).flatMap(record => record.sources || []));
@@ -373,7 +379,8 @@ function createPersistentLedgerCaptureController(options) {
                     if (!validCandidates.length) throw rejectedError(diagnostic, 'capture-source-unmatched');
                     const plan = planLedgerCapture({ entries: env.listEntries?.({ includeClosed: true }) || [], candidates: validCandidates, sourceMap: recentMap, captureFloor, captureDate, norm: env.normGist });
                     const result = await save({ additions: plan.additions.map(cleanCandidate), patches: plan.patches, initialized: true, checkpoint: null }, owner, persisted.ledgerRevision);
-                    diagnostic.accepted({ phase: 'validation', reasonCode: plan.additions.length || plan.patches.length ? 'capture-valid' : 'capture-duplicate' }); diagnostic.committed({ reasonCode: plan.additions.length || plan.patches.length ? 'capture-saved' : 'capture-no-change' });
+                    lastCommitState = result?.commitState;
+                    diagnostic.accepted({ phase: 'validation', reasonCode: plan.additions.length || plan.patches.length ? 'capture-valid' : 'capture-duplicate' }); reportSavedState(diagnostic, result, plan.additions.length || plan.patches.length ? 'capture-saved' : 'capture-duplicate-state');
                     return { status: plan.additions.length || plan.patches.length ? 'updated' : 'unchanged', reason: plan.additions.length || plan.patches.length ? undefined : 'duplicate', added: result.added?.length || 0, patched: result.patched?.length || 0, ignored: parsed.rejected.length + normalized.length - validCandidates.length, feedbackShown: false };
                 }
                 const isSetItem = item => String(item._sourceToken || '').toUpperCase() === 'SET';
@@ -383,8 +390,9 @@ function createPersistentLedgerCaptureController(options) {
                 const setPlan = planLedgerCapture({ entries: env.listEntries?.({ includeClosed: true }) || [], candidates: setItems, sourceMap: new Map(), captureFloor, captureDate, norm: env.normGist });
                 checkpoint = pending.length ? { version: 1, stage: 'provenance', chatId, charKey: String(charKey), owner: ownerSnapshot, target: fixedTarget, scope, nextBatchIndex: 0, candidates: pending, captureFloor, captureDate, ignored: parsed.rejected.length, ledgerRevision: '@after' } : null;
                 const result = await save({ additions: setPlan.additions.map(cleanCandidate), patches: setPlan.patches, initialized: true, checkpoint }, owner, persisted.ledgerRevision);
+                lastCommitState = result?.commitState;
                 if (!checkpoint) {
-                    diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-valid' }); diagnostic.committed({ reasonCode: 'capture-saved' });
+                    diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-valid' }); reportSavedState(diagnostic, result, 'capture-saved');
                     return { status: result.added?.length || result.patched?.length ? 'updated' : 'unchanged', reason: result.added?.length || result.patched?.length ? undefined : 'duplicate', added: result.added?.length || 0, patched: result.patched?.length || 0, ignored: parsed.rejected.length, feedbackShown: false };
                 }
                 checkpoint = state().checkpoint;
@@ -433,13 +441,14 @@ function createPersistentLedgerCaptureController(options) {
                 const nextCandidates = checkpoint.candidates.filter(item => !resolvedIds.has(item._candidateId));
                 const nextCheckpoint = nextCandidates.length ? { ...checkpoint, nextBatchIndex: i + 1, candidates: nextCandidates, ignored: ignoredTotal, ledgerRevision: '@after' } : null;
                 const result = await save({ additions: plan.additions.map(cleanCandidate), patches: plan.patches, initialized: true, checkpoint: nextCheckpoint }, owner, beforeRevision);
+                lastCommitState = result?.commitState;
                 addedTotal += result.added?.length || 0; patchedTotal += result.patched?.length || 0;
                 checkpoint = nextCheckpoint ? state().checkpoint : null;
-                provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: parsed.explicitNone ? 'provenance-explicit-none' : 'provenance-valid' }); provenanceDiagnostic.committed({ reasonCode: plan.additions.length || plan.patches.length ? 'provenance-saved' : 'provenance-no-change' });
+                provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: parsed.explicitNone ? 'provenance-explicit-none' : 'provenance-valid' }); reportSavedState(provenanceDiagnostic, result, plan.additions.length || plan.patches.length ? 'provenance-saved' : 'provenance-checkpoint-saved');
                 progress = { done: i + 1, total: batches.length }; env.setProgress?.(progress.done, progress.total, ctrl);
             }
             if (checkpoint?.candidates?.length) return { status: 'needs-confirmation', reason: 'provenance-range-exhausted', pending: checkpoint.candidates.length, done: checkpoint.nextBatchIndex, totalBatches: batches.length, ignored: ignoredTotal, feedbackShown: false };
-            diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-valid' }); diagnostic.committed({ reasonCode: 'capture-saved' });
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-valid' }); reportSavedState(diagnostic, { commitState: lastCommitState }, 'capture-saved');
             return { status: addedTotal || patchedTotal ? 'updated' : 'unchanged', reason: addedTotal || patchedTotal ? undefined : 'duplicate', added: addedTotal, patched: patchedTotal, ignored: ignoredTotal, feedbackShown: false };
         } catch (error) {
             if (error?.name === 'AbortError' || ctrl.signal.aborted || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', error };
@@ -535,7 +544,7 @@ export function createLedgerCaptureController(options = {}) {
     const run = async (manual = false, travel = null) => {
         const diagnostic = createGenerationDiagnosticScope('ledger-capture', { background: !manual });
         let generationCommitted = false;
-        const markCommitted = options => { diagnostic.committed(options); generationCommitted = true; };
+        const markCommitted = options => { if (options?.commitState === 'local-applied') diagnostic.locallyApplied(options); else if (options?.commitState === 'confirmed') diagnostic.committed(options); generationCommitted = true; };
         if (busy) return { status: 'busy', reason: 'busy' };
         const ctx = env.context();
         const charKey = env.charKey?.(ctx);
@@ -605,7 +614,7 @@ export function createLedgerCaptureController(options = {}) {
                 if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
                 picked = env.parseCapture?.(raw) || [];
                 if (!picked.length) {
-                    if (/^无[。.！!]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-explicit-none' }); markCommitted({ reasonCode: 'capture-no-change' }); if (manual) await runGenerationUiEffect(() => env.toast?.('未发现可登记的新事件'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
+                    if (/^无[。.！!]?$/u.test(String(raw || '').trim())) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-explicit-none' }); if (manual) await runGenerationUiEffect(() => env.toast?.('未发现可登记的新事件'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'no-new-event', feedbackShown: manual }; }
                     throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'capture-format-unrecognized' });
                 }
                 picked.forEach((item, index) => { item._candidateId = `C${index + 1}`; });
@@ -644,7 +653,6 @@ export function createLedgerCaptureController(options = {}) {
                     if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
                     if (/^无[。.！!]?$/u.test(String(result || '').trim())) {
                         provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: 'provenance-explicit-none' });
-                        provenanceDiagnostic.committed({ reasonCode: 'provenance-no-change' });
                         if (checkpoint) provenanceCheckpoint = { ...checkpoint, picked, nextBatchIndex: i + 1 };
                         progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                         continue;
@@ -668,7 +676,6 @@ export function createLedgerCaptureController(options = {}) {
                     hits.sort((a, b) => a.source.floor - b.source.floor || Number(!a.token.endsWith('S')) - Number(!b.token.endsWith('S')));
                     hits.forEach(hit => { if (!String(hit.candidate._sourceToken || '').trim()) hit.candidate._sourceToken = hit.token; });
                     provenanceDiagnostic.accepted({ phase: 'validation', reasonCode: 'provenance-valid' });
-                    provenanceDiagnostic.committed({ reasonCode: 'provenance-applied' });
                     if (checkpoint) provenanceCheckpoint = { ...checkpoint, picked, nextBatchIndex: i + 1 };
                     progress = { done: i + 1, total: provenanceBatches.length }; env.setProgress?.(i + 1, provenanceBatches.length, ctrl);
                 }
@@ -687,7 +694,7 @@ export function createLedgerCaptureController(options = {}) {
             const entries = env.listEntries?.({ includeClosed: true }) || [];
             const candidates = picked.map(item => ({ ...item, 起始锚: resolveLedgerStartAnchor(item, sourceMap, sourceList) }));
             const capturePlan = planLedgerCapture({ entries, candidates, sourceMap, captureFloor, captureDate, norm: env.normGist || (value => String(value || '').replace(/\s+/g, '')) });
-            if (!capturePlan.additions.length && !capturePlan.patches.length) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-duplicate' }); markCommitted({ reasonCode: 'capture-no-change' }); provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!capturePlan.additions.length && !capturePlan.patches.length) { diagnostic.accepted({ phase: 'validation', reasonCode: 'capture-duplicate' }); provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
             const completedRetry = checkpoint?.phase === 'pending-commit';
             const commitRecordLimit = historical ? null : CAPTURE_FLOORS;
@@ -719,9 +726,9 @@ export function createLedgerCaptureController(options = {}) {
             }
             const added = result?.added || [];
             if (!isCurrent(ctrl, chatId, travel)) return cancellation(ctrl.signal.aborted || travel?.signal?.aborted ? 'aborted' : 'cancelled');
-            if (!added.length && !(result?.patched || []).length) { markCommitted({ reasonCode: 'capture-no-change' }); provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
+            if (!added.length && !(result?.patched || []).length) { provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             provenanceCheckpoint = null;
-            markCommitted({ reasonCode: 'capture-saved' });
+            markCommitted({ reasonCode: 'capture-saved', commitState: result?.commitState });
             if (manual || env.settings?.()?.notifyMode === 'full') await runGenerationUiEffect(() => env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`), { diagnostic, reasonCode: 'capture-toast-failed' });
             await runGenerationUiEffect(() => env.refresh?.(), { diagnostic, reasonCode: 'capture-refresh-failed' });
             await runGenerationUiEffect(() => env.refreshInline?.(true), { diagnostic, reasonCode: 'capture-inline-refresh-failed' });
@@ -729,6 +736,7 @@ export function createLedgerCaptureController(options = {}) {
             return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: manual || env.settings?.()?.notifyMode === 'full' };
         } catch (err) {
             const ownerCurrent = sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
+            if (err?.name !== 'AbortError' && !travel?.signal?.aborted) diagnostic.rejected(err, { phase: err?.phase || 'prepare', reasonCode: err?.phase || err?.diagnosticCode || 'capture-failed' });
             if (err?.ledgerPhase === 'rollback-save-failed' || err?.phase === 'rollback-save-failed') {
                 logLedgerFailure(err, { ledgerPhase: 'rollback-save-failed' });
                 if (ownerCurrent) env.toast?.('刻度保存后状态已过期，且回滚失败，请检查当前聊天数据', null, true);
@@ -749,8 +757,8 @@ export function createLedgerCaptureController(options = {}) {
             return { status: 'failed', reason: err?.ledgerPhase || err?.phase || 'api-failed', error: err, feedbackShown: manualFailure };
         } finally {
             if (generationCommitted) {
-                await runGenerationUiEffect(() => clear(ctrl), { diagnostic, reasonCode: 'capture-cleanup-failed' });
-                await runGenerationUiEffect(() => removeBridge(), { diagnostic, reasonCode: 'capture-cleanup-failed' });
+                await runGenerationUiEffect(() => clear(ctrl), { diagnostic, reasonCode: 'capture-cleanup-failed', reportDisplayed: false });
+                await runGenerationUiEffect(() => removeBridge(), { diagnostic, reasonCode: 'capture-cleanup-failed', reportDisplayed: false });
             } else { clear(ctrl); removeBridge(); }
         }
     };

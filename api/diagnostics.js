@@ -2,6 +2,7 @@
 // Never copy upstream response bodies, URLs, prompts, keys, or model output here.
 import { isDiagnosticRequestId, safeSaveDiagnosticFields, traceDiagnosticEvent } from '../runtime/diagnostic-trace.js';
 import { recordDiagnosticResult } from '../runtime/external-chat-storage.js';
+import { captureLocalGenerationDiagnostic } from '../runtime/local-diagnostics.js';
 
 const CODES = new Set([
     'config-missing', 'http-400', 'auth', 'not-found', 'rate-limit', 'server',
@@ -67,7 +68,7 @@ export function diagnosticMessage(error, options = {}) {
         return '保存请求已开始，但宿主尚未返回确认。请刷新当前聊天核实保存结果，确认前不要重复生成。';
     }
     if (code === 'save' && save?.commitState === 'conflict') {
-        return '保存前发现当前线已变化，本次候选未覆盖；请刷新当前聊天后再继续。';
+        return '当前聊天保存版本已变化，本次未覆盖；请刷新核实后再继续。';
     }
     let message = MESSAGES[code] || MESSAGES.unknown;
     if (code === 'server') {
@@ -126,15 +127,26 @@ export function attachDiagnosticRequest(error, metadata = {}) {
 // 成功响应仍保持普通字符串合同；调用方只通过这个安全 sink 接收请求号，再记录业务终点。
 export function createGenerationDiagnosticScope(module, defaults = {}) {
     const safeModule = String(module || 'generation');
-    let metadata = Object.freeze({ module: safeModule, requestId: '' });
+    const startedAt = Date.now();
+    const runId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    let metadata = Object.freeze({ module: safeModule, requestId: '', runId, startedAt });
+    captureLocalGenerationDiagnostic({ runId, module: safeModule, startedAt, result: { processing: 'preparing', commit: 'not-requested', ui: 'not-requested', events: [] } });
     const sink = value => {
         const requestId = typeof value?.requestId === 'string' && isDiagnosticRequestId(value.requestId) ? value.requestId : '';
-        if (requestId) metadata = Object.freeze({ module: safeModule, requestId });
+        if (requestId) {
+            metadata = Object.freeze({ module: safeModule, requestId, runId, startedAt, apiStartedAt: Number(value?.startedAt) || Date.now() });
+            captureLocalGenerationDiagnostic({ requestId, runId, module: safeModule, startedAt: metadata.apiStartedAt, runStartedAt: startedAt });
+        }
     };
     const annotate = error => attachDiagnosticRequest(error, metadata);
     const record = (event, options = {}) => {
         const error = annotate(options.error);
         const saveDetails = safeSaveDiagnosticFields(error?.saveResult);
+        const uiError = event === 'generation-ui-failed' && error ? {
+            errorName: String(error.name || 'Error').slice(0, 80),
+            errorMessage: String(error.message || error).replace(/(?:Bearer\s+)\S+/gi, '[redacted]').slice(0, 500),
+            ...(error.stack ? { errorStack: String(error.stack).replace(/(?:Bearer\s+)\S+/gi, '[redacted]').slice(0, 1200) } : {}),
+        } : {};
         const traced = traceDiagnosticEvent(event, {
             module: safeModule,
             ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
@@ -142,6 +154,7 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
             phase: options.phase,
             reasonCode: options.reasonCode,
             errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
+            ...uiError,
             background: defaults.background === true || options.background === true,
             ...saveDetails,
         });
@@ -153,8 +166,15 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
             phase: options.phase,
             reasonCode: options.reasonCode,
             errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
+            privateDetails: uiError,
             ...saveDetails,
         });
+        else captureLocalGenerationDiagnostic({ runId, module: safeModule, startedAt, event: {
+            event, status: options.status || event, phase: options.phase, reasonCode: options.reasonCode,
+            errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
+            ...uiError,
+            ...saveDetails,
+        } });
         return traced;
     };
     return Object.freeze({
@@ -163,7 +183,10 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
         accepted: options => record('generation-accepted', { ...options, status: 'accepted' }),
         rejected: (error, options = {}) => { annotate(error); record('generation-rejected', { ...options, error, status: 'rejected' }); return error; },
         committed: options => record('generation-committed', { ...options, status: 'committed', phase: options?.phase || 'save' }),
+        // Ordinary chat_metadata writes report local application, never a remote save acknowledgement.
+        locallyApplied: options => record('generation-locally-applied', { ...options, status: 'local-applied', phase: options?.phase || 'save' }),
         uiFailed: (error, options = {}) => { annotate(error); record('generation-ui-failed', { ...options, error, status: 'failed', phase: 'ui' }); return error; },
+        uiDisplayed: options => record('generation-ui-displayed', { ...options, status: 'displayed', phase: 'ui' }),
         fallback: (error, options = {}) => { annotate(error); record('generation-fallback', { ...options, error, status: 'fallback', phase: options.phase || 'recoverable-fallback' }); return error; },
         metadata: () => metadata,
     });
@@ -172,8 +195,8 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
 // 保存已经确认后，toast/render/refresh/cleanup 都只能作为 UI 副作用失败记录，不能再把
 // 已落盘的生成结果改判成 AI/API/保存失败。调用方可不传 diagnostic，先安全捕获后再在
 // generation-committed 之后补记同一个请求 scope。
-export async function runGenerationUiEffect(callback, { diagnostic = null, reasonCode = 'generation-ui-failed' } = {}) {
-    try { return { ok: true, value: await callback?.() }; }
+export async function runGenerationUiEffect(callback, { diagnostic = null, reasonCode = 'generation-ui-failed', reportDisplayed = true } = {}) {
+    try { const value = await callback?.(); if (reportDisplayed) diagnostic?.uiDisplayed?.(); return { ok: true, value }; }
     catch (error) { diagnostic?.uiFailed?.(error, { reasonCode }); return { ok: false, error }; }
 }
 

@@ -8,7 +8,6 @@ const normalizeOwner = owner => owner?.view === 'char' && String(owner.charName 
         : null;
 
 export function createPointWidgetActions(env) {
-    const participantCurrent = participant => !participant || env.sameParticipantIdentity?.(participant, env.captureParticipantIdentity?.()) !== false;
     const sameBaseline = (saved, baseline) => !!baseline
         && env.pointRawToken?.(saved?.raw || '') === baseline.rawToken
         && (Number(saved?.ts) || null) === (Number(baseline.ts) || null);
@@ -24,14 +23,11 @@ export function createPointWidgetActions(env) {
             return false;
         }
 
-        const chatId = env.chatId?.();
-        const participant = env.captureParticipantIdentity?.() || null;
         let owner = normalizeOwner(options.owner);
         if (editIndex == null || !owner) {
             owner = normalizeOwner(await env.selectOwner?.({ edit: editIndex != null, currentOwner: owner }));
             if (!owner) return false;
         }
-        if ((env.chatId && env.chatId() !== chatId) || !participantCurrent(participant)) return false;
 
         const key = env.getCacheKey(owner.view, owner.charName);
         if (!key) {
@@ -72,7 +68,6 @@ export function createPointWidgetActions(env) {
             }
         }
 
-        if ((env.chatId && env.chatId() !== chatId) || !participantCurrent(participant)) return false;
         const subject = owner.view === 'char' ? owner.charName : env.getUserName();
         if (env.writeStore(key, { ...(saved || {}), raw, userName: subject, ts: Date.now() }) === false) {
             env.showToast('点保存失败，请重试', null, true);

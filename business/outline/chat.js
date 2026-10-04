@@ -23,12 +23,17 @@ export function createOutlineChat({
         if (!owns(candidate)) return false;
         owner = null;
         busy = false;
-        ui?.endThinking?.(candidate.thinking);
+        try { ui?.endThinking?.(candidate.thinking); } catch (error) { return error; }
+        return null;
         return true;
     };
     const currentAndOwned = candidate => owns(candidate)
         && !candidate.controller.signal.aborted
         && repository.isCurrent(candidate.target);
+    const activeTarget = target => {
+        const current = repository.capture();
+        return { target: current, sameChat: String(current?.chatId || '') === String(target?.chatId || '') };
+    };
     const load = (target = repository.capture()) => {
         if (!repository.isCurrent(target)) return [];
         history = repository.readHistory(target);
@@ -98,6 +103,7 @@ export function createOutlineChat({
         const thinking = ui?.beginThinking?.();
         const task = Object.freeze({ target, historySnapshot, controller, thinking });
         const diagnostic = createGenerationDiagnosticScope('outline-chat');
+        let locallyAppliedReply = null;
         owner = task;
         busy = true;
         try {
@@ -107,7 +113,8 @@ export function createOutlineChat({
                 throw makeDiagnosticError('config-missing');
             }
             const messages = await buildMessages?.({ target, userMsg, historySnapshot, signal: controller.signal });
-            if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
+            let active = activeTarget(target);
+            if (!currentAndOwned(task) || (active.sameChat && !repository.sameHistory(active.target, historySnapshot))) return { status: 'cancelled' };
             const reply = await postCompletion?.({
                 config,
                 messages,
@@ -117,26 +124,43 @@ export function createOutlineChat({
                 diagnosticModule: 'outline-chat',
                 diagnosticSink: diagnostic.sink,
             });
-            if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
-            const nextHistory = [...historySnapshot, { role: 'assistant', content: reply }].slice(-repository.historyCap);
+            active = activeTarget(target);
+            if (!currentAndOwned(task) || (active.sameChat && !repository.sameHistory(active.target, historySnapshot))) return { status: 'cancelled' };
+            const currentHistory = active.sameChat ? historySnapshot : repository.readHistory(active.target);
+            const nextHistory = (active.sameChat
+                ? [...currentHistory, { role: 'assistant', content: reply }]
+                : [...currentHistory, { role: 'user', content: userMsg }, { role: 'assistant', content: reply }])
+                .slice(-repository.historyCap);
             diagnostic.accepted({ phase: 'response' });
-            if (!repository.writeHistory(target, nextHistory, historySnapshot)) {
-                if (!currentAndOwned(task) || !repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
+            if (!repository.writeHistory(active.target, nextHistory, active.sameChat ? historySnapshot : null)) {
+                if (!currentAndOwned(task) || (active.sameChat && !repository.sameHistory(active.target, historySnapshot))) return { status: 'cancelled' };
                 const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'outline-chat-save-failed' });
                 ui?.appendMessage?.('system', '发送失败：回复保存未确认，请重试');
                 finish(task);
                 return { status: 'failed', error };
             }
-            diagnostic.committed({ phase: 'save' });
+            diagnostic.locallyApplied({ phase: 'save', reasonCode: 'outline-chat-local-applied' });
+            locallyAppliedReply = reply;
             history = nextHistory;
-            if (nextHistory.length !== historySnapshot.length + 1 || normalizeOutlineResponse(reply)) ui?.renderHistory?.(history);
-            else ui?.appendMessage?.('ai', reply, history.length - 1);
-            finish(task);
+            historyTarget = active.target;
+            try {
+                if (nextHistory.length !== historySnapshot.length + 1 || normalizeOutlineResponse(reply)) ui?.renderHistory?.(history);
+                else ui?.appendMessage?.('ai', reply, history.length - 1);
+                diagnostic.uiDisplayed({ reasonCode: 'outline-chat-ui-applied' });
+            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-chat-ui-failed' }); }
+            const finishError = finish(task);
+            if (finishError) diagnostic.uiFailed(finishError, { reasonCode: 'outline-chat-finish-ui-failed' });
             return { status: 'updated', reply };
         } catch (error) {
+            if (locallyAppliedReply !== null) {
+                diagnostic.uiFailed(error, { reasonCode: 'outline-chat-post-apply-ui-failed' });
+                finish(task);
+                return { status: 'updated', reply: locallyAppliedReply };
+            }
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'outline-chat-request-failed' });
             if (!currentAndOwned(task)) return { status: 'cancelled' };
-            if (!repository.sameHistory(target, historySnapshot)) return { status: 'cancelled' };
+            const active = activeTarget(target);
+            if (active.sameChat && !repository.sameHistory(active.target, historySnapshot)) return { status: 'cancelled' };
             if (error?.name !== 'AbortError') {
                 ui?.appendMessage?.('system', error?.outlineChatMessage || `发送失败：${diagnosticMessage(error)}`);
             }
@@ -180,7 +204,6 @@ export function createOutlineChat({
         return send(text);
     };
     const onChatChanged = () => {
-        abort('chat-boundary');
         history = [];
         historyTarget = null;
     };

@@ -24,12 +24,13 @@
 
 import { getContext } from '../../../extensions.js';
 import { deleteChatRoot, externalOwnKeyBytes, getChatRoot, isExternalMode, persistExternalRoots, registerExternalStorageContext, restoreDeletedChatRoot } from './runtime/external-chat-storage.js';
-import { createBestEffortMetadataSaver } from './runtime/target-metadata-save.js';
+import { createDeadlineSignal } from './runtime/deadline.js';
 
 registerExternalStorageContext(getContext);
 
 const STORE_KEY      = 'sp-store';
 const SCHEMA_VERSION = 1;
+const EXTERNAL_CONFIRMED_SAVE_LIMIT_MS = 30_000;
 
 // 构画自己拥有的 chat_metadata 顶层 key。面板据此区分"构画 vs 别的插件"，也是 clearOwnKey 的白名单。
 export const OWN_KEYS = ['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger'];
@@ -80,13 +81,12 @@ function store(create = false) {
     if (!s || typeof s !== 'object') {
         return null;
     }
-    if (!s.data || typeof s.data !== 'object') { claimOrdinaryRootOwnership(); s.data = {}; }
+    if (!s.data || typeof s.data !== 'object') s.data = {};
     // 版本对齐只在写路径做：读路径若也把内存 version 拔到最新却不落盘、不迁移，
     // 将来 bump schema 时写路径会误判「已是最新」而跳过迁移，数据停在旧结构却挂新版本号。
     // 故读路径原样返回（version 保持磁盘值），迁移一律推到下一次写路径（在此补迁移逻辑）。
     if (create && s.version !== SCHEMA_VERSION) {
         // schema 升级时在写路径补齐结构。
-        claimOrdinaryRootOwnership();
         s.version = SCHEMA_VERSION;
         persist();
     }
@@ -98,7 +98,7 @@ function persistNow(ctx) {
     return ctx.saveMetadataDebounced?.();
 }
 
-function persist() {
+function persist(options = {}) {
     // 立即落盘，而非 saveMetadataDebounced：切档时 ST 的 clearChat() 会
     // cancelDebouncedMetadataSave() 取消还没触发的防抖保存，紧接着 chat_metadata={}，
     // 防抖那份就永不落盘 → 点线面/记忆丢失。saveMetadata() 同步快照 chat_metadata、
@@ -107,12 +107,22 @@ function persist() {
     if (!ctx) return;
     const external = persistExternalRoots();
     if (external !== null) return external;
-    const metadata = ctx.chatMetadata;
-    if (metadata && confirmedMetadataQueues.get(metadata)) {
-        deferOrdinaryPersist(ctx, metadata);
-        return;
+    try {
+        const result = persistNow(ctx);
+        if (result && typeof result.then === 'function') {
+            // 普通写只确认本地应用；宿主异步错误不回滚可见内容，也不成为未处理拒绝。
+            return result.catch(error => {
+                try {
+                    if (options.onPersistenceError) options.onPersistenceError(error);
+                    else console.warn('[ST-SevenDaysCal] 普通元数据保存失败', { phase: 'save', errorClass: String(error?.name || 'Error') });
+                } catch {}
+            });
+        }
+        return result;
+    } catch (error) {
+        if (options.onPersistenceError) { try { options.onPersistenceError(error); } catch {} return; }
+        throw error;
     }
-    persistNow(ctx);
 }
 
 // 清理等破坏性动作使用可等待版本：ST 旧版可能只返回 undefined；若返回 Promise，
@@ -123,9 +133,6 @@ async function persistAsync() {
     const external = persistExternalRoots({ confirmed: true });
     if (external !== null) return await external;
     const metadata = ctx.chatMetadata;
-    for (let pending = metadata && confirmedMetadataQueues.get(metadata); pending; pending = confirmedMetadataQueues.get(metadata)) {
-        try { await pending; } catch {}
-    }
     const current = getContext?.();
     if (metadata && current?.chatMetadata !== metadata) return;
     const result = persistNow(current || ctx);
@@ -140,184 +147,50 @@ function confirmedSaveError(saved, fallback = 'store-save-unconfirmed') {
     });
 }
 
-// AI 生成链专用的可确认保存口。普通 UI/迁移仍继续使用同步 writeStore，避免把全插件
-// 存储 API 粗暴异步化。生产宿主绑定固定目标 metadata saver；测试或旧宿主保留
-// best-effort 兼容语义，不把 Promise resolve 冒充服务端确认。
-let confirmedMetadataPersistence = null;
-export function bindStoreMetadataPersistence(adapter = null) {
-    confirmedMetadataPersistence = adapter && typeof adapter.commit === 'function' ? adapter : null;
-}
-
-async function persistConfirmed(boundContext, options = {}) {
-    const external = persistExternalRoots({
-        confirmed: true, ownerGuard: options.ownerGuard, signal: options.signal, deadlineAt: options.deadlineAt,
-        stagedData: options.externalStagedData, intent: options.externalIntent,
-    });
-    if (external !== null) return await external;
-    if (confirmedMetadataPersistence) return confirmedMetadataPersistence.commit(boundContext, options);
-    const ctx = boundContext || getContext?.();
-    if (!ctx?.chatId || typeof ctx.saveMetadata !== 'function') return { ok: false, reason: 'saveMetadata-unavailable', commitState: 'not-dispatched', dispatched: false };
-    return createBestEffortMetadataSaver({ context: () => ctx }).commit(ctx, { ...options, rootKey: STORE_KEY });
-}
-
 const cloneStoreValue = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-const confirmedMetadataQueues = new WeakMap();
-const deferredOrdinaryPersists = new WeakMap();
-const ordinaryKeyOwnership = new WeakMap();
-const ORDINARY_ROOT = Symbol('ordinary-root');
-
-// 只在 confirmed 事务在途时记录普通操作对同一子键的接管。它不参与生成准入，
-// 只防止该事务结算/回撤时把随后发生的普通同值写或删除认成本次候选。
-function ordinaryOwnership(metadata, key) { return ordinaryKeyOwnership.get(metadata)?.get(key); }
-function claimOrdinaryRootOwnership(metadata = getContext?.()?.chatMetadata) {
-    if (!metadata || !confirmedMetadataQueues.has(metadata)) return;
-    let keys = ordinaryKeyOwnership.get(metadata);
-    if (!keys) ordinaryKeyOwnership.set(metadata, keys = new Map());
-    keys.set(ORDINARY_ROOT, Symbol('ordinary-root-owner'));
-    return keys;
-}
-function claimOrdinaryOwnership(key) {
-    const metadata = getContext?.()?.chatMetadata;
-    const keys = claimOrdinaryRootOwnership(metadata);
-    if (!keys) return;
-    keys.set(key, Symbol(key));
-}
-
-// 普通 writeData/writeBatch 等仍立即更新 live root，保持同步读写合同；若同一 root 正有
-// confirmed 保存，只延后宿主抓取整 root 快照。confirmed 成功后保存 A+B，失败后保存 B，
-// 从根上避免后到的普通旧快照覆盖刚确认的 key。连续普通写只需一次最终保存。
-function deferOrdinaryPersist(ctx, metadata) {
-    if (deferredOrdinaryPersists.has(metadata)) return;
-    const state = { ctx };
-    deferredOrdinaryPersists.set(metadata, state);
-    const flush = () => {
-        if (deferredOrdinaryPersists.get(metadata) !== state) return;
-        const pending = confirmedMetadataQueues.get(metadata);
-        if (pending) { pending.then(flush, flush); return; }
-        deferredOrdinaryPersists.delete(metadata);
-        const current = getContext?.();
-        if (current?.chatMetadata === metadata) persistNow(current);
-    };
-    confirmedMetadataQueues.get(metadata)?.then(flush, flush);
-}
-
-// confirmed 写入必须把「私有 staging → 固定目标保存 → 成功结算/失败回滚」作为一个整体
-// 按 metadata root 串行。普通写仍同步更新 live 数据，但它的宿主整 root 快照也要等同一队列
-// settle 后再抓取，避免夹带失败值或用旧快照覆盖刚确认的值。
-function serializeConfirmedMetadata(metadata, operation, signal = null) {
-    const previous = confirmedMetadataQueues.get(metadata) || Promise.resolve();
-    let started = false;
-    const run = () => {
-        if (signal?.aborted) return { ok: false, reason: 'cancelled-before-metadata-queue', commitState: 'not-dispatched', dispatched: false };
-        started = true;
-        return operation();
-    };
-    const queued = previous.then(run, run);
-    confirmedMetadataQueues.set(metadata, queued);
-    const clear = () => { if (confirmedMetadataQueues.get(metadata) === queued) confirmedMetadataQueues.delete(metadata); };
-    queued.then(clear, clear);
-    if (!signal) return queued;
-    // A cancelled queue tail may settle its caller early, but the queued callback remains a no-op
-    // until its predecessor releases. Once this transaction starts, its own bounded save must settle first.
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = (callback, value) => {
-            if (settled) return;
-            settled = true;
-            signal.removeEventListener('abort', onAbort);
-            callback(value);
-        };
-        const onAbort = () => { if (!started) finish(resolve, { ok: false, reason: 'cancelled-before-metadata-queue', commitState: 'not-dispatched', dispatched: false }); };
-        signal.addEventListener('abort', onAbort, { once: true });
-        if (signal.aborted) onAbort();
-        queued.then(value => finish(resolve, value), error => finish(reject, error));
-    });
-}
 
 export async function writeDataConfirmed(kind, view, charName, value, options = {}) {
     const ctx = getContext?.();
     const chatId = String(ctx?.chatId || '');
     if (!ctx || !chatId || !ctx.chatMetadata) return { ok: false, reason: 'missing-chat', commitState: 'not-dispatched', dispatched: false };
     const metadata = ctx.chatMetadata;
-    const externalGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => getContext?.()?.chatId === chatId;
-    const ownerGuard = () => !options.signal?.aborted && getContext?.()?.chatMetadata === metadata && externalGuard();
-    if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+    const key = subKey(kind, view, charName);
+    const externalGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => true;
+    const sameMetadata = () => getContext?.()?.chatId === chatId && getContext?.()?.chatMetadata === metadata;
+    const current = () => !options.signal?.aborted && externalGuard();
+    if (!current() || isExternalMode() && !sameMetadata()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+
     if (isExternalMode()) {
-        const s = store(true);
-        if (!s) return { ok: false, reason: 'external-not-ready', commitState: 'not-dispatched', dispatched: false };
-        const key = subKey(kind, view, charName);
-        const beforeHad = Object.hasOwn(s.data, key);
-        const beforeValue = beforeHad ? cloneStoreValue(s.data[key]) : undefined;
-        return persistConfirmed(ctx, {
-            ...options, ownerGuard,
-            externalIntent: { rootKey: STORE_KEY, key, beforeHad, beforeValue, afterHad: value != null, afterValue: value == null ? undefined : cloneStoreValue(value) },
-        });
-    }
-    return serializeConfirmedMetadata(metadata, async () => {
-        if (!ownerGuard()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
-        const rootExisted = Object.prototype.hasOwnProperty.call(metadata, STORE_KEY);
-        const liveRoot = metadata[STORE_KEY];
-        const key = subKey(kind, view, charName);
-        const liveData = liveRoot?.data && typeof liveRoot.data === 'object' ? liveRoot.data : {};
-        const beforeHad = Object.prototype.hasOwnProperty.call(liveData, key);
-        const before = beforeHad ? cloneStoreValue(liveData[key]) : undefined;
-        let s = liveRoot && typeof liveRoot === 'object' ? cloneStoreValue(liveRoot) : freshStore();
-        if (!s.data || typeof s.data !== 'object') s.data = {};
-        if (s.version !== SCHEMA_VERSION) s.version = SCHEMA_VERSION;
-        if (value == null) delete s.data[key]; else s.data[key] = value;
-        const stagedMetadata = { ...metadata, [STORE_KEY]: s };
-        const stagedContext = { ...ctx, chatMetadata: stagedMetadata };
-        const ordinaryOwner = ordinaryOwnership(metadata, key);
-        const ordinaryRootOwner = ordinaryOwnership(metadata, ORDINARY_ROOT);
-        const publication = { root: null, installed: false, isOwned: () => ordinaryOwnership(metadata, ORDINARY_ROOT) === ordinaryRootOwner };
+        const bounded = createDeadlineSignal({ signal: options.signal, deadlineAt: options.deadlineAt, timeoutMs: EXTERNAL_CONFIRMED_SAVE_LIMIT_MS, reason: 'store-confirmed-save-timeout' });
         try {
-            const saved = await persistConfirmed(stagedContext, {
-                ...options, ownerGuard, liveMetadata: metadata, publication,
-                // The TT transport can be delayed in the host queue; preserve the existing same-key handoff boundary until dispatch.
-                intentOwnerGuard: () => ordinaryOwnership(metadata, key) === ordinaryOwner,
+            if (!current() || !sameMetadata() || bounded.signal.aborted) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+            const s = store(true);
+            if (!s) return { ok: false, reason: 'external-not-ready', commitState: 'not-dispatched', dispatched: false };
+            const beforeHad = Object.hasOwn(s.data, key);
+            const beforeValue = beforeHad ? cloneStoreValue(s.data[key]) : undefined;
+            return await persistExternalRoots({
+                ...options, signal: bounded.signal, deadlineAt: bounded.deadlineAt, ownerGuard: current,
+                confirmed: true,
+                intent: { rootKey: STORE_KEY, key, beforeHad, beforeValue, afterHad: value != null, afterValue: value == null ? undefined : cloneStoreValue(value) },
             });
-            if (saved?.ok !== true) {
-                const error = Object.assign(new Error(saved?.reason || 'store-save-unconfirmed'), { phase: 'save', saveResult: saved || null });
-                if (Number.isInteger(Number(saved?.status))) error.status = Number(saved.status);
-                throw error;
-            }
-            // 服务端确认若属于已过期 owner，只能报告确认事实；旧候选不得再发布到当前 live root。
-            if (!ownerGuard()) return { ...saved, stale: true, reason: 'committed-but-stale' };
-            const currentRoot = metadata[STORE_KEY];
-            const ordinaryStillOwned = ordinaryOwnership(metadata, key) === ordinaryOwner;
-            if (!ordinaryStillOwned) return { ...saved, stale: true, reason: 'committed-but-ordinary-write-took-ownership' };
-            if (ordinaryStillOwned) {
-                let target = currentRoot;
-                if (!target || typeof target !== 'object') target = metadata[STORE_KEY] = freshStore();
-                if (!target.data || typeof target.data !== 'object') target.data = {};
-                target.version = SCHEMA_VERSION;
-                if (value == null) delete target.data[key]; else target.data[key] = value;
-                if (!rootExisted && value == null && Object.keys(target.data).length === 0) delete metadata[STORE_KEY];
-            }
-            if (!ownerGuard()) return { ...saved, stale: true, reason: 'committed-but-stale' };
-            return saved;
-        } catch (error) {
-            // fixed saver 从未发布 staging，不能回撤 live 数据。官方兼容路径只在
-            // 本次临时 root 仍实际挂载、且目标子键未被普通操作接管时撤回候选。
-            const currentRoot = metadata[STORE_KEY];
-            const candidateStillOwned = publication.installed && currentRoot === publication.root
-                && ordinaryOwnership(metadata, key) === ordinaryOwner;
-            if (candidateStillOwned) {
-                let target = currentRoot;
-                if (!target || typeof target !== 'object') target = metadata[STORE_KEY] = freshStore();
-                if (!target.data || typeof target.data !== 'object') target.data = {};
-                if (beforeHad) target.data[key] = before;
-                else delete target.data[key];
-                if (!rootExisted && Object.keys(target.data).length === 0) delete metadata[STORE_KEY];
-            }
-            if (!error.saveResult) {
-                const status = Number(error?.status ?? error?.statusCode ?? error?.httpStatus);
-                error.saveResult = { ok: false, reason: Number.isInteger(status) ? `http-${status}` : 'saveMetadata-rejected', ...(Number.isInteger(status) ? { status } : {}), commitState: 'not-dispatched', dispatched: false };
-            }
-            error.phase ||= 'save';
-            throw error;
-        }
-    }, options.signal);
+        } finally { bounded.dispose(); }
+    }
+
+    // 普通聊天先应用本地子键，再沿用宿主既有 saveMetadata 流程；其返回值不代表远端 ACK。
+    const applied = writeData(kind, view, charName, value, {
+        onPersistenceError: error => {
+            // The owner signal may be retired after local success; late failures may still annotate this exact live chat/value.
+            const liveRoot = metadata[STORE_KEY];
+            // All current business payloads are objects; reference identity distinguishes a same-value ordinary takeover.
+            if (!value || typeof value !== 'object' || liveRoot?.data?.[key] !== value) return;
+            // 日志只保留阶段和错误类型，不包含聊天或存储正文。
+            console.warn('[ST-SevenDaysCal] 普通元数据保存失败', { module: kind, phase: 'save', errorClass: String(error?.name || 'Error') });
+            options.onPersistenceError?.(error, { chatId, key, kind });
+        },
+    });
+    if (!applied) return { ok: false, reason: 'local-apply-failed', commitState: 'not-dispatched', dispatched: false };
+    // sync throw由writeData的回调接收；返回成功只说明本地数据已更新。
+    return { ok: true, reason: 'local-applied', commitState: 'local-applied', dispatched: false };
 }
 
 // sp-store 顶层 key 是否已存在（不含内容判断，也不实例化）。
@@ -381,14 +254,16 @@ export function listScheduleScopes() {
     return scheduleScopesFromData(store(false)?.data || {});
 }
 
-export function writeData(kind, view, charName, value) {
+export function writeData(kind, view, charName, value, options = {}) {
     const s = store(true);
     if (!s) return false;
-    if (value == null) { removeData(kind, view, charName); return true; }
     const key = subKey(kind, view, charName);
-    claimOrdinaryOwnership(key);
-    s.data[key] = value;
-    persist();
+    if (value == null) {
+        if (!Object.hasOwn(s.data, key)) return true;
+        delete s.data[key];
+    }
+    else s.data[key] = value;
+    persist(options);
     return true;
 }
 
@@ -404,7 +279,7 @@ export function writeBatch(entries) {
 
 function _applyBatch(list) {
     const s = store(true); if (!s) return false;
-    for (const it of list) { const key = subKey(it.kind, it.view, it.charName); claimOrdinaryOwnership(key); if (it.value == null) delete s.data[key]; else s.data[key] = it.value; }
+    for (const it of list) { const key = subKey(it.kind, it.view, it.charName); if (it.value == null) delete s.data[key]; else s.data[key] = it.value; }
     return true;
 }
 
@@ -412,7 +287,6 @@ export function removeData(kind, view = 'user', charName = '') {
     const s = store();
     if (!s) return;
     const k = subKey(kind, view, charName);
-    claimOrdinaryOwnership(k);
     if (k in s.data) { delete s.data[k]; persist(); }
 }
 
@@ -420,7 +294,6 @@ export function removeData(kind, view = 'user', charName = '') {
 export function writeRaw(subKeyStr, value) {
     const s = store(true);
     if (!s || !subKeyStr) return false;
-    claimOrdinaryOwnership(subKeyStr);
     s.data[subKeyStr] = value;
     persist();
     return true;
@@ -444,7 +317,6 @@ export function pushRecentCharName(name, max = 3) {
     if (!s) return;
     const prev = Array.isArray(s.data[CHARNAMES_SUBKEY]) ? s.data[CHARNAMES_SUBKEY] : [];
     const next = [n, ...prev.filter(x => x !== n)].slice(0, max);
-    claimOrdinaryOwnership(CHARNAMES_SUBKEY);
     s.data[CHARNAMES_SUBKEY] = next;
     persist();
 }
@@ -472,7 +344,6 @@ export function addPinnedChar(name) {
     const prev = Array.isArray(s.data[CHARPINS_SUBKEY]) ? s.data[CHARPINS_SUBKEY].filter(x => typeof x === 'string' && x.trim()) : [];
     if (prev.includes(n)) return 'exists';
     if (prev.length >= PIN_CAP) return 'full';
-    claimOrdinaryOwnership(CHARPINS_SUBKEY);
     s.data[CHARPINS_SUBKEY] = [...prev, n];
     persist();
     return 'ok';
@@ -485,7 +356,6 @@ export function removePinnedChar(name) {
     const prev = Array.isArray(s.data[CHARPINS_SUBKEY]) ? s.data[CHARPINS_SUBKEY] : [];
     const next = prev.filter(x => x !== n);
     if (next.length === prev.length) return false;
-    claimOrdinaryOwnership(CHARPINS_SUBKEY);
     s.data[CHARPINS_SUBKEY] = next;
     persist();
     return true;
@@ -541,7 +411,7 @@ export function clearKind(kind) {
     if (!s) return 0;
     let n = 0;
     for (const sk of Object.keys(s.data)) {
-        if (sk === kind || sk.startsWith(kind + '-')) { claimOrdinaryOwnership(sk); delete s.data[sk]; n++; }
+        if (sk === kind || sk.startsWith(kind + '-')) { delete s.data[sk]; n++; }
     }
     if (n) persist();
     return n;
@@ -555,14 +425,13 @@ export async function clearDataKeyAsync(dataKey) {
     const s = store();
     if (!s || !(dataKey in s.data)) return false;
     const previous = s.data[dataKey];
-    claimOrdinaryOwnership(dataKey);
     delete s.data[dataKey];
     try {
         const saved = await persistAsync();
         const error = confirmedSaveError(saved); if (error) throw error;
         return true;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown' && !(dataKey in s.data)) { claimOrdinaryOwnership(dataKey); s.data[dataKey] = previous; }
+        if (error?.saveResult?.commitState !== 'unknown' && !(dataKey in s.data)) { s.data[dataKey] = previous; }
         throw error;
     }
 }
@@ -573,13 +442,13 @@ export async function clearKindAsync(kind) {
     if (!s) return 0;
     const removed = Object.entries(s.data).filter(([sk]) => sk === kind || sk.startsWith(kind + '-'));
     if (!removed.length) return 0;
-    for (const [sk] of removed) { claimOrdinaryOwnership(sk); delete s.data[sk]; }
+    for (const [sk] of removed) { delete s.data[sk]; }
     try {
         const saved = await persistAsync();
         const error = confirmedSaveError(saved); if (error) throw error;
         return removed.length;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown') for (const [sk, value] of removed) if (!(sk in s.data)) { claimOrdinaryOwnership(sk); s.data[sk] = value; }
+        if (error?.saveResult?.commitState !== 'unknown') for (const [sk, value] of removed) if (!(sk in s.data)) { s.data[sk] = value; }
         throw error;
     }
 }
@@ -729,7 +598,7 @@ export function migrateChatFromLocalStorage(chatId) {
 
     const cloudHasData = Object.keys(s.data).some(kindOfSubKey);
     if (!cloudHasData) {
-        for (const it of legacy) { claimOrdinaryOwnership(it.subKey); s.data[it.subKey] = it.value; }
+        for (const it of legacy) { s.data[it.subKey] = it.value; }
         persist();
         legacy.forEach(it => localStorage.removeItem(it.key));
         return { status: 'migrated', count: legacy.length };
@@ -751,8 +620,8 @@ export function applyLegacyOverCloud(legacy) {
     if (isExternalMode()) return false;
     const s = store(true);
     if (!s || !Array.isArray(legacy)) return false;
-    for (const sk of Object.keys(s.data)) if (kindOfSubKey(sk)) { claimOrdinaryOwnership(sk); delete s.data[sk]; }
-    for (const it of legacy) { claimOrdinaryOwnership(it.subKey); s.data[it.subKey] = it.value; }
+    for (const sk of Object.keys(s.data)) if (kindOfSubKey(sk)) delete s.data[sk];
+    for (const it of legacy) { s.data[it.subKey] = it.value; }
     persist();
     legacy.forEach(it => localStorage.removeItem(it.key));
     return true;
