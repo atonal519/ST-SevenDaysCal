@@ -3550,7 +3550,7 @@ function injectModal() {
                                     </details>
 
                                     <details class="sp-settings-section" id="sp-adult-scale-section">
-                                        <summary class="sp-settings-section-title">剧情倾向、成人内容与叙事尺度</summary>
+                                        <summary class="sp-settings-section-title">内容偏好设置</summary>
                                         <div class="sp-settings-section-body">
                                             <p class="sp-cfg-group">剧情推进幅度（全局）</p>
                                             <div class="sp-mode-row" id="sp-narrative-pace-row"><!-- populated when settings opens --></div>
