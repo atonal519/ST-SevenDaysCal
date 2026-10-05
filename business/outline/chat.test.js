@@ -42,5 +42,6 @@ test('面内讨论的呈现异常保留已本地应用的回复', async () => {
     const result = await chat.send('继续');
     assert.equal(result.status, 'updated');
     assert.equal(result.reply, '已生成回复');
+    assert.match(result.uiError.message, /render failed/);
     assert.equal(root['creative-chat'].at(-1).content, '已生成回复');
 });

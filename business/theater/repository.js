@@ -92,6 +92,33 @@ export function createTheaterRepository({ storage, metadata, persist, keyForChat
             }
             catch (error) { rollback(m, before, owned); return { ok: false, error }; }
         }),
+        updateSavedTitle: (target, id, title, options = {}) => enqueuePermanent(async () => {
+            const fixed = resolveTarget(target);
+            if (fixedUnavailable(fixed)) return notDispatched();
+            if (fixed.external && metadataSaver && !fixed.target) return { ok: false, commitState: 'not-dispatched', reason: 'fixed-target-unavailable', error: new Error('theater-target-unavailable') };
+            const m = readMeta(fixed);
+            if (!m) return { ok: false, error: new Error('metadata-unavailable') };
+            const before = m.saved.slice();
+            const index = before.findIndex(item => String(item.id) === String(id));
+            if (index < 0) return { ok: false, missing: true, error: new Error('saved-piece-not-found') };
+            if (options.savedBaseline && theaterPieceBaseline(before[index]) !== options.savedBaseline) return { ok: false, conflict: true, commitState: 'conflict', error: new Error('theater-piece-conflict') };
+            const key = operationKey('title', fixed.chatId, id);
+            if (fixed.external) { const confirmed = await confirmUnknown(key, fixed); if (confirmed) return confirmed; }
+            // Patch the saved piece so a stale draft can never overwrite its permanent body.
+            m.saved = before.map((item, itemIndex) => itemIndex === index ? { ...item, title: String(title ?? '').trim() } : item);
+            const owned = m.saved;
+            try {
+                let saved;
+                if (fixed.external && metadataSaver?.capture && fixed.target) {
+                    const captured = metadataSaver.capture(fixed.target, { ...(fixed.metadataSnapshot || {}), 'sp-theater': m });
+                    if (!captured) { rollback(m, before, owned); return notDispatched(); }
+                    saved = await metadataSaver.dispatch(captured, { isCurrent: fixed.isCurrent });
+                    if (saved?.commitState === 'unknown') unknownCommits.set(key, captured);
+                } else saved = persistLocal(fixed);
+                if (!saved?.ok && saved?.commitState !== 'unknown') { rollback(m, before, owned); return { ...saved, error: saved.error || new Error('theater-persist-failed') }; }
+                return { ok: true, chatId: fixed.chatId, ...saved };
+            } catch (error) { rollback(m, before, owned); return { ok: false, error }; }
+        }),
         deleteSaved: (target, id, options = {}) => enqueuePermanent(async () => {
             const fixed = resolveTarget(target);
             if (fixedUnavailable(fixed)) return notDispatched();

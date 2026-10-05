@@ -1,4 +1,5 @@
 import { classifyGenerationError, createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 // 点任务控制器的宿主边界：owner/lifecycle 由宿主提供，模块只负责统一清理与中止。
 export function splitAbortController(controller) {
     if (!controller || typeof controller.abort !== 'function' || !controller.signal || typeof controller.signal.addEventListener !== 'function') throw new TypeError('需要原生 AbortController');
@@ -139,13 +140,19 @@ export function createPointController(env) {
             if (!saveFailed) env.clearFailure?.(owner);
             env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton('done'); if (view === 'char') env.setChar(char);
             try {
-                env.sync();
                 const same = env.view() === view && (view !== 'char' || env.char() === char);
-                if (same) { env.setCached(html); if (env.panelVisible()) { env.setBody(html); if (env.notify() !== 'off') env.toast('点已生成'); } else env.toast('点已生成，点击查看', () => { if (!canOwnerCallback(owner)) return; env.showPanel(); env.setBody(html); }); }
+                if (same) env.setCached(html);
+                env.sync();
+                if (same) { if (env.panelVisible()) { env.setBody(html); if (env.notify() !== 'off') env.toast('点已生成'); } else env.toast('点已生成，点击查看', () => { if (!canOwnerCallback(owner)) return; env.showPanel(); env.setBody(html); }); }
                 else env.toast('点已生成，点击查看', () => { if (!canOwnerCallback(owner)) return; env.setView(view, char); env.setCached(html); env.showPanel(); env.setBody(html); });
                 diagnostic.uiDisplayed({ reasonCode: 'point-ui-applied' });
                 setTimeout(() => { if (canOwnerCallback(owner)) env.setButton(null); }, 6000); env.owners.finish(owner);
-            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'point-ui-refresh-failed' }); }
+            } catch (error) {
+                diagnostic.uiFailed(error, { reasonCode: 'point-ui-refresh-failed' });
+                try { env.recordFailure?.(owner, '界面刷新', UI_REFRESH_FAILURE_TEXT); } catch {}
+                try { env.toast(UI_REFRESH_FAILURE_TEXT, null, true); } catch {}
+                return { status: 'updated', uiError: error };
+            }
             return { status: 'updated' };
         } catch (error) {
             const sameOwnerView = sameOwnerIdentity(owner, view, char); const isCurrent = env.state.scheduleAbortController === owner.controller; if (!isCurrent) return; env.state.isGenerating = false; env.state.scheduleAbortController = null; env.setButton(null); if (!env.canCommit(owner, travelContext) || !sameOwnerView) return;
@@ -204,11 +211,18 @@ export function createPointController(env) {
             if (stored?.stale || !env.canCommit(owner, travelContext)) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, targetDate: today };
             if (!saveFailed) env.clearFailure?.(owner);
             try {
+                const same = env.view() === view && (view !== 'char' || env.char() === char);
+                if (same) env.setCached(env.render(merged, subject, view, env.calendar()));
                 env.sync();
-                if (env.view() === view && (view !== 'char' || env.char() === char)) { env.setCached(env.render(merged, subject, view, env.calendar())); if (env.panelVisible()) env.setBody(env.cached()); }
+                if (same && env.panelVisible()) env.setBody(env.cached());
                 if (auto ? env.notify() === 'full' : env.notify() !== 'off') env.toast(`点已同步到 ${env.monthName(today.month)}${today.day}日`);
                 diagnostic.uiDisplayed({ reasonCode: 'point-ui-applied' });
-            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'point-ui-refresh-failed' }); }
+            } catch (error) {
+                diagnostic.uiFailed(error, { reasonCode: 'point-ui-refresh-failed' });
+                try { env.recordFailure?.(owner, '界面刷新', UI_REFRESH_FAILURE_TEXT); } catch {}
+                try { env.toast(UI_REFRESH_FAILURE_TEXT, null, true); } catch {}
+                return { status: 'updated', targetDate: today, uiError: error };
+            }
             return { status: 'updated', targetDate: today };
         } catch (error) { const canNotify = error?.name !== 'AbortError' && env.canCommit(owner, travelContext) && canonicalMatches(owner.canonical); if (canNotify) { env.recordFailure?.(owner, '点同步', error); env.logDiagnostic?.(safeDiagnosticLog('point', 'request', error, { background: auto })); if (!auto || env.notify() === 'full') env.toast(`点同步失败：${diagnosticMessage(error)}`, null, true); } return { status: error?.name === 'AbortError' || travelContext?.signal?.aborted ? 'cancelled' : 'failed', error }; }
         finally {

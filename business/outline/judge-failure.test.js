@@ -59,7 +59,7 @@ test('confirmed judge cursor save leaves a saved-but-refresh-failed hint', async
     const result = await fixture.feature.judge.runAdvance();
     assert.equal(result.status, 'updated');
     assert.equal(fixture.getCursor(), 2, 'the cursor commit remains saved');
-    assert.match(fixture.getFailureHtml(), /已保存，但面板刷新失败/);
+    assert.match(fixture.getFailureHtml(), /内容已更新，界面刷新失败/);
 });
 
 test('chat switch during the old judge refresh prevents a late failure hint', async () => {

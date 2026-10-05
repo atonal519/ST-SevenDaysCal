@@ -9,6 +9,7 @@ import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline, editOutl
 import { createOutlineUi } from './ui.js';
 import { createPanelFailureStore } from '../ui/panel-failure.js';
 import { diagnosticMessage } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 
 export function createOutlineFeature(env = {}) {
     let chatRevision = 0;
@@ -52,9 +53,9 @@ export function createOutlineFeature(env = {}) {
         if (result?.status === 'failed') {
             const detail = result.error ? diagnosticMessage(result.error) : result.reason === 'memory-precheck' ? '记忆读取失败，请重试' : '操作失败，请重试';
             setFailureNote(slot, targetKey, `上次${label}失败：${detail}`);
-        } else if (result?.status === 'updated' && result.uiError) setFailureNote(slot, targetKey, `上次${label}已保存，但面板刷新失败：${diagnosticMessage(result.uiError)}`);
+        } else if (result?.status === 'updated' && result.uiError) setFailureNote(slot, targetKey, UI_REFRESH_FAILURE_TEXT);
         else if (['updated', 'unchanged'].includes(result?.status)) clearFailureNote(slot, targetKey);
-        renderFailureNotes();
+        try { renderFailureNotes(); } catch { try { ui.toast?.(UI_REFRESH_FAILURE_TEXT, true); } catch {} }
         return result;
     };
     const renderer = createOutlineRenderer({
@@ -104,8 +105,8 @@ export function createOutlineFeature(env = {}) {
         },
         uiFailure: (slot, target, error) => {
             if (!isCurrent(target)) return;
-            const label = slot === 'relocate' ? '面定位' : '面自动推进';
-            setFailureNote(slot, identityKey(target), `上次${label}已保存，但面板刷新失败：${diagnosticMessage(error)}`); renderFailureNotes();
+            setFailureNote(slot, identityKey(target), UI_REFRESH_FAILURE_TEXT);
+            try { renderFailureNotes(); } catch { try { ui.toast?.(UI_REFRESH_FAILURE_TEXT, true); } catch {} }
         },
         onCursorChanged: ({ target }) => { if (ui.isOutlineMode()) refreshPanel(target); },
     });

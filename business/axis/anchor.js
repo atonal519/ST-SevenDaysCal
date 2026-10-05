@@ -29,7 +29,7 @@ export function bindAxisAnchor(e) { env = e; }
 
 // 今天 = 历上的 {month, day}。多源优先级见下方逐条注释。
 // 内部证据解析保留 null，避免最终 UI 默认值 1/1 被星期浅兜底误当成真实故事日期。
-function almTodayAnchorEvidence() {
+export function almTodayAnchorEvidence() {
     // ①′ 手动/自动确认锚点：最高优先。
     try {
         const pinned = env.getDateAnchor(env.charStableKey(getContext()));

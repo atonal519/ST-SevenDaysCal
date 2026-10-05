@@ -5,6 +5,7 @@ import { createLinesInjectionController } from './injection.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesActions } from './actions.js';
 import { diagnosticMessage, runGenerationUiEffect, safeDiagnosticLog } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { commitLineWidget } from './widget.js';
 import { createDashedModule } from './dashed.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
@@ -72,9 +73,7 @@ export function createLinesFeature(env = {}) {
     const clearGenerationFailure = () => { lastGenerationFailure = null; };
     const failureText = (error, reasonCode) => reasonCode === 'evolution-newborn-missing-ticket'
         ? '上次生成失败：模型漏写了新线的来源编号。原有内容未改变，可以重新生成。'
-        : reasonCode === 'evolution-auto-capacity-overflow'
-            ? '上次生成失败：候选超过 8 条自动活线容量，未保存，原有内容仍保留。请先整理已结束的线，再手动重试。'
-            : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
+        : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
     const generation = env.generation || (env.generationEnv && createLinesGenerationController({
         ...env.generationEnv,
         timeLimits: env.timeLimits || env.generationEnv.timeLimits,
@@ -251,9 +250,7 @@ export function createLinesFeature(env = {}) {
             if (!stillCurrent()) continue;
             if (result?.status === 'updated' && env.getSettings?.().notifyMode === 'full') env.toast?.('线已随剧情自动推进 · 请注意查看');
             else if (result?.status === 'failed') {
-                if (result.reason === 'evolution-auto-capacity-overflow') {
-                    showAutoAdvanceFailure(intent, '模型候选超过 8 条自动活线容量；未保存，原有线保持不变。请手动重试前整理已结束的线');
-                } else if (lastGenerationFailure?.chatId === intent.chatId && lastGenerationFailure?.chatRevision === intent.chatRevision) {
+                if (lastGenerationFailure?.chatId === intent.chatId && lastGenerationFailure?.chatRevision === intent.chatRevision) {
                     if (env.isPanelActive?.()) refreshPanel();
                 } else {
                     showAutoAdvanceFailure(intent, '生成或保存未完成，请查看失败提示并手动重试');
@@ -328,7 +325,6 @@ export function createLinesFeature(env = {}) {
         } finally { saveDeadline.dispose(); }
         if (!(stored === true || stored?.ok === true)) return stored || false;
         if (stored?.stale) return { ...stored, ok: true };
-        if (currentGenerationOwner(owner) && !saveFailed) clearGenerationFailure();
         const ui = await runGenerationUiEffect(() => {
             runtime.cache(raw);
             if (swipeCtx?.mesId != null) {
@@ -339,10 +335,20 @@ export function createLinesFeature(env = {}) {
                 rec.swipeMeta = { ...(rec.swipeMeta || {}), [String(swipeCtx.swipeId ?? 0)]: { generatedAt: next.value.generatedAt } };
                 swipeStore.write(chatId, swipeCtx.mesId, rec);
             }
-            if (env.isPanelActive?.()) { refreshPanel(true); if (!silent && env.notifyMode?.() !== 'off') env.toast?.('线已生成'); }
+            if (env.isPanelActive?.()) refreshPanel(true);
             syncInline();
-            if (!env.isPanelActive?.() && !silent) env.toast?.('线已生成，点击查看');
         });
+        if (!saveFailed && currentGenerationOwner(owner)) {
+            if (ui.ok) clearGenerationFailure();
+            else {
+                lastGenerationFailure = { chatId, chatRevision: owner.chatRevision, text: UI_REFRESH_FAILURE_TEXT };
+                try { if (env.isPanelActive?.()) refreshPanel(true); } catch {}
+                try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {}
+            }
+        }
+        if (ui.ok && !silent) {
+            try { env.toast?.(env.isPanelActive?.() ? '线已生成' : '线已生成，点击查看'); } catch (error) { /* 成功 toast 不影响已保存的线 */ }
+        }
         return stored?.commitState === 'local-applied'
             ? { ...stored, uiApplied: ui.ok, ...(ui.ok ? {} : { uiError: ui.error }) }
             : { ...(stored && typeof stored === 'object' ? stored : { ok: true }), uiApplied: ui.ok, ...(ui.ok ? {} : { uiError: ui.error }) };

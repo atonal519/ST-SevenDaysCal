@@ -23,7 +23,7 @@ export const normalizeLineStage = value => {
         发酵: '延展', 执行: '延展',
         逼近: '成形', 关键: '成形',
         已爆发: '收束', 已完成: '收束',
-        已消散: '淡出', 已失败: '淡出',
+        已消散: '淡出', 已失败: '淡出', 已了结: '收束',
     };
     if (legacy[text]) return legacy[text];
     const aliases = [
@@ -118,6 +118,10 @@ export function validateLinesResponse(raw, { maxCandidates } = {}) {
     if (typeof raw !== 'string' || !raw.trim()) return { ok: false, reason: 'empty' }; let source = raw.trim();
     source = source.replace(/^```(?:text|markdown|xml)?\s*[\r\n]/i, '').replace(/[\r\n]\s*```\s*$/i, '').trim();
     const inner = extractLinesWidget(source); if (inner === null) return { ok: false, reason: 'incomplete-or-extraneous' };
+    if (!inner.trim()) {
+        if (!/^\s*<storylines_widget\b[^>]*>\s*<\/storylines_widget\s*>\s*$/i.test(source)) return { ok: false, reason: 'incomplete-or-extraneous' };
+        return { ok: true, model: [], raw: '', rejected: [] };
+    }
     const parsedBlocks = tolerantBlocks(inner);
     const limit = Number.isInteger(maxCandidates) && maxCandidates >= 0 ? maxCandidates : null;
     const blocks = limit === null ? parsedBlocks : parsedBlocks.slice(0, limit);

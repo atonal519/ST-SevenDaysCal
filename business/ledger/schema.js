@@ -22,6 +22,7 @@ const captureAnchorKind = value => {
     const offset = /^(?:C|L)\d+$/.test(id) ? 1 : 0;
     return columns.length >= (offset ? 9 : 8) && columns[offset] ? 'record' : null;
 };
+const normalizeLedgerType = value => ({ 待办: '约定待办' }[String(value || '').trim()] || String(value || '').trim());
 const judgeAnchorKind = value => {
     const columns = ledgerProtocolColumns(value);
     return columns.length >= 4 && /^L\d+$/i.test(String(columns[0] || '').replace(/[\[\]【】]/g, '').trim()) ? 'record' : null;
@@ -74,7 +75,9 @@ export function parseLedgerCaptureDetailed(raw) {
         const statusEnd = sourceIndex >= 0 ? sourceIndex - 2 : cols.length;
         const status = cols.slice(offset + 4, statusEnd).join('｜');
         if (!status) { reject('status'); continue; }
-        const entry = { 事由: cols[offset], 类型: types.includes(cols[offset + 1]) ? cols[offset + 1] : '持续状态', 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: normalizeLedgerSentenceTerminal(status) };
+        const normalizedType = normalizeLedgerType(cols[offset + 1]);
+        if (!types.includes(normalizedType)) { reject('type'); continue; }
+        const entry = { 事由: cols[offset], 类型: normalizedType, 牵扯: splitCnList(cols[offset + 2]), 标签: splitCnList(cols[offset + 3]), 现状: normalizeLedgerSentenceTerminal(status) };
         const cycle = /^\d+$/.test(cycleText) ? Number(cycleText) : NaN;
         if (Number.isFinite(cycle) && cycle > 0) entry.周期长度 = cycle;
         const due = parseDate(dueText);

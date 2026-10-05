@@ -1,6 +1,7 @@
 import { ledgerSourceFingerprint, legacyLedgerSourceFingerprint } from './reconcile.js';
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, runGenerationUiEffect } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 // 刻度捕获纯依赖：只负责正文楼层/来源窗口与稳定性，不执行 API 或落库。
 export const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
 - 持续状态：身体伤情 / 病症、怀孕、会持续影响后续行为、关系或状态的情绪／心理影响等——会随天数自然演变（如割伤→结痂→愈合）。单场景的一过性心情不记。
@@ -729,11 +730,14 @@ export function createLedgerCaptureController(options = {}) {
             if (!added.length && !(result?.patched || []).length) { provenanceCheckpoint = null; if (manual) await runGenerationUiEffect(() => env.toast?.('没有新事件（都已在刻度上）'), { diagnostic, reasonCode: 'capture-toast-failed' }); return { status: 'unchanged', reason: 'duplicate', feedbackShown: manual }; }
             provenanceCheckpoint = null;
             markCommitted({ reasonCode: 'capture-saved', commitState: result?.commitState });
-            if (manual || env.settings?.()?.notifyMode === 'full') await runGenerationUiEffect(() => env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`), { diagnostic, reasonCode: 'capture-toast-failed' });
-            await runGenerationUiEffect(() => env.refresh?.(), { diagnostic, reasonCode: 'capture-refresh-failed' });
-            await runGenerationUiEffect(() => env.refreshInline?.(true), { diagnostic, reasonCode: 'capture-inline-refresh-failed' });
-            await runGenerationUiEffect(() => env.render?.(), { diagnostic, reasonCode: 'capture-render-failed' });
-            return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: manual || env.settings?.()?.notifyMode === 'full' };
+            let uiError = null;
+            const runUi = async (effect, reasonCode) => { const outcome = await runGenerationUiEffect(effect, { diagnostic, reasonCode }); if (!outcome.ok) uiError ||= outcome.error; };
+            if (manual || env.settings?.()?.notifyMode === 'full') await runUi(() => env.toast?.(`刻度标注 ${added.length} 条、更新 ${(result?.patched || []).length} 条${added.length ? `：${added.map(e => e.事由).join('、')}` : ''} · 请注意查看`), 'capture-toast-failed');
+            await runUi(() => env.refresh?.(), 'capture-refresh-failed');
+            await runUi(() => env.refreshInline?.(true), 'capture-inline-refresh-failed');
+            await runUi(() => env.render?.(), 'capture-render-failed');
+            if (uiError) { try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
+            return { status: 'updated', added: added.length, patched: (result?.patched || []).length, feedbackShown: Boolean(uiError || manual || env.settings?.()?.notifyMode === 'full'), ...(uiError ? { uiError } : {}) };
         } catch (err) {
             const ownerCurrent = sameLedgerOwner(ownerSnapshot, ledgerOwnerIdentity(env.context()));
             if (err?.name !== 'AbortError' && !travel?.signal?.aborted) diagnostic.rejected(err, { phase: err?.phase || 'prepare', reasonCode: err?.phase || err?.diagnosticCode || 'capture-failed' });

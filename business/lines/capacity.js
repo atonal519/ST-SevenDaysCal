@@ -1,3 +1,3 @@
 export const AUTO_LINE_CAPACITY = 8;
-// 每轮签发 8 张票；只有选入原始前八的新线才会消耗对应真实票据。
+// 仅无存档首次生成限制为 8；后续按既有未锁线规模动态供票，不设总条数上限。
 export const AUTO_LINE_SEED_CAPACITY = AUTO_LINE_CAPACITY;

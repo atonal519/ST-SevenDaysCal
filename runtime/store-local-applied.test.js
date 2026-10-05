@@ -28,7 +28,7 @@ const fixtures = new Map([
   ['world-info.js', ${JSON.stringify(pathToFileURL(world).href)}], ['utils.js', ${JSON.stringify(pathToFileURL(utils).href)}],
 ]);
 export async function resolve(specifier, context, nextResolve) { const hit = [...fixtures].find(([name]) => specifier.endsWith('/' + name) || specifier === name); if (hit) return { url: hit[1], shortCircuit: true }; return nextResolve(specifier, context); }
-export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, readStore, keyDesc, commitPortableImport, addLedgerEntries: ledger.addEntriesAtomic, memory };\\n', shortCircuit: true }; }
+export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, readStore, keyDesc, commitPortableImport, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
 `);
         await fs.writeFile(runner, `
 import { setContext } from ${JSON.stringify(pathToFileURL(harness).href)};
@@ -38,6 +38,7 @@ globalThis.document = { documentElement: { style: { setProperty() {} }, insertAd
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' }); globalThis.requestAnimationFrame = callback => setTimeout(callback, 0); globalThis.MutationObserver = class { observe() {} disconnect() {} }; globalThis.ResizeObserver = class { observe() {} disconnect() {} }; globalThis.IntersectionObserver = class { observe() {} disconnect() {} }; globalThis.toastr = null;
 await import(${JSON.stringify(indexUrl)} + '?local-applied-test=' + Date.now());
 const seam = globalThis.__hostSaveSeam;
+if (!seam.storeKinds.includes('daily-menu')) throw new Error('daily menu is missing from store statistics/clear kinds');
 let saveCalls = 0; let settleSave; let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls++; throw new Error('ordinary local-applied path must not fetch'); };
 const never = new Promise((resolve, reject) => { settleSave = { resolve, reject }; });
@@ -135,7 +136,125 @@ if (replacedMetadata['sp-store'].data['lines-user'] !== takeoverValue) throw new
 rejectReplaced(new Error('old save rejected after same-value takeover'));
 await new Promise(resolve => setImmediate(resolve));
 if (replacedCallback !== 0) throw new Error('same-value ordinary takeover received an old save error');
+const menuMetadata = { 'sp-store': { version: 1, data: { 'daily-menu-user': { title: '保留菜单', items: [{ name: '汤' }] }, 'lines-user': { raw: '保留线' } } } };
+setContext(context('menu-kind-chat', menuMetadata, { is_group: false, file_name: 'menu-kind-chat', char_name: 'Role', avatar_url: 'role.png' }));
+if (!(seam.usageByKind()['daily-menu'] > 0)) throw new Error('daily menu is missing from storage usage statistics');
+if (seam.clearKind('daily-menu') !== 1 || 'daily-menu-user' in menuMetadata['sp-store'].data || !menuMetadata['sp-store'].data['lines-user']) throw new Error('daily menu kind clear removed the wrong data');
+const menuContext = {
+  chatId: 'menu-context-chat', characterId: 0, name1: 'User Context', name2: 'Character Context',
+  characters: [{ avatar: 'menu-role.png', description: 'CHARACTER_CONTEXT_MARKER', personality: '', scenario: '', data: { character_book: { name: 'Story Book', entries: [{ uid: 1, key: ['*'], comment: 'Menu lore', content: 'WORLD_BOOK_MARKER', enabled: true }] } } }],
+  powerUserSettings: { persona_description: 'PERSONA_CONTEXT_MARKER' }, chatMetadata: { note_prompt: 'AUTHOR_NOTE_MARKER' },
+  chat: [1, 2, 3, 4].map(n => ({ is_user: false, name: 'Character Context', mes: 'AI_FLOOR_' + n })), getRequestHeaders: () => ({}),
+  simulateWorldInfoActivation: async () => ({ activatedEntries: [{ world: 'Story Book', uid: 1 }] }),
+};
+setContext(menuContext);
+const settings = seam.getSettings();
+settings.useBaiBaiBook = true; settings.apiUrl = 'https://mock.invalid'; settings.apiKey = 'mock-key'; settings.apiModel = 'mock-model';
+let memoryReads = 0;
+globalThis.STBaiBaiBook = { getInjectedHistory: () => { memoryReads++; return { relativeText: 'MEMORY_CONTEXT_MARKER' }; } };
+const menuMessages = await seam.buildMessages(menuContext, 'MENU_PROMPT', 'User Context', 'Character Context', 3, { includeMemory: false });
+const menuSystem = menuMessages.find(message => message.role === 'system')?.content || '';
+if (memoryReads !== 0 || menuSystem.includes('MEMORY_CONTEXT_MARKER')) throw new Error('menu buildMessages read or included story memory');
+for (const marker of ['CHARACTER_CONTEXT_MARKER', 'PERSONA_CONTEXT_MARKER', 'AUTHOR_NOTE_MARKER', 'WORLD_BOOK_MARKER']) if (!menuSystem.includes(marker)) throw new Error('menu context omitted ' + marker);
+const menuFloors = menuMessages.filter(message => message.role === 'assistant').map(message => message.content);
+if (JSON.stringify(menuFloors) !== JSON.stringify(['AI_FLOOR_2', 'AI_FLOOR_3', 'AI_FLOOR_4'])) throw new Error('menu context did not preserve the latest three AI floors: ' + JSON.stringify(menuFloors));
+const normalMessages = await seam.buildMessages(menuContext, 'NORMAL_PROMPT', 'User Context', 'Character Context', 3, {});
+if (memoryReads !== 1 || !(normalMessages[0]?.content || '').includes('MEMORY_CONTEXT_MARKER')) throw new Error('default buildMessages memory behavior changed');
+const beforeMenu = { title: 'Existing menu', intro: '按舰上当前食材调配，今晚来点新鲜搭配 😊', items: [{ name: 'Existing dish', category: 'main', description: 'kept' }] };
+menuContext.chatMetadata['sp-store'] = { version: 1, data: { 'daily-menu-user': beforeMenu } };
+const introWrite = await seam.writeStoreConfirmed(seam.keyDesc('daily-menu', 'user', ''), beforeMenu);
+if (introWrite?.commitState !== 'local-applied' || seam.readStore(seam.keyDesc('daily-menu', 'user', ''))?.intro !== beforeMenu.intro) throw new Error('production ordinary store failed to immediately preserve the optional menu intro');
+let requestSignal = null;
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/diagnostics.local.json')) return { ok: true, json: async () => ({ enabled: false }) };
+  if (String(url).includes('/private-diagnostics/')) return { ok: false, status: 404, json: async () => ({}) };
+  if (String(url) === '/api/backends/chat-completions/generate') return new Promise((_resolve, reject) => { requestSignal = options.signal; options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }); });
+  throw new Error('unexpected mocked request: ' + String(url));
+};
+const menuRequest = seam.dailyMenuController.run();
+for (let i = 0; i < 100 && !requestSignal; i++) await new Promise(resolve => setTimeout(resolve, 10));
+if (!requestSignal) throw new Error('menu request did not reach mocked API');
+if (memoryReads !== 1) throw new Error('actual menu API call did not skip memory before request dispatch');
+seam.preparePluginDisable();
+seam.abortBackground();
+const menuAbortResult = await Promise.race([menuRequest, new Promise((_, reject) => setTimeout(() => reject(new Error('total gate did not cancel menu request')), 1000))]);
+if (!requestSignal.aborted || menuAbortResult?.status !== 'cancelled') throw new Error('plugin total gate failed to cancel menu request');
+if (menuContext.chatMetadata['sp-store'].data['daily-menu-user'] !== beforeMenu) throw new Error('plugin total gate allowed menu write after cancellation');
 if (typeof seam.readStore !== 'function') throw new Error('production read seam missing');
+const scheduleWithMenu = seam.renderSchedule('not a calendar', 'UI probe');
+const menuButtonIndex = scheduleWithMenu.indexOf('sp-open-daily-menu'); const refreshButtonIndex = scheduleWithMenu.indexOf('sp-refresh-schedule');
+if (refreshButtonIndex < 0 || menuButtonIndex < refreshButtonIndex || !scheduleWithMenu.includes('aria-label="今日菜单"')) throw new Error('real schedule renderer omitted or misplaced menu entry');
+if (!seam.pointScheduleEmptyHtml().includes('sp-open-daily-menu')) throw new Error('real point empty state omitted menu entry');
+let popup = null; const menuContent = { innerHTML: '' }; const uiHandlers = {};
+const closeButton = { focus() { this.focused = true; } };
+const eventHost = {
+  addEventListener(type, handler) { uiHandlers[type] = handler; },
+  appendChild(node) { popup = node; node.closest = selector => selector === '#sp-daily-menu-dialog' ? node : null; node.getAttribute = name => node.attributes[name]; node.querySelector = selector => selector === '[data-daily-menu-close]' ? closeButton : null; node.remove = () => { if (popup === node) popup = null; }; },
+};
+const dialogShadow = {
+  querySelector(selector) { return selector === '#sp-dialog-overlay-host' ? eventHost : selector === '#sp-daily-menu-dialog' ? popup : selector === '#sp-daily-menu-content' && popup ? menuContent : null; },
+};
+const originalCreateElement = document.createElement;
+document.createElement = () => { const attributes = {}; return { attributes, setAttribute(name, value) { attributes[name] = value; }, focus() {}, remove() {} }; };
+seam.setDialogShadow(dialogShadow);
+seam.bindDailyMenuDialogEvents();
+let openFetches = 0; const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => { openFetches++; throw new Error('opening the menu must not request generation'); };
+seam.openDailyMenuDialog();
+if (!popup || popup.getAttribute?.('role') !== 'dialog' || !menuContent.innerHTML.includes('Existing dish') || !closeButton.focused) throw new Error('real menu opener did not show stored menu in an accessible dialog');
+if (openFetches !== 0) throw new Error('opening menu invoked API');
+popup.remove(); seam.renderDailyMenuCard();
+if (popup) throw new Error('closed menu render callback reopened the dialog');
+seam.writeStore(seam.keyDesc('daily-menu', 'user', ''), { title: 'Latest menu', items: [{ name: 'Latest dish', category: 'main', description: 'newly saved' }] });
+seam.openDailyMenuDialog();
+if (!menuContent.innerHTML.includes('Latest dish')) throw new Error('reopening the menu did not read the latest stored value');
+const latestOverlay = popup;
+uiHandlers.click({ target: { closest: selector => selector === '[data-daily-menu-close]' ? closeButton : selector === '#sp-daily-menu-dialog' ? latestOverlay : null } });
+if (popup) throw new Error('close control did not close the menu popup');
+globalThis.fetch = originalFetch;
+let uiRequestSignal = null; let uiRequestCount = 0;
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/diagnostics.local.json')) return { ok: true, json: async () => ({ enabled: false }) };
+  if (String(url).includes('/private-diagnostics/')) return { ok: false, status: 404, json: async () => ({}) };
+  if (String(url) === '/api/backends/chat-completions/generate') { uiRequestCount++; return new Promise((_resolve, reject) => { uiRequestSignal = options.signal; options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }); }); }
+  throw new Error('unexpected menu popup request: ' + String(url));
+};
+const uiRequest = seam.dailyMenuController.run();
+for (let i = 0; i < 100 && !uiRequestSignal; i++) await new Promise(resolve => setTimeout(resolve, 10));
+if (!uiRequestSignal) throw new Error('menu lifecycle probe did not reach mocked API');
+seam.openDailyMenuDialog();
+if (!menuContent.innerHTML.includes('Latest dish') || !menuContent.innerHTML.includes('取消生成') || uiRequestCount !== 1) throw new Error('popup did not show saved menu/busy action or opened another request');
+const activeOverlay = popup;
+uiHandlers.click({ target: { closest: selector => selector === '[data-daily-menu-close]' ? closeButton : selector === '#sp-daily-menu-dialog' ? activeOverlay : null } });
+if (popup || uiRequestSignal.aborted || !seam.dailyMenuController.busy()) throw new Error('closing popup cancelled the running menu task');
+seam.renderDailyMenuCard();
+if (popup) throw new Error('closed popup was recreated by a task redraw');
+seam.openDailyMenuDialog();
+if (!menuContent.innerHTML.includes('取消生成')) throw new Error('reopening popup did not recover the current busy state');
+const runningOverlay = popup;
+uiHandlers.click({ target: runningOverlay });
+if (popup || uiRequestSignal.aborted || !seam.dailyMenuController.busy()) throw new Error('outside click did more than close popup');
+seam.openDailyMenuDialog();
+uiHandlers.keydown({ key: 'Escape', target: { closest: selector => selector === '#sp-daily-menu-dialog' ? popup : null } });
+if (popup || uiRequestSignal.aborted) throw new Error('Escape did more than close popup');
+seam.openDailyMenuDialog();
+uiHandlers.click({ target: { closest: selector => selector === '.sp-daily-menu-generate, .sp-daily-menu-cancel' ? { classList: { contains: name => name === 'sp-daily-menu-cancel' } } : selector === '#sp-daily-menu-dialog' ? popup : null } });
+const cancelledUiRequest = await uiRequest;
+if (!uiRequestSignal.aborted || cancelledUiRequest?.status !== 'cancelled') throw new Error('popup cancel button did not cancel the menu task');
+let generateClicks = 0;
+seam.setDailyMenuController({ busy: () => false, run: () => { generateClicks++; return Promise.resolve(); }, cancel() { throw new Error('unexpected cancel action'); } });
+seam.renderDailyMenuCard();
+uiHandlers.click({ target: { closest: selector => selector === '.sp-daily-menu-generate, .sp-daily-menu-cancel' ? { classList: { contains: () => false } } : selector === '#sp-daily-menu-dialog' ? popup : null } });
+if (generateClicks !== 1) throw new Error('popup generation button is not wired to the controller');
+popup.remove();
+seam.getSettings().themeMode = 'auto'; seam.setThemeForTest('night');
+seam.openDailyMenuDialog();
+if (!popup.className.includes('sp-root') || !popup.className.includes('sp-night') || popup.className.includes('sp-forced-night')) throw new Error('auto-theme popup did not use current palette classes');
+popup.remove();
+seam.getSettings().themeMode = 'day'; seam.setThemeForTest('day');
+seam.openDailyMenuDialog();
+if (!popup.className.includes('sp-root') || !popup.className.includes('sp-day') || !popup.className.includes('sp-forced-day')) throw new Error('forced-theme popup did not use the selected forced palette class');
+document.createElement = originalCreateElement;
 `);
         const result = await new Promise(resolve => {
             const child = spawn(process.execPath, ['--experimental-loader', loader, runner], { cwd: dir, env: { ...process.env, NODE_OPTIONS: '' }, stdio: ['ignore', 'pipe', 'pipe'] });

@@ -78,7 +78,7 @@ test('space card generation reads the current character preference through its c
 });
 
 test('semantic-route applies point/line preferences only if it chooses those cards', async () => {
-    const preferencesByCharacter = { card: preferences('meso') };
+    const preferencesByCharacter = { card: { ...preferences('meso'), narrativePace: 'fast' } };
     const ctx = { name1: '用户', name2: '角色', characterId: 'card' };
     const feature = createSpaceContext({
         context: () => ctx,
@@ -92,6 +92,10 @@ test('semantic-route applies point/line preferences only if it chooses those car
     assert.match(routed, /若你选择普通讨论或解释/);
     assert.match(routed, /不要把偏好当作回答立场/);
     assert.match(routed, /轴／历法卡片与刻度内容不套用这些偏好/);
+    assert.match(routed, /剧情推进幅度仅在本轮确实输出或修改线卡时适用；其他卡与普通讨论不套用此幅度/);
+    assert.match(routed, /快：压缩无关键变化的过渡，让有据事件实质推进，过渡可自然跨日或数日/);
+    assert.equal(routed.split('【剧情推进幅度】').length - 1, 1);
+    for (const kind of ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget']) assert.match(routed, new RegExp(`<${kind}>`));
     assert.match(routed, /中观：观察已有组织/);
     assert.match(routed, /剧情倾向·优先级/);
 

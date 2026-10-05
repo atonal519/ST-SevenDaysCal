@@ -7,6 +7,126 @@ import { bindPointAdultTickets, mergePinnedPoints, numberedPointList, parseCalen
 import { createPointWidgetActions } from './widget.js';
 import { buildPrompt } from './prompt.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
+import { buildDailyMenuPrompt, createDailyMenuController, parseDailyMenu, renderDailyMenuHtml } from './daily-menu.js';
+import { __portableChatDataTestSeams, buildPortableChatPackage, createPortableImportPlan, parsePortableChatPackage } from '../../runtime/portable-chat-data.js';
+
+test('daily menu prompt and parser support a compact optional intro and keep valid partial rows', () => {
+    const prompt = buildDailyMenuPrompt({ storyDate: null, previousMenu: { items: [{ name: '旧菜' }, { name: '旧汤' }] } });
+    assert.match(prompt, /故事日期未确认/);
+    assert.match(prompt, /当前世界观、角色近况及当地可得食材/);
+    assert.match(prompt, /Title: 短主题；Intro: 一小段菜单介绍或选菜理由/);
+    assert.match(prompt, /Dish: 菜名 \| 类别 \| 短说明/);
+    assert.match(prompt, /语气轻松俏皮，菜单文字不用emoji/);
+    assert.match(prompt, /旧菜、旧汤/);
+    assert.equal((prompt.match(/Title:/g) || []).length, 1);
+    assert.equal((prompt.match(/Intro:/g) || []).length, 1);
+    assert.equal((prompt.match(/Dish:/g) || []).length, 1);
+    const intro = '“舰上水培菜配上轻盈的发酵主食，今晚少占点冰柜空间，多留点胃口 😊”';
+    const parsed = parseDailyMenu(`标题：清爽家常\n> Intro: ${intro}\n1. 菜品：番茄豆腐汤｜汤品｜酸香清淡\nDish: 烤鱼 | 主菜 | 香草烤制\nDish: 缺说明 | 小食\n其他说明`);
+    assert.deepEqual(parsed, {
+        title: '清爽家常',
+        intro,
+        items: [
+            { name: '番茄豆腐汤', category: '汤品', description: '酸香清淡' },
+            { name: '烤鱼', category: '主菜', description: '香草烤制' },
+        ],
+    });
+    const legacy = parseDailyMenu('Title: 旧主题\nDish: 旧菜 | 主菜 | 旧说明');
+    assert.deepEqual(legacy, { title: '旧主题', items: [{ name: '旧菜', category: '主菜', description: '旧说明' }] });
+    assert.equal(parseDailyMenu('Title: alias\n简介：一段说明 😺\nDish: 菜 | 主菜 | 说明').intro, '一段说明 😺');
+    assert.equal(parseDailyMenu('无菜单').items.length, 0);
+});
+
+test('daily menu renderer escapes model content', () => {
+    const html = renderDailyMenuHtml({ title: '<img src=x>', intro: '<script>说明 😊</script>', storyDate: '夏季3日', items: [{ name: '<b>菜</b>', category: '主菜', description: '<script>bad</script>' }] }, { escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') });
+    assert.doesNotMatch(html, /<img|<b>|<script>/);
+    assert.match(html, /&lt;img/);
+    assert.match(html, /<h3>.*?<\/h3><p class="sp-daily-menu-intro"><em>&lt;script&gt;说明 😊&lt;\/script&gt;<\/em><\/p>/);
+    assert.match(html, /换一份/);
+    assert.doesNotMatch(renderDailyMenuHtml({ title: '旧主题', items: [{ name: '旧菜', category: '主菜', description: '短说明' }] }), /sp-daily-menu-intro/);
+});
+
+test('daily menu shares 点 storage statistics/clear kind and portable export ownership', () => {
+    assert.equal(__portableChatDataTestSeams.KEY_MATCHERS.points('daily-menu-user'), true);
+    assert.equal(__portableChatDataTestSeams.KEY_MATCHERS.lines('daily-menu-user'), false);
+    const exported = buildPortableChatPackage({
+        selectedModules: ['points'],
+        roots: { 'sp-store': { version: 1, data: { 'daily-menu-user': { title: '午餐', intro: '按眼下食材配一碗暖汤 😊', items: [{ name: '汤', category: '汤品', description: '清淡' }] } } } },
+    });
+    assert.equal(exported.ok, true);
+    assert.deepEqual(Object.keys(exported.package.modules.points.entries), ['daily-menu-user']);
+    const parsed = parsePortableChatPackage(JSON.stringify(exported.package));
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.package.modules.points.entries['daily-menu-user'].intro, '按眼下食材配一碗暖汤 😊');
+    const planned = createPortableImportPlan({
+        roots: { 'sp-store': { version: 1, data: { 'schedule-user': { raw: 'old' }, 'daily-menu-user': { title: '旧' }, 'lines-user': { raw: 'keep' } } } },
+        portablePackage: parsed.package, selectedModules: ['points'], targetChatId: 'chat',
+    });
+    assert.deepEqual(Object.keys(planned.replacementRoots['sp-store'].data).sort(), ['daily-menu-user', 'lines-user']);
+    assert.equal(planned.replacementRoots['sp-store'].data['daily-menu-user'].title, '午餐');
+    assert.equal(planned.replacementRoots['sp-store'].data['daily-menu-user'].intro, '按眼下食材配一碗暖汤 😊');
+});
+
+test('daily menu controller only replaces the previous menu after a confirmed application and preserves it on errors', async () => {
+    let currentOwner = null; let saved = { title: '旧菜单', items: [{ name: '旧菜' }] }; let promptSent = ''; let writeCount = 0; const toasts = [];
+    const owners = {
+        create: () => { currentOwner = { controller: new AbortController() }; return currentOwner; },
+        isCurrent: owner => owner === currentOwner && !owner.controller.signal.aborted,
+        finish: owner => { if (owner === currentOwner) currentOwner = null; },
+    };
+    const controller = createDailyMenuController({
+        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
+        generate: async (prompt, signal) => { promptSent = prompt; if (signal.aborted) throw new DOMException('aborted', 'AbortError'); return 'Title: 新菜单\nIntro: 舰上水培菜今晚也有新花样 😊\nDish: 炖菜 | 主菜 | 慢炖'; },
+        write: async value => { writeCount++; saved = value; return { ok: true, commitState: 'local-applied' }; },
+        render: () => {}, toast: message => toasts.push(message),
+    });
+    const result = await controller.run();
+    assert.equal(result.status, 'updated');
+    assert.equal(saved.title, '新菜单');
+    assert.equal(saved.intro, '舰上水培菜今晚也有新花样 😊');
+    assert.equal(saved.storyDate, null);
+    assert.equal(writeCount, 1);
+    assert.match(promptSent, /故事日期未确认/);
+    assert.match(promptSent, /Intro: 一小段菜单介绍或选菜理由/);
+    saved = { title: '保留菜单', items: [{ name: '保留菜' }] };
+    const failed = createDailyMenuController({
+        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
+        generate: async () => { throw new Error('offline'); },
+        write: async value => { writeCount++; saved = value; return { ok: true }; },
+        render: () => {}, toast: message => toasts.push(message),
+    });
+    const failure = await failed.run();
+    assert.equal(failure.status, 'failed');
+    assert.equal(saved.title, '保留菜单');
+    assert.equal(writeCount, 1);
+    assert.equal(toasts.at(-1), '菜单生成失败，请重试');
+
+    const cancellable = createDailyMenuController({
+        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
+        generate: (_prompt, signal) => new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        }),
+        write: async value => { writeCount++; saved = value; return { ok: true }; },
+        render: () => {}, toast: message => toasts.push(message),
+    });
+    const pending = cancellable.run();
+    assert.equal(cancellable.cancel(), true);
+    assert.equal((await pending).status, 'cancelled');
+    assert.equal(writeCount, 1);
+    assert.equal(saved.title, '保留菜单');
+
+    const refreshFailure = createDailyMenuController({
+        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
+        generate: async () => 'Title: 新菜单\nDish: 炖菜 | 主菜 | 慢炖',
+        write: async value => { writeCount++; saved = value; return { ok: true, commitState: 'local-applied' }; },
+        render: () => { throw new Error('render-failed'); }, toast: message => toasts.push(message),
+    });
+    const refresh = await refreshFailure.run();
+    assert.equal(refresh.status, 'updated');
+    assert.equal(refresh.uiError, true);
+    assert.equal(saved.title, '新菜单');
+    assert.equal(toasts.at(-1), '内容已更新，界面刷新失败');
+});
 
 test('point parser removes arbitrary structural wrappers without weakening fields or metadata', () => {
     const raw = `<calendar_widget>
@@ -806,14 +926,14 @@ test('point combined edit updates desc and npcAction atomically', () => {
     assert.equal(result.ok, true); assert.match(result.raw, /Event: main\|标题\|新描述\|早晨\|地点\|新动态\|true/);
 });
 
-function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null, persistenceFailure = null } = {}) {
+function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null, persistenceFailure = null, uiFailure = false } = {}) {
     const state = { isGenerating: false, scheduleAbortController: null, cachedSchedule: null };
     const records = new Map();
     const targetKey = (scope, name) => `schedule:${scope}:${name}`;
     if (raw) records.set(targetKey(view, char), { raw, ts: 1, userName: view === 'char' ? char : '用户' });
     let apiCalls = 0; let syncing = false; const writes = []; const failureNotes = [];
     const owners = {
-        create: (_kind, details) => ({ ...details, controller: new AbortController() }), currentChatRevision: () => 1,
+        create: (_kind, details) => ({ ...details, controller: new AbortController() }), currentChatRevision: () => 1, isOwner: () => true,
         finish: () => {}, peekPending: () => null, discardPending: () => {}, setPending: () => {},
     };
     const generated = 'StartDate: 2024-08-21\n<calendar_widget>\nDay: 1\nEvent: main|新点|描述|早|地点|动态\n</calendar_widget>';
@@ -832,9 +952,10 @@ function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024
             else if (persistenceFailure === 'rejected-promise') queueMicrotask(() => options.onPersistenceError?.());
             return { ok: true, commitState: 'local-applied', value };
         },
-        recordFailure: (_owner, operation, error) => failureNotes.push({ operation, error }), sync: () => {},
+        recordFailure: (_owner, operation, error) => failureNotes.push({ operation, error }), sync: () => { if (uiFailure) throw new Error('synthetic UI refresh failure'); },
         setCached: value => { state.cachedSchedule = value; }, cached: () => state.cachedSchedule, panelVisible: () => false, setBody: () => {},
-        toast: () => {}, notify: () => 'off', monthName: month => `${month}月`, clearBusy: () => {},
+        toast: () => {}, notify: () => 'off', monthName: month => `${month}月`, clearBusy: () => {}, setButton: () => {}, loading: () => '',
+        evaluate: () => ({ canCleanup: true }),
         followupState: () => ({ canCleanup: true, canFollowup: false }), shouldFollowup: () => false,
     };
     return { controller: createPointController(env), records, writes, failureNotes, apiCalls: () => apiCalls };
@@ -883,6 +1004,20 @@ test('point local success keeps an early host-save failure hint for sync throw a
         assert.match(harness.writes[0][1].raw, /新点/);
         assert.equal(harness.failureNotes.length, 1, `${persistenceFailure}: save failure remains visible after successful local apply`);
         assert.equal(harness.failureNotes[0].operation, '保存');
+    }
+});
+
+test('point sync and generation keep applied content and report UI refresh failure without a second request', async () => {
+    for (const operation of ['sync', 'generate']) {
+        const harness = pointBoundaryHarness({ uiFailure: true });
+        const result = operation === 'sync' ? await harness.controller.syncPointToToday(false) : await harness.controller.runGenerate();
+        assert.equal(result.status, 'updated', operation);
+        assert.match(result.uiError.message, /synthetic UI refresh failure/);
+        assert.equal(harness.apiCalls(), 1, `${operation}: no API retry`);
+        assert.equal(harness.writes.length, 1, `${operation}: the local result stays applied`);
+        assert.match(harness.writes[0][1].raw, /新点/);
+        assert.equal(harness.failureNotes.at(-1).operation, '界面刷新');
+        assert.equal(harness.failureNotes.at(-1).error, '内容已更新，界面刷新失败');
     }
 });
 

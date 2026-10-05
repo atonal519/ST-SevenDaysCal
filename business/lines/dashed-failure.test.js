@@ -67,3 +67,24 @@ test('dashed displays locally applied items before the host save settles and ret
     assert.match(dashed.panelHtml(), /这条冷知识在本地立即可见/);
     assert.ok(refreshes > beforeFailureRefreshes);
 });
+
+test('dashed keeps locally applied content and reports a refresh failure as UI-only', async () => {
+    let saved = null, refreshes = 0, apiCalls = 0;
+    const toasts = [];
+    const dashed = createDashedModule({
+        keyDesc: () => 'dashed', readStore: () => saved, writeStoreConfirmed: (_key, value) => { saved = value; return { ok: true, commitState: 'local-applied' }; },
+        getSettings: () => ({ dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
+        context: () => ({ chatId: 'chat-ui', name1: 'User', name2: 'Character' }), chatId: () => 'chat-ui',
+        loadConfig: () => ({ url: 'fixture', key: 'fixture' }), callApi: async () => { apiCalls++; return '新增的冷知识内容。'; },
+        refreshPanel: () => { refreshes++; if (saved) throw new Error('synthetic dashed UI failure'); }, refreshInline: () => {},
+        escapeHtml: String, escapeAttr: String, toast: message => toasts.push(message), logDiagnostic: () => {},
+    });
+    const result = await dashed.run({ manual: true, topics: ['world'] });
+    assert.equal(result.status, 'updated');
+    assert.match(result.uiError.message, /synthetic dashed UI failure/);
+    assert.match(dashed.panelHtml(), /新增的冷知识内容/);
+    assert.match(dashed.panelHtml(), /内容已更新，界面刷新失败/);
+    assert.equal(apiCalls, 1);
+    assert.ok(refreshes >= 2);
+    assert.ok(toasts.includes('内容已更新，界面刷新失败'));
+});

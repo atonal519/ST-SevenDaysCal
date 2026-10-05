@@ -49,7 +49,7 @@ export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅�
     const adultGuidance = adultInjectionGuidance(adultMode);
     return [
         prefix,
-        '以下是这个故事水面之下正在发展的伏笔。请把它们当作暗流，在接下来的叙事中自然、含蓄、缓慢地顺势推进：不要生硬提及、不要让角色直接谈论、更不要一次抖开。',
+        '以下是这个故事水面之下正在发展的伏笔。请在接下来的叙事中自然、含蓄地呈现线索：不要生硬提及、不要让角色直接谈论、更不要一次抖开。',
         narrativePreferenceContract({ scale, direction }),
         adultGuidance,
         ...items,

@@ -1,6 +1,8 @@
 // Runtime-only status notes belong to the visible panel, never to module data or chat snapshots.
 const escapeText = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
+export const UI_REFRESH_FAILURE_TEXT = '内容已更新，界面刷新失败';
+
 export function createPanelFailureStore({ escapeHtml = escapeText } = {}) {
     const entries = new Map();
     const matches = (entry, target) => entry && Object.is(entry.target, target);

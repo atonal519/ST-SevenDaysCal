@@ -7,6 +7,7 @@ import { createSpaceRepository } from './repository.js';
 import { createSpaceUi } from './ui.js';
 import { createPanelFailureStore } from '../ui/panel-failure.js';
 import { diagnosticMessage } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 
 export function createSpaceFeature(env = {}) {
     let chatRevision = 0;
@@ -48,8 +49,10 @@ export function createSpaceFeature(env = {}) {
             const result = await chat.send(...args);
             if (attempt !== sendAttempt || !repository.isCurrent(target)) return result;
             if (result?.status === 'failed') failureNotes.set('space-chat', key, `上次局外讨论失败：${diagnosticMessage(result.error)}`);
+            else if (result?.status === 'updated' && result.uiError) failureNotes.set('space-chat', key, UI_REFRESH_FAILURE_TEXT);
             else if (result?.status === 'updated') failureNotes.clear('space-chat', key);
-            renderFailure(); return result;
+            try { renderFailure(); } catch { try { ui.toast?.(UI_REFRESH_FAILURE_TEXT, true); } catch {} }
+            return result;
         } },
         resendFrom: { value: async (...args) => {
             if (chat.busy) return chat.resendFrom(...args);
@@ -58,8 +61,10 @@ export function createSpaceFeature(env = {}) {
             const result = await chat.resendFrom(...args);
             if (attempt !== sendAttempt || !repository.isCurrent(target)) return result;
             if (result?.status === 'failed') failureNotes.set('space-chat', key, `上次局外讨论失败：${diagnosticMessage(result.error)}`);
+            else if (result?.status === 'updated' && result.uiError) failureNotes.set('space-chat', key, UI_REFRESH_FAILURE_TEXT);
             else if (result?.status === 'updated') failureNotes.clear('space-chat', key);
-            renderFailure(); return result;
+            try { renderFailure(); } catch { try { ui.toast?.(UI_REFRESH_FAILURE_TEXT, true); } catch {} }
+            return result;
         } },
         abort: { value: reason => { sendAttempt++; failureNotes.clear('space-chat', failureKey(repository.capture())); renderFailure(); return chat.abort(reason); } },
     });

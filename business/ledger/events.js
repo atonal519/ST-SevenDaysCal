@@ -1,5 +1,9 @@
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
+import { ledgerFailureText } from './diagnostics.js';
+
 export function formatLedgerJudgeFeedback(result) {
     const r = result || { status: 'failed', reason: 'unknown' };
+    if (r.status === 'updated' && r.uiError) return { message: '内容已更新，界面刷新失败', error: true };
     const s = r.reconcile?.summary || {};
     const saveResult = r.saveResult || r.error?.saveResult || r.reconcile?.error?.saveResult || null;
     const saveStatus = Number(saveResult?.status);
@@ -36,6 +40,7 @@ export function createLedgerDeletedHandler({ cancel, onDeleted, reconcile, toast
 
 export function formatLedgerCaptureFeedback(result) {
     const r = result || { status: 'failed', reason: 'unknown' };
+    if (r.status === 'updated' && r.uiError) return { message: '内容已更新，界面刷新失败', error: true };
     const text = {
         busy: '已有刻度标注正在进行，请稍候',
         skipped: r.reason === 'no-character' ? '当前没有角色卡，无法标注' : r.reason === 'spDisabled' ? '刻度功能已停用' : '本次刻度标注已跳过',
@@ -47,6 +52,42 @@ export function formatLedgerCaptureFeedback(result) {
         updated: `刻度标注已完成${Number.isFinite(r.added) || Number.isFinite(r.patched) ? `：新增 ${r.added || 0} 条、更新 ${r.patched || 0} 条` : ''} · 请注意查看`,
     }[r.status] || '刻度标注已结束';
     return { message: `${text}${r.ignored > 0 ? `；另有 ${r.ignored} 行字段不完整或来源不可靠，已忽略` : ''}`, error: r.status === 'failed' };
+}
+
+export function finalizeLedgerPanelFeedback(result, { formatFeedback, setFailure, clearFailure, render, toast, clearOnSuccess = false, formatFailure = feedback => feedback.message } = {}) {
+    let next = result;
+    const feedback = formatFeedback?.(result) || { message: '', error: false };
+    if (feedback.error) { try { setFailure?.(formatFailure(feedback, result)); } catch {} }
+    else if (clearOnSuccess && ['updated', 'unchanged'].includes(result?.status)) { try { clearFailure?.(); } catch {} }
+    try { render?.(); }
+    catch (error) {
+        if (result?.status === 'updated') {
+            next = { ...result, uiError: result.uiError || error };
+            try { setFailure?.(UI_REFRESH_FAILURE_TEXT); } catch {}
+            if (!result.uiError) { try { toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
+        }
+    }
+    return next;
+}
+
+export function finalizeLedgerCapturePanel(result, options = {}) {
+    return finalizeLedgerPanelFeedback(result, { ...options, formatFeedback: formatLedgerCaptureFeedback });
+}
+
+export function finalizeLedgerJudgePanel(result, options = {}) {
+    return finalizeLedgerPanelFeedback(result, { ...options, formatFeedback: formatLedgerJudgeFeedback });
+}
+
+export function finalizeLedgerEventUi(result, { refreshInline, render, toast } = {}) {
+    let uiError = null;
+    try { refreshInline?.(true); } catch (error) { uiError = error; }
+    try { render?.(); } catch (error) { uiError ||= error; }
+    if (result?.status === 'updated' && uiError) {
+        const next = { ...result, uiError: result.uiError || uiError, feedbackShown: true };
+        try { toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {}
+        return next;
+    }
+    return result;
 }
 
 export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, capture, judge, captureState, actions, render, refreshInline, identity, isCurrentIdentity, editor, archive, batch, toast, resetCapture } = {}) {
@@ -79,35 +120,35 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         if (button) button.__spLedgerCaptureTask = task;
         setCaptureBusy(button, true, inline);
         let outcome = null;
+        let result = null;
+        let showFeedback = true;
         try {
-            const result = outcome = await capture.run(true);
+            result = outcome = await capture.run(true);
             const completedProvenance = result?.status === 'pending-commit' || result?.reason === 'completed-source-invalid';
-            if ((!current(owner) && !completedProvenance) || staleResult(result)) return result;
-            if (result?.feedbackShown !== true) captureFeedback(result);
-            return result;
+            if ((!current(owner) && !completedProvenance) || staleResult(result)) showFeedback = false;
         } catch (error) {
-            if (!current(owner)) return { status: 'cancelled', reason: 'source-stale-chat', stale: true, error };
-            const result = outcome = { status: 'failed', reason: error?.phase || 'ui-handler-failed', error };
-            captureFeedback(result);
-            return result;
+            if (!current(owner)) { result = outcome = { status: 'cancelled', reason: 'source-stale-chat', stale: true, error }; showFeedback = false; }
+            else result = outcome = { status: 'failed', reason: error?.phase || 'ui-handler-failed', error };
         } finally {
             const completedProvenance = outcome?.status === 'pending-commit' || outcome?.reason === 'completed-source-invalid';
-            if (button?.__spLedgerCaptureTask !== task || (!current(owner) && !completedProvenance)) return;
-            setCaptureBusy(button, false, inline);
-            refreshInline?.(true);
-            redraw();
+            if (button?.__spLedgerCaptureTask === task && (current(owner) || completedProvenance)) {
+                setCaptureBusy(button, false, inline);
+                result = finalizeLedgerEventUi(result, { refreshInline, render: redraw, toast });
+            }
         }
+        if (showFeedback && current(owner) && !staleResult(result) && result?.feedbackShown !== true) captureFeedback(result);
+        return result;
     };
     const runManualJudge = async () => {
         const owner = identity?.();
+        let result;
         try {
-            const result = await judge.run(true);
-            if (current(owner) && !staleResult(result) && result?.feedbackShown !== true) judgeFeedback(result);
-            return result;
+            result = await judge.run(true);
         } catch (error) {
-            if (current(owner)) judgeFeedback({ status: 'failed', reason: error?.phase || 'api-failed', error });
-            return { status: 'failed', reason: error?.phase || 'api-failed', error };
-        } finally { if (current(owner)) redraw(); }
+            result = { status: 'failed', reason: error?.phase || 'api-failed', error };
+        } finally { if (current(owner)) result = finalizeLedgerEventUi(result, { render: redraw, toast }); }
+        if (current(owner) && !staleResult(result) && result?.feedbackShown !== true) judgeFeedback(result);
+        return result;
     };
     almanac.off?.(namespace);
     almanac.on(`click${namespace}`, '.sp-ledger-capture-now', function () { return runManualCapture(this); });
@@ -155,4 +196,3 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
         return typeof capture.confirmAbandon === 'function' ? capture.confirmAbandon() : true;
     }
 }
-import { ledgerFailureText } from './diagnostics.js';

@@ -1,6 +1,7 @@
 import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnostics.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { addCalendarDays } from '../calendar/date.js';
 export const JUDGE_FLOORS = 3;
 
@@ -122,9 +123,11 @@ export function createLedgerJudgeController(options = {}) {
                 for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
                 // The fallback updater has no persistence receipt to classify here.
             }
+            let uiError = null;
             try { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); diagnostic.uiDisplayed({ reasonCode: 'judge-ui-applied' }); }
-            catch (error) { diagnostic.uiFailed(error, { reasonCode: 'judge-ui-refresh-failed' }); }
-            return { status: 'updated', applied: applied.map(change => change.事由), reconcile };
+            catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'judge-ui-refresh-failed' }); }
+            if (uiError) { try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
+            return { status: 'updated', applied: applied.map(change => change.事由), reconcile, ...(uiError ? { uiError } : {}) };
         } catch (error) {
             if (abortController !== ctrl) return { status: 'cancelled', reason: 'superseded', reconcile, applied: [], error };
             if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };

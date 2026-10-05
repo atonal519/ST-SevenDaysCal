@@ -104,6 +104,7 @@ export function createOutlineChat({
         const task = Object.freeze({ target, historySnapshot, controller, thinking });
         const diagnostic = createGenerationDiagnosticScope('outline-chat');
         let locallyAppliedReply = null;
+        let uiError = null;
         owner = task;
         busy = true;
         try {
@@ -147,15 +148,15 @@ export function createOutlineChat({
                 if (nextHistory.length !== historySnapshot.length + 1 || normalizeOutlineResponse(reply)) ui?.renderHistory?.(history);
                 else ui?.appendMessage?.('ai', reply, history.length - 1);
                 diagnostic.uiDisplayed({ reasonCode: 'outline-chat-ui-applied' });
-            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'outline-chat-ui-failed' }); }
+            } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'outline-chat-ui-failed' }); }
             const finishError = finish(task);
-            if (finishError) diagnostic.uiFailed(finishError, { reasonCode: 'outline-chat-finish-ui-failed' });
-            return { status: 'updated', reply };
+            if (finishError) { uiError ||= finishError; diagnostic.uiFailed(finishError, { reasonCode: 'outline-chat-finish-ui-failed' }); }
+            return { status: 'updated', reply, ...(uiError ? { uiError } : {}) };
         } catch (error) {
             if (locallyAppliedReply !== null) {
                 diagnostic.uiFailed(error, { reasonCode: 'outline-chat-post-apply-ui-failed' });
                 finish(task);
-                return { status: 'updated', reply: locallyAppliedReply };
+                return { status: 'updated', reply: locallyAppliedReply, uiError: error };
             }
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'outline-chat-request-failed' });
             if (!currentAndOwned(task)) return { status: 'cancelled' };

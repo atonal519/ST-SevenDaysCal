@@ -135,7 +135,34 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         root.on('click.sp-theater-ui', '.sp-theater-del-draft', async function () { const target = host.captureTarget?.(currentChat()); const id = host.data?.(this, 'id'); const baseline = repository.draftBaseline?.(target?.chatId, id); if (await host.confirm?.('删除草稿', '确定删除这条小剧场草稿吗？') && isCurrent(target)) { const result = repository.deleteDraft(target.chatId, id, baseline); if (result?.ok && isCurrent(target)) render(); else if (result?.conflict && isCurrent(target)) host.toast?.('草稿已变化，请重新确认', null, true); } });
         root.on('click.sp-theater-ui', '.sp-theater-promote', function () { const target = host.captureTarget?.(currentChat()); const piece = (repository.loadDrafts(target.chatId) || []).find(p => p.id === host.data?.(this, 'id')); if (!piece) return; Promise.resolve(repository.promoteToSaved(target, piece)).then(result => { if (result?.ok && isCurrent(target)) { host.toast?.('已永久保存'); render(); } else if (!result?.cancelled && result?.commitState !== 'not-dispatched' && isCurrent(target)) host.toast?.('永久保存失败，请重试', null, true); }).catch(() => { if (isCurrent(target)) host.toast?.('永久保存失败，请重试', null, true); }); });
         root.on('click.sp-theater-ui', '.sp-theater-del-saved', async function () { const target = host.captureTarget?.(currentChat()); const id = host.data?.(this, 'id'); const baseline = repository.savedBaseline?.(target, id); if (!await host.confirm?.('删除永久保存', '确定从本对话删除这条已永久保存的小剧场吗？删除后无法恢复。') || !isCurrent(target)) return; try { const result = await repository.deleteSaved(target, id, { baseline }); if (isCurrent(target)) { if (result?.conflict) host.toast?.('永久稿已变化，请重新确认', null, true); else if (!result?.ok && !result?.cancelled) host.toast?.('删除永久稿失败，请重试', null, true); else render(); } } catch { if (isCurrent(target)) host.toast?.('删除永久稿失败，请重试', null, true); } });
-        root.on('click.sp-theater-ui', '.sp-theater-save', async function () { if (!state.current) return; const target = host.captureTarget?.(currentChat()); const title = String(host.val?.('#sp-theater-title') || '').trim(); const piece = { ...state.current, title }; const draftBaseline = repository.draftBaseline?.(target.chatId, piece.id); const draftResult = repository.updateDraft?.(target.chatId, piece.id, { title }, draftBaseline); if (draftResult?.ok === false) { if (isCurrent(target)) host.toast?.(draftResult.conflict ? '草稿已变化，请重试' : '永久保存失败，请重试', null, true); return; } const updatedDraftBaseline = repository.draftBaseline?.(target.chatId, piece.id); try { const result = await repository.promoteToSaved(target, piece, { draftBaseline: updatedDraftBaseline }); if (result?.ok && isCurrent(target)) { state.current = piece; host.toast?.('已永久保存到本对话'); render(); } else if (result?.ok === false && isCurrent(target)) host.toast?.(result.conflict ? '内容已变化，请重试' : '永久保存失败，请重试', null, true); } catch { if (isCurrent(target)) host.toast?.('永久保存失败，请重试', null, true); } });
+        root.on('click.sp-theater-ui', '.sp-theater-save', async function () {
+            if (!state.current) return;
+            const target = host.captureTarget?.(currentChat());
+            const piece = state.current;
+            const title = String(host.val?.('#sp-theater-title') || '').trim();
+            const draftBaseline = repository.draftBaseline?.(target.chatId, piece.id);
+            const hasDraft = draftBaseline != null;
+            if (hasDraft) {
+                const draftResult = repository.updateDraft?.(target.chatId, piece.id, { title }, draftBaseline);
+                if (draftResult?.ok === false) {
+                    if (isCurrent(target)) host.toast?.(draftResult.conflict ? '草稿已变化，请重试' : '永久保存失败，请重试', null, true);
+                    return;
+                }
+            }
+            const savedBaseline = repository.savedBaseline?.(target, piece.id);
+            try {
+                const result = savedBaseline
+                    ? await repository.updateSavedTitle(target, piece.id, title, { savedBaseline })
+                    : await repository.promoteToSaved(target, { ...piece, title }, { draftBaseline: repository.draftBaseline?.(target.chatId, piece.id) });
+                if (result?.ok && isCurrent(target)) {
+                    state.current = { ...piece, title };
+                    host.toast?.(savedBaseline ? '已更新永久稿标题' : '已永久保存到本对话');
+                    render();
+                } else if (result?.ok === false && isCurrent(target)) {
+                    host.toast?.(result.conflict ? '内容已变化，请重试' : '永久保存失败，请重试', null, true);
+                }
+            } catch { if (isCurrent(target)) host.toast?.('永久保存失败，请重试', null, true); }
+        });
         // resolveTheaterRegen(state.current, textarea) is supplied by the feature boundary.
         root.on('click.sp-theater-ui', '.sp-theater-regen', function () { if (feature.busy || !state.current) return; const regen = resolveRegen(state.current, host.val?.('#sp-theater-input') || ''); if (!regen.input) { host.toast?.('旧草稿未记录原主题，请先填写输入', null, true); host.focus?.('#sp-theater-input'); return; } const explicitTitle = String(host.val?.('#sp-theater-title') ?? '').trim(); state.source = regen.templateSource; host.val?.('#sp-theater-input', regen.input); generate(regen.input, { explicitTitle }); });
         root.on('click.sp-theater-ui', '.sp-theater-retry', retry);

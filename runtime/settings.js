@@ -23,6 +23,8 @@ export const DEFAULT_SETTINGS = {
     // 插件总开关：false = 构画完全隐身（藏悬浮球 / 楼内块 / 锚点收藏入口，停一切后台判定与潜伏注入），如同未安装；
     // 设置面板仍可从酒馆魔杖菜单进入以重新开启。默认开。
     pluginEnabled: true,
+    // 全局创作推进幅度；独立于按角色保存的观察焦点与故事时间事实。
+    narrativePace: 'free',
     // 单聊角色卡排除：存精确 avatar 文件名。排除只影响运行态，不改总开关、不删除聊天数据；群聊不适用。
     characterExcludeAvatars: [],
     // 潜伏注入总闸（受 pluginEnabled 统辖）：false = 线 / 面 / 刻度不注入主楼 AI（不影响楼内展示与手动生成）。默认开。

@@ -1,5 +1,6 @@
 import { axisState } from './state.js';
 import { createGenerationDiagnosticScope, makeDiagnosticError } from '../../api/diagnostics.js';
+import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 
 export function validateAlmanacResponse(raw) {
     return /<almanac_widget\b[^>]*>[\s\S]*<\/almanac_widget\s*>/i.test(String(raw || ''));
@@ -8,7 +9,8 @@ export function validateAlmanacResponse(raw) {
 export function createAxisGenerationController(env = {}) {
     const run = async (supplement = false, participantLease = null) => {
         const diagnostic = createGenerationDiagnosticScope('axis-generation');
-        const runUi = (callback, reasonCode) => { try { callback?.(); diagnostic.uiDisplayed({ reasonCode }); } catch (error) { diagnostic.uiFailed(error, { reasonCode }); } };
+        let uiError = null;
+        const runUi = (callback, reasonCode) => { try { callback?.(); } catch (error) { uiError ||= error; diagnostic.uiFailed(error, { reasonCode }); } };
         const participant = participantLease || env.captureParticipantIdentity?.() || null;
                 const chat = env.context?.(); const chatId = chat?.chatId; const ctrl = axisState.almanacAbortController = new AbortController();
         env.clearFailure?.(supplement, chatId);
@@ -50,12 +52,14 @@ export function createAxisGenerationController(env = {}) {
                 else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'axis-saved' });
                 if (stored?.stale) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true, added }; }
                 if (axisState.almanacAbortController !== ctrl) return cancelOwned();
-                env.clearFailure?.(supplement, chatId);
                 axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
                 if (added.length) runUi(() => env.sync?.(), 'axis-sync-failed');
                 runUi(() => env.render?.(), 'axis-render-failed');
                 runUi(() => env.notify?.(added.length ? `已补录 ${added.length} 条纪念日` : '通读全程后没有够格补录的新里程碑（这很正常）', added.length > 0), 'axis-notify-failed');
-                return { status: 'updated', added };
+                if (!uiError) runUi(() => env.clearFailure?.(supplement, chatId), 'axis-clear-failure-failed');
+                if (uiError) { try { env.failure?.(UI_REFRESH_FAILURE_TEXT, supplement, chatId, participant); } catch {} try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
+                else diagnostic.uiDisplayed({ reasonCode: 'axis-ui-applied' });
+                return { status: 'updated', added, ...(uiError ? { uiError } : {}) };
             }
             if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             diagnostic.accepted({ phase: 'validation', reasonCode: 'almanac-valid' });
@@ -66,10 +70,12 @@ export function createAxisGenerationController(env = {}) {
             else if (stored?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'axis-saved' });
             if (stored?.stale) { axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true, items: parsed }; }
             if (axisState.almanacAbortController !== ctrl) return cancelOwned();
-            env.clearFailure?.(supplement, chatId);
             axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
             runUi(() => env.sync?.(), 'axis-sync-failed'); runUi(() => env.render?.(), 'axis-render-failed'); runUi(() => env.notify?.('轴已生成', true), 'axis-notify-failed');
-            return { status: 'updated', items: parsed };
+            if (!uiError) runUi(() => env.clearFailure?.(supplement, chatId), 'axis-clear-failure-failed');
+            if (uiError) { try { env.failure?.(UI_REFRESH_FAILURE_TEXT, supplement, chatId, participant); } catch {} try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
+            else diagnostic.uiDisplayed({ reasonCode: 'axis-ui-applied' });
+            return { status: 'updated', items: parsed, ...(uiError ? { uiError } : {}) };
         } catch (error) {
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
             axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;

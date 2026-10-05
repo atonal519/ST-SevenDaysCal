@@ -1045,9 +1045,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap           : 5px;
     padding       : 12px 16px 13px;
     border-bottom : 1px solid var(--sp-divider);
-    background    : var(--sp-surface);
+    /* 继承设置面板底色；SmartThemeBotMesBlurTintColor 可与正文色亮度失配。 */
+    background    : transparent;
 }
 .sp-settings-total-row .sp-mode-opt { gap: 8px; }
+.sp-settings-total-row .sp-mode-opt,
+.sp-settings-total-row .sp-cfg-hint { color: var(--sp-on-surface); }
 .sp-settings-total-row .sp-cfg-hint { margin: 0; padding-left: 24px; }
 
 /* ─── Settings layers (五组收纳盒) ───────────────────────────────────────────── */
@@ -2080,6 +2083,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex           : 1;
 }
 .sp-error i { font-size: var(--sp-fs-180); opacity: 0.8; }
+.sp-empty .sp-open-daily-menu i,
+.sp-error .sp-open-daily-menu i { font-size: var(--sp-fs-80); opacity: 1; }
 
 .sp-empty {
     display        : flex;
@@ -2093,6 +2098,84 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-empty i { font-size: var(--sp-fs-200); opacity: 0.35; }
 .sp-empty p { font-size: var(--sp-fs-85); margin: 0; }
+
+.sp-daily-menu-card {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--sp-on-surface);
+}
+.sp-daily-menu-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--sp-subtle); font-size: var(--sp-fs-80); }
+.sp-daily-menu-header strong { font-weight: 500; }
+.sp-daily-menu-date { overflow-wrap: anywhere; text-align: right; }
+.sp-daily-menu-card h3 { margin: 7px 0 10px; font-size: var(--sp-fs-88); font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.sp-daily-menu-intro { margin: -4px 0 10px; color: var(--sp-subtle); font-size: var(--sp-fs-85); font-style: italic; font-weight: 400; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-daily-menu-items { display: grid; gap: 8px; }
+.sp-daily-menu-item { min-width: 0; padding-top: 7px; border-top: 1px solid var(--sp-divider); overflow-wrap: anywhere; }
+.sp-daily-menu-item strong { font-size: var(--sp-fs-88); font-weight: 500; }
+.sp-daily-menu-category { margin-left: 7px; color: var(--sp-subtle); font-size: var(--sp-fs-75); }
+.sp-daily-menu-item p { margin: 4px 0 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); white-space: pre-wrap; }
+.sp-daily-menu-empty { margin: 10px 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); }
+.sp-daily-menu-card .sp-gen-btn { margin-top: 10px; }
+
+.sp-daily-menu-overlay { z-index: 2000002; }
+#sp-dialog-overlay-host { position: fixed; inset: 0; z-index: 2000002; pointer-events: none; }
+.sp-daily-menu-sheet {
+    width: min(520px, calc(100vw - 40px));
+    max-height: calc(100dvh - 40px);
+    min-height: 0;
+    overflow: hidden;
+    padding: 12px 16px 14px;
+    gap: 10px;
+}
+.sp-daily-menu-dialog-head {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+.sp-daily-menu-dialog-head h2 {
+    min-width: 0;
+    margin: 0;
+    color: var(--sp-on-surface);
+    font-size: var(--sp-fs-88);
+    font-weight: 500;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+.sp-daily-menu-dialog-close {
+    display: inline-flex;
+    flex: 0 0 32px;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--sp-subtle);
+    cursor: pointer;
+}
+.sp-daily-menu-dialog-close:hover { background: var(--sp-surface-high); color: var(--sp-on-surface); }
+.sp-daily-menu-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    color: var(--sp-on-surface);
+}
+.sp-daily-menu-content .sp-daily-menu-header > strong { display: none; }
+@media (max-width: 640px) {
+    .sp-daily-menu-sheet {
+        width: calc(100vw - 40px);
+        max-height: calc(100dvh - 40px);
+    }
+}
 
 .sp-raw {
     color      : var(--sp-on-surface);

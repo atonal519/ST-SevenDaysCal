@@ -1,4 +1,4 @@
-import { narrativePreferenceContract } from '../narrative-preferences.js';
+import { narrativePaceContract, narrativePreferenceContract } from '../narrative-preferences.js';
 
 export const OUTLINE_INJECT_KEY = 'sp_outline_step';
 export const OUTLINE_INJECT_DEPTH = 4;
@@ -14,7 +14,7 @@ export function buildOutlineInjectionText(beats, cursor, cleanText = value => St
         narrativePreferenceContract(preferences),
         `当前节点：${format(current)}` + (current.scene ? `\n  ${cleanText(current.scene)}` : ''),
     ];
-    if (next) parts.push(`下个节点（方向，勿急）：${format(next)}` + (next.scene ? `\n  ${cleanText(next.scene)}` : ''));
+    if (next) parts.push(`下个节点（仅供未来方向）：${format(next)}` + (next.scene ? `\n  ${cleanText(next.scene)}` : ''));
     else parts.push('已是大纲最后一个节点，可从容收束。');
     return parts.join('\n');
 }
@@ -45,6 +45,7 @@ export function buildOutlineCreationContract(preferences = {}) {
 - title 是凝练点题的小标题，可用意象、动作、一个词或半句话，贴合节点气质即可。
 
 ${narrativePreferenceContract(preferences)}
+${narrativePaceContract(preferences.narrativePace)}
 
 【理想机器结构】
 - 完整输出使用一对闭合的 <outline_widget>...</outline_widget>。

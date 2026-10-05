@@ -29,6 +29,7 @@ export function createSpaceChat(env = {}) {
         const thinking = env.ui?.beginThinking?.();
         const diagnostic = createGenerationDiagnosticScope('space');
         let locallyAppliedReply = null;
+        let uiError = null;
         try {
             const config = env.loadConfig?.() || {};
             if (!config.url || !config.key) {
@@ -79,12 +80,12 @@ export function createSpaceChat(env = {}) {
                     legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
                 });
                 diagnostic.uiDisplayed({ reasonCode: 'space-chat-ui-applied' });
-            } catch (error) { diagnostic.uiFailed(error, { reasonCode: 'space-chat-ui-failed' }); }
-            return Object.freeze({ status: 'updated', reply });
+            } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'space-chat-ui-failed' }); }
+            return Object.freeze({ status: 'updated', reply, ...(uiError ? { uiError } : {}) });
         } catch (error) {
             if (locallyAppliedReply !== null) {
                 diagnostic.uiFailed(error, { reasonCode: 'space-chat-post-apply-ui-failed' });
-                return Object.freeze({ status: 'updated', reply: locallyAppliedReply });
+                return Object.freeze({ status: 'updated', reply: locallyAppliedReply, uiError: error });
             }
             diagnostic.rejected(error, { phase: error?.phase || 'request', reasonCode: 'space-request-failed' });
             if (abortController === controller && !controller.signal.aborted && error?.name !== 'AbortError') {
