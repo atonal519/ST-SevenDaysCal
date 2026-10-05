@@ -358,7 +358,7 @@ test('ticket category suffixes normalize only complete IDs and never override lo
 });
 test('release prompt caps only first generation while preserving global agency and local 6x3 cues', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial', firstRun: true, freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
-    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响变得明确，而非要求事态极端化', '收束＝解决、和解、形成新平衡或事务落定', '淡出＝不再值得持续追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
+    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响明确', '收束＝解决、和解、新平衡或事务落定', '淡出＝不再值得追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
     assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
     assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
@@ -375,12 +375,12 @@ test('advance prompt leaves line count to the story and does not require every o
     ]);
     const prompt = buildLinesPrompt('用户', '角色', 'user', baseline, 'auto', { intent: 'advance' });
     assert.match(prompt, /本轮有 7 条未锁且未终态线/);
-    assert.match(prompt, /条目数量按当前剧情证据灵活决定（可为 0 或多条/);
-    assert.match(prompt, /可省略不再值得追踪的旧线/);
+    assert.match(prompt, /数量按当前剧情证据决定（可为 0 或多条/);
+    assert.match(prompt, /失去独立价值或并线可淡出\/省略/);
     assert.doesNotMatch(prompt, /最多输出 8 条|旧活线超过 8 条|第 9 条起不校验/);
     const full = serializeLines(Array.from({ length: 8 }, (_, index) => ({ name: `满槽${index + 1}`, stage: '延展', when: '今天', agency: 'world', desc: '状态', next: '下一步' })));
     const fullPrompt = buildLinesPrompt('用户', '角色', 'user', full, 'auto', { intent: 'advance', freshTickets: [{ ticketId: 'TICKET-1', selections: [] }] });
-    assert.match(fullPrompt, /条目数量按当前剧情证据灵活决定（可为 0 或多条/);
+    assert.match(fullPrompt, /数量按当前剧情证据决定（可为 0 或多条/);
     assert.doesNotMatch(fullPrompt, /最多输出 8 条|第 9 条起不校验/);
 });
 test('release prompt allows evidence-based offscreen progress across intents and scales while preserving protocol boundaries', () => {
@@ -398,14 +398,15 @@ test('release prompt allows evidence-based offscreen progress across intents and
         assert.match(prompt, /agency=world 表示其他人物、势力、机构或环境即使 用户 暂不参与也能自行推进/);
         assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
         assert.match(prompt, /AI 一律输出 pin=false/);
-        assert.match(prompt, /Ticket 不得缺失、重复、改写或伪造；旧线不得使用 Ticket/);
+        assert.match(prompt, /Ticket 不得缺失、重复、改写或伪造/);
+        assert.match(prompt, /旧线不填 Ticket/);
         assert.match(prompt, /锁线已由本地完整保留，不输出、不改写、不终结、不分票/);
     }
     assert.match(prompts[0], /首次最多输出 8 条/);
-    assert.match(prompts[1], /条目数量按当前剧情证据灵活决定（可为 0 或多条/);
-    assert.match(prompts[1], /可省略不再值得追踪的旧线/);
+    assert.match(prompts[1], /数量按当前剧情证据决定（可为 0 或多条/);
+    assert.match(prompts[1], /失去独立价值或并线可淡出\/省略/);
     assert.match(prompts[1], /旧活线/);
-    assert.match(prompts[2], /刷新不要求返回旧自动线/);
+    assert.match(prompts[2], /刷新不要求延续旧自动线/);
     assert.match(prompts[2], /上一版自动线主题·仅名称避重/);
 });
 test('Ticket is transient and absent from serialized storage/model', () => {
@@ -423,12 +424,14 @@ test('adult line modes keep off unchanged and reserve explicit adult candidates'
     assert.match(mixed, /目标约 30% 成人线/);
     assert.match(dominant, /目标约 70% 成人线/);
     assert.match(dominant, /证据不足允许低于目标/);
-    assert.match(dominant, /使用 NSFW 票的新线必须由成人欲望、成人场景或成人互动本身驱动/);
+    assert.match(dominant, /先按独立事件选材：同次成人互动中的玩法、感受、回应与正常事后照料属于同一生命周期/);
+    assert.match(dominant, /成人场景中的普通职责\/事务按其核心目标归类，不因此占用成人新票/);
+    assert.match(dominant, /新成人线仍须由成人欲望、场景或互动本身驱动/);
     assert.match(dominant, /具体玩法\/行为/);
     assert.match(dominant, /实际主动方、其他参与者的明确主动回应/);
     assert.match(dominant, /只能作为后果/);
     assert.match(off, /Next: 一句前瞻信号或 stall=true 的恢复条件/);
-    assert.match(dominant, /不得用.*淡出/);
+    assert.match(dominant, /仍有具体目标时不得以含糊或暧昧措辞回避推进/);
     assert.equal(adultModeForCharacter({ adultMode: { c: 'mixed' } }, 'c'), 'mixed');
     assert.equal(adultModeForCharacter({ adultMode: { c: 'invalid' } }, 'c'), 'off');
 });
@@ -501,7 +504,8 @@ test('dominant true initial generation signs eight tickets with a temporary 2 SF
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 6);
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 6);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /新线可从以上 8 张票中选择不重复子集并调整输出顺序/);
+    assert.match(prompt, /先据正文与记忆判断是否有不同于旧线、具独立目标和后续的事件，再为确需新建的线匹配票据/);
+    assert.match(prompt, /若动作、提醒或后续阶段已被旧线 Desc\/Next 涵盖，先回写原线/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
     assert.match(prompt, /首次最多输出 8 条/);
     assert.doesNotMatch(prompt, /超过票数仍可输出/);
