@@ -1,8 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTheaterRepository } from './repository.js';
+import { createTheaterStoryContext } from './context.js';
 
 const piece = id => ({ id, prompt: `scene ${id}`, ts: 1 });
+
+test('theater story context reads the shared memory entrance without inventing a separate recent window', async () => {
+    const calls = [];
+    const build = createTheaterStoryContext({
+        getContext: () => ({ chatId: 'theater-context', name1: '用户', name2: '角色', characters: {}, characterId: 0 }),
+        buildWorldInfoContext: async () => '',
+        readCardExtras: () => ({ personaDesc: '', authorNote: '' }),
+        getMemText: async (...args) => { calls.push(args); return '摘要\n【尚未摘要的近期正文】\n近期原文'; },
+    });
+    const context = await build();
+    assert.deepEqual(calls, [[]]);
+    assert.match(context.sysBlocks.join('\n'), /标注已验证摘要与尚未摘要的近期正文/);
+});
 
 test('ordinary permanent theater edits apply live and return without waiting for host save', async () => {
     const metadata = { saved: [piece('old')], version: 1 };

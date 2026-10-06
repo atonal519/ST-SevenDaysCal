@@ -14,5 +14,5 @@ export function selectVisibleChatHistory(messages = [], historyLimit = 3, { excl
             return !(mesId === Number(excludedAssistant.mesId) && String(message?.mes ?? '') === String(excludedAssistant.text ?? ''));
         })
         .slice(-Math.floor(Number(historyLimit)))
-        .map(({ message }) => mapMessage(message));
+        .map(({ message, mesId }) => mapMessage(message, mesId));
 }

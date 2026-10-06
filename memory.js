@@ -738,14 +738,14 @@ export function consumeMigrationNotice() {
 }
 
 // ─── Memory context for injection ────────────────────────────────────────────
-export function getMemoryContext() {
+export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false } = {}) {
     if (_getSettings().useBaiBaiBook || _getSettings().useAnima || _getSettings().useDatabase || _getSettings().useQianQianJie) return '';
     const m = meta();
     if (!m) return '';
     const parts = [];
     const groups = getStableGroups();
     const legacy = sourcePolicy(m) === 'legacy-needs-rebuild';
-    const l1Entries = legacy ? (m.L1 || []) : validL1Entries(m, groups);
+    const l1Entries = legacy ? (m.L1 || []) : validL1Entries(m, groups).filter(l1 => String(l1.text || '').trim());
     if (l1Entries.length) {
         parts.push('━ 早期章节 ━');
         for (const l1 of l1Entries) {
@@ -753,17 +753,58 @@ export function getMemoryContext() {
         }
     }
     const covered = legacy ? null : new Set(l1Entries.flatMap(l1 => l1.sources.map(source => source.groupKey)));
+    const coveredMesIds = new Set();
+    if (!legacy) {
+        const l1CoveredKeys = covered || new Set();
+        for (const group of groups) {
+            if (l1CoveredKeys.has(group.key)) group.floors.forEach(floor => coveredMesIds.add(String(floor.mesid)));
+        }
+    }
     const lastL1End = legacy && l1Entries.length ? Math.max(...l1Entries.map(l1 => parseInt(l1.range[1], 10))) : -1;
-    const recent = groups
-        .filter(g => legacy ? parseInt(g.floors[0].mesid, 10) > lastL1End : !covered.has(g.key))
-        .filter(g => legacy ? !!m.L0[g.key] : validL0(g, m))
+    const eligibleGroups = groups.filter(g => legacy ? parseInt(g.floors[0].mesid, 10) > lastL1End : !covered.has(g.key));
+    const recentWindowGroups = eligibleGroups.slice(-6);
+    const recent = eligibleGroups
+        .filter(g => legacy ? !!m.L0[g.key] : validL0(g, m) && String(m.L0[g.key]?.text || '').trim())
         .slice(-6);
     if (recent.length) {
         parts.push('━ 最近发展 ━');
         for (const g of recent) {
             const l0 = m.L0[g.key];
             parts.push(`【楼 ${l0.range[0]} - ${l0.range[1]}】\n${l0.text}`);
+            if (includeRecentRaw) g.floors.forEach(floor => coveredMesIds.add(String(floor.mesid)));
         }
+    }
+
+    // Append recent uncovered L0-window groups plus the continuous AI-floor
+    // suffix after the latest source actually present in this context. Legacy
+    // L1 entries have no verifiable source list, so never guess their coverage.
+    if (includeRecentRaw && !legacy) {
+        const allFloors = getAiFloors();
+        let tailFloors;
+        if (coveredMesIds.size) {
+            const coveredNumbers = [...coveredMesIds].map(Number).filter(Number.isFinite);
+            const latestCoveredMid = coveredNumbers.length ? Math.max(...coveredNumbers) : null;
+            const rawIds = new Set();
+            for (const group of recentWindowGroups) {
+                for (const floor of group.floors) {
+                    if (!coveredMesIds.has(String(floor.mesid))) rawIds.add(String(floor.mesid));
+                }
+            }
+            if (latestCoveredMid !== null) {
+                for (const floor of allFloors) {
+                    if (Number(floor.mesid) > latestCoveredMid && !coveredMesIds.has(String(floor.mesid))) rawIds.add(String(floor.mesid));
+                }
+            }
+            tailFloors = allFloors.filter(floor => rawIds.has(String(floor.mesid)));
+        } else {
+            const groupSize = Math.max(1, +_getSettings().memoryL0Group || 5);
+            tailFloors = allFloors.slice(-groupSize * 6).map(floor => ({ ...floor, text: String(floor.text || '').slice(0, 2000) }));
+        }
+        const excluded = new Set((Array.isArray(excludeMesIds) ? excludeMesIds : []).map(value => String(value)));
+        const rawTail = tailFloors
+            .filter(floor => !excluded.has(String(floor.mesid)) && String(floor.text || '').trim())
+            .map(floor => String(floor.text).trim());
+        if (rawTail.length) parts.push(`━ 尚未摘要的近期正文 ━\n${rawTail.join('\n\n')}`);
     }
     return parts.join('\n\n');
 }

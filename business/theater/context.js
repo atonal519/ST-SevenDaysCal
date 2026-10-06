@@ -6,6 +6,6 @@ export function createTheaterStoryContext({ getContext, buildWorldInfoContext, r
         if (owner && !owners.isValid(owner, { chatId, chatRevision: revision })) throw Object.assign(new Error('theater-story-stale'), { name: 'AbortError' });
         const { personaDesc, authorNote } = readCardExtras(ctx); let memText = ''; try { memText = await getMemText(); } catch { memText = ''; }
         if (owner && !owners.isValid(owner, { chatId, chatRevision: revision })) throw Object.assign(new Error('theater-story-stale'), { name: 'AbortError' });
-        return { userName, charName, sysBlocks: [personaDesc ? `【${userName} 的人物设定】\n${personaDesc}` : '', char.description ? `【${charName} 的背景资料】\n${char.description}` : '', char.personality ? `【性格】${char.personality}` : '', char.scenario ? `【场景】${char.scenario}` : '', authorNote ? `【作者注释（当前聊天）】\n${authorNote}` : '', wiContext, memText ? `【故事记忆库】以下是本插件自动生成的剧情客观摘要（从最早到近期的关键事件与伏笔），作为这段小剧场的既有背景，注意与之保持连贯：\n\n${memText}` : ''].filter(Boolean) };
+        return { userName, charName, sysBlocks: [personaDesc ? `【${userName} 的人物设定】\n${personaDesc}` : '', char.description ? `【${charName} 的背景资料】\n${char.description}` : '', char.personality ? `【性格】${char.personality}` : '', char.scenario ? `【场景】${char.scenario}` : '', authorNote ? `【作者注释（当前聊天）】\n${authorNote}` : '', wiContext, memText ? `【故事记忆库】以下是当前选择的剧情记忆材料；内置记忆会分别标注已验证摘要与尚未摘要的近期正文，作为既有背景，请按标签理解并保持连贯：\n\n${memText}` : ''].filter(Boolean) };
     };
 }

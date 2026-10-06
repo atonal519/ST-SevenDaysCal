@@ -677,6 +677,57 @@ function normalizeDiagnosticFloors(floors, ctx = context()) {
     });
 }
 
+const SUCCESS_DIAGNOSTIC_INPUT_TTL = 10 * 60 * 1000;
+const FAILURE_DIAGNOSTIC_INPUT_TTL = 24 * 60 * 60 * 1000;
+const ACCEPTED_ONLY_DIAGNOSTIC_SUCCESS = Object.freeze({
+    'outline-judge': new Set(['no-advance']),
+    'ledger-judge': new Set(['judge-explicit-none', 'judge-protected']),
+    'ledger-capture': new Set(['capture-explicit-none', 'capture-duplicate']),
+    'ledger-provenance': new Set(['provenance-explicit-none', 'provenance-valid']),
+    'axis-date': new Set(['date-explicit-unknown']),
+    'axis-generation': new Set(['supplement-empty']),
+});
+
+function diagnosticInputOutcome(attempt, module) {
+    const result = attempt?.result || {};
+    if (attempt?.transport?.status === 'failed' || result.processing === 'rejected' || result.ui === 'failed') return 'failure';
+    if (result.commit === 'failed') {
+        const latestSaveRejection = [...(Array.isArray(result.events) ? result.events : [])].reverse()
+            .find(event => event?.event === 'generation-rejected' && event?.phase === 'save');
+        // An unknown save result is unresolved, so keep its input until a later event resolves it.
+        if (latestSaveRejection?.commitState === 'unknown') return null;
+        return 'failure';
+    }
+    if (result.ui === 'displayed' || result.commit === 'committed' || result.commit === 'local-applied') return 'success';
+    if (result.processing === 'accepted') {
+        const accepted = [...(Array.isArray(result.events) ? result.events : [])].reverse()
+            .find(event => event?.event === 'generation-accepted');
+        const reasons = Object.hasOwn(ACCEPTED_ONLY_DIAGNOSTIC_SUCCESS, module) ? ACCEPTED_ONLY_DIAGNOSTIC_SUCCESS[module] : null;
+        if (reasons?.has(accepted?.reasonCode)) return 'success';
+    }
+    return null;
+}
+
+// Trim only old request bodies from the normal diagnostic snapshot; raw/output state remains available.
+function retainDiagnosticInputs(floors, previousFloors, now) {
+    const priorByReply = new Map((Array.isArray(previousFloors) ? previousFloors : []).map(floor => [floor.replyId, floor]));
+    for (const floor of Array.isArray(floors) ? floors : []) {
+        for (const [module, attempt] of Object.entries(floor.attempts || {})) {
+            const outcome = diagnosticInputOutcome(attempt, module);
+            if (!outcome) continue;
+            const previous = priorByReply.get(floor.replyId)?.attempts?.[module];
+            const sameRequest = previous?.requestId === attempt.requestId;
+            const priorOutcome = sameRequest ? diagnosticInputOutcome(previous, module) : null;
+            const priorFinishedAt = attempt.finishedAt == null ? NaN : Number(attempt.finishedAt);
+            // Older snapshots had no end time; start their TTL when first observed by a normal update.
+            // A change from success/failure through unresolved and back starts a fresh outcome window once.
+            if (!Number.isFinite(priorFinishedAt) || (sameRequest && priorOutcome !== outcome)) attempt.finishedAt = now;
+            const ttl = outcome === 'failure' ? FAILURE_DIAGNOSTIC_INPUT_TTL : SUCCESS_DIAGNOSTIC_INPUT_TTL;
+            if (Array.isArray(attempt.messages) && now - Number(attempt.finishedAt) >= ttl) delete attempt.messages;
+        }
+    }
+}
+
 async function persistDiagnosticsNow() {
     const ctx = context(); const root = normalRoot('sp-store', true, () => ({ version: 1, data: {} }));
     if (!root.data || typeof root.data !== 'object') root.data = {};
@@ -692,6 +743,7 @@ function updateDiagnostics(mutator) {
     if (isExternalMode() && !isExternalReady()) return false;
     const current = normalizeDiagnosticFloors(getExternalDiagnostics());
     const next = mutator(clone(current)) || current;
+    retainDiagnosticInputs(next, current, Date.now());
     if (isExternalMode()) active.diagnostics.data.floors = normalizeDiagnosticFloors(next);
     else {
         active.diagnostics ||= { revision: 0, data: cleanDiagnosticsData() };

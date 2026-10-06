@@ -88,7 +88,7 @@ export function createOutlineGeneration({
                 signal: controller.signal,
                 historyLimit: 3,
                 // 手动创建/刷新只用当前可见 AI 正文触发世界书；自动游标判定走独立机械链。
-                options: { ...(apiOptions || {}), worldInfoTriggerText: true, ...(precheckResult?.memorySnapshot ? { memorySnapshot: precheckResult.memorySnapshot, memoryOperationToken: operationToken } : {}), promptMode: 'creative', diagnosticModule: 'outline-generation', diagnosticSink: diagnostic.sink },
+                options: { ...(apiOptions || {}), worldInfoTriggerText: true, ...(precheckResult?.memorySnapshot ? { memorySnapshot: precheckResult.memorySnapshot, memoryOperationToken: operationToken } : {}), promptMode: 'planning', diagnosticModule: 'outline-generation', diagnosticSink: diagnostic.sink },
             });
             if (isEditing() || !currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             if (!String(raw || '').trim()) throw diagnostic.rejected(makeDiagnosticError('empty-output', { phase: 'empty-output' }), { phase: 'parse', reasonCode: 'outline-empty' });

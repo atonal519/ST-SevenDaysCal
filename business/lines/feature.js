@@ -130,7 +130,10 @@ export function createLinesFeature(env = {}) {
         finishPreflight: (owner, failure = null) => {
             clearTimeout(owner.deadlineTimer);
             owners.finish(owner);
-            if (runtime.finish(owner.controller) && env.isPanelActive?.()) {
+            const released = runtime.finish(owner.controller);
+            // Generation may already have rendered while actions still held preparing; refresh after it clears.
+            // Keep a newer runtime owner busy and visible.
+            if ((released || !runtime.busy) && env.isPanelActive?.()) {
                 if (failure) renderBody(env.preflightError?.(failure) || env.empty?.());
                 else refreshPanel?.();
             }

@@ -66,7 +66,6 @@ import {
     buildPortableChatPackage,
     createPortableImportPlan,
     parsePortableChatPackage,
-    persistentChatRootsAreBlank,
     portableModuleLabel,
     rebasePortableImportPlan,
 } from './runtime/portable-chat-data.js';
@@ -1828,7 +1827,7 @@ const spaceFeature = createSpaceFeature({
             } catch { return ''; }
         },
         readWorldInfo: (ctx, triggerText, referenceHistory, titleSupplementText = '') => buildWorldInfoContext(ctx, triggerText === undefined ? undefined : { triggerText, triggerMode: 'query', referenceHistory, titleSupplementText }),
-        readMemory: () => getMemText(),
+        readMemory: ctx => getMemText({ excludeMesIds: getRecentVisibleFloorIds(ctx, 6) }),
         readRecent: ctx => buildRecentChatContext(ctx, 6, Infinity),
         readCardExtras,
         readAlmanacText: () => getAlmanacInjectText(),
@@ -2178,15 +2177,9 @@ jQuery(async () => {
         refreshLedgerInjection();       // 暗历注入：切 chat → 账随 chat_metadata 变，重设（关/空时内部自清）
         refreshNarrativePacePrompt();   // 全局创作幅度槽与聊天内容无关，切 chat 后重设
     };
+    // A new chat without an external marker keeps ordinary chat_metadata storage; migration is explicit.
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
     refreshNarrativePacePrompt();
-    for (const type of [event_types.CHAT_CREATED, event_types.GROUP_CHAT_CREATED]) {
-        if (type && _stListeners.newChatStorage) eventSource.removeListener?.(type, _stListeners.newChatStorage);
-    }
-    _stListeners.newChatStorage = handleNewChatStorage;
-    for (const type of [event_types.CHAT_CREATED, event_types.GROUP_CHAT_CREATED]) {
-        if (type) eventSource.on(type, _stListeners.newChatStorage);
-    }
     if (_stListeners.diagnosticRetention) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
     _stListeners.diagnosticRetention = () => { if (!currentCharacterExcluded()) refreshDiagnosticRetention(getContext()); };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
@@ -6002,14 +5995,16 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
 }
 
 // 近期聊天上下文补足延后一组的 L0/L1 记忆与当前用户输入之间的空窗；聊天为空时返回 ''。
-async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 2500) {
+function buildRecentChatEntries(ctx, floorCount = 6, perMessageChars = 2500) {
     const chat = ctx?.chat;
-    if (!Array.isArray(chat) || !chat.length) return '';
+    if (!Array.isArray(chat) || !chat.length || !(Number(floorCount) > 0)) return [];
     const charName = ctx.name2 || '角色';
     const s = getSettings();
     const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
     const rows = [];
-    for (const m of selectVisibleChatHistory(chat, floorCount)) {
+    for (const { message: m, mesId } of selectVisibleChatHistory(chat, floorCount, {
+        mapMessage: (message, id) => ({ message, mesId: id }),
+    })) {
         const raw = String(m.mes || '');
         if (!raw.trim()) continue;
         const cleaned = memory.stripTags(raw, stripOpts).trim();
@@ -6018,8 +6013,17 @@ async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 250
         const capped = cleaned.length > perMessageChars
             ? cleaned.slice(0, perMessageChars) + '…'
             : cleaned;
-        rows.push(`【${speaker}】${capped}`);
+        rows.push({ mesId, text: `【${speaker}】${capped}` });
     }
+    return rows;
+}
+
+function getRecentVisibleFloorIds(ctx, floorCount = 6) {
+    return buildRecentChatEntries(ctx, floorCount, Infinity).map(entry => entry.mesId);
+}
+
+async function buildRecentChatContext(ctx, floorCount = 6, perMessageChars = 2500) {
+    const rows = buildRecentChatEntries(ctx, floorCount, perMessageChars).map(entry => entry.text);
     if (!rows.length) return '';
     return `【最近对话】以下是主聊天中最近几层对话原文，供理解当前剧情走向。\n\n${rows.join('\n\n')}`;
 }
@@ -6583,17 +6587,18 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
 // Alternate sources are mutually exclusive (enforced in bindMemoryHandlers); each
 // returns its own history or nothing (empty prompt block) — no fallback between them.
 async function _getMemTextRaw(opts = {}) {
+    const { excludeMesIds, ...sourceOpts } = opts;
     const s = getSettings();
     if (s.useQianQianJie) {
-        try { return await qianQianJieMemoryAccess.text(opts); }
+        try { return await qianQianJieMemoryAccess.text(sourceOpts); }
         catch (err) { console.warn('[7dayscal] 千千结取记忆出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
     }
     if (s.useAnima) {
-        try { return await getAnimaMemText(opts); }
+        try { return await getAnimaMemText(sourceOpts); }
         catch (err) { console.warn('[7dayscal] Anima 取摘要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
     }
     if (s.useDatabase) {
-        try { return await databaseMemoryAccess.text(opts); }
+        try { return await databaseMemoryAccess.text(sourceOpts); }
         catch (err) { console.warn('[7dayscal] 数据库取纪要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
     }
     if (s.useBaiBaiBook) {
@@ -6610,7 +6615,7 @@ async function _getMemTextRaw(opts = {}) {
             // 用 getHistory（柏宝书「全部压缩历史」，含滑动窗口楼层）；而非 getInjectedHistory
             // （后者是按当前剧情向量召回、跳过滑动窗口的注入版，会漏掉与"此刻"无关的旧里程碑）。
             // 点/线/面贴当前剧情，保持 getInjectedHistory（聚焦近景、省额度）。
-            if (opts.full && typeof api.getHistory === 'function') {
+            if (sourceOpts.full && typeof api.getHistory === 'function') {
                 return api.getHistory()?.relativeText || '';
             }
             return api.getInjectedHistory()?.relativeText || '';
@@ -6619,7 +6624,7 @@ async function _getMemTextRaw(opts = {}) {
             return '';
         }
     }
-    return memory.getMemoryContext();
+    return memory.getMemoryContext({ excludeMesIds, includeRecentRaw: true });
 }
 
 // 记忆源先按各自的召回规则选材，再把已选文本原样交给生成；上下文容量由上游模型服务决定。
@@ -6646,14 +6651,23 @@ function buildRecentGenerationHistory(ctx, historyLimit, opts = {}) {
     const stripOpts = { keepTags: settings.keepTags, extraTags: settings.extraTags };
     return selectVisibleChatHistory(ctx?.chat, effectiveHistoryLimit, {
         excludedAssistant: opts.excludedAssistant,
-        mapMessage: message => ({
+        mapMessage: (message, mesId) => ({
             role: message.is_user ? 'user' : 'assistant',
             content: substituteParams(sanitizeGenerationContextText(message.mes ?? '', {
                 reroll: opts.reroll,
                 stripTags: value => memory.stripTags(value, stripOpts),
             })),
+            mesId,
         }),
     });
+}
+
+function buildGenerationHistoryContext(ctx, historyLimit, opts = {}) {
+    const selected = buildRecentGenerationHistory(ctx, historyLimit, opts);
+    return {
+        history: selected.map(({ mesId, ...message }) => message),
+        excludeMesIds: selected.map(message => message.mesId),
+    };
 }
 
 function outlineWorldInfoTriggerText(history) {
@@ -6669,12 +6683,18 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
     throwIfAborted();
     const char = ctx.characters?.[ctx.characterId] ?? {};
     // 正文窗口及其清洗只在此处生成一次，世界书标题触发复用模型将收到的同一数组。
-    let history = buildRecentGenerationHistory(ctx, historyLimit, opts);
+    const generationHistory = buildGenerationHistoryContext(ctx, historyLimit, opts);
+    let history = generationHistory.history;
+    let memoryExcludeMesIds = generationHistory.excludeMesIds;
     if (Array.isArray(opts.ledgerSourceFloors)) {
         history = opts.ledgerSourceFloors.map(source => ({
             role: 'assistant',
             content: `【刻度可信来源｜楼层 ${source.floor}｜${source.sources?.length ? source.sources.map(x => `${x.token}=${x.stamp}`).join('、') : '无合法 SDC 令牌，仅供识别正文'}】\n${source.content || ''}`,
         }));
+        memoryExcludeMesIds = opts.ledgerSourceFloors
+            .map(source => source.floor)
+            .filter(floor => Number.isInteger(Number(floor)))
+            .map(String);
     }
     const outlineTrigger = opts.worldInfoTriggerText === true
         ? outlineWorldInfoTriggerText(history)
@@ -6703,16 +6723,19 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
             rawMemText = snapshot.text;
         } else {
             reportPhase('memory');
-            rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken });
+            rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds });
         }
         memText = sanitizeGenerationContextText(rawMemText, { reroll: opts.reroll });
     }
     throwIfAborted();
     const memPerspective = opts.pointView === 'char' ? charName : opts.pointView === 'user' ? userName : null;
+    const memorySettings = getSettings();
+    const builtInMemorySelected = !opts.memorySnapshot
+        && !memorySettings.useQianQianJie && !memorySettings.useAnima && !memorySettings.useDatabase && !memorySettings.useBaiBaiBook;
     const memBlock = memText
         ? opts.memorySnapshot?.source === 'qianqianjie'
             ? `【千千结召回材料】请将以下内容作为相关回忆线索，结合当前聊天理解；缓存内容会明确标注为上次成功召回。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
-            : `【故事记忆库】以下由本插件在对话过程中自动生成的客观摘要，反映从最早到近期的关键事件与伏笔。请**优先信任记忆库描述**，即使它与角色卡/世界书中较早的描述冲突（因为记忆库记录了事件后的最新状态）。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
+            : `【故事记忆库】${builtInMemorySelected ? '以下包含已验证摘要与标注为“尚未摘要的近期正文”的内置 AI 原文，请按来源标签区分并保持连贯。' : '以下由当前选定的记忆源提供，请结合当前聊天理解并保持连贯。'}${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
         : '';
 
     // 历（本世界观重要日期）：供构画生成与讨论上下文使用，不做主楼常驻注入。
@@ -6872,7 +6895,7 @@ function outlineChatMemoryError(message) {
     return error;
 }
 
-async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
+async function readCreativeChatMemory({ ctx, userMsg, signal, selection, excludeMesIds = [] }) {
     const ensureCurrent = () => {
         if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         if (!creativeChatMemorySelectionCurrent(selection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
@@ -6930,7 +6953,7 @@ async function readCreativeChatMemory({ ctx, userMsg, signal, selection }) {
         const preflight = await memoryPreCheckConfirm({ signal, contextSnapshot: ctx });
         ensureCurrent();
         if (!preflight) throw Object.assign(new Error('memory preflight cancelled'), { name: 'AbortError' });
-        try { text = await getMemText({ query: userMsg }); }
+        try { text = await getMemText({ query: userMsg, excludeMesIds }); }
         catch (error) { ensureCurrent(); throw outlineChatMemoryError(`内置故事记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
     }
     ensureCurrent();
@@ -6948,7 +6971,8 @@ async function composeCreativeChatMessages({ target, userMsg, historySnapshot, s
     const { personaDesc, authorNote } = readCardExtras(ctx);
     const almanacText = getAlmanacInjectText();
     const calDescText = getCalDescInjectText();
-    const memoryRead = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection });
+    const recentMesIds = getRecentVisibleFloorIds(ctx, 6);
+    const memoryRead = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection, excludeMesIds: recentMesIds });
     const memText = memoryRead.text;
     if (!creativeChatMemorySelectionCurrent(memorySelection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
     const recentCtx = await buildRecentChatContext(ctx, 6, memoryRead.recentFallback ? Infinity : 2500);
@@ -7104,62 +7128,6 @@ function storageChatStillCurrent(identity) {
     return !!identity && !!now && identity.chatId === now.chatId && identity.metadata === now.metadata;
 }
 
-let newChatStorageAttempt = null;
-
-function sameStorageChatIdentity(left, right) {
-    return !!left && !!right && left.chatId === right.chatId && left.metadata === right.metadata;
-}
-
-function migrationAllowsChatFallback(result) {
-    const reason = String(result?.reason || '');
-    return ['network', 'timeout', 'unavailable', 'capability-mismatch'].includes(reason)
-        || (/^http-\d+$/.test(reason) && reason !== 'http-409')
-        || (result?.stage === 'backend-probe' && Number.isInteger(Number(result?.error?.status)) && Number(result.error.status) !== 409);
-}
-
-function migrationHasConflict(result) {
-    return result?.commitState === 'conflict'
-        || result?.publishResult?.commitState === 'conflict'
-        || String(result?.reason || '').includes('conflict')
-        || String(result?.publishResult?.reason || '').includes('conflict');
-}
-
-async function routeChatStorageToAvailableBackend(identity) {
-    if (!storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ok: false, reason: 'chat-changed' } };
-    if (storageStatus().mode === 'external') return { mode: isExternalReady() ? 'external' : 'blocked', result: { ok: isExternalReady(), reason: isExternalReady() ? 'already-external' : 'external-not-ready' } };
-    let result;
-    try { result = await migrateCurrentChat(); }
-    catch (error) { result = { ok: false, reason: error?.code || 'migration-failed', error }; }
-    if (!storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ...result, ok: false, reason: 'chat-changed' } };
-    if (result?.ok) return { mode: 'external', result };
-    if (migrationAllowsChatFallback(result)) return { mode: 'chat', result };
-    if (result?.reason === 'publish-unknown' || result?.commitState === 'unknown' || result?.publishResult?.commitState === 'unknown') return { mode: 'unknown', result };
-    return { mode: 'blocked', result };
-}
-
-async function handleNewChatStorage() {
-    if (currentCharacterExcluded()) return { mode: 'blocked', result: { ok: false, reason: 'character-excluded' } };
-    const identity = storageChatIdentity();
-    if (!identity) return { mode: 'blocked', result: { ok: false, reason: 'missing-chat' } };
-    if (sameStorageChatIdentity(newChatStorageAttempt?.identity, identity)) return newChatStorageAttempt.task;
-    const task = (async () => {
-        const routed = await routeChatStorageToAvailableBackend(identity);
-        if (currentCharacterExcluded() || !storageChatStillCurrent(identity)) return { mode: 'blocked', result: { ...routed.result, ok: false, reason: currentCharacterExcluded() ? 'character-excluded' : 'chat-changed' } };
-        if (routed.mode === 'external') {
-            void renderStorageUsage(); void renderCurrentChatStorageMode();
-        } else if (routed.mode === 'unknown') {
-            showToast('新聊天的存储位置暂时无法确认。请刷新当前聊天核实，在确认前不要继续写入构画数据。', null, true);
-        } else if (routed.mode === 'blocked' && routed.result?.reason !== 'chat-changed' && routed.result?.reason !== 'already-external') {
-            showToast(migrationHasConflict(routed.result)
-                ? '新聊天在切换存储期间发生了变化，仍保留在聊天文件中；请稍后在存储管理里重试迁出。'
-                : `新聊天没有切换到后端：${routed.result?.error?.message || routed.result?.reason || '无法确认存储位置'}`, null, true);
-        }
-        return routed;
-    })();
-    newChatStorageAttempt = { identity, task };
-    return task;
-}
-
 function storageRow(label, bytesText, btnHtml = '', extraClass = '') {
     return `<div class="sp-storage-row ${extraClass}">
         <span class="sp-storage-row-label">${escapeHtml(label)}</span>
@@ -7290,11 +7258,6 @@ function currentPortableRoots() {
         'sp-store': portableClone(getChatRoot('sp-store')),
         'sp-theater': portableClone(getChatRoot('sp-theater')),
     };
-}
-
-function currentPersistentRoots() {
-    const metadata = getContext()?.chatMetadata;
-    return Object.fromEntries(['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger'].map(key => [key, portableClone(metadata?.[key])]));
 }
 
 function portableModuleSummary(portablePackage, id) {
@@ -7511,27 +7474,10 @@ async function importPortableFile(file, identity) {
     });
     if (decision === 'backup') { await exportPortableModules(picked.values); return; }
     if (decision !== 'apply' || !portableStorageAvailable('导入数据')) return;
-    const persistentRoots = currentPersistentRoots();
     const originalRoots = currentPortableRoots();
-    const routeBlankReceiver = storageStatus().mode === 'chat' && persistentChatRootsAreBlank(persistentRoots);
     abortPortableImportTasks('portable-import');
-    if (routeBlankReceiver) _abortAllBackground();
+    // Confirmed imports commit through the target chat's existing storage mode, including external CAS when marked.
     const overlay = mountPortableImportOverlay();
-    if (routeBlankReceiver) {
-        const routed = await routeChatStorageToAvailableBackend(identity);
-        if (routed.mode === 'unknown') {
-            overlay.unknown('目标聊天的存储位置暂时无法确认。请关闭后刷新当前聊天核实；在确认前不要重复导入。');
-            return;
-        }
-        if (routed.mode === 'blocked') {
-            overlay.close();
-            if (routed.result?.reason === 'chat-changed') return;
-            showToast(migrationHasConflict(routed.result)
-                ? '目标聊天在确认期间产生了新的构画数据，本次没有导入；请重新操作。'
-                : `导入前无法确认目标存储位置：${routed.result?.error?.message || routed.result?.reason || '迁移失败'}`, null, true);
-            return;
-        }
-    }
     let result;
     try { result = await commitPortableImport({ identity, originalRoots, portablePackage, selectedModules: picked.values }); }
     catch (error) { result = { ok: false, reason: 'import-failed', error, commitState: 'not-dispatched' }; }

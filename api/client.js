@@ -101,6 +101,7 @@ The current task instructions and its machine-readable output contract take prec
 export const PROMPT_MODES = Object.freeze({
     MECHANICAL: 'mechanical',
     CREATIVE: 'creative',
+    PLANNING: 'planning',
 });
 
 // 创作链额外使用的强化提示词；不注入日期判断、刻度、记忆压缩或 HTML 排版等机械链。
@@ -224,12 +225,14 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     const requestUserName = String(userName || ctx.name1 || '用户');
     const requestCharName = String(charName || ctx.name2 || '角色');
     const stream = cfg.stream === true;
-    // 默认失败安全：只有调用方显式声明 creative 才追加强化创作层和用户写作规范；
+    // creative 才追加内置强化层；creative/planning 可附用户自定义规范。
     // 未声明、拼错或未知值都只得到基础处理层，避免新的机械调用误吃创作指令。
     const creative = promptMode === PROMPT_MODES.CREATIVE;
-    const userExtra = creative ? (getSettings().customPrompt || '').trim() : '';
+    const planning = promptMode === PROMPT_MODES.PLANNING;
+    const userExtra = creative || planning ? (getSettings().customPrompt || '').trim() : '';
     const promptLayers = [BASE_PROCESSING_PROMPT];
-    if (creative) promptLayers.push(DEFAULT_JAILBREAK, ...(userExtra ? [userExtra] : []));
+    if (creative) promptLayers.push(DEFAULT_JAILBREAK);
+    if (userExtra) promptLayers.push(userExtra);
     const custom = substituteParams(expandRequestPlaceholders(promptLayers.join('\n\n'), { userName: requestUserName, charName: requestCharName }));
     // Request-level replacement applies to every role, not only the global custom prompt.
     // Keep non-string content (e.g. multimodal parts) untouched and do not rewrite plain "user".

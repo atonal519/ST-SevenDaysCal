@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { validateLinesResponse, parseLineCard, parseLines, serializeLines, normalizeLineStage } from './schema.js';
+import { validateLinesResponse, parseLineCard, parseLines, parseLineRow, serializeLines, normalizeLineStage, isTerminalLineStage } from './schema.js';
 import { buildLinesPrompt, LINE_NEXT_RELEASE_CONTRACT } from './prompt.js';
 import { createLinesGenerationController } from './controller.js';
 import { createLinesFeature } from './feature.js';
@@ -29,6 +29,26 @@ test('line combined edit updates Desc and Next in one raw mutation', () => {
 test('明确旧阶段“已了结”归一为收束', () => {
     assert.equal(normalizeLineStage('已了结'), '收束');
 });
+test('stage aliases require full matches and uncertain wording stays nonterminal across storage round trips', () => {
+    for (const stage of ['起线', '延展', '成形', '收束', '淡出']) assert.equal(normalizeLineStage(stage), stage);
+    for (const stage of ['completed', '已完成', '结束', '已结束', '解决', '已解决', '已了结']) {
+        assert.equal(normalizeLineStage(stage), '收束', stage);
+        assert.equal(isTerminalLineStage(stage), true, stage);
+    }
+    for (const stage of ['未完成', '尚未结束', '尚未解决', '完成中', '接近完成', '未收束', '即将淡出', '已爆发', '爆发', '发生', 'unknown', 'constructor', 'toString', '__proto__']) {
+        assert.equal(normalizeLineStage(stage), '延展', stage);
+        assert.equal(isTerminalLineStage(stage), false, stage);
+        const source = `<storylines_widget>\nLine: 阶段测试|${stage}|今天|world|false|false\nDesc: 状态\nNext: 下一步\n</storylines_widget>`;
+        const parsed = parseLines(source)[0];
+        assert.equal(parsed.stage, '延展', stage);
+        const roundTrip = parseLines(serializeLines([parsed]))[0];
+        assert.equal(roundTrip.stage, '延展', stage);
+        assert.equal(isTerminalLineStage(roundTrip.stage), false, stage);
+    }
+    assert.equal(normalizeLineStage('已完成的流程'), '延展');
+    assert.equal(normalizeLineStage('IN PROGRESS'), '延展');
+    assert.equal(normalizeLineStage(' COMPLETED '), '收束');
+});
 test('line edit keeps Next inside the selected Line block and handles empty fields', () => {
     const raw = '<storylines_widget>\nLine: A|推进|执行|1|今天|world|false|false\nDesc:\nNext:\nLine: B|推进|执行|1|今天|world|false|false\nDesc: B desc\nNext: B next\n</storylines_widget>';
     const filled = editLineFields(raw, 0, { desc: 'A desc', next: 'A next' });
@@ -44,6 +64,7 @@ import { bindVectorTickets } from './vectors/bind.js';
 import { AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
 import { buildLineInjectText, inlineState } from './inline.js';
+import { normalizeKnownFieldWrappers } from '../utils/record-wrappers.js';
 
 const raw = '<storylines_widget>\nLine: 主线|推进|起线|今天|player|false|false\nDesc: 当前状态\nNext: 下一步信号\n</storylines_widget>';
 function responseWithCount(count) { return `<storylines_widget>\n${Array.from({ length: count }, (_, index) => `Line: 线${index + 1}|推进|起线|今天|world|false|false\nTicket: TICKET-${index + 1}\nDesc: 状态${index + 1}\nNext: 下一步${index + 1}`).join('\n')}\n</storylines_widget>`; }
@@ -152,6 +173,118 @@ test('wrapper cleanup preserves paired narrative tags, multiline text, namespace
     assert.equal(result.model[0].desc, '<storyline priority="low">叶片舒展 温度 < 25 且湿度 > 60</storyline>，<storyline-note>保留近名标签</storyline-note> <强调>Next: 这里只是台词</强调>');
     assert.equal(result.model[0].next, '园丁继续记录晨间读数 <storyline:note>保留命名空间标签</storyline:note>');
 });
+test('known complete field wrappers normalize consistently without changing field values or candidate order', () => {
+    const tuple = '包装线|起线|今天|world|false|false';
+    const drawn = { ...drawTickets(1, { seed: 'known-field-wrapper' })[0], ticketId: 'TICKET-1' };
+    const cue = serializeVectorCue(drawn);
+    const inner = `<lInE：${tuple}</LINE>\n<TiCkEt：${drawn.ticketId}</tIcKeT>\n<dEsC>保留 <b>Line:</b>正文与 <storyline-note>未知标签</storyline-note></DESC>\n<nExT：后续：保持原文</nExT>\n<Cue：${cue}</Cue>\n<Adult>true</Adult>\n<Pin>true</Pin>`;
+    const response = `<storylines_widget>\n${inner}\n</storylines_widget>`;
+    const checked = validateLinesResponse(response);
+    assert.equal(checked.ok, true);
+    assert.deepEqual([checked.model[0].name, checked.model[0].stage, checked.model[0].desc, checked.model[0].next, checked.model[0].ticketId], [
+        '包装线', '起线', '保留 <b>Line:</b>正文与 <storyline-note>未知标签</storyline-note>', '后续：保持原文', drawn.ticketId,
+    ]);
+    assert.deepEqual(
+        parseLines(`<storylines_widget>\n${inner}\n</storylines_widget>`).map(line => [line.name, line.stage, line.desc, line.next, line.cue, line.adult]),
+        [['包装线', '起线', '保留 <b>Line:</b>正文与 <storyline-note>未知标签</storyline-note>', '后续：保持原文', cue, true]],
+    );
+    const card = parseLineCard(inner);
+    assert.deepEqual([card.name, card.desc, card.next], ['包装线', '保留 <b>Line:</b>正文与 <storyline-note>未知标签</storyline-note>', '后续：保持原文']);
+    assert.equal(parseLineRow(`<LINE>${tuple}</lInE>`).fieldCount, 6, 'the ordinary same-name <Line> wrapper reaches the existing tuple validator');
+    const evolved = auditLineEvolution({ generatedLines: checked.model, freshTickets: [drawn], intent: 'initial' });
+    assert.equal(evolved.ok, true);
+    assert.equal(bindVectorTickets({ generatedLines: checked.model, freshTickets: [drawn] })[0].name, '包装线');
+
+    const colonForm = '<Line: 第二条|延展|明天|player|false|false</Line>\n<Ticket> TICKET-2</Ticket>\n<Desc: 第二条状态</Desc>\n<Next: 第二条下一步</Next>';
+    const second = validateLinesResponse(`<storylines_widget>\n${colonForm}\n</storylines_widget>`);
+    assert.equal(second.ok, true);
+    assert.deepEqual([second.model[0].name, second.model[0].desc, second.model[0].next], ['第二条', '第二条状态', '第二条下一步']);
+
+    const duplicate = validateLinesResponse(`<storylines_widget>\n<Line: 重复票|起线|今天|world|false|false</Line>\n<Ticket: TICKET-1</Ticket>\n<Ticket> TICKET-1</Ticket>\n<Desc>状态</Desc>\n<Next>下一步</Next>\n</storylines_widget>`);
+    assert.equal(duplicate.reason, 'invalid-ticket');
+    const missing = validateLinesResponse(`<storylines_widget>\n<Line: 缺票|起线|今天|world|false|false</Line>\n<Desc>状态</Desc>\n<Next>下一步</Next>\n</storylines_widget>`);
+    assert.equal(missing.ok, true);
+    assert.equal(Object.hasOwn(missing.model[0], 'ticketId'), false, 'normalization never manufactures a Ticket');
+    assert.equal(auditLineEvolution({ generatedLines: missing.model, freshTickets: [], intent: 'initial' }).reason, 'evolution-newborn-missing-ticket');
+});
+test('known-field wrapper normalization leaves malformed, non-line, and unknown wrappers untouched', () => {
+    const options = { colonFields: ['Line', 'Desc'], bareFields: ['Line', 'Desc'] };
+    for (const value of [
+        '<Line: tuple</Desc>',
+        'prefix <Line: tuple</Line>',
+        '<Unknown: tuple</Unknown>',
+        '<Desc>not closed',
+        '<Desc: 甲</Desc><Desc: 乙</Desc>',
+        '<Desc>甲<Desc>乙</Desc>丙</Desc>',
+        '<Desc: 甲</Desc> <Desc>乙</Desc>',
+    ]) assert.equal(normalizeKnownFieldWrappers(value, options), value);
+    const normal = '<storylines_widget>\nLine: 普通|起线|今天|world|false|false\nDesc: 保留 <b>强调</b>\nNext: 继续\n</storylines_widget>';
+    assert.equal(validateLinesResponse(normal).model[0].desc, '保留 <b>强调</b>');
+});
+test('JSON line arrays use the shared parser and preserve candidate slots and narrative text', () => {
+    const labelledNine = parseLineRow('Line：九槽线｜延展｜今晚｜AGENCY｜world｜Stall｜true｜pin｜false');
+    assert.deepEqual([labelledNine.fieldCount, labelledNine.name, labelledNine.agency, labelledNine.stall, labelledNine.pin, labelledNine.format], [6, '九槽线', 'world', 'true', 'false', 'canonical-v3']);
+    const keyValueSix = parseLineRow('六槽线|延展|明天|Agency = player|Stall = true|Pin = false');
+    assert.deepEqual([keyValueSix.fieldCount, keyValueSix.name, keyValueSix.agency, keyValueSix.stall, keyValueSix.pin, keyValueSix.format], [6, '六槽线', 'player', 'true', 'false', 'canonical-v3']);
+    const unknownKeys = parseLineRow('未知键线|延展|明天|role=world|stall=false|pin=false');
+    assert.equal(unknownKeys.agency, 'role=world', 'unrecognized labels do not get stripped or shifted');
+
+    const record = {
+        Line: 'JSON线|延展|今晚|agency|world|stall|false|pin|false',
+        Ticket: 'TICKET-1',
+        Desc: '维修员今天收到通知\nLine: 这行是正文，不是新候选\nTicket: 这行也只是正文',
+        Next: '明早复检\nLine: 继续保留在Next正文',
+        Extra: 'ignored',
+    };
+    const raw = `<storylines_widget>\n${JSON.stringify([record])}\n</storylines_widget>`;
+    const checked = validateLinesResponse(raw);
+    assert.equal(checked.ok, true);
+    assert.equal(checked.model.length, 1);
+    const flattenedDesc = record.Desc.replace(/\r\n?/g, '\n').replace(/\n/g, ' ');
+    const flattenedNext = record.Next.replace(/\r\n?/g, '\n').replace(/\n/g, ' ');
+    assert.deepEqual([checked.model[0].name, checked.model[0].agency, checked.model[0].desc, checked.model[0].next, checked.model[0].ticketId], [
+        'JSON线', 'world', record.Desc, record.Next, 'TICKET-1',
+    ]);
+    assert.equal(parseLines(raw)[0].desc, record.Desc, 'history parsing retains embedded line anchors as narrative');
+    assert.equal(parseLineCard(raw).desc, record.Desc, 'card parsing shares the JSON adapter');
+    assert.equal(parseLineCard(JSON.stringify([record])).next, record.Next);
+    assert.match(checked.raw, new RegExp(flattenedDesc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const storedRoundTrip = parseLines(checked.raw);
+    assert.equal(storedRoundTrip.length, 1, 'canonical serialization does not turn narrative anchors into extra rows');
+    assert.deepEqual([storedRoundTrip[0].desc, storedRoundTrip[0].next], [flattenedDesc, flattenedNext]);
+    const pinnedRaw = `<storylines_widget>${JSON.stringify([{ Line: '历史锁线|延展|今日|agency|world|stall|false|pin|true', Desc: '保留锁定', Next: '继续观察' }])}</storylines_widget>`;
+    assert.equal(parseLines(pinnedRaw)[0].pin, true, 'history reads the pin encoded in its Line tuple when no top-level Pin is present');
+    assert.equal(validateLinesResponse(pinnedRaw).model[0].pin, false, 'generated JSON cannot create a local lock');
+    const explicitUnpin = `<storylines_widget>${JSON.stringify([{ Line: '历史锁线|延展|今日|agency|world|stall|false|pin|true', Pin: false, Desc: '状态', Next: '后续' }])}</storylines_widget>`;
+    assert.equal(parseLines(explicitUnpin)[0].pin, false, 'an explicit legacy Pin field retains its existing precedence');
+
+    const valid = index => ({ Line: `候选${index}|起线|今天|agency|world|stall|false|pin|false`, Desc: `状态${index}`, Next: `下一步${index}` });
+    const candidates = [...Array.from({ length: 7 }, (_, index) => valid(index + 1)), { Desc: '第八项缺Line', Next: '占住第八槽' }, valid(9)];
+    const firstEight = validateLinesResponse(`<storylines_widget>${JSON.stringify(candidates)}</storylines_widget>`, { maxCandidates: 8 });
+    assert.equal(firstEight.ok, true);
+    assert.deepEqual(firstEight.model.map(line => line.name), Array.from({ length: 7 }, (_, index) => `候选${index + 1}`));
+    assert.deepEqual(firstEight.rejected, [{ index: 7, reason: 'missing-business-field' }]);
+    assert.equal(parseLines(`<storylines_widget>${JSON.stringify([...Array.from({ length: 9 }, (_, index) => valid(index + 1))])}</storylines_widget>`).length, 9, 'history remains uncapped');
+    assert.deepEqual(validateLinesResponse('<storylines_widget>[]</storylines_widget>'), { ok: true, model: [], raw: '', rejected: [] }, 'complete JSON empty arrays retain the valid-zero contract');
+    assert.equal(validateLinesResponse('前言<storylines_widget>[]</storylines_widget>').reason, 'incomplete-or-extraneous');
+    assert.equal(validateLinesResponse('<storylines_widget>{}</storylines_widget>').reason, 'no-lines');
+    assert.equal(validateLinesResponse('<storylines_widget>[{"Line":"truncated"}</storylines_widget>').reason, 'no-lines', 'truncated JSON does not become an empty valid response');
+
+    const saved = [{ name: '旧名', stage: '延展' }];
+    const renamed = validateLinesResponse(`<storylines_widget>${JSON.stringify([{ Line: '新名|延展|今天|agency|world|stall|false|pin|false', Desc: '状态', Next: '后续' }])}</storylines_widget>`);
+    assert.equal(auditLineEvolution({ previousLines: saved, generatedLines: renamed.model, freshTickets: [], intent: 'advance' }).reason, 'evolution-newborn-missing-ticket');
+    const oldWithTicket = validateLinesResponse(`<storylines_widget>${JSON.stringify([{ Line: '旧名|延展|今天|agency|world|stall|false|pin|false', Ticket: 'TICKET-1', Desc: '状态', Next: '后续' }])}</storylines_widget>`);
+    assert.equal(auditLineEvolution({ previousLines: saved, generatedLines: oldWithTicket.model, freshTickets: [{ ticketId: 'TICKET-1' }], intent: 'advance' }).reason, 'evolution-old-line-ticket');
+});
+test('wrapped malformed first-eight candidate still occupies its original slot before validation', () => {
+    const valid = index => `<Line: 包装${index}|起线|今天|world|false|false</Line>\n<Ticket: TICKET-${index}</Ticket>\n<Desc>状态${index}</Desc>\n<Next>下一步${index}</Next>`;
+    const malformed = '<Line: 无效候选</Line>\n<Desc>缺 tuple 字段</Desc>\n<Next>不得补位</Next>';
+    const response = `<storylines_widget>\n${[...Array.from({ length: 7 }, (_, index) => valid(index + 1)), malformed, valid(9)].join('\n')}\n</storylines_widget>`;
+    const result = validateLinesResponse(response, { maxCandidates: 8 });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.model.map(line => line.name), Array.from({ length: 7 }, (_, index) => `包装${index + 1}`));
+    assert.deepEqual(result.rejected, [{ index: 7, reason: 'missing-business-field' }]);
+});
 test('release schema extracts and normalizes complete records from outer response noise', () => {
     for (const response of [
         `正文状态栏\n${raw}`,
@@ -235,7 +368,7 @@ test('legacy seven/eight-field storage stays readable and rewrites as six fields
     assert.equal(Object.hasOwn(parsed, 'type'), false);
     const legacyStages = ['萌芽', '筹备', '发酵', '执行', '逼近', '关键', '已爆发', '已完成', '已消散', '已失败'];
     const canonicalStages = legacyStages.map(stage => parseLines(`<storylines_widget>\nLine: ${stage}|推进|${stage}|今天|world|false|false\nDesc: d\nNext: n\n</storylines_widget>`)[0].stage);
-    assert.deepEqual(canonicalStages, ['起线', '起线', '延展', '延展', '成形', '成形', '收束', '收束', '淡出', '淡出']);
+    assert.deepEqual(canonicalStages, ['起线', '起线', '延展', '延展', '成形', '成形', '延展', '收束', '淡出', '淡出']);
     assert.equal(rewritten.split('\n').find(line => line.startsWith('Line:')).split('|').length, 6);
     const aliases = parseLines('<storylines_widget>\nLine: old8|推进|筹备|4|下周|world|停滞|false\nDesc: d\nNext: n\n</storylines_widget>')[0];
     assert.deepEqual([aliases.when, aliases.agency, aliases.stall, aliases.pin], ['下周', 'world', true, false]);
@@ -361,7 +494,7 @@ test('release prompt caps only first generation while preserving global agency a
     for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响明确', '收束＝解决、和解、新平衡或事务落定', '淡出＝不再值得追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
     assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
-    assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
+    assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
     assert.doesNotMatch(prompt, /type 使用冲突或推进|名称\|类型\|阶段/);
     assert.doesNotMatch(prompt, /\blevel\b|等级|四珠|珠子/);
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -396,7 +529,7 @@ test('release prompt allows evidence-based offscreen progress across intents and
         for (const phrase of ['已有正文、记忆与世界设定确立的事实', '既有主体的动机、资源、行动条件和实际经过的故事时间', '可以在场外合理推进自身进展', '正文暂未提及或当前主角未参与不等于停滞', '普通场外推演也不等于凭空编造', '不要求每条线每轮都变化或升级阶段', '没有充分依据时，不得突然扩大伤害或制造不可逆后果', '时间跨度须符合已有进程依据']) assert.match(prompt, new RegExp(phrase));
         assert.doesNotMatch(prompt, /每轮都依据连续正文证据与人物动机/);
         assert.match(prompt, /agency=world 表示其他人物、势力、机构或环境即使 用户 暂不参与也能自行推进/);
-        assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
+        assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
         assert.match(prompt, /AI 一律输出 pin=false/);
         assert.match(prompt, /Ticket 不得缺失、重复、改写或伪造/);
         assert.match(prompt, /旧线不填 Ticket/);
@@ -504,8 +637,9 @@ test('dominant true initial generation signs eight tickets with a temporary 2 SF
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 6);
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 6);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /先据正文与记忆判断是否有不同于旧线、具独立目标和后续的事件，再为确需新建的线匹配票据/);
-    assert.match(prompt, /若动作、提醒或后续阶段已被旧线 Desc\/Next 涵盖，先回写原线/);
+    assert.match(prompt, /先看核心目标及后续是否实质独立：旧线 Desc\/Next 已涵盖就续旧/);
+    assert.match(prompt, /互斥走向或换 Cue 不拆；真独立才匹配新票，无独立事件可不选/);
+    assert.match(prompt, /Desc 写草稿已到，Next 写团队补齐资料后由玩家决定签字与否/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
     assert.match(prompt, /首次最多输出 8 条/);
     assert.doesNotMatch(prompt, /超过票数仍可输出/);
@@ -659,17 +793,71 @@ test('line preflight owns visible loading, cancel, inline failure, and one-opera
     assert.equal(failedBodies.at(-1), 'memory-error:读取失败');
 });
 
+test('manual generation refreshes history after its controller already finished, while a newer owner stays busy', async () => {
+    const runCase = async ({ rejectApi = false, startNewOwner = false } = {}) => {
+        const owners = createTaskOwnerManager(); const runtime = createLinesRuntime(); const rendered = [];
+        const saved = { raw: 'current', history: [{ raw: 'previous', generatedAt: 1 }] };
+        let feature; let newerOwner = null;
+        const generation = createLinesGenerationController({
+            owners, runtime, chatId: () => 'history-finish', cacheKey: () => 'history-finish',
+            loadConfig: () => ({ url: 'fixture', key: 'fixture' }), readSaved: () => saved,
+            drawTickets: () => [{ tuple: 'seed', token: 'seed' }], vectorCapacity: 1,
+            buildPrompt: () => 'fixture',
+            callApi: async () => {
+                if (rejectApi) throw new Error('synthetic API rejection');
+                return '<storylines_widget>\nLine: 新线|起线|今天|world|false|false\nTicket: TICKET-1\nDesc: 当前状态\nNext: 下一步\n</storylines_widget>';
+            },
+            commit: async () => ({ ok: true, commitState: 'local-applied', uiApplied: true }),
+            cleanup: (owner, chatId, options) => {
+                feature.cleanupOwner(owner, chatId, options);
+                if (startNewOwner) {
+                    newerOwner = owners.create('lines-generation', { chatId: 'history-finish' });
+                    runtime.start(newerOwner.controller, 'new generation');
+                    feature.refreshPanel();
+                }
+            },
+        });
+        feature = createLinesFeature({
+            owners, runtime, generation, chatId: () => 'history-finish', dayAnchor: () => null, isPanelActive: () => true,
+            readSaved: () => saved, readRaw: () => 'current', empty: () => 'empty', loading: label => `loading:${label}`,
+            dashed: { toolbarHtml: ({ historyDisabled, historyTitle }) => `${historyDisabled}|${historyTitle}` },
+            renderPanelDom: ({ toolbar }) => rendered.push(toolbar),
+            actionsEnv: { precheck: async () => ({ proceed: true }) },
+        });
+        await feature.reroll();
+        return { feature, rendered, newerOwner };
+    };
+
+    for (const rejectApi of [false, true]) {
+        const { feature, rendered } = await runCase({ rejectApi });
+        assert.ok(rendered.some(value => value.startsWith('true|')), 'controller cleanup first renders while preflight still owns preparing');
+        assert.equal(feature.runtime.busy, false);
+        assert.equal(feature.actions.isPreparing(), false);
+        assert.equal(rendered.at(-1), 'false|查看 1 个历史版本', 'actions finally refreshes after preparing is cleared');
+    }
+
+    const newer = await runCase({ startNewOwner: true });
+    assert.equal(newer.feature.runtime.busy, true);
+    assert.equal(newer.feature.actions.isPreparing(), false);
+    assert.equal(newer.rendered.at(-1), 'true|线正在处理中，暂不能查看历史');
+    newer.feature.runtime.finish(newer.newerOwner.controller);
+});
+
 test('a stalled line preflight expires on the preparation budget and cannot dispatch late generation', async () => {
-    const owners = createTaskOwnerManager(); let release; let generations = 0; const bodies = [];
+    const owners = createTaskOwnerManager(); let release; let generations = 0; const bodies = []; const toolbars = [];
     const feature = createLinesFeature({
         owners, timeLimits: { totalMs: 500, preparationMs: 8 }, chatId: () => 'prep-timeout', dayAnchor: () => null, isPanelActive: () => true,
-        readRaw: () => '', empty: () => 'empty', loading: label => `loading:${label}`, preflightError: message => `failure:${message}`, renderPanelDom: ({ body }) => bodies.push(body),
+        readSaved: () => ({ raw: 'current', history: [{ raw: 'previous', generatedAt: 1 }] }),
+        readRaw: () => '', empty: () => 'empty', loading: label => `loading:${label}`, preflightError: message => `failure:${message}`,
+        dashed: { toolbarHtml: ({ historyDisabled }) => String(historyDisabled) },
+        renderPanelDom: ({ body, toolbar }) => { bodies.push(body); toolbars.push(toolbar); },
         generation: { run: async () => { generations++; return { status: 'updated' }; } },
         actionsEnv: { precheck: () => new Promise(resolve => { release = resolve; }) },
     });
     const result = await feature.reroll();
     assert.equal(result.status, 'failed'); assert.equal(result.reason, 'preparation-timeout');
-    assert.equal(feature.runtime.busy, false); assert.equal(generations, 0);
+    assert.equal(feature.runtime.busy, false); assert.equal(feature.actions.isPreparing(), false); assert.equal(generations, 0);
+    assert.equal(toolbars.at(-1), 'false', 'timeout completion re-renders the now-available history action');
     release({ proceed: true }); await new Promise(resolve => setImmediate(resolve));
     assert.equal(generations, 0, 'a late preflight result cannot enter generation');
     assert.match(bodies.at(-1), /准备线素材超时/);

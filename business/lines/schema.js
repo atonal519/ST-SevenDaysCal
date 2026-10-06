@@ -1,7 +1,14 @@
 import { serializeVectorCue } from './vectors/codec.js';
-import { stripRecordWrappers } from '../utils/record-wrappers.js';
+import { normalizeKnownFieldWrappers, stripRecordWrappers } from '../utils/record-wrappers.js';
 export const TERMINAL_LINE_STAGES = new Set(['收束', '淡出']);
 export const LINE_STAGES = new Set(['起线', '延展', '成形', '收束', '淡出']);
+const LINE_STAGE_ALIASES = Object.freeze({
+    萌芽: '起线', 筹备: '起线', 萌生: '起线', 初始: '起线', 开始: '起线', 新生: '起线', 准备: '起线', 预备: '起线', started: '起线', starting: '起线',
+    发酵: '延展', 执行: '延展', 酝酿: '延展', 发展: '延展', 升温: '延展', 进行: '延展', 推进中: '延展', progressing: '延展', developing: '延展', ongoing: '延展', 'in progress': '延展',
+    逼近: '成形', 关键: '成形', 临近: '成形', 迫近: '成形', 高潮: '成形', 影响明确: '成形', approaching: '成形', forming: '成形', imminent: '成形',
+    已完成: '收束', 已结束: '收束', 已解决: '收束', 已了结: '收束', 完成: '收束', 结束: '收束', 成功: '收束', 解决: '收束', 和解: '收束', 落定: '收束', 新平衡: '收束', completed: '收束', finished: '收束', ended: '收束', resolved: '收束', settled: '收束', concluded: '收束',
+    已消散: '淡出', 已失败: '淡出', 消散: '淡出', 消失: '淡出', 失败: '淡出', 不再追踪: '淡出', faded: '淡出', disappeared: '淡出', failed: '淡出',
+});
 function bool(value) { return /^(?:true|1|yes|y|是|对|开启|停滞|暂停|锁定)$/i.test(String(value ?? '').trim()); }
 const cleanLabel = value => {
     let text = String(value || '').trim();
@@ -16,22 +23,12 @@ function normalizeTicketId(value) {
     return match ? match[1].toUpperCase() : null;
 }
 export const normalizeLineStage = value => {
-    const text = String(value || '').trim();
+    const text = String(value ?? '').trim();
     if (LINE_STAGES.has(text)) return text;
-    const legacy = {
-        萌芽: '起线', 筹备: '起线',
-        发酵: '延展', 执行: '延展',
-        逼近: '成形', 关键: '成形',
-        已爆发: '收束', 已完成: '收束',
-        已消散: '淡出', 已失败: '淡出', 已了结: '收束',
-    };
-    if (legacy[text]) return legacy[text];
-    const aliases = [
-        [/萌生|初始|开始|新生|准备|预备/, '起线'], [/酝酿|发展|升温|进行|推进中/, '延展'],
-        [/临近|迫近|关键|高潮|影响明确/, '成形'], [/爆发|发生|完成|结束|成功|解决|和解|落定|新平衡/, '收束'],
-        [/消散|消失|失败|不再追踪/, '淡出'],
-    ];
-    return aliases.find(([rx]) => rx.test(text))?.[1] || '起线';
+    const alias = text.toLowerCase();
+    if (Object.hasOwn(LINE_STAGE_ALIASES, text)) return LINE_STAGE_ALIASES[text];
+    if (Object.hasOwn(LINE_STAGE_ALIASES, alias)) return LINE_STAGE_ALIASES[alias];
+    return '延展';
 };
 export const isTerminalLineStage = value => TERMINAL_LINE_STAGES.has(normalizeLineStage(value));
 const normalizeAgency = value => /^(?:player|user|用户|玩家|主角)$/i.test(String(value || '').trim()) ? 'player' : 'world';
@@ -39,8 +36,10 @@ const isAgencyField = value => /^(?:player|world|user|用户|玩家|主角|世�
 const isBoolField = value => /^(?:true|false|1|0|yes|no|y|n|是|否|对|错|开启|关闭|停滞|暂停|锁定|未锁)$/i.test(String(value || '').trim());
 const isLegacyLevel = value => /^(?:[1-4]|[一二三四](?:级)?)$/.test(String(value || '').trim());
 export function parseLineRow(value) {
-    const text = cleanLabel(value);
-    const fields = splitFields(/^Line\s*[:：]/i.test(text) ? fieldValue(text, 'Line') : text);
+    const text = cleanLabel(normalizeKnownFieldWrappers(value, LINE_FIELD_WRAPPERS));
+    const sourceFields = splitFields(/^Line\s*[:：]/i.test(text) ? fieldValue(text, 'Line') : text);
+    // Accept only the two explicit labelled tuple variants; keep every unknown shape on the existing parser path.
+    const fields = normalizeExplicitLineTuple(sourceFields);
     if (fields.length >= 6 && isAgencyField(fields[3]) && isBoolField(fields[4]) && isBoolField(fields[5])) {
         const [name, stage, when, agency, stall, pin] = fields;
         return { fieldCount: fields.length, name, stage, when, agency, stall, pin, format: fields.length === 6 ? 'canonical-v3' : 'canonical-v3-extra' };
@@ -72,20 +71,99 @@ const lineAnchorKind = value => {
     return /^(?:Ticket|Cue|Adult|Pin|说明|备注|Reason|Analysis)\s*[:：]/i.test(text) ? 'field' : null;
 };
 const completeLineStructure = kinds => ['line', 'desc', 'next'].every(kind => kinds.includes(kind));
+const LINE_FIELD_WRAPPERS = Object.freeze({
+    colonFields: ['Line', 'Ticket', 'Desc', 'Next', 'Cue', 'Adult', 'Pin', '说明', '备注', 'Reason', 'Analysis'],
+    bareFields: ['Line', 'Ticket', 'Desc', 'Next', 'Cue', 'Adult', 'Pin'],
+});
+function normalizeLineFieldWrappers(value) { return normalizeKnownFieldWrappers(value, LINE_FIELD_WRAPPERS); }
+function jsonField(record, name) {
+    const key = Object.keys(record).find(candidate => candidate.toLowerCase() === name.toLowerCase());
+    return key === undefined ? { found: false, value: undefined } : { found: true, value: record[key] };
+}
+function parseJsonLineBlocks(value) {
+    let records;
+    try { records = JSON.parse(String(value ?? '').trim()); } catch { return null; }
+    if (!Array.isArray(records)) return null;
+    // Keep one block per array slot, including malformed entries, so first-eight selection happens before validation.
+    return records.map(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) {
+            return { line: '', ticketId: null, ticketSeen: false, ticketDuplicate: false, desc: '', next: '', cue: '', adultSeen: false, adult: false, pinSeen: false, pin: false, lastText: null };
+        }
+        const line = jsonField(record, 'Line');
+        const ticket = jsonField(record, 'Ticket');
+        const desc = jsonField(record, 'Desc');
+        const next = jsonField(record, 'Next');
+        const cue = jsonField(record, 'Cue');
+        const adult = jsonField(record, 'Adult');
+        const pin = jsonField(record, 'Pin');
+        return {
+            line: typeof line.value === 'string' ? line.value : '',
+            ticketId: typeof ticket.value === 'string' ? ticket.value : null,
+            ticketSeen: ticket.found,
+            ticketDuplicate: false,
+            desc: typeof desc.value === 'string' ? desc.value : '',
+            next: typeof next.value === 'string' ? next.value : '',
+            cue: typeof cue.value === 'string' ? cue.value : '',
+            adultSeen: adult.found,
+            adult: bool(adult.value),
+            pinSeen: pin.found,
+            pin: bool(pin.value),
+            lastText: null,
+        };
+    });
+}
+function tupleKey(value, key) { return String(value ?? '').trim().toLowerCase() === key; }
+function tupleValue(value, key) {
+    const match = new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, 'i').exec(String(value ?? ''));
+    return match ? match[1] : null;
+}
+function normalizeExplicitLineTuple(fields) {
+    if (fields.length === 9 && tupleKey(fields[3], 'agency') && isAgencyField(fields[4])
+        && tupleKey(fields[5], 'stall') && isBoolField(fields[6])
+        && tupleKey(fields[7], 'pin') && isBoolField(fields[8])) {
+        return [fields[0], fields[1], fields[2], fields[4], fields[6], fields[8]];
+    }
+    if (fields.length === 6) {
+        const agency = tupleValue(fields[3], 'agency');
+        const stall = tupleValue(fields[4], 'stall');
+        const pin = tupleValue(fields[5], 'pin');
+        if (agency !== null && isAgencyField(agency) && stall !== null && isBoolField(stall) && pin !== null && isBoolField(pin)) {
+            return [fields[0], fields[1], fields[2], agency, stall, pin];
+        }
+    }
+    return fields;
+}
+function prepareLineRecordText(value) {
+    return stripRecordWrappers(normalizeLineFieldWrappers(value), lineAnchorKind, completeLineStructure);
+}
 function parseLegacyInner(content) {
+    const jsonBlocks = parseJsonLineBlocks(content);
+    if (jsonBlocks !== null) {
+        return jsonBlocks.flatMap(block => {
+            const parsed = parseLineRow(block.line);
+            if (parsed.fieldCount < 6) return [];
+            return [normalizeLine({ name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: block.pinSeen ? block.pin : bool(parsed.pin), desc: block.desc, next: block.next, cue: block.cue, adult: block.adult })];
+        });
+    }
     const lines = []; let current = null;
-    for (const source of stripRecordWrappers(content, lineAnchorKind, completeLineStructure).split(/\r?\n/)) { const text = cleanLabel(source); if (!text) continue;
+    for (const source of prepareLineRecordText(content).split(/\r?\n/)) { const text = cleanLabel(source); if (!text) continue;
         if (/^Line\s*[:：]/i.test(text)) { if (current) lines.push(normalizeLine(current)); const parsed = parseLineRow(text); if (parsed.fieldCount < 6) { current = null; continue; } current = { name: parsed.name, stage: normalizeLineStage(parsed.stage), when: parsed.when, agency: normalizeAgency(parsed.agency), stall: bool(parsed.stall), pin: bool(parsed.pin), desc: '', next: '' }; }
         else if (current && /^Desc\s*[:：]/i.test(text)) current.desc = fieldValue(text, 'Desc'); else if (current && /^Next\s*[:：]/i.test(text)) current.next = fieldValue(text, 'Next'); else if (current && /^Cue\s*[:：]/i.test(text)) current.cue = fieldValue(text, 'Cue'); else if (current && /^Adult\s*[:：]/i.test(text)) current.adult = bool(fieldValue(text, 'Adult'));
     }
     if (current) lines.push(normalizeLine(current)); return lines;
 }
 export function parseLines(raw, { legacy = true } = {}) { if (typeof raw !== 'string' || !raw.trim()) return []; const match = raw.match(/<storylines_widget[^>]*>([\s\S]*?)<\/storylines_widget>/i); return match ? parseLegacyInner(match[1]) : (legacy ? parseLegacyInner(raw) : []); }
-export function serializeLines(model, { includeCue = true, includeAdult = true } = {}) { const blocks = (Array.isArray(model) ? model : []).map(item => { const l = normalizeLine(item); const row = [`Line: ${l.name}`, l.stage, l.when, l.agency, l.stall ? 'true' : 'false', l.pin ? 'true' : 'false'].join('|'); return [row, l.desc ? `Desc: ${l.desc}` : '', l.next ? `Next: ${l.next}` : '', includeCue && l.cue ? `Cue: ${l.cue}` : '', includeAdult && l.adult ? 'Adult: true' : ''].filter(Boolean).join('\n'); }); return `<storylines_widget>\n${blocks.join('\n\n')}\n</storylines_widget>`; }
+// Canonical storage is line-oriented, so narrative newlines must not become record anchors on reread.
+const singleLineNarrative = value => String(value ?? '').replace(/\r\n?/g, '\n').replace(/\n/g, ' ');
+export function serializeLines(model, { includeCue = true, includeAdult = true } = {}) { const blocks = (Array.isArray(model) ? model : []).map(item => { const l = normalizeLine(item); const row = [`Line: ${l.name}`, l.stage, l.when, l.agency, l.stall ? 'true' : 'false', l.pin ? 'true' : 'false'].join('|'); return [row, l.desc ? `Desc: ${singleLineNarrative(l.desc)}` : '', l.next ? `Next: ${singleLineNarrative(l.next)}` : '', includeCue && l.cue ? `Cue: ${l.cue}` : '', includeAdult && l.adult ? 'Adult: true' : ''].filter(Boolean).join('\n'); }); return `<storylines_widget>\n${blocks.join('\n\n')}\n</storylines_widget>`; }
 function tolerantBlocks(inner) {
+    const wrapped = extractLinesWidget(inner);
+    const source = wrapped === null ? String(inner ?? '') : wrapped;
+    const jsonBlocks = parseJsonLineBlocks(source);
+    if (jsonBlocks !== null) return jsonBlocks;
     const blocks = []; let block = null;
     const flush = () => { if (block) blocks.push(block); block = null; };
-    for (const raw of stripRecordWrappers(inner, lineAnchorKind, completeLineStructure).split(/\r?\n/)) {
+    for (const raw of prepareLineRecordText(source).split(/\r?\n/)) {
         const text = cleanLabel(raw); if (!text || /^```/.test(text)) continue;
         if (/^Line\s*[:：]/i.test(text)) { flush(); block = { line: text, ticketId: null, ticketSeen: false, ticketDuplicate: false, desc: '', next: '', adultSeen: false, lastText: null }; continue; }
         if (!block) continue;
@@ -122,7 +200,12 @@ export function validateLinesResponse(raw, { maxCandidates } = {}) {
         if (!/^\s*<storylines_widget\b[^>]*>\s*<\/storylines_widget\s*>\s*$/i.test(source)) return { ok: false, reason: 'incomplete-or-extraneous' };
         return { ok: true, model: [], raw: '', rejected: [] };
     }
-    const parsedBlocks = tolerantBlocks(inner);
+    const jsonBlocks = parseJsonLineBlocks(inner);
+    if (jsonBlocks?.length === 0) {
+        if (!/^\s*<storylines_widget\b[^>]*>\s*\[\s*\]\s*<\/storylines_widget\s*>\s*$/i.test(source)) return { ok: false, reason: 'incomplete-or-extraneous' };
+        return { ok: true, model: [], raw: '', rejected: [] };
+    }
+    const parsedBlocks = jsonBlocks ?? tolerantBlocks(inner);
     const limit = Number.isInteger(maxCandidates) && maxCandidates >= 0 ? maxCandidates : null;
     const blocks = limit === null ? parsedBlocks : parsedBlocks.slice(0, limit);
     if (!blocks.length) return { ok: false, reason: 'no-lines' };

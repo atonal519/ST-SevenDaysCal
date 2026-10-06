@@ -1,5 +1,35 @@
 const TAG_TOKEN = /<\s*(\/?)\s*([\p{L}_][\p{L}\p{N}_.:-]*)(?:\s+(?:"[^"]*"|'[^']*'|[^"'<>])*)?\s*(\/?)>/gu;
 
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Normalize only complete, same-name wrappers for fields explicitly owned by the caller.
+export function normalizeKnownFieldWrappers(value, { colonFields = [], bareFields = [] } = {}) {
+    const source = String(value ?? '');
+    if (!source) return source;
+    const names = new Map([...colonFields, ...bareFields].map(name => [String(name).toLowerCase(), String(name)]));
+    const colonNames = new Set(colonFields.map(name => String(name).toLowerCase()));
+    const bareNames = new Set(bareFields.map(name => String(name).toLowerCase()));
+    if (!names.size) return source;
+
+    const normalizeLine = line => {
+        const colon = /^[\t ]*<\s*([^<>:\s：]+)\s*[:：]([\s\S]*)$/.exec(line);
+        const bare = colon ? null : /^[\t ]*<\s*([^<>:\s：]+)\s*>([\s\S]*)$/.exec(line);
+        const match = colon || bare;
+        if (!match) return line;
+        const lowerName = match[1].toLowerCase();
+        const fieldName = names.get(lowerName);
+        if (!fieldName || (colon && !colonNames.has(lowerName)) || (bare && !bareNames.has(lowerName))) return line;
+        const closer = new RegExp(`<\\s*\\/\\s*${escapeRegex(match[1])}\\s*>[\\t ]*$`, 'i').exec(match[2]);
+        if (!closer) return line;
+        const rawValue = match[2].slice(0, closer.index);
+        if (new RegExp(`<\\s*\\/\\s*${escapeRegex(match[1])}\\s*>`, 'i').test(rawValue)) return line;
+        const fieldValue = rawValue.replace(/^[\t ]*/, '');
+        return `${line.match(/^[\t ]*/)[0]}${fieldName}: ${fieldValue}`;
+    };
+
+    return source.split(/(\r?\n)/).map((part, index) => index % 2 ? part : normalizeLine(part)).join('');
+}
+
 function tagTokens(source) {
     const tokens = [];
     for (const match of source.matchAll(TAG_TOKEN)) {
