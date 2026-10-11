@@ -7,7 +7,7 @@ import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
 import { LITERAL_DOUBLE_BRACKET_RULE, normalizeTagRules, TAG_NAME_SOURCE } from './utils/tag-names.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
-import { getChatRoot, persistExternalRoots, registerExternalStorageContext } from './runtime/external-chat-storage.js';
+import { getChatRoot, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from './runtime/external-chat-storage.js';
 import { ledgerHistoricalNarrativeMessage } from './business/ledger/capture.js';
 
 registerExternalStorageContext(getContext);
@@ -128,10 +128,11 @@ function freshMeta() {
 
 function persist() {
     // 后台队列采用即时保存；切档会取消宿主防抖并替换 metadata，不能把多组结果只挂在末次防抖上。
+    const ctx = getContext();
     const external = persistExternalRoots();
     if (external !== null) return external;
-    const ctx = getContext();
     if (!ctx) return;
+    prepareNormalChatStoreForSave(ctx);
     if (ctx.saveMetadata) ctx.saveMetadata();
     else ctx.saveMetadataDebounced?.();
 }
@@ -161,6 +162,7 @@ async function persistConfirmed(ownerGuard) {
     }
     const ctx = getContext();
     if (!ctx) throw Object.assign(new Error('当前聊天不可用，未保存本次记忆'), { diagnosticCode: 'save', externalStorage: false });
+    prepareNormalChatStoreForSave(ctx);
     const save = typeof ctx.saveMetadata === 'function' ? ctx.saveMetadata.bind(ctx) : ctx.saveMetadataDebounced?.bind(ctx);
     if (typeof save !== 'function') throw Object.assign(new Error('宿主没有可用的聊天保存接口'), { diagnosticCode: 'save', externalStorage: false });
     try {

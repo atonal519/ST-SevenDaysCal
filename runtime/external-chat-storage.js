@@ -5,6 +5,7 @@ import { safeSaveDiagnosticFields, sanitizeDiagnosticRecord } from './diagnostic
 import { createNativeExternalChatHostBridge } from './external-chat-host-bridge.js';
 import { waitForSignal } from './deadline.js';
 import { bindLocalDiagnosticsContext, captureLocalGenerationDiagnostic } from './local-diagnostics.js';
+import { decodeStoreEntry, decodeStoreRoot, encodeStoreData, encodeStoreEntry } from './store-codec.js';
 
 export const EXTERNAL_MARKER_KEY = 'sp-storage';
 export const EXTERNAL_NAMESPACE = 'st-sevendayscal';
@@ -598,7 +599,32 @@ export function externalOwnKeyBytes(key) {
 
 export function getExternalDiagnostics() {
     if (isExternalMode()) return isExternalReady() ? active.diagnostics?.data?.floors || [] : [];
-    return normalRoot('sp-store', false, () => ({}))?.data?.[DIAGNOSTICS_DATA_KEY]?.floors || [];
+    const physical = normalRoot('sp-store', false, () => ({}))?.data?.[DIAGNOSTICS_DATA_KEY];
+    const diagnostics = decodeStoreEntry(DIAGNOSTICS_DATA_KEY, physical);
+    if (diagnostics == null) return [];
+    return diagnostics.floors || [];
+}
+
+// Keep expired diagnostic request bodies attached to the next ordinary business save.
+export function prepareNormalChatStoreForSave(targetContext = null) {
+    if (targetContext ? hasMarker(targetContext) : isExternalMode()) return;
+    const root = targetContext
+        ? targetContext.chatMetadata?.['sp-store']
+        : normalRoot('sp-store', false, () => ({}));
+    const data = root?.data;
+    if (!data || typeof data !== 'object') return;
+    retainDiagnosticInputsBeforeSave(data, Date.now());
+    encodeStoreData(data);
+}
+
+function retainDiagnosticInputsBeforeSave(data, now) {
+    if (Object.hasOwn(data, DIAGNOSTICS_DATA_KEY)) {
+        try {
+            const diagnostics = decodeStoreEntry(DIAGNOSTICS_DATA_KEY, data[DIAGNOSTICS_DATA_KEY]);
+            // Leave the physical wrapper in place on a no-op save; only TTL edits need a fresh encoded value.
+            if (Array.isArray(diagnostics?.floors) && retainDiagnosticInputs(diagnostics.floors, diagnostics.floors, now)) data[DIAGNOSTICS_DATA_KEY] = diagnostics;
+        } catch { /* A damaged diagnostic value remains intact until an explicit repair. */ }
+    }
 }
 
 function latestVisibleAi(ctx = context()) {
@@ -710,6 +736,7 @@ function diagnosticInputOutcome(attempt, module) {
 
 // Trim only old request bodies from the normal diagnostic snapshot; raw/output state remains available.
 function retainDiagnosticInputs(floors, previousFloors, now) {
+    let changed = false;
     const priorByReply = new Map((Array.isArray(previousFloors) ? previousFloors : []).map(floor => [floor.replyId, floor]));
     for (const floor of Array.isArray(floors) ? floors : []) {
         for (const [module, attempt] of Object.entries(floor.attempts || {})) {
@@ -721,17 +748,18 @@ function retainDiagnosticInputs(floors, previousFloors, now) {
             const priorFinishedAt = attempt.finishedAt == null ? NaN : Number(attempt.finishedAt);
             // Older snapshots had no end time; start their TTL when first observed by a normal update.
             // A change from success/failure through unresolved and back starts a fresh outcome window once.
-            if (!Number.isFinite(priorFinishedAt) || (sameRequest && priorOutcome !== outcome)) attempt.finishedAt = now;
+            if (!Number.isFinite(priorFinishedAt) || (sameRequest && priorOutcome !== outcome)) { attempt.finishedAt = now; changed = true; }
             const ttl = outcome === 'failure' ? FAILURE_DIAGNOSTIC_INPUT_TTL : SUCCESS_DIAGNOSTIC_INPUT_TTL;
-            if (Array.isArray(attempt.messages) && now - Number(attempt.finishedAt) >= ttl) delete attempt.messages;
+            if (Array.isArray(attempt.messages) && now - Number(attempt.finishedAt) >= ttl) { delete attempt.messages; changed = true; }
         }
     }
+    return changed;
 }
 
 async function persistDiagnosticsNow() {
     const ctx = context(); const root = normalRoot('sp-store', true, () => ({ version: 1, data: {} }));
     if (!root.data || typeof root.data !== 'object') root.data = {};
-    root.data[DIAGNOSTICS_DATA_KEY] = { schemaVersion: 1, floors: clone(active.diagnostics?.data?.floors || getExternalDiagnostics()) };
+    root.data[DIAGNOSTICS_DATA_KEY] = encodeStoreEntry(DIAGNOSTICS_DATA_KEY, { schemaVersion: 1, floors: clone(active.diagnostics?.data?.floors || getExternalDiagnostics()) });
     // Diagnostics are fail-open and must not add business-commit writes. ST's
     // debounced metadata path persists them during ordinary chat use; minimal
     // unit/legacy hosts without it retain only the in-memory bounded record.
@@ -1086,6 +1114,7 @@ export async function migrateCurrentChat({ onProgress = () => {} } = {}) {
     const collection = `${await collectionIdFor(target)}-${randomId('attempt').slice(-12)}`; const created = [];
     const expectedRoots = Object.fromEntries(EXTERNAL_ROOT_KEYS.map(key => [key, clone(currentSnapshot[key])]));
     const roots = {}; for (const key of EXTERNAL_ROOT_KEYS) if (currentSnapshot[key] && typeof currentSnapshot[key] === 'object') roots[key] = clone(currentSnapshot[key]);
+    roots['sp-store'] = decodeStoreRoot(roots['sp-store']);
     const normalDiagnostics = roots['sp-store']?.data?.[DIAGNOSTICS_DATA_KEY];
     if (roots['sp-store']?.data) delete roots['sp-store'].data[DIAGNOSTICS_DATA_KEY];
     const nextMessages = clone(messagesSnapshot); const migratedSnapshots = [];
@@ -1154,7 +1183,7 @@ export async function buildCurrentChatDiagnosticPackage({ includeNarrative = fal
     const ctx = context(); if (!ctx?.chatId) throw new Error('当前没有聊天');
     if (isExternalMode() && !isExternalReady()) throw new Error(active.error || '外置存储不可用，不能把未加载误导出为空');
     const roots = {};
-    for (const key of EXTERNAL_ROOT_KEYS) { const value = getChatRoot(key); if (value) roots[key] = clone(value); }
+    for (const key of EXTERNAL_ROOT_KEYS) { const value = getChatRoot(key); if (value) roots[key] = clone(key === 'sp-store' ? decodeStoreRoot(value) : value); }
     const snapshots = [];
     for (const item of snapshotEntries(ctx.chat)) {
         const snapshot = item.value?.external ? active.records.get(item.value.recordId)?.data?.snapshot : item.value;
@@ -1173,4 +1202,4 @@ export async function buildCurrentChatDiagnosticPackage({ includeNarrative = fal
     };
 }
 
-export const __externalStorageTestSeams = Object.freeze({ cleanCurrentData, normalizeDiagnosticFloors, latestVisibleAi, publishMessages, replySourceSignature, replySignature });
+export const __externalStorageTestSeams = Object.freeze({ cleanCurrentData, normalizeDiagnosticFloors, latestVisibleAi, publishMessages, replySourceSignature, replySignature, retainDiagnosticInputsBeforeSave });

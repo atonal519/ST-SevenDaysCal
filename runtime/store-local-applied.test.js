@@ -5,9 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { encodeStoreEntry } from './store-codec.js';
+import { gzipSync } from '../vendor/fflate-gzip.mjs';
 
 test('production index/store applies ordinary chat metadata immediately without waiting for host ACK', async () => {
     const repo = path.resolve(new URL('..', import.meta.url).pathname);
+    const externalEncodedLine = encodeStoreEntry('lines-user', { raw: 'external older line '.repeat(1200), ts: 55, history: [{ raw: 'recoverable external history', id: 'old-line', locked: true }] });
+    const malformedDiagnostics = { codec: 'stsc-gzip-base64', version: 1, payload: Buffer.from(gzipSync(new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, unexpected: 'x'.repeat(1000) })))).toString('base64') };
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'st7cal-local-applied-'));
     const indexUrl = pathToFileURL(path.join(repo, 'index.js')).href;
     const loader = path.join(dir, 'loader.mjs');
@@ -28,7 +32,7 @@ const fixtures = new Map([
   ['world-info.js', ${JSON.stringify(pathToFileURL(world).href)}], ['utils.js', ${JSON.stringify(pathToFileURL(utils).href)}],
 ]);
 export async function resolve(specifier, context, nextResolve) { const hit = [...fixtures].find(([name]) => specifier.endsWith('/' + name) || specifier === name); if (hit) return { url: hit[1], shortCircuit: true }; return nextResolve(specifier, context); }
-export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, readStore, keyDesc, commitPortableImport, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
+export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
 `);
         await fs.writeFile(runner, `
 import { setContext } from ${JSON.stringify(pathToFileURL(harness).href)};
@@ -39,10 +43,10 @@ globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' }); globalThis
 await import(${JSON.stringify(indexUrl)} + '?local-applied-test=' + Date.now());
 const seam = globalThis.__hostSaveSeam;
 if (!seam.storeKinds.includes('daily-menu')) throw new Error('daily menu is missing from store statistics/clear kinds');
-let saveCalls = 0; let settleSave; let fetchCalls = 0;
+let saveCalls = 0; let settleSave; let fetchCalls = 0; const hostPayloadBytes = [];
 globalThis.fetch = async () => { fetchCalls++; throw new Error('ordinary local-applied path must not fetch'); };
 const never = new Promise((resolve, reject) => { settleSave = { resolve, reject }; });
-function context(chatId, metadata, target, save = never) { return { chatId, ...(target.is_group ? { groupId: target.id } : { characterId: 0, characters: [{ name: target.char_name || 'Role', avatar: target.avatar_url || 'role.png' }] }), chat: [], chatMetadata: metadata, saveMetadata() { saveCalls++; return save; } }; }
+function context(chatId, metadata, target, save = never) { return { chatId, ...(target.is_group ? { groupId: target.id } : { characterId: 0, characters: [{ name: target.char_name || 'Role', avatar: target.avatar_url || 'role.png' }] }), chat: [], chatMetadata: metadata, saveMetadata() { saveCalls++; hostPayloadBytes.push(new TextEncoder().encode(JSON.stringify(metadata)).byteLength); return save; } }; }
 for (const target of [{ is_group: false, file_name: 'role-chat', char_name: 'Role', avatar_url: 'role.png' }, { is_group: true, id: 'group-chat' }]) {
   const chatId = target.is_group ? target.id : target.file_name;
   const metadata = { 'sp-store': { version: 1, data: { 'schedule-user': { raw: 'old' }, 'outline-user': { raw: 'keep' }, 'diagnostics-v1': { marker: 'retain' } } } };
@@ -67,11 +71,148 @@ const importResult = await seam.commitPortableImport({
 if (importResult.commitState !== 'local-applied' || importResult.ok !== true) throw new Error('ordinary import did not return local-applied: ' + JSON.stringify(importResult));
 if (importMetadata['sp-store'].data['lines-user'].raw !== 'after' || importMetadata['sp-store'].data['schedule-user'].raw !== 'preserved') throw new Error('ordinary import failed to replace only selected module roots');
 if (saveCalls !== 3 || fetchCalls !== 0) throw new Error('ordinary import must make one standard host save and no GET/PATCH: ' + saveCalls + '/' + fetchCalls);
+const nowBeforeRetention = Date.now; let retentionNow = 1_800_000_000_000; Date.now = () => retentionNow;
+const linesValue = { raw: 'current story line '.repeat(4000), ts: 101, history: Array.from({ length: 10 }, (_, index) => ({ raw: 'history-' + index + ' history '.repeat(1200), id: 'line-' + index, locked: index === 3 })) };
+const qqjValue = { recallText: 'QQJ fallback memory '.repeat(900), sourceKey: 'l0-7', savedAt: 777 };
+const diagnosticValues = { schemaVersion: 1, floors: [{ replyId: 'success-reply', floor: 1, attempts: { lines: { requestId: 'success', finishedAt: retentionNow - 600_000, messages: [{ role: 'user', content: 'expired request body' }], rawResponse: 'retained raw', result: { commit: 'local-applied' } } } }, { replyId: 'pending-reply', floor: 2, attempts: { point: { requestId: 'pending', messages: [{ role: 'user', content: 'pending request body' }], result: { processing: 'pending', commit: 'pending', ui: 'pending' } } } }] };
+const largeMetadata = { 'sp-store': { version: 1, data: { 'lines-user': linesValue, 'qqj-prompt-cache-user': qqjValue, 'diagnostics-v1': diagnosticValues } } };
+setContext(context('codec-production-chat', largeMetadata, { is_group: false, file_name: 'codec-production-chat', char_name: 'Role', avatar_url: 'role.png' }));
+const beforeCodecBytes = new TextEncoder().encode(JSON.stringify(largeMetadata)).byteLength;
+seam.writeStore(seam.keyDesc('schedule', 'user', ''), { raw: 'trigger existing normal save', ts: 2 });
+Date.now = nowBeforeRetention;
+const packedLines = largeMetadata['sp-store'].data['lines-user'];
+const packedQqj = largeMetadata['sp-store'].data['qqj-prompt-cache-user'];
+const packedDiagnostics = largeMetadata['sp-store'].data['diagnostics-v1'];
+if (packedLines?.codec !== 'stsc-gzip-base64' || packedQqj?.codec !== 'stsc-gzip-base64' || packedDiagnostics?.codec !== 'stsc-gzip-base64') throw new Error('production ordinary save did not encode all present large target keys');
+if ('dashed-user' in largeMetadata['sp-store'].data) throw new Error('production save created the absent dashed key');
+if (JSON.stringify(seam.readStore(seam.keyDesc('lines', 'user', ''))) !== JSON.stringify(linesValue)) throw new Error('production read changed current line or recoverable history data');
+if (JSON.stringify(seam.readStore(seam.keyDesc('qqj-prompt-cache', 'user', ''))) !== JSON.stringify(qqjValue)) throw new Error('production QQJ fallback read changed cache data');
+const decodedDiagnostics = await import(${JSON.stringify(pathToFileURL(path.join(repo, 'runtime/external-chat-storage.js')).href)});
+const retainedDiagnostics = decodedDiagnostics.getExternalDiagnostics();
+if (Object.hasOwn(retainedDiagnostics[0].attempts.lines, 'messages') || retainedDiagnostics[0].attempts.lines.rawResponse !== 'retained raw') throw new Error('production TTL did not remove only expired request messages');
+if (retainedDiagnostics[1].attempts.point.messages?.[0]?.content !== 'pending request body') throw new Error('production TTL removed an unresolved request');
+const portableBuilt = seam.buildPortableChatPackage({ selectedModules: ['lines'], roots: { 'sp-store': largeMetadata['sp-store'] }, exportedAt: 'fixed' });
+const portableLines = portableBuilt.package?.modules?.lines?.entries?.['lines-user'];
+if (!portableBuilt.ok || portableLines?.codec || JSON.stringify(portableLines) !== JSON.stringify(linesValue)) throw new Error('portable export did not restore the complete plain line history');
+const diagnosticPackage = await seam.buildCurrentChatDiagnosticPackage();
+if (diagnosticPackage.business['sp-store'].data['lines-user']?.codec || diagnosticPackage.business['sp-store'].data['lines-user']?.history?.length !== 10) throw new Error('diagnostic export did not restore the complete plain business root');
+if (diagnosticPackage.diagnostics[1].attempts.point.messages?.[0]?.content !== 'pending request body') throw new Error('diagnostic export omitted pending input');
+const afterCodecBytes = new TextEncoder().encode(JSON.stringify(largeMetadata)).byteLength;
+if (!(afterCodecBytes < beforeCodecBytes) || hostPayloadBytes.at(-1) !== afterCodecBytes) throw new Error('captured ordinary save body does not reflect actual codec/TTL metadata bytes');
+const packedDiagnosticsAfterFirstSave = largeMetadata['sp-store'].data['diagnostics-v1'];
+const packedDiagnosticsPayloadAfterFirstSave = packedDiagnosticsAfterFirstSave.payload;
+seam.writeStore(seam.keyDesc('schedule', 'user', ''), { raw: 'second unchanged save', ts: 3 });
+if (largeMetadata['sp-store'].data['diagnostics-v1'] !== packedDiagnosticsAfterFirstSave || largeMetadata['sp-store'].data['diagnostics-v1'].payload !== packedDiagnosticsPayloadAfterFirstSave) throw new Error('unchanged diagnostics were decoded and recompressed on the next normal save');
+const sameValueImport = await seam.commitPortableImport({
+  identity: { chatId: 'codec-production-chat' },
+  originalRoots: { 'sp-store': structuredClone(largeMetadata['sp-store']) },
+  portablePackage: portableBuilt.package,
+  selectedModules: ['lines'],
+});
+if (sameValueImport.reason !== 'no-change' || saveCalls !== 5) throw new Error('same-value portable import unexpectedly saved (reason=' + sameValueImport.reason + ', calls=' + saveCalls + ')');
+if (saveCalls !== 5 || fetchCalls !== 0) throw new Error('codec and TTL must reuse exactly one ordinary save per write');
+
+const rejectChecks = [];
+for (const [kind, key] of [['dashed', 'dashed-user'], ['lines', 'lines-user'], ['qqj-prompt-cache', 'qqj-prompt-cache-user']]) {
+  const rejectedMetadata = { 'sp-store': { version: 1, data: {
+    'dashed-user': { raw: '冷知识。'.repeat(700) },
+    'lines-user': { raw: '线历史。'.repeat(900), history: [{ raw: '可恢复历史。'.repeat(300), locked: true }] },
+    'qqj-prompt-cache-user': { recallText: '缓存回退。'.repeat(700), sourceKey: 'l0-7' },
+    'diagnostics-v1': {
+      schemaVersion: 1,
+      floors: [{
+        replyId: 'pending',
+        attempts: { lines: { requestId: 'pending', messages: [{ role: 'user', content: '未决输入。'.repeat(600) }], result: { processing: 'pending', commit: 'pending', ui: 'pending' } } },
+      }],
+    },
+  } } };
+  const rejected = Promise.reject(new Error('synthetic async save rejection'));
+  setContext(context('reject-' + kind, rejectedMetadata, { is_group: false, file_name: 'reject-' + kind, char_name: 'Role', avatar_url: 'role.png' }, rejected));
+  let callback = null;
+  const result = await seam.writeStoreConfirmed(seam.keyDesc(kind, 'user', ''), { raw: 'new owned ' + kind + ' value '.repeat(400) }, { onPersistenceError: (error, details) => { callback = { errorClass: error.name, key: details.key }; } });
+  await new Promise(resolve => setImmediate(resolve));
+  if (result.commitState !== 'local-applied' || callback?.errorClass !== 'Error' || callback.key !== key) throw new Error('packed ordinary value lost its async save rejection callback for ' + kind);
+  if (Object.values(rejectedMetadata['sp-store'].data).filter(value => value?.codec === 'stsc-gzip-base64').length !== 4) throw new Error('async reject fixture did not pack all four known keys');
+  rejectChecks.push(kind);
+}
+if (rejectChecks.length !== 3 || saveCalls !== 8 || fetchCalls !== 0) throw new Error('packed async rejection checks must each use one ordinary save');
+
+const futurePack = { codec: 'stsc-gzip-base64-v2', version: 2, payload: 'future-format' };
+const damagedPack = { codec: 'stsc-gzip-base64', version: 1, payload: 'broken' };
+const protectedMetadata = { 'sp-store': { version: 1, data: {
+  'schedule-user': { raw: 'must survive failed batch', ts: 1 },
+  'lines-user': futurePack,
+  'qqj-prompt-cache-user': damagedPack,
+  'diagnostics-v1': { codec: 'stsc-gzip-base64', version: 1, payload: 'broken' },
+} } };
+setContext(context('damaged-pack-chat', protectedMetadata, { is_group: false, file_name: 'damaged-pack-chat', char_name: 'Role', avatar_url: 'role.png' }));
+for (const attempt of [
+  () => seam.writeData('lines', 'user', '', { raw: 'overwrite future pack' }),
+  () => seam.writeBatch([{ kind: 'schedule', view: 'user', charName: '', value: { raw: 'batch partial write', ts: 2 } }, { kind: 'lines', view: 'user', charName: '', value: { raw: 'overwrite future pack' } }]),
+  () => seam.writeRaw('qqj-prompt-cache-user', { recallText: 'overwrite damaged pack' }),
+  () => seam.writeRaw('diagnostics-v1', { floors: [] }),
+]) {
+  try { attempt(); throw new Error('damaged or future wrapper was silently overwritten'); }
+  catch (error) { if (error.message === 'damaged or future wrapper was silently overwritten') throw error; if (!/无法识别|损坏/.test(error.message)) throw error; }
+}
+if (protectedMetadata['sp-store'].data['schedule-user'].ts !== 1 || protectedMetadata['sp-store'].data['lines-user'] !== futurePack || protectedMetadata['sp-store'].data['qqj-prompt-cache-user'] !== damagedPack || protectedMetadata['sp-store'].data['diagnostics-v1'].payload !== 'broken') throw new Error('failed direct/batch writes replaced protected physical values');
+for (const key of ['lines-user', 'qqj-prompt-cache-user']) {
+  try { seam.readStore(seam.keyDesc(key === 'lines-user' ? 'lines' : 'qqj-prompt-cache', 'user', '')); throw new Error('bad wrapper read as an ordinary value'); }
+  catch (error) { if (error.message === 'bad wrapper read as an ordinary value') throw error; }
+}
+const malformedDiagnosticRoot = { 'sp-store': { version: 1, data: { 'diagnostics-v1': ${JSON.stringify(malformedDiagnostics)} } } };
+const malformedDiagnosticContext = context('bad-diagnostics-chat', malformedDiagnosticRoot, { is_group: false, file_name: 'bad-diagnostics-chat', char_name: 'Role', avatar_url: 'role.png' });
+malformedDiagnosticContext.chat = [{ is_user: false, is_system: false, mes: 'diagnostic structure probe' }];
+setContext(malformedDiagnosticContext);
+const originalMalformedDiagnostics = malformedDiagnosticRoot['sp-store'].data['diagnostics-v1'];
+try { decodedDiagnostics.getExternalDiagnostics(); throw new Error('bad diagnostic wrapper read as an empty value'); }
+catch (error) { if (error.message === 'bad diagnostic wrapper read as an empty value') throw error; }
+try { decodedDiagnostics.refreshDiagnosticRetention(); throw new Error('diagnostic update silently replaced malformed storage'); }
+catch (error) { if (error.message === 'diagnostic update silently replaced malformed storage') throw error; }
+try { await seam.buildCurrentChatDiagnosticPackage(); throw new Error('diagnostic export accepted a malformed packed value'); }
+catch (error) { if (error.message === 'diagnostic export accepted a malformed packed value') throw error; }
+if (malformedDiagnosticRoot['sp-store'].data['diagnostics-v1'] !== originalMalformedDiagnostics) throw new Error('diagnostic update replaced its malformed physical wrapper');
+
+for (const legacyDiagnostics of [{}, { marker: 'retain' }]) {
+  const legacyRoot = { 'sp-store': { version: 1, data: { 'diagnostics-v1': legacyDiagnostics } } };
+  const legacyContext = context('legacy-diagnostics-chat', legacyRoot, { is_group: false, file_name: 'legacy-diagnostics-chat', char_name: 'Role', avatar_url: 'role.png' });
+  setContext(legacyContext);
+  if (decodedDiagnostics.getExternalDiagnostics().length !== 0) throw new Error('legacy plain diagnostics without floors lost the empty-list fallback');
+  if (legacyRoot['sp-store'].data['diagnostics-v1'] !== legacyDiagnostics) throw new Error('reading legacy plain diagnostics rewrote its stored value');
+}
+const legacyLargeDiagnostics = { marker: 'old diagnostic shape '.repeat(1000) };
+const legacyLargeRoot = { 'sp-store': { version: 1, data: { 'diagnostics-v1': legacyLargeDiagnostics } } };
+setContext(context('legacy-large-diagnostics-chat', legacyLargeRoot, { is_group: false, file_name: 'legacy-large-diagnostics-chat', char_name: 'Role', avatar_url: 'role.png' }));
+seam.writeStore(seam.keyDesc('schedule', 'user', ''), { raw: 'normal save preserves legacy diagnostic shape', ts: 4 });
+if (legacyLargeRoot['sp-store'].data['diagnostics-v1'] !== legacyLargeDiagnostics || decodedDiagnostics.getExternalDiagnostics().length !== 0) throw new Error('normal save packed or broke a legacy diagnostic value without floors');
+
+const snapshotCalendar = { kind: 'custom', id: 'snapshot-save-test', revision: 1, weekdayCycle: 7, era: '纪', months: [{ name: '一月', days: 30 }, { name: '二月', days: 30 }] };
+const snapshotValue = { point: 'p', line: 'l', almanac: [], pool: [], recall: [], calendar: snapshotCalendar, anchor: { month: 1, day: 2 } };
+let snapshotDebouncedCalls = 0;
+const snapshotTargetMetadata = { 'sp-store': { version: 1, data: { 'lines-user': { raw: 'snapshot target line '.repeat(1000) } } } };
+const snapshotTarget = context('snapshot-target', snapshotTargetMetadata, { is_group: false, file_name: 'snapshot-target', char_name: 'Role', avatar_url: 'role.png' });
+snapshotTarget.chat = [{ is_user: false, extra: {}, swipe_id: 0, swipe_info: [{ extra: {} }] }];
+snapshotTarget.saveChatDebounced = () => { snapshotDebouncedCalls++; };
+setContext(snapshotTarget);
+if (!seam.snapshotWrite(0, snapshotValue)) throw new Error('snapshot save integration did not update the latest floor');
+if (snapshotDebouncedCalls !== 1 || snapshotTargetMetadata['sp-store'].data['lines-user']?.codec !== 'stsc-gzip-base64') throw new Error('snapshot debounced save did not prepare its current normal metadata once');
+
+let snapshotFallbackCalls = 0;
+const fallbackMetadata = { 'sp-store': { version: 1, data: { 'lines-user': { raw: 'fallback snapshot target '.repeat(1000) } } } };
+const snapshotFallbackTarget = context('snapshot-fallback-target', fallbackMetadata, { is_group: false, file_name: 'snapshot-fallback-target', char_name: 'Role', avatar_url: 'role.png' });
+snapshotFallbackTarget.chat = [{ is_user: false, extra: {}, swipe_id: 0, swipe_info: [{ extra: {} }] }];
+snapshotFallbackTarget.saveChat = () => { snapshotFallbackCalls++; };
+setContext(snapshotFallbackTarget);
+if (!seam.snapshotWrite(0, snapshotValue)) throw new Error('snapshot fallback did not update its target floor');
+await new Promise(resolve => setTimeout(resolve, 250));
+if (snapshotFallbackCalls !== 1 || fallbackMetadata['sp-store'].data['lines-user']?.codec !== 'stsc-gzip-base64') throw new Error('snapshot fallback did not use its existing single-target prepare and save');
+
 const ledgerMetadata = {};
+const fetchCallsBeforeLedger = fetchCalls;
 setContext(context('ledger-chat', ledgerMetadata, { is_group: false, file_name: 'ledger-chat', char_name: 'Role', avatar_url: 'role.png' }));
 const ledgerEntries = await seam.addLedgerEntries([{ 事由: '现场事务', 类型: '持续状态', 现状: '仍在持续。' }]);
 if (ledgerEntries.length !== 1 || ledgerMetadata['sp-ledger']?.entries?.[0]?.事由 !== '现场事务') throw new Error('ordinary ledger batch was not applied to the live root');
-if (saveCalls !== 4 || fetchCalls !== 0) throw new Error('ordinary ledger batch must make one standard host save and no GET/PATCH: ' + saveCalls + '/' + fetchCalls);
+if (saveCalls !== 10 || fetchCalls !== fetchCallsBeforeLedger) throw new Error('ordinary ledger batch must make one standard host save without adding GET/PATCH: ' + saveCalls + '/' + fetchCalls);
 const ledgerThrowMetadata = {};
 setContext(context('ledger-throw-chat', ledgerThrowMetadata, { is_group: false, file_name: 'ledger-throw-chat', char_name: 'Role', avatar_url: 'role.png' }, () => { saveCalls++; throw new Error('synthetic synchronous host save failure'); }));
 const thrownLedger = await seam.addLedgerEntries([{ 事由: '已应用事项', 类型: '持续状态', 现状: '仍在本地。' }]);
@@ -99,7 +240,7 @@ const memoryResult = await Promise.race([
   new Promise((_, reject) => setTimeout(() => reject(new Error('manual memory waited for never-settling host save')), 200)),
 ]);
 if (memoryResult.aborted || !memoryMetadata['sp-memory'].L0['0-0']?.text) throw new Error('manual memory did not locally apply its generated summary');
-if (saveCalls !== 6 || !memoryProgress.some(item => item.current === 1 && item.done === false)) throw new Error('manual memory did not progress immediately after one standard save');
+if (saveCalls !== 12 || !memoryProgress.some(item => item.current === 1 && item.done === false)) throw new Error('manual memory did not progress immediately after one standard save');
 await new Promise((resolve, reject) => { const start = Date.now(); const poll = () => diagnosticWrite ? resolve() : Date.now() - start > 1500 ? reject(new Error('manual memory diagnostic did not flush')) : setTimeout(poll, 20); poll(); });
 const memoryAttempt = diagnosticWrite.data.attempts.memory;
 if (memoryAttempt.result.processing !== 'accepted' || memoryAttempt.result.commit !== 'local-applied' || memoryAttempt.result.ui !== 'displayed') throw new Error('manual memory diagnostic is missing its terminal stages: ' + JSON.stringify(memoryAttempt.result));
@@ -254,6 +395,27 @@ popup.remove();
 seam.getSettings().themeMode = 'day'; seam.setThemeForTest('day');
 seam.openDailyMenuDialog();
 if (!popup.className.includes('sp-root') || !popup.className.includes('sp-day') || !popup.className.includes('sp-forced-day')) throw new Error('forced-theme popup did not use the selected forced palette class');
+const externalContext = { chatId: 'external-codec-chat', chatMetadata: { 'sp-storage': { provider: 'st-bainiaodata', schemaVersion: 1, collection: 'codec-test', currentRecord: 'current', diagnosticsRecord: 'diagnostics' } }, chat: [] };
+const externalWrites = [];
+seam.bindExternalChatStorage({ getContext: () => externalContext, fetchImpl: async (url, options = {}) => {
+  if (String(url).endsWith('/health')) return { ok: true, status: 200, json: async () => ({ apiVersion: 1, records: true, recordList: true, optimisticRevision: true, atomicReplace: true }) };
+  if (String(url).endsWith('/codec-test')) return { ok: true, status: 200, json: async () => [
+    { recordId: 'current', revision: 1, data: { schemaVersion: 1, roots: { 'sp-store': { version: 1, data: { 'lines-user': ${JSON.stringify(externalEncodedLine)} } } } } },
+    { recordId: 'diagnostics', revision: 1, data: { schemaVersion: 1, floors: [] } },
+  ] };
+  if (String(url).endsWith('/codec-test/current') && options.method === 'PUT') { externalWrites.push(JSON.parse(options.body)); return { ok: true, status: 200, json: async () => ({ revision: 2 }) }; }
+  throw new Error('unexpected external codec request: ' + String(url));
+} });
+setContext(externalContext);
+const externalStatus = await seam.loadExternalChat({ force: true });
+if (externalStatus.status !== 'ready') throw new Error('external encoded-root fixture did not load: ' + externalStatus.status);
+const externalRead = seam.readStore(seam.keyDesc('lines', 'user', ''));
+if (externalRead.raw !== 'external older line '.repeat(1200) || externalRead.history[0].locked !== true) throw new Error('external mode did not decode a manually migrated store value');
+const externalReplacement = { raw: 'new external plain value', ts: 56 };
+const externalWriteResult = await seam.writeStoreConfirmed(seam.keyDesc('lines', 'user', ''), externalReplacement);
+if (externalWriteResult.commitState !== 'confirmed' || externalWrites.length !== 1) throw new Error('external confirmed CAS path changed');
+const externalSavedLine = externalWrites[0].data.roots['sp-store'].data['lines-user'];
+if (externalSavedLine.codec || JSON.stringify(externalSavedLine) !== JSON.stringify(externalReplacement)) throw new Error('external CAS write did not preserve its plain-value contract');
 document.createElement = originalCreateElement;
 `);
         const result = await new Promise(resolve => {

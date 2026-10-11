@@ -86,8 +86,8 @@ q::after {
    here when ST vars aren't defined. */
 .sp-night {
     --sp-sheet-bg-legacy    : #272829;
-    --sp-surface-legacy     : #61677A;
-    --sp-surface-high-legacy: #757B8E;
+    --sp-surface-legacy     : #4A5060;
+    --sp-surface-high-legacy: #505668;
     --sp-primary-legacy     : #A8A49E;
     --sp-on-primary   : #272829;
     --sp-on-surface-legacy  : #D8D9DA;
@@ -160,8 +160,9 @@ q::after {
     --sp-neon-color  : var(--sp-primary);
     --sp-neon-glow   : color-mix(in oklab, var(--sp-primary) 45%, transparent);
     --sp-sheet-bg    : var(--SmartThemeChatTintColor,    var(--sp-sheet-bg-legacy));
-    --sp-surface     : var(--SmartThemeBotMesBlurTintColor,  var(--sp-surface-legacy));
-    --sp-surface-high: var(--SmartThemeUserMesBlurTintColor, var(--sp-surface-high-legacy));
+    /* 消息气泡底色与正文色可以各自独立；共用表面沿插件 day/night 色板配对，避免浅底浅字。 */
+    --sp-surface     : var(--sp-surface-legacy);
+    --sp-surface-high: var(--sp-surface-high-legacy);
     --sp-divider     : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 12%, transparent);
     --sp-hover-bg    : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 6%,  transparent);
     --sp-chat-bg     : var(--SmartThemeChatTintColor, var(--sp-chat-bg-legacy));
@@ -470,8 +471,7 @@ q::after {
     z-index: 40;
     margin: 0;
     padding: 12px 14px;
-    /* 不透明化：--sp-surface-high 会落到 ST 的半透明 BlurTintColor，字会透出下层。
-       先铺一层不透明的 legacy 底色，再把想要的高光 tint 用 linear-gradient 叠上去 → 既保留「浮起」的色调、又保证挡住下层。 */
+    /* 表面高层用插件成对的不透明色；保留 sheet 底色作为缺失变量时的回退。 */
     background-color: var(--sp-sheet-bg-legacy);
     background-image: linear-gradient(var(--sp-surface-high, var(--sp-sheet-bg-legacy)), var(--sp-surface-high, var(--sp-sheet-bg-legacy)));
     border: 1px solid var(--sp-divider);
@@ -571,8 +571,7 @@ q::after {
     min-width: 140px;
     max-width: 220px;
     padding: 4px;
-    /* 双层背景（照 .sp-sheet）：不透明底板 + 覆一层酒馆 tint，避免透明酒馆主题下抽屉透底看不清。
-       不能只用 --sp-surface：它=酒馆模糊着色变量，半透明、本该配 backdrop-blur，单用即透。*/
+    /* 沿用 .sp-sheet 的双层背景：底板兜住透明主题下的 sheet tint。 */
     background-color: var(--sp-sheet-bg-legacy);
     background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
     border: 1px solid var(--sp-divider);
@@ -1045,7 +1044,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap           : 5px;
     padding       : 12px 16px 13px;
     border-bottom : 1px solid var(--sp-divider);
-    /* 继承设置面板底色；SmartThemeBotMesBlurTintColor 可与正文色亮度失配。 */
+    /* 继承设置面板底色；独立的消息气泡模糊底色不参与共用表面配色。 */
     background    : transparent;
 }
 .sp-settings-total-row .sp-mode-opt { gap: 8px; }
@@ -2240,9 +2239,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items: center;
     gap        : 6px;
     padding    : 7px 14px;
-    /* 配色跟随酒馆自适应（令牌见 :140 级联）。双层背景（同 .sp-sheet:245）：不透明底板
-       (--sp-surface-legacy，即原写死的 #61677A 系) + 覆一层酒馆 tint。--sp-surface(BotMesBlurTintColor)
-       在透明主题下带 alpha 甚至全透，单用它 toast 会透底；底板兜底保证永不透明，文字用正文色令牌保对比。 */
+    /* 双层背景（同 .sp-sheet:245）：不透明底板 + 插件 day/night 表面色，文字沿用正文色令牌。 */
     background-color: var(--sp-surface-legacy);
     background-image: linear-gradient(var(--sp-surface), var(--sp-surface));
     color      : var(--sp-on-surface);

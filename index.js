@@ -56,10 +56,12 @@ import {
     migrateCurrentChat,
     probeExternalBackend,
     pruneExternalSnapshots,
+    prepareNormalChatStoreForSave,
     refreshDiagnosticRetention,
     replaceExternalRootsAtomic,
     storageStatus,
 } from './runtime/external-chat-storage.js';
+import { decodeStoreRoot } from './runtime/store-codec.js';
 import {
     PORTABLE_CHAT_MAX_BYTES,
     PORTABLE_MODULES,
@@ -2036,7 +2038,7 @@ jQuery(async () => {
             chatName: () => { const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name'); return el?.value || el?.textContent?.trim() || getContext().chatId || '当前聊天'; },
             capture: el => { const ctx = getContext?.() || {}; return captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify, messageFormatting: ctx.messageFormatting }); },
             toast: (message, action, error) => showToast(message, action, error),
-            saveChatDebounced: () => scriptCore.saveChatDebounced(),
+            saveChatDebounced: () => { prepareNormalChatStoreForSave(getContext()); return scriptCore.saveChatDebounced(); },
             warn: (message, error) => console.warn(message, error),
             confirm: message => spConfirm({ title: String(message).includes('收藏') ? '删除收藏' : '删除标签', body: message }),
             selectMany: options => customDialog.selectMany(options),
@@ -7238,7 +7240,15 @@ function downloadDiagnosticPackage(data) {
 }
 
 const portableClone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-const portableSame = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const portableSame = (key, left, right) => {
+    const normalize = value => key === 'sp-store' ? decodeStoreRoot(value) : value;
+    const stable = value => Array.isArray(value)
+        ? value.map(stable)
+        : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(name => [name, stable(value[name])]))
+            : value;
+    return JSON.stringify(stable(normalize(left))) === JSON.stringify(stable(normalize(right)));
+};
 let portableImportPickerIdentity = null;
 
 function portableStorageAvailable(actionLabel) {
@@ -7387,10 +7397,11 @@ async function commitPortableImport({ identity, originalRoots, portablePackage, 
     };
     const freshPlan = rebasePortableImportPlan({ originalRoots, freshRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
     if (!freshPlan.ok) return freshPlan;
-    if (Object.entries(freshPlan.replacementRoots).every(([key, value]) => portableSame(freshRoots[key], value))) {
+    if (Object.entries(freshPlan.replacementRoots).every(([key, value]) => portableSame(key, freshRoots[key], value))) {
         return { ok: true, reason: 'no-change', commitState: 'local-applied', replacementRoots: freshPlan.replacementRoots };
     }
     for (const [key, value] of Object.entries(freshPlan.replacementRoots)) ctx.chatMetadata[key] = portableClone(value);
+    prepareNormalChatStoreForSave(ctx);
     try {
         const pending = ctx.saveMetadata?.();
         pending?.catch?.(() => {});

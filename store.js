@@ -24,7 +24,8 @@
 // baibai_book / variables / LWB_SNAP 等是别的插件的数据，一律只读、绝不删。
 
 import { getContext } from '../../../extensions.js';
-import { deleteChatRoot, externalOwnKeyBytes, getChatRoot, isExternalMode, persistExternalRoots, registerExternalStorageContext, restoreDeletedChatRoot } from './runtime/external-chat-storage.js';
+import { deleteChatRoot, externalOwnKeyBytes, getChatRoot, isExternalMode, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext, restoreDeletedChatRoot } from './runtime/external-chat-storage.js';
+import { decodeStoreEntry } from './runtime/store-codec.js';
 import { createDeadlineSignal } from './runtime/deadline.js';
 
 registerExternalStorageContext(getContext);
@@ -108,6 +109,7 @@ function persist(options = {}) {
     if (!ctx) return;
     const external = persistExternalRoots();
     if (external !== null) return external;
+    prepareNormalChatStoreForSave(ctx);
     try {
         const result = persistNow(ctx);
         if (result && typeof result.then === 'function') {
@@ -136,6 +138,7 @@ async function persistAsync() {
     const metadata = ctx.chatMetadata;
     const current = getContext?.();
     if (metadata && current?.chatMetadata !== metadata) return;
+    prepareNormalChatStoreForSave(current || ctx);
     const result = persistNow(current || ctx);
     if (result && typeof result.then === 'function') await result;
 }
@@ -149,6 +152,10 @@ function confirmedSaveError(saved, fallback = 'store-save-unconfirmed') {
 }
 
 const cloneStoreValue = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+
+function validateStoreReplacement(data, key, value) {
+    if (value != null) decodeStoreEntry(key, data[key]);
+}
 
 export async function writeDataConfirmed(kind, view, charName, value, options = {}) {
     const ctx = getContext?.();
@@ -183,7 +190,10 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
             // The owner signal may be retired after local success; late failures may still annotate this exact live chat/value.
             const liveRoot = metadata[STORE_KEY];
             // All current business payloads are objects; reference identity distinguishes a same-value ordinary takeover.
-            if (!value || typeof value !== 'object' || liveRoot?.data?.[key] !== value) return;
+            if (!value || typeof value !== 'object') return;
+            const physicalValue = liveRoot?.data?.[key];
+            try { if (physicalValue !== value && decodeStoreEntry(key, physicalValue) !== value) return; }
+            catch { return; }
             // 日志只保留阶段和错误类型，不包含聊天或存储正文。
             console.warn('[ST-SevenDaysCal] 普通元数据保存失败', { module: kind, phase: 'save', errorClass: String(error?.name || 'Error') });
             options.onPersistenceError?.(error, { chatId, key, kind });
@@ -215,8 +225,9 @@ export function hasAnyData() {
 export function readData(kind, view = 'user', charName = '') {
     const s = store();
     if (!s) return null;
-    const v = s.data[subKey(kind, view, charName)];
-    return v == null ? null : v;
+    const key = subKey(kind, view, charName);
+    const v = s.data[key];
+    return v == null ? null : decodeStoreEntry(key, v);
 }
 
 // 当前 chat 的全部非空点 scope。间只通过这条只读 seam 看点存档，避免用固定槽/最近角色
@@ -263,7 +274,7 @@ export function writeData(kind, view, charName, value, options = {}) {
         if (!Object.hasOwn(s.data, key)) return true;
         delete s.data[key];
     }
-    else s.data[key] = value;
+    else { validateStoreReplacement(s.data, key, value); s.data[key] = value; }
     persist(options);
     return true;
 }
@@ -280,6 +291,10 @@ export function writeBatch(entries) {
 
 function _applyBatch(list) {
     const s = store(true); if (!s) return false;
+    for (const it of list) {
+        if (it.value == null) continue;
+        validateStoreReplacement(s.data, subKey(it.kind, it.view, it.charName), it.value);
+    }
     for (const it of list) { const key = subKey(it.kind, it.view, it.charName); if (it.value == null) delete s.data[key]; else s.data[key] = it.value; }
     return true;
 }
@@ -295,6 +310,7 @@ export function removeData(kind, view = 'user', charName = '') {
 export function writeRaw(subKeyStr, value) {
     const s = store(true);
     if (!s || !subKeyStr) return false;
+    validateStoreReplacement(s.data, subKeyStr, value);
     s.data[subKeyStr] = value;
     persist();
     return true;
@@ -555,7 +571,7 @@ function legacyEqualsCloud(legacy, cloudData) {
     if (cloudKeys.length !== legacy.length) return false;
     for (const it of legacy) {
         if (!(it.subKey in cloudData)) return false;
-        if (JSON.stringify(cloudData[it.subKey]) !== JSON.stringify(it.value)) return false;
+        if (JSON.stringify(decodeStoreEntry(it.subKey, cloudData[it.subKey])) !== JSON.stringify(it.value)) return false;
     }
     return true;
 }
@@ -568,7 +584,7 @@ function summarizeData(dataMap) {
         const kind = kindOfSubKey(sk);
         if (!kind) continue;
         kinds.add(kind); count++;
-        const ts = tsOf(v);
+        const ts = tsOf(decodeStoreEntry(sk, v));
         if (ts > latestTs) latestTs = ts;
     }
     return { kinds: [...kinds], latestTs, count };

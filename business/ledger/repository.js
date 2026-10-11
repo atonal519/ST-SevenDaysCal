@@ -3,7 +3,7 @@
 // 批量路径保留输入与同键编辑检查；普通 metadata 一次应用并触发宿主保存，外置路径保留 revision CAS。
 
 const { getContext = () => null } = await import('../../../../../extensions.js').catch(() => ({}));
-import { getChatRoot, isExternalMode, persistExternalRoots, registerExternalStorageContext } from '../../runtime/external-chat-storage.js';
+import { getChatRoot, isExternalMode, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from '../../runtime/external-chat-storage.js';
 
 registerExternalStorageContext(getContext);
 
@@ -67,6 +67,7 @@ function persist() {
     if (!ctx) return;
     const external = persistExternalRoots();
     if (external !== null) return external;
+    prepareNormalChatStoreForSave(ctx);
     try {
         const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
         // 旧同步 API 不改变签名；宿主返回 Promise 也不是普通写的提交门槛。
@@ -80,6 +81,7 @@ function persistAwaitable(boundContext = null, options = {}) {
     if (external !== null) return external;
     const ctx = boundContext || getContext?.();
     if (!ctx) return Promise.resolve();
+    prepareNormalChatStoreForSave(ctx);
     // Ordinary chat_metadata is already live. Apply once through the host's
     // normal save hook, but do not treat its Promise/throw as a remote ACK or
     // roll back locally applied content.

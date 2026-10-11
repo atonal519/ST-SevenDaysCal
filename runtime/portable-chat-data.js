@@ -1,3 +1,5 @@
+import { decodeStoreEntry } from './store-codec.js';
+
 export const PORTABLE_CHAT_FORMAT = 'st-sevendayscal-portable';
 export const PORTABLE_CHAT_VERSION = 1;
 export const PORTABLE_CHAT_MAX_BYTES = 8 * 1024 * 1024;
@@ -91,7 +93,7 @@ function moduleFromRoots(id, roots = {}) {
     }
     const data = isObject(roots['sp-store']?.data) ? roots['sp-store'].data : {};
     const entries = {};
-    for (const [key, value] of Object.entries(data)) if (KEY_MATCHERS[id]?.(key)) entries[key] = clone(value);
+    for (const [key, value] of Object.entries(data)) if (KEY_MATCHERS[id]?.(key)) entries[key] = clone(decodeStoreEntry(key, value));
     return { entries };
 }
 
@@ -133,7 +135,7 @@ function validateModule(id, value) {
         if (!KEY_MATCHERS[id]?.(key)) return fail('illegal-module-key', `模块 ${id} 包含不允许的条目：${key}`);
         const expectsArray = ARRAY_ENTRY_KEYS[id]?.(key) === true;
         if (expectsArray ? !Array.isArray(item) : !isObject(item)) return fail('invalid-entry', `模块 ${id} 的条目 ${key} 顶层结构不正确`);
-        entries[key] = clone(item);
+        entries[key] = clone(decodeStoreEntry(key, item));
     }
     return { ok: true, value: { entries } };
 }

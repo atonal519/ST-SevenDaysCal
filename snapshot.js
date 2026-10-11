@@ -5,7 +5,7 @@
 
 import { getContext } from '../../../extensions.js';
 import { isValidCalendarDescriptor, resolveSnapshotCalendar } from './runtime/chat-date-anchor.js';
-import { isExternalMode, isExternalReady, readExternalSnapshot, registerExternalStorageContext, writeExternalSnapshot } from './runtime/external-chat-storage.js';
+import { isExternalMode, isExternalReady, prepareNormalChatStoreForSave, readExternalSnapshot, registerExternalStorageContext, writeExternalSnapshot } from './runtime/external-chat-storage.js';
 
 registerExternalStorageContext(getContext);
 
@@ -75,7 +75,8 @@ function isCurrentWritableFloor(mesId) {
 // 幂等/省写：与现存快照 JSON 相等则跳过（不 touch extra、不触发保存），
 //   避免每次 sync 都把 chat 标脏、debounce 永远够不到落盘。
 export function writeSnapshot(mesId, snap) {
-    const msg = messageAt(mesId);
+    const context = ctx();
+    const msg = context?.chat?.[Number(mesId)] || null;
     if (!msg || !isCurrentWritableFloor(mesId)) return false;
     const calendar = snap?.calendar;
     if (!isValidCalendarDescriptor(calendar)) return false;
@@ -113,6 +114,7 @@ export function writeSnapshot(mesId, snap) {
     // 双写：镜像到当前 swipe 的 swipe_info[swipe_id].extra，随 swipe/删楼/分支正确回滚。
     _mirrorToCurrentSwipe(msg, payload);
 
+    prepareNormalChatStoreForSave(context);
     scheduleSnapshotSave();
     return true;
 }
