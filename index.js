@@ -1,4 +1,6 @@
 import { getContext, extension_settings, extensionNames } from '../../../extensions.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import * as worldInfoCore from '../../../world-info.js';
 import { equalsIgnoreCaseAndAccents, getCharaFilename } from '../../../utils.js';
 import * as scriptCore from '../../../../script.js';
@@ -40,6 +42,7 @@ import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, maskKey } from './utils/format.js';
 import { getSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
+import { QUICK_REPLY_SHORTCUTS, createQuickReplyShortcutSync, registerQuickReplyShortcutCommand } from './runtime/quick-reply-shortcuts.js';
 import { characterCardMatches, effectivePluginEnabled, excludedCharacterSet, isCharacterExcluded, renderCharacterExclusionRows, setCharacterExcluded as updateCharacterExcluded } from './runtime/character-exclusion.js';
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
@@ -248,6 +251,28 @@ import {
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
 import { createDailyMenuController, renderDailyMenuHtml } from './business/point/daily-menu.js';
+
+const syncQuickReplyShortcuts = createQuickReplyShortcutSync({
+    getApi: () => globalThis.quickReplyApi,
+    notify: (message, isError) => showToast(message, null, isError),
+});
+function renderQuickReplyShortcutStatus() {
+    const status = inEl('#sp-qr-shortcuts-status');
+    if (!status) return;
+    const selected = getSettings().quickReplyShortcutKeys;
+    const api = globalThis.quickReplyApi;
+    status.textContent = selected.length && !api
+        ? '选择已保存；Quick Replies 尚未加载。'
+        : selected.length && api.settings?.isEnabled !== true
+            ? 'Quick Replies 总开关当前关闭；构画不会更改它。'
+            : '';
+}
+eventSource.on(event_types.APP_READY, () => { void syncQuickReplyShortcuts(getSettings().quickReplyShortcutKeys); });
+if (event_types.EXTENSION_SETTINGS_LOADED) {
+    eventSource.on(event_types.EXTENSION_SETTINGS_LOADED, () => {
+        if (globalThis.quickReplyApi?.settings?.config?.setListDom) void syncQuickReplyShortcuts(getSettings().quickReplyShortcutKeys);
+    });
+}
 
 // 固定目标仅作为外置/输入来源索引；普通 metadata 写入走标准 saveMetadata。
 const getLedgerTarget = () => {
@@ -1999,6 +2024,12 @@ jQuery(async () => {
     theaterFeature?.destroy?.();
     theaterFeature = createTheaterHostFeature();
     injectModal();
+    registerQuickReplyShortcutCommand({
+        parser: SlashCommandParser,
+        commandClass: SlashCommand,
+        open: openQuickReplyShortcut,
+        notify: (message, isError) => showToast(message, null, isError),
+    });
     injectFab();
     injectToastContainer();
     // Apply saved theme mode (day/night/auto) now that settings are guaranteed loaded
@@ -3364,7 +3395,7 @@ function injectModal() {
                                 </div>
                             </details>
 
-                            <!-- 显示管理：收藏入口有两个可独立多选的位置；楼内渲染框下有点、线、轴、标注打捞等子开关。都不注入 AI、不请求 API，纯只读展示。 -->
+                            <!-- 显示管理：收藏入口位置、Quick Reply快捷打开按钮和楼内只读展示均在此统一管理。 -->
                             <details class="sp-settings-section" id="sp-display-section">
                                 <summary class="sp-settings-section-title">显示与通知管理</summary>
                                 <div class="sp-settings-section-body">
@@ -3384,6 +3415,17 @@ function injectModal() {
                                     </label>
                                     <p class="sp-cfg-hint">可同时开启或全部关闭；关闭入口不会删除已有收藏。</p>
 
+                                    <hr class="sp-mem-divider sp-settings-display-divider">
+                                    <div id="sp-qr-shortcuts-section">
+                                        <label class="sp-cfg-group">Quick Reply 快捷入口</label>
+                                        <p class="sp-cfg-hint">选择要显示的构画打开按钮。按钮只打开界面，不会自动生成内容。</p>
+                                        <div id="sp-qr-shortcuts" class="sp-qr-shortcuts sp-mode-row">
+                                            ${QUICK_REPLY_SHORTCUTS.map(item => `<label class="sp-mode-opt"><input type="checkbox" data-qr-shortcut="${item.key}" ${getSettings().quickReplyShortcutKeys.includes(item.key) ? 'checked' : ''}><span>${item.label}</span></label>`).join('')}
+                                        </div>
+                                        <p id="sp-qr-shortcuts-status" class="sp-cfg-hint" aria-live="polite"></p>
+                                    </div>
+
+                                    <hr class="sp-mem-divider sp-settings-display-divider">
                                     <label class="sp-mode-opt" style="margin-top:10px">
                                         <input type="checkbox" id="sp-inline-render-enabled" ${getSettings().inlineRenderEnabled !== false ? 'checked' : ''}>
                                         <span>楼内渲染框</span>
@@ -4222,192 +4264,8 @@ function injectModal() {
         if (event.key === 'Escape') closeActionMenus();
     });
 
-    // Tab switching: sidebar (schedule/outline/lines) + sub-toggle (user/char)
-    $in('.sp-root').on('click', '.sp-view-btn', function () {  // 全窗委托（含 .sp-content-head 内 sub-btn/ta-trigger），等价原宿主级绑定
-        // 点生成不再冻结整个侧栏：切模块(历/线/面/棱/锚)随时可用——点正文按状态重建（下方 schedule 分支），
-        // 生成完成走 stillOnView 守卫写进(可能隐藏的) #sp-body，切走不被覆盖、切回自动补正。
-        // 仅「我/TA」子切换在点生成途中仍挡（点按视角生成，中途换视角无意义）。
-        const view = $(this).data('view');
-        if (!view) return;
-        if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
-        $in('#sp-module-intro-pop').hide();   // 切模块即收起介绍气泡
-
-        const $btn      = $(this);
-        const isSideTab = $btn.hasClass('sp-side-tab');
-        const isSubBtn  = $btn.hasClass('sp-sub-btn');
-        if (isSideTab && settingsOpen) toggleSettings();
-
-        // 离开棱时统一走 UI 生命周期出口，避免全屏滚动锁和 Esc listener 跟到其他侧栏。
-        if (isSideTab && theaterMode && view !== 'theater') theaterFeature.leave();
-
-        // 切模块（历/线/面/棱/锚/轴）会藏掉 sub-toggle → 顺手收起可能开着的 TA▾ 抽屉，免得它残留浮在别处。
-        if (isSideTab) closeTaDrawer();
-
-        // TA▾ 触发器：不直接切视角，而是开/关「固定槽抽屉」（换人入口，已与刷新解耦）。
-        // 生成途中锁子切换（沿用 isSubBtn 分支原守卫）。active 态 / 标签由抽屉内真正切到某 char 时再落。
-        if ($btn.hasClass('sp-ta-trigger')) {
-            if (pointState.isGenerating) return;
-            toggleTaDrawer();
-            return;
-        }
-
-        // Update active state within the button's group
-        if (isSideTab) {
-            $inAll('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
-            $btn.addClass('sp-view-active');
-            _lastMainView = view;   // 记住当前模块视图，供下次打开面板时恢复（同 chat）
-        } else if (isSubBtn) {
-            $inAll('.sp-sub-btn').removeClass('sp-view-active');
-            $btn.addClass('sp-view-active');
-        }
-
-        // Sidebar clicks
-        if (isSideTab) {
-            if (view === 'outline') {
-                if (outlineMode) return;
-                outlineMode = true;
-                linesMode = false;
-                spaceMode = false;
-                theaterMode = false;
-                axisState.almanacMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-lines-wrap').hide();
-                $in('#sp-space-wrap').hide();
-                $in('#sp-theater-wrap').hide();
-                $in('#sp-anchor-wrap').hide();
-                $in('#sp-almanac-wrap').hide();
-                $in('#sp-outline-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('面');
-                outlineFeature.open();
-                return;
-            }
-            if (view === 'lines') {
-                if (linesMode) return;
-                linesMode = true;
-                outlineMode = false;
-                spaceMode = false;
-                theaterMode = false;
-                axisState.almanacMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-outline-wrap').hide();
-                $in('#sp-space-wrap').hide();
-                $in('#sp-theater-wrap').hide();
-                $in('#sp-anchor-wrap').hide();
-                $in('#sp-almanac-wrap').hide();
-                $in('#sp-lines-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('线');
-                // 生成在途时切回来：重建 loading，别 fallback 到"生成线"空态误导用户
-                if (linesRuntime.busy) {
-                    linesFeature.renderBody(loadingHtml('正在推演线', 'sp-abort-lines'));
-                } else {
-                    const cached = loadCachedLinesForCurrentChat();
-                    if (cached) linesFeature.renderBody(cached);
-                    else linesFeature.renderBody(renderEmptyLinesState());
-                }
-                return;
-            }
-            if (view === 'space') {
-                if (spaceMode) return;
-                spaceMode = true;
-                outlineMode = false;
-                linesMode = false;
-                theaterMode = false;
-                axisState.almanacMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-outline-wrap').hide();
-                $in('#sp-lines-wrap').hide();
-                $in('#sp-theater-wrap').hide();
-                $in('#sp-anchor-wrap').hide();
-                $in('#sp-almanac-wrap').hide();
-                $in('#sp-space-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('间');
-                spaceFeature.open();
-                return;
-            }
-            if (view === 'theater') {
-                if (theaterMode) return;
-                theaterMode = true;
-                outlineMode = false;
-                linesMode = false;
-                spaceMode = false;
-                axisState.almanacMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-outline-wrap').hide();
-                $in('#sp-lines-wrap').hide();
-                $in('#sp-space-wrap').hide();
-                $in('#sp-anchor-wrap').hide();
-                $in('#sp-almanac-wrap').hide();
-                $in('#sp-theater-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('棱');
-                if (theaterFeature.busy) setTheaterBody(loadingHtml('正在折射', 'sp-abort-theater'));
-                else theaterFeature.open();
-                return;
-            }
-            if (view === 'anchor') {
-                enterCoordinateSidebar({
-                    resetModes: () => { outlineMode = false; linesMode = false; spaceMode = false; theaterMode = false; axisState.almanacMode = false; },
-                    hidePanels: () => { $in('#sp-body').hide(); $in('#sp-outline-wrap').hide(); $in('#sp-lines-wrap').hide(); $in('#sp-space-wrap').hide(); $in('#sp-theater-wrap').hide(); $in('#sp-almanac-wrap').hide(); },
-                    showCoordinate: () => $in('#sp-anchor-wrap').css('display', 'flex'),
-                    hideSubToggle: () => $in('#sp-sub-toggle').hide(),
-                    setTitle: title => $in('#sp-content-title').text(title),
-                    feature: coordinateRuntime?.feature,
-                });
-                return;
-            }
-            if (view === 'almanac') {
-                if (axisState.almanacMode) return;
-                axisState.almanacMode = true;
-                outlineMode = false;
-                linesMode = false;
-                spaceMode = false;
-                theaterMode = false;
-                $in('#sp-body').hide();
-                $in('#sp-outline-wrap').hide();
-                $in('#sp-lines-wrap').hide();
-                $in('#sp-space-wrap').hide();
-                $in('#sp-theater-wrap').hide();
-                $in('#sp-anchor-wrap').hide();
-                $in('#sp-almanac-wrap').css('display', 'flex');
-                $in('#sp-sub-toggle').hide();
-                $in('#sp-content-title').text('轴');
-                renderAlmanacPanel();
-                return;
-            }
-            // view === 'schedule' — leaving outline/lines/space/theater/anchor/almanac, restore body
-            if (outlineMode) { outlineMode = false; $in('#sp-outline-wrap').hide(); }
-            if (linesMode)   { linesMode   = false; $in('#sp-lines-wrap').hide(); }
-            if (spaceMode)   { spaceMode   = false; $in('#sp-space-wrap').hide(); }
-            if (theaterMode) { theaterMode = false; $in('#sp-theater-wrap').hide(); }
-            coordinateRuntime?.feature?.close?.(); $in('#sp-anchor-wrap').hide();
-            if (axisState.almanacMode) { axisState.almanacMode = false; $in('#sp-almanac-wrap').hide(); }
-            $in('#sp-body').show();
-            $in('#sp-sub-toggle').show();
-            $in('#sp-content-title').text('点');
-            $inAll('.sp-sub-btn').removeClass('sp-view-active');
-            $inAll(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
-            updateTaTriggerLabel();   // 回点视图：TA▾ 标签跟随当前视角（char 显名 / user 回落 TA）
-            // 生成在途/切走再切回：从状态重建正文（镜像 线/面/棱），别露上次残留或僵尸转圈
-            if (pointState.isGenerating) setBody(loadingHtml('正在规划', 'sp-abort-generate'));
-            else if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
-            else showEmptyGenerate();
-            return;
-        }
-
-        // Sub-toggle clicks：走到这里只剩「我」（TA▾ 触发器已在上面拦截并 return）。
-        if (isSubBtn) {
-            if (pointState.isGenerating) return;   // 点生成途中不切视角：本次生成绑定当前视角，中途换「我/TA」无意义
-            closeTaDrawer();            // 切回「我」顺手收起 TA 抽屉
-            if (view === currentView) return;
-            setView('user');
-            if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
-            else showEmptyGenerate();
-            return;
-        }
-    });
+    // Sidebar buttons and direct QR commands share this route so view lifecycle stays identical.
+    $in('.sp-root').on('click', '.sp-view-btn', function () { handleViewButtonClick($(this)); });
 
     $in('#sp-cfg-save').on('click', function () {
         const $msg = $in('#sp-cfg-msg');
@@ -4427,6 +4285,16 @@ function injectModal() {
     });
     $in('#sp-current-diagnostic-export').on('click', () => { void exportCurrentChatDiagnosticPackage(); });
     bindApiPresetEvents();
+    $in('#sp-qr-shortcuts').on('change', 'input[data-qr-shortcut]', function () {
+        const key = this.dataset.qrShortcut;
+        const selected = new Set(getSettings().quickReplyShortcutKeys);
+        if (this.checked) selected.add(key);
+        else selected.delete(key);
+        getSettings().quickReplyShortcutKeys = [...selected];
+        saveSettingsDebounced();
+        renderQuickReplyShortcutStatus();
+        void syncQuickReplyShortcuts(getSettings().quickReplyShortcutKeys);
+    });
     renderApiPresetList();
     renderUtilityPresetList();
     $in('#sp-scale-row').on('change.autoSave', 'input[name="sp-lines-scale"]', function () {
@@ -4976,6 +4844,170 @@ function refreshCharPinIcon() {
     $btn.toggleClass('sp-pinned', pinned);
 }
 
+function openSidebarView(view) {
+    if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
+    $in('#sp-module-intro-pop').hide();
+    const $btn = $in(`.sp-side-tab.sp-view-btn[data-view="${view}"]`).first();
+    if (!$btn.length) return;
+    if (settingsOpen) toggleSettings();
+    if (theaterMode && view !== 'theater') theaterFeature.leave();
+    closeTaDrawer();
+    $inAll('.sp-side-tab.sp-view-btn').removeClass('sp-view-active');
+    $btn.addClass('sp-view-active');
+    _lastMainView = view;
+
+    // Existing sidebar route and all of its view-specific setup.
+        if (view === 'outline') {
+            if (outlineMode) return;
+            outlineMode = true;
+            linesMode = false;
+            spaceMode = false;
+            theaterMode = false;
+            axisState.almanacMode = false;
+            $in('#sp-body').hide();
+            $in('#sp-lines-wrap').hide();
+            $in('#sp-space-wrap').hide();
+            $in('#sp-theater-wrap').hide();
+            $in('#sp-anchor-wrap').hide();
+            $in('#sp-almanac-wrap').hide();
+            $in('#sp-outline-wrap').css('display', 'flex');
+            $in('#sp-sub-toggle').hide();
+            $in('#sp-content-title').text('面');
+            outlineFeature.open();
+            return;
+        }
+        if (view === 'lines') {
+            if (linesMode) return;
+            linesMode = true;
+            outlineMode = false;
+            spaceMode = false;
+            theaterMode = false;
+            axisState.almanacMode = false;
+            $in('#sp-body').hide();
+            $in('#sp-outline-wrap').hide();
+            $in('#sp-space-wrap').hide();
+            $in('#sp-theater-wrap').hide();
+            $in('#sp-anchor-wrap').hide();
+            $in('#sp-almanac-wrap').hide();
+            $in('#sp-lines-wrap').css('display', 'flex');
+            $in('#sp-sub-toggle').hide();
+            $in('#sp-content-title').text('线');
+            // 生成在途时切回来：重建 loading，别 fallback 到"生成线"空态误导用户
+            if (linesRuntime.busy) {
+                linesFeature.renderBody(loadingHtml('正在推演线', 'sp-abort-lines'));
+            } else {
+                const cached = loadCachedLinesForCurrentChat();
+                if (cached) linesFeature.renderBody(cached);
+                else linesFeature.renderBody(renderEmptyLinesState());
+            }
+            return;
+        }
+        if (view === 'space') {
+            if (spaceMode) return;
+            spaceMode = true;
+            outlineMode = false;
+            linesMode = false;
+            theaterMode = false;
+            axisState.almanacMode = false;
+            $in('#sp-body').hide();
+            $in('#sp-outline-wrap').hide();
+            $in('#sp-lines-wrap').hide();
+            $in('#sp-theater-wrap').hide();
+            $in('#sp-anchor-wrap').hide();
+            $in('#sp-almanac-wrap').hide();
+            $in('#sp-space-wrap').css('display', 'flex');
+            $in('#sp-sub-toggle').hide();
+            $in('#sp-content-title').text('间');
+            spaceFeature.open();
+            return;
+        }
+        if (view === 'theater') {
+            if (theaterMode) return;
+            theaterMode = true;
+            outlineMode = false;
+            linesMode = false;
+            spaceMode = false;
+            axisState.almanacMode = false;
+            $in('#sp-body').hide();
+            $in('#sp-outline-wrap').hide();
+            $in('#sp-lines-wrap').hide();
+            $in('#sp-space-wrap').hide();
+            $in('#sp-anchor-wrap').hide();
+            $in('#sp-almanac-wrap').hide();
+            $in('#sp-theater-wrap').css('display', 'flex');
+            $in('#sp-sub-toggle').hide();
+            $in('#sp-content-title').text('棱');
+            if (theaterFeature.busy) setTheaterBody(loadingHtml('正在折射', 'sp-abort-theater'));
+            else theaterFeature.open();
+            return;
+        }
+        if (view === 'anchor') {
+            enterCoordinateSidebar({
+                resetModes: () => { outlineMode = false; linesMode = false; spaceMode = false; theaterMode = false; axisState.almanacMode = false; },
+                hidePanels: () => { $in('#sp-body').hide(); $in('#sp-outline-wrap').hide(); $in('#sp-lines-wrap').hide(); $in('#sp-space-wrap').hide(); $in('#sp-theater-wrap').hide(); $in('#sp-almanac-wrap').hide(); },
+                showCoordinate: () => $in('#sp-anchor-wrap').css('display', 'flex'),
+                hideSubToggle: () => $in('#sp-sub-toggle').hide(),
+                setTitle: title => $in('#sp-content-title').text(title),
+                feature: coordinateRuntime?.feature,
+            });
+            return;
+        }
+        if (view === 'almanac') {
+            if (axisState.almanacMode) return;
+            axisState.almanacMode = true;
+            outlineMode = false;
+            linesMode = false;
+            spaceMode = false;
+            theaterMode = false;
+            $in('#sp-body').hide();
+            $in('#sp-outline-wrap').hide();
+            $in('#sp-lines-wrap').hide();
+            $in('#sp-space-wrap').hide();
+            $in('#sp-theater-wrap').hide();
+            $in('#sp-anchor-wrap').hide();
+            $in('#sp-almanac-wrap').css('display', 'flex');
+            $in('#sp-sub-toggle').hide();
+            $in('#sp-content-title').text('轴');
+            renderAlmanacPanel();
+            return;
+        }
+        // view === 'schedule' — leaving outline/lines/space/theater/anchor/almanac, restore body
+        if (outlineMode) { outlineMode = false; $in('#sp-outline-wrap').hide(); }
+        if (linesMode)   { linesMode   = false; $in('#sp-lines-wrap').hide(); }
+        if (spaceMode)   { spaceMode   = false; $in('#sp-space-wrap').hide(); }
+        if (theaterMode) { theaterMode = false; $in('#sp-theater-wrap').hide(); }
+        coordinateRuntime?.feature?.close?.(); $in('#sp-anchor-wrap').hide();
+        if (axisState.almanacMode) { axisState.almanacMode = false; $in('#sp-almanac-wrap').hide(); }
+        $in('#sp-body').show();
+        $in('#sp-sub-toggle').show();
+        $in('#sp-content-title').text('点');
+        $inAll('.sp-sub-btn').removeClass('sp-view-active');
+        $inAll(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
+        updateTaTriggerLabel();   // 回点视图：TA▾ 标签跟随当前视角（char 显名 / user 回落 TA）
+        // 生成在途/切走再切回：从状态重建正文（镜像 线/面/棱），别露上次残留或僵尸转圈
+        if (pointState.isGenerating) setBody(loadingHtml('正在规划', 'sp-abort-generate'));
+        else if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
+        else showEmptyGenerate();
+        return;
+}
+
+
+function handleViewButtonClick($btn) {
+    const view = $btn.data('view');
+    if (!view) return;
+    if ($btn.hasClass('sp-side-tab')) { openSidebarView(view); return; }
+    if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
+    $in('#sp-module-intro-pop').hide();
+    if (!$btn.hasClass('sp-sub-btn')) return;
+    if (pointState.isGenerating) return;
+    if ($btn.hasClass('sp-ta-trigger')) { toggleTaDrawer(); return; }
+    closeTaDrawer();
+    if (view === currentView) return;
+    setView('user');
+    if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
+    else showEmptyGenerate();
+}
+
 // ─── Open / close ─────────────────────────────────────────────────────────────
 
 // 面板打开时先重置到点首页作为干净基线，再恢复同聊天上次的 lastMainView；切聊天时该值已复位为点。
@@ -5002,7 +5034,7 @@ function resetPanelToScheduleHome() {
     $inAll('.sp-sub-btn').removeClass('sp-view-active');
     $in(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
 }
-function openSchedule() {
+function openSchedule(targetView = null) {
     showPanel();
     if (currentCharacterExcluded()) {
         ensureExcludedCharacterSettingsOnly();
@@ -5010,12 +5042,17 @@ function openSchedule() {
     }
     resetPanelToScheduleHome();   // 先归位到点首页（清所有子视图 mode/wrap），作为恢复的干净基线
     renderDailyMenuCard();
+    if (targetView) {
+        openSidebarView(targetView);
+        checkMemoryMigrationNotice();
+        return;
+    }
     // 同 chat 内恢复上次打开的模块视图；切 chat 已把 _lastMainView 复位成 schedule → 默认第一页。
-    // 非 schedule：触发该 tab 的 click 让它自渲染（此刻各 mode 均 false，不会被幂等 guard 挡）。
-    if (_lastMainView && _lastMainView !== 'schedule') {
+    // 非 schedule：复用侧栏路由初始化目标视图。
+    if (!targetView && _lastMainView && _lastMainView !== 'schedule') {
         const $tab = $in(`.sp-side-tab.sp-view-btn[data-view="${_lastMainView}"]`);
         if ($tab.length) {
-            $tab.trigger('click');
+            openSidebarView(_lastMainView);
             checkMemoryMigrationNotice();
             return;
         }
@@ -5030,6 +5067,55 @@ function openSchedule() {
     // Surface schema-migration notice for users who upgrade + open the panel
     // without ever switching chat first (rare but possible after fresh install/update)
     checkMemoryMigrationNotice();
+}
+
+function openQuickReplyShortcut(key) {
+    const shortcut = QUICK_REPLY_SHORTCUTS.find(item => item.key === key);
+    if (!shortcut) return;
+    if (shortcut.mode === 'daily-menu') {
+        if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
+        if (!pluginEnabled()) { showToast('构画已关闭', null, true); return; }
+        openDailyMenuDialog();
+        return;
+    }
+    if (shortcut.mode !== 'settings' && shortcut.mode !== 'memory' && currentCharacterExcluded()) {
+        ensureExcludedCharacterSettingsOnly();
+        return;
+    }
+    if (shortcut.mode !== 'settings' && shortcut.mode !== 'memory' && !pluginEnabled()) {
+        showToast('构画已关闭', null, true);
+        return;
+    }
+
+    const panel = $(`#${MODAL_ID}`);
+    const panelWasVisible = panel.is(':visible');
+    if (!panelWasVisible) openSchedule(shortcut.view ?? 'schedule');
+
+    if (shortcut.mode === 'settings' || shortcut.mode === 'memory') {
+        if (!settingsOpen) toggleSettings();
+        if (shortcut.mode === 'memory') {
+            const section = inEl('#sp-mem-section');
+            for (let parent = section?.parentElement; parent; parent = parent.parentElement) {
+                if (parent.tagName === 'DETAILS') parent.open = true;
+            }
+            if (section) {
+                section.open = true;
+                section.scrollIntoView?.({ block: 'center' });
+            }
+        }
+        return;
+    }
+
+    if (shortcut.view === 'schedule') {
+        if (panelWasVisible) openSidebarView(shortcut.view);
+        return;
+    }
+    if (panelWasVisible) openSidebarView(shortcut.view);
+    if (shortcut.view === 'almanac' && shortcut.sheet) almSetSheet(shortcut.sheet);
+    if (shortcut.view === 'lines' && shortcut.sheet) {
+        linesFeature.setSheet(shortcut.sheet);
+        linesFeature.refreshPanel();
+    }
 }
 
 function showEmptyGenerate() {
@@ -8117,6 +8203,7 @@ function toggleSettings() {
     settingsOpen = !settingsOpen;
     const $overlay = $in('#sp-settings-overlay');
     if (settingsOpen) {
+        renderQuickReplyShortcutStatus();
         const savedLinesMode = getLinesMode();
         for (const value of ['turns', 'days', 'manual']) {
             $in(`input[name="sp-lines-mode"][value="${value}"]`).prop('checked', value === savedLinesMode);

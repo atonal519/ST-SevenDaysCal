@@ -20,33 +20,109 @@ test('production index/store applies ordinary chat metadata immediately without 
     const script = path.join(dir, 'script.mjs');
     const utils = path.join(dir, 'utils.mjs');
     const world = path.join(dir, 'world-info.mjs');
+    const slashParser = path.join(dir, 'slash-parser.mjs');
+    const slashCommand = path.join(dir, 'slash-command.mjs');
     try {
         await fs.writeFile(harness, `let context = null; export const extension_settings = {}; export const extensionNames = []; export function getContext() { return context; } export function setContext(value) { context = value; }\n`);
         await fs.writeFile(utils, `export const equalsIgnoreCaseAndAccents = (a,b) => String(a).toLowerCase() === String(b).toLowerCase(); export const getCharaFilename = () => '';\n`);
         await fs.writeFile(world, `export let selected_world_info = null; export const world_info = {}; export async function checkWorldInfo() { return { allActivatedEntries: new Set() }; }\n`);
+        await fs.writeFile(slashParser, `export class SlashCommandParser { static addCommandObject(command) { (globalThis.__slashCommands ??= []).push(command); } }\n`);
+        await fs.writeFile(slashCommand, `export class SlashCommand { static fromProps(props) { return props; } }\n`);
         await fs.writeFile(script, `export const eventSource = { on() {}, removeListener() {}, makeLast() {} }; export const event_types = {}; export const system_message_types = {}; export function saveSettingsDebounced() {} export function saveSettings() {} export function substituteParams(value) { return String(value ?? ''); } export let isChatSaving = false; export function getRequestHeaders() { return {}; }\n`);
         await fs.writeFile(loader, `
 const index = ${JSON.stringify(indexUrl)};
 const fixtures = new Map([
   ['extensions.js', ${JSON.stringify(pathToFileURL(harness).href)}], ['script.js', ${JSON.stringify(pathToFileURL(script).href)}],
   ['world-info.js', ${JSON.stringify(pathToFileURL(world).href)}], ['utils.js', ${JSON.stringify(pathToFileURL(utils).href)}],
+  ['SlashCommandParser.js', ${JSON.stringify(pathToFileURL(slashParser).href)}], ['SlashCommand.js', ${JSON.stringify(pathToFileURL(slashCommand).href)}],
 ]);
 export async function resolve(specifier, context, nextResolve) { const hit = [...fixtures].find(([name]) => specifier.endsWith('/' + name) || specifier === name); if (hit) return { url: hit[1], shortCircuit: true }; return nextResolve(specifier, context); }
-export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
+export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, openQuickReplyShortcut, openSidebarView, openSchedule, handleViewButtonClick, setCurrentViewForTest: value => { currentView = value; }, registerShortcutCommandForTest: () => registerQuickReplyShortcutCommand({ parser: SlashCommandParser, commandClass: SlashCommand, open: openQuickReplyShortcut, notify: (message, isError) => showToast(message, null, isError) }), setLastMainViewForTest: value => { _lastMainView = value; }, shortcutState: () => ({ outlineMode, linesMode, spaceMode, theaterMode, almanacMode: axisState.almanacMode, almanacSheet: axisState._almanacSheet, linesSheet: linesFeature.sheet, settingsOpen, currentView, lastMainView: _lastMainView }), setShortcutUiForTest: value => { _spShadow = value; }, prepareShortcutViewDependencies: () => { theaterFeature ??= { busy: false, leave() {}, open() {}, onPanelClosed() {}, onPluginDisabled() {} }; coordinateRuntime ??= { feature: { open() {}, close() {} } }; }, setSettingsOpenForTest: value => { settingsOpen = value; }, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
 `);
         await fs.writeFile(runner, `
 import { setContext } from ${JSON.stringify(pathToFileURL(harness).href)};
-globalThis.jQuery = Object.assign((...args) => new Proxy({ length: 0 }, { get: (target, key) => key === 'length' ? 0 : (...values) => target }), { fn: {} }); globalThis.$ = globalThis.jQuery;
+const shortcutButton = {}; const settingsLayer = { tagName: 'DETAILS', open: false, parentElement: null }; const memorySection = { tagName: 'DETAILS', open: false, parentElement: settingsLayer, scrollIntoView() {} };
+const shortcutUi = { querySelector(selector) { if (selector.startsWith('.sp-side-tab.sp-view-btn')) return shortcutButton; if (selector === '#sp-mem-section') return memorySection; return null; }, querySelectorAll() { return []; } };
+globalThis.shortcutTriggerCalls = 0; globalThis.shortcutPanelVisible = true; const jqChain = (length, selector) => { let chain; chain = new Proxy({ length }, { get(target, key) { if (key === 'length') return target.length; if (key === 'is') return query => selector === '#sp-modal-root' ? globalThis.shortcutPanelVisible : true; if (key === 'first') return () => chain; if (key === 'hasClass') return () => false; if (key === 'trigger') return () => { globalThis.shortcutTriggerCalls++; return chain; }; return (...values) => chain; } }); return chain; };
+globalThis.jQuery = Object.assign((...args) => jqChain(args[0] === shortcutButton ? 1 : 0, args[0]), { fn: {} }); globalThis.$ = globalThis.jQuery;
 globalThis.window = { innerWidth: 1024, innerHeight: 768, matchMedia: () => ({ matches: false }), addEventListener() {}, removeEventListener() {}, visualViewport: null };
 globalThis.document = { documentElement: { style: { setProperty() {} }, insertAdjacentHTML() {} }, body: { appendChild() {}, removeChild() {} }, head: { appendChild() {} }, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createElement: () => ({ style: {}, classList: { add() {}, remove() {} }, appendChild() {}, remove() {} }) };
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' }); globalThis.requestAnimationFrame = callback => setTimeout(callback, 0); globalThis.MutationObserver = class { observe() {} disconnect() {} }; globalThis.ResizeObserver = class { observe() {} disconnect() {} }; globalThis.IntersectionObserver = class { observe() {} disconnect() {} }; globalThis.toastr = null;
 await import(${JSON.stringify(indexUrl)} + '?local-applied-test=' + Date.now());
 const seam = globalThis.__hostSaveSeam;
+seam.registerShortcutCommandForTest();
 if (!seam.storeKinds.includes('daily-menu')) throw new Error('daily menu is missing from store statistics/clear kinds');
 let saveCalls = 0; let settleSave; let fetchCalls = 0; const hostPayloadBytes = [];
 globalThis.fetch = async () => { fetchCalls++; throw new Error('ordinary local-applied path must not fetch'); };
 const never = new Promise((resolve, reject) => { settleSave = { resolve, reject }; });
 function context(chatId, metadata, target, save = never) { return { chatId, ...(target.is_group ? { groupId: target.id } : { characterId: 0, characters: [{ name: target.char_name || 'Role', avatar: target.avatar_url || 'role.png' }] }), chat: [], chatMetadata: metadata, saveMetadata() { saveCalls++; hostPayloadBytes.push(new TextEncoder().encode(JSON.stringify(metadata)).byteLength); return save; } }; }
+setContext(context('qr-shortcut-route', {}, { is_group: false, file_name: 'qr-shortcut-route', char_name: 'Role', avatar_url: 'role.png' }));
+seam.setShortcutUiForTest(shortcutUi);
+seam.prepareShortcutViewDependencies();
+seam.setSettingsOpenForTest(true);
+seam.setLastMainViewForTest('space');
+seam.setCurrentViewForTest('user');
+seam.handleViewButtonClick({ data: () => 'char', hasClass: name => name === 'sp-sub-btn' || name === 'sp-ta-trigger' });
+if (seam.shortcutState().currentView !== 'char') throw new Error('production TA trigger click did not toggle into its char view');
+const registeredShortcut = globalThis.__slashCommands?.find(command => command.name === 'gouhua-open');
+if (!registeredShortcut) throw new Error('production index did not register /gouhua-open');
+const routeCases = [
+  ['point', 'schedule'], ['axis-upcoming', 'almanac'], ['axis-calendar', 'almanac'], ['axis-ticks', 'almanac'],
+  ['lines-events', 'lines'], ['lines-dashed', 'lines'], ['outline', 'outline'], ['space', 'space'],
+  ['theater', 'theater'], ['coordinate', 'anchor'],
+];
+for (const [key, expected] of routeCases) {
+  globalThis.shortcutPanelVisible = false;
+  const result = await registeredShortcut.callback({}, key);
+  const state = seam.shortcutState();
+  if (result !== '' || state.lastMainView !== expected) throw new Error('production shortcut route failed for ' + key + ': ' + JSON.stringify(state));
+  if (key.startsWith('axis-')) {
+    const sheet = { 'axis-upcoming': 'upcoming', 'axis-calendar': 'calendar', 'axis-ticks': 'ledger' }[key];
+    if (state.almanacSheet !== sheet) throw new Error('axis shortcut chose the wrong existing sheet for ' + key);
+  }
+  if (key.startsWith('lines-')) {
+    const sheet = key === 'lines-events' ? 'events' : 'dashed';
+    if (state.linesSheet !== sheet) throw new Error('line shortcut chose the wrong existing sheet for ' + key);
+  }
+}
+globalThis.shortcutPanelVisible = true;
+seam.setLastMainViewForTest('space');
+await registeredShortcut.callback({}, 'point');
+if (seam.shortcutState().lastMainView !== 'schedule') throw new Error('visible-panel point shortcut restored a stale module instead of the point view');
+const shortcutSettings = seam.getSettings();
+shortcutSettings.pluginEnabled = false;
+for (const visible of [false, true]) {
+  globalThis.shortcutPanelVisible = visible;
+  seam.setLastMainViewForTest('schedule');
+  await registeredShortcut.callback({}, 'axis-calendar');
+  await registeredShortcut.callback({}, 'daily-menu');
+  if (seam.shortcutState().lastMainView !== 'schedule') throw new Error('business shortcut bypassed the plugin master switch with panel visible=' + visible);
+}
+shortcutSettings.pluginEnabled = true;
+shortcutSettings.characterExcludeAvatars = ['role.png'];
+for (const visible of [false, true]) {
+  globalThis.shortcutPanelVisible = visible;
+  seam.setLastMainViewForTest('schedule');
+  await registeredShortcut.callback({}, 'lines-events');
+  if (seam.shortcutState().lastMainView !== 'schedule') throw new Error('business shortcut bypassed the excluded-card gate with panel visible=' + visible);
+  seam.setSettingsOpenForTest(false);
+  await registeredShortcut.callback({}, 'settings');
+  await registeredShortcut.callback({}, 'settings');
+  await registeredShortcut.callback({}, 'memory');
+  if (!seam.shortcutState().settingsOpen || !memorySection.open) throw new Error('excluded-card setting shortcuts were blocked with panel visible=' + visible);
+}
+shortcutSettings.characterExcludeAvatars = [];
+globalThis.shortcutPanelVisible = true;
+seam.setLastMainViewForTest('space');
+seam.openSchedule();
+if (seam.shortcutState().lastMainView !== 'space' || !seam.shortcutState().spaceMode || globalThis.shortcutTriggerCalls !== 0) throw new Error('openSchedule did not restore through the shared direct route');
+await registeredShortcut.callback({}, 'settings');
+await registeredShortcut.callback({}, 'settings');
+await registeredShortcut.callback({}, 'memory');
+await registeredShortcut.callback({}, 'memory');
+if (!seam.shortcutState().settingsOpen || !memorySection.open || !settingsLayer.open) throw new Error('settings/memory shortcuts did not remain open when repeated');
+if (await registeredShortcut.callback({}, 'daily-menu') !== '') throw new Error('daily-menu shortcut did not return an empty command result');
+if (await registeredShortcut.callback({}, 'unknown') !== '') throw new Error('unknown shortcut did not return an empty command result');
 for (const target of [{ is_group: false, file_name: 'role-chat', char_name: 'Role', avatar_url: 'role.png' }, { is_group: true, id: 'group-chat' }]) {
   const chatId = target.is_group ? target.id : target.file_name;
   const metadata = { 'sp-store': { version: 1, data: { 'schedule-user': { raw: 'old' }, 'outline-user': { raw: 'keep' }, 'diagnostics-v1': { marker: 'retain' } } } };
@@ -341,7 +417,7 @@ seam.setDialogShadow(dialogShadow);
 seam.bindDailyMenuDialogEvents();
 let openFetches = 0; const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { openFetches++; throw new Error('opening the menu must not request generation'); };
-seam.openDailyMenuDialog();
+if (await registeredShortcut.callback({}, 'daily-menu') !== '') throw new Error('daily-menu slash command did not return an empty result');
 if (!popup || popup.getAttribute?.('role') !== 'dialog' || !menuContent.innerHTML.includes('Existing dish') || !closeButton.focused) throw new Error('real menu opener did not show stored menu in an accessible dialog');
 if (openFetches !== 0) throw new Error('opening menu invoked API');
 popup.remove(); seam.renderDailyMenuCard();

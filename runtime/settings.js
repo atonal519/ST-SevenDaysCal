@@ -101,6 +101,8 @@ export const DEFAULT_SETTINGS = {
     // 历法模板保存可复用描述符；绑定表以角色 avatar 精确映射模板 id。
     calendarTemplates    : [],
     calendarTemplateBindings: {},
+    // QR buttons are a projection of this preference; the host QR settings remain user-owned.
+    quickReplyShortcutKeys: [],
 };
 
 export function getSettings() {
@@ -111,6 +113,8 @@ export function getSettings() {
     if (s.calendarTemplates === DEFAULT_SETTINGS.calendarTemplates) s.calendarTemplates = [];
     if (s.calendarTemplateBindings === DEFAULT_SETTINGS.calendarTemplateBindings) s.calendarTemplateBindings = {};
     if (s.characterExcludeAvatars === DEFAULT_SETTINGS.characterExcludeAvatars) s.characterExcludeAvatars = [];
+    if (s.quickReplyShortcutKeys === DEFAULT_SETTINGS.quickReplyShortcutKeys) s.quickReplyShortcutKeys = [];
+    if (!Array.isArray(s.quickReplyShortcutKeys)) s.quickReplyShortcutKeys = [];
     return s;
 }
 
