@@ -7,7 +7,7 @@ import { captureLocalGenerationDiagnostic } from '../runtime/local-diagnostics.j
 const CODES = new Set([
     'config-missing', 'http-400', 'auth', 'not-found', 'rate-limit', 'server',
     'timeout', 'upstream-timeout', 'network', 'invalid-json', 'response-error', 'empty-output', 'truncated', 'sse-invalid', 'unknown',
-    'parse', 'invalid-structure', 'invalid-fields', 'save', 'recoverable-fallback', 'memory-stale',
+    'parse', 'invalid-structure', 'invalid-fields', 'save', 'recoverable-fallback', 'memory-stale', 'memory-read',
 ]);
 
 export function classifyGenerationError(error, { status = 0, phase = 'request' } = {}) {
@@ -36,25 +36,26 @@ export function classifyGenerationError(error, { status = 0, phase = 'request' }
 
 const MESSAGES = Object.freeze({
     'config-missing': '请先配置 API',
-    'http-400': 'AI 请求参数不被接口接受。请检查模型配置或在“剔除参数”中移除不支持的参数。',
-    auth: 'AI API Key 无效或没有权限，请检查 Key 和模型权限。',
-    'not-found': 'AI 接口地址不可用（404），请检查 Base URL。',
+    'http-400': '接口不接受当前请求参数，请检查模型配置或移除不支持的参数。',
+    auth: '接口拒绝访问，请检查 Key 和模型权限。',
+    'not-found': 'AI 接口地址不可用，请检查 Base URL。',
     'rate-limit': 'AI 请求触发限流，请稍后重试或检查额度。',
     server: 'AI 服务暂时异常，请稍后重试。',
-    timeout: 'AI 请求超时，请稍后重试或调大请求超时。',
-    'upstream-timeout': '上游服务返回超时说明，本次未自动重试；请稍后重试，或缩短发送给模型的上下文。',
+    timeout: 'AI 请求超时，请稍后重试或缩短发送给模型的内容。',
+    'upstream-timeout': 'AI 服务报告超时，本次未自动重试；请稍后重试或缩短发送给模型的内容。',
     network: '网络连接中断，请检查网络后重试。',
-    'invalid-json': 'AI 接口已响应，但响应包不是有效 JSON，构画无法读取正文；请重试或检查接口兼容性。',
-    'response-error': 'AI 接口已响应，但返回的是错误包而非正文；请检查接口状态、额度或模型权限。',
+    'invalid-json': 'AI 接口返回内容无法读取，请检查接口兼容性后重试。',
+    'response-error': 'AI 接口返回错误，没有可用正文；请检查接口状态和模型权限。',
     'empty-output': 'AI 没有返回可用正文，请调整模型或提示词后重试。',
-    truncated: '上游返回了输出长度截断信号，构画未保存不完整结果；可缩短上下文或分段处理，并检查模型服务是否有输出限制。',
-    'sse-invalid': 'AI 流式响应损坏，未保存不完整结果；请重试。',
-    parse: '模型已返回，但构画未识别出该模块要求的格式；原有内容未改变，请重试。',
-    'invalid-structure': '模型已返回，构画已识别格式，但结构未通过本地校验；原有内容未改变，请重试。',
-    'invalid-fields': '模型已返回，构画已识别格式，但字段未通过本地校验；原有内容未改变，请重试。',
+    truncated: 'AI 回复被截断，不完整内容未保存；请缩短上下文或分段处理。',
+    'sse-invalid': 'AI 流式回复损坏，不完整内容未保存；请重试。',
+    parse: 'AI 已回复，但内容格式无法识别；原有内容未改变，请重试。',
+    'invalid-structure': 'AI 已回复，但内容结构不完整；原有内容未改变，请重试。',
+    'invalid-fields': 'AI 已回复，但有必需字段不符合要求；原有内容未改变，请重试。',
     save: '内容已生成，但未确认保存完成；请检查当前内容后重试。',
     'recoverable-fallback': '美化失败，已保留原稿。',
-    'memory-stale': '千千结记忆快照已失效，请重新生成。',
+    'memory-stale': '本次记忆预检已失效，请重新生成。',
+    'memory-read': '所选记忆源读取失败，请检查读取接口和当前聊天绑定后重试。',
     unknown: 'AI 生成失败，请稍后重试。',
 });
 
@@ -76,16 +77,16 @@ export function diagnosticMessage(error, options = {}) {
         const attempt = Number(error?.attempt ?? options.attempt);
         if (Number.isInteger(status) && status >= 500) {
             message = Number.isInteger(attempt) && attempt > 0
-                ? `上游服务返回 HTTP ${status}；本次已尝试 ${attempt} 次仍失败，请稍后重试。`
-                : `上游服务返回 HTTP ${status}，请稍后重试。`;
+            ? `AI 服务暂时异常，已尝试 ${attempt} 次仍失败，请稍后重试。`
+                : 'AI 服务暂时异常，请稍后重试。';
         }
     }
     if (code === 'timeout') {
         const seconds = safeTimeoutSeconds(error?.timeoutSec ?? options.timeoutSec);
         const status = Number(error?.status ?? options.status);
         message = Number.isInteger(status) && status >= 200 && status < 300
-            ? `AI 请求超时：已收到 HTTP ${status} 响应，但正文/响应流在 ${seconds} 秒内未完成，已在本地终止。本次未自动重试。`
-            : `AI 请求超时：等待 ${seconds} 秒后已在本地终止。本次未自动重试。`;
+            ? `AI 已响应，但内容读取超过 ${seconds} 秒仍未完成；本次未自动重试。`
+            : `等待 AI 回复超过 ${seconds} 秒，本次未自动重试。`;
     }
     return message;
 }

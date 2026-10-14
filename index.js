@@ -5,10 +5,6 @@ import * as worldInfoCore from '../../../world-info.js';
 import { equalsIgnoreCaseAndAccents, getCharaFilename } from '../../../utils.js';
 import * as scriptCore from '../../../../script.js';
 import { eventSource, event_types, substituteParams, saveSettingsDebounced, saveSettings as stSaveSettings, system_message_types } from '../../../../script.js';
-import {
-    buildCreativeChatSystemPrompt,
-    getCreativeChatPlaceholder,
-} from './state.js';
 import * as memory from './memory.js';
 import { createTheaterRuntime } from './business/theater/runtime.js';
 import { createPanelFailureStore, createPanelFailureRecency, UI_REFRESH_FAILURE_TEXT } from './business/ui/panel-failure.js';
@@ -18,6 +14,7 @@ import { captureSnapshotElement } from './business/coordinate/capture.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
+import { normalizeLedgerInterval } from './business/ledger/settings.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
@@ -100,6 +97,7 @@ import {
     almEndMonthDay,
     almItemCoversDoy,
     getCalDescInjectText,
+    isEmptyAlmanacWidget,
     parseAlmanacWidget,
     parseEraWidget,
     almDedupKey,
@@ -155,7 +153,7 @@ import { createAxisTransactionController } from './business/axis/transaction.js'
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
 import { createAxisDateContext } from './business/axis/date-context.js';
 import { resolveAlmanacContextText, sanitizeGenerationContextText } from './runtime/generation-context.js';
-import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, buildStoryClockPrompt, STORY_CLOCK_KEY, createStoryClockController, extensionStoryClockState } from './business/axis/story-clock.js';
+import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, buildStoryClockPrompt, createStoryClockController, extensionStoryClockState } from './business/axis/story-clock.js';
 import { createWeekdayConsumerContext } from './business/axis/weekday-coordinator.js';
 import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
 import { createDateDetectionController } from './business/axis/date-detection.js';
@@ -190,10 +188,10 @@ import { createLedgerJudgeController } from './business/ledger/judge.js';
 import { createLedgerInlineRenderer } from './business/ledger/inline.js';
 import { createLedgerSnapshotBridge } from './business/ledger/snapshot.js';
 import { createLedgerActions } from './business/ledger/actions.js';
-import { bindLedgerEvents, createLedgerDeletedHandler, finalizeLedgerCapturePanel, finalizeLedgerJudgePanel, formatLedgerCaptureFeedback, formatLedgerJudgeFeedback } from './business/ledger/events.js';
+import { bindLedgerEvents, createLedgerDeletedHandler, finalizeLedgerCapturePanel, finalizeLedgerJudgePanel, formatLedgerCaptureFeedback } from './business/ledger/events.js';
 import { buildLedgerSources } from './business/ledger/reconcile.js';
 import { ledgerOwnerIdentity, sameLedgerOwner } from './business/ledger/owner.js';
-import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerLatestAiFloorId, ledgerFloorDateContext, ledgerAiFloorRecords, ledgerHistoricalAiFloorRecords, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
+import { bindLedgerCapture, createLedgerCaptureController, ledgerNarrativeMessage, ledgerLatestAiFloorId, ledgerFloorDateContext, ledgerHistoricalAiFloorRecords, LEDGER_EVENT_TYPES, LEDGER_FIELD_SPEC } from './business/ledger/capture.js';
 import { filterRerollItems, shouldRunPendingPointFollowup } from './runtime/refactor-adapters.js';
 import {
     createDatabaseMemoryAccess,
@@ -210,7 +208,7 @@ import { parseLines as parseCanonicalLines, TERMINAL_LINE_STAGES } from './busin
 import { buildLinesPrompt as buildCanonicalLinesPrompt } from './business/lines/prompt.js';
 import { LINE_DIRECTION_LABELS, LINE_DIRECTION_VALUES, normalizeLineDirection } from './business/lines/direction.js';
 import { createAdvanceStrategy } from './business/lines/strategy.js';
-import { createLinesFeature } from './business/lines/feature.js';
+import { createLinesFeature, linesGenerationFailureText } from './business/lines/feature.js';
 import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
 import { createSpaceFeature } from './business/space/feature.js';
@@ -250,7 +248,7 @@ import {
     batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet, renderLedgerControls,
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
-import { createDailyMenuController, renderDailyMenuHtml } from './business/point/daily-menu.js';
+import { createDailyMenuController, parseDailyMenu, renderDailyMenuHtml } from './business/point/daily-menu.js';
 
 const syncQuickReplyShortcuts = createQuickReplyShortcutSync({
     getApi: () => globalThis.quickReplyApi,
@@ -329,17 +327,21 @@ function consumeDateBootstrap(messageId) {
     return matches;
 }
 let theaterFeature;
+let theaterRuntime = null;
 let memoryPauseNoticeShown = false;
 function createTheaterHostFeature() {
     const runtime = createTheaterRuntime({
         storage: globalThis.localStorage, coreModule: scriptCore, getContext, callTheaterApi,
-        buildWorldInfoContext: ctx => buildWorldInfoContext(ctx), readCardExtras: ctx => readCardExtras(ctx), getMemText: () => getMemText(),
+        buildWorldInfoContext: ctx => buildWorldInfoContext(ctx), readCardExtras: ctx => readCardExtras(ctx),
+        buildRecentContext: ctx => buildRecentChatContext(ctx, 3), getRecentMesIds: ctx => getRecentVisibleFloorIds(ctx, 3),
+        getMemText: options => getMemText(options),
         names: () => ({ userName: getContext().name1 || '用户', charName: getContext().name2 || '角色' }),
         settings: () => { const s = getSettings(); return { theaterStylePrompt: typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '', theaterBeautifyPrompt: typeof s.theaterBeautifyPrompt === 'string' ? s.theaterBeautifyPrompt : '' }; },
         onDiagnostic: diagnostic => { console.warn('[SP theater]', diagnostic); if (getSettings().notifyMode === 'full') showToast('小剧场美化失败，已保留原稿', null, true); },
-        stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); }, renderAiMessageHtml,
+        stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); },
         ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), setFailureHtml: html => $in('#sp-theater-failure-slot').html(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore }),
     });
+    theaterRuntime = runtime;
     return runtime.feature;
 }
 
@@ -482,7 +484,6 @@ const pointController = createPointController({
     chatId: () => getContext().chatId,
     enabled: pluginEnabled,
     setButton: setExtBtnState,
-    showEmpty: showEmptyGenerate,
     syncing: () => axisState._almSyncingPoint,
     toast: showToast,
     view: () => currentView,
@@ -593,7 +594,7 @@ function calendarForStoryFloor(floor) {
 }
 
 // ledger 选择器注入：select.js 的打分/门槛依赖到期/距今口径 ledgerDueInfo/ledgerDaysSince
-// （二者仍滞留本文件、且另经历法助手触达），经 bindLedgerSelect 注入以免反向依赖循环引用。
+// 选择器需要日期口径但不依赖轴模块，由宿主在此注入以避免循环引用。
 bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
 const axisDateContext = createAxisDateContext({ today: almTodayAnchor, daysUntil: almDaysUntil, daysUntilFull: almDaysBetweenFull, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor });
 bindLedgerDate({ today: () => axisDateContext.today(), daysUntil: axisDateContext.daysUntil, daysUntilFull: axisDateContext.daysUntilFull, listEntries: () => ledger.listEntries() });
@@ -836,7 +837,6 @@ const axisCalendarManager = createCalendarManager({
     clone: cloneCalDesc,
     createState: () => ({ editing: false, draft: cloneCalDesc(loadCalDesc()), error: '', templatesOpen: false, bindTemplateId: null, bindQuery: '' }),
     readDraft: () => readCalendarDraftForm(),
-    limits: CALENDAR_LIMITS,
     confirm: (...args) => customDialog.confirm(...args),
     chatId: () => getContext().chatId,
     cards: currentCharacterCards,
@@ -854,7 +854,6 @@ const axisCalendarManager = createCalendarManager({
     escapeHtml,
     escapeAttr,
     setBinding: setCalendarBinding,
-    writeBindings: bindings => { getSettings().calendarTemplateBindings = bindings; },
     save: saveSettingsDebounced,
     applyTemplate: options => maybeApplyBoundCalendarTemplate(options),
     validate: validateCalendarDesc,
@@ -904,7 +903,7 @@ const axisGenerationController = createAxisGenerationController({
     prompt: (user, char) => buildAlmanacPrompt(user, char),
     supplementPrompt: (user, char, existing) => buildAnniversarySupplementPrompt(user, char, existing),
     validate: validateAlmanacResponse, parse: parseAlmanacWidget, merge: mergeAlmanac,
-    loadItems: loadAlmanac, saveItems: saveAlmanacItemsConfirmed, dedupKey: almDedupKey, dateLabel: almDateLabel,
+    isEmptyWidget: isEmptyAlmanacWidget, loadItems: loadAlmanac, saveItems: saveAlmanacItemsConfirmed, dedupKey: almDedupKey, dateLabel: almDateLabel,
     sync: syncLatestAlmanacBlock, render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
     notify: (message, generated) => { if (generated) { if (axisState.almanacMode) { if (getSettings().notifyMode !== 'off') showToast(message); } else showToast(message, () => { $in('.sp-view-btn[data-view="almanac"]').trigger('click'); showPanel(); }); } else if (getSettings().notifyMode !== 'off') showToast(message); },
     error: (error, supplement) => showToast(`${supplement ? '补录失败：' : '轴生成失败：'}${diagnosticMessage(error)}`, null, true),
@@ -1035,7 +1034,7 @@ const dateDetectionController = createDateDetectionController({
     completeStoryClock: clock => completeStoryClockPure(clock),
     identity: latestStoryOwnerIdentity,
     getCalibration: () => getStoryCalibration(charStableKey(getContext())),
-    prompt: () => buildDateJudgePromptPure(getCalDescInjectText()),
+    prompt: () => { const cal = loadCalDesc(); return buildDateJudgePromptPure(isGregorianCalendar(cal) && !cal.title ? '' : getCalDescInjectText()); },
     callApi: callCustomApi,
     parse: parseJudgedDatePure,
     bridge: bridgeAbortSignal,
@@ -1143,8 +1142,8 @@ const timeTravel = createTimeTravelController({
         { key: AUTOMATION_MODULES.LINES, canRun: () => false, run: async () => ({ status: 'skipped' }) },
         { key: AUTOMATION_MODULES.OUTLINE, canRun: () => outlineFeature.canRelocate(), run: ({ promptAddon, signal }) => outlineFeature.relocate(promptAddon, signal) },
         { key: AUTOMATION_MODULES.POINT, canRun: () => !!readStore(getCacheKey('user', ''))?.raw, run: ({ destinationDate, promptAddon, signal }) => syncPointToToday(false, { targetDate: destinationDate, targetScope: { view: 'user', charName: '' }, promptAddon, feedback: 'time-travel', signal, allowPendingFollowup: false }) },
-        { key: AUTOMATION_MODULES.LEDGER_CAPTURE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
-        { key: AUTOMATION_MODULES.LEDGER_JUDGE, canRun: () => getSettings().ledgerCaptureEnabled === true, run: ({ destinationDate, promptAddon, signal }) => runLedgerJudgeStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
+        { key: AUTOMATION_MODULES.LEDGER_CAPTURE, canRun: () => getSettings().ledgerCaptureEnabled === true && getLedgerCaptureInterval() > 0, run: ({ destinationDate, promptAddon, signal }) => runLedgerCaptureStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
+        { key: AUTOMATION_MODULES.LEDGER_JUDGE, canRun: () => getSettings().ledgerCaptureEnabled === true && getLedgerJudgeInterval() > 0, run: ({ destinationDate, promptAddon, signal }) => runLedgerJudgeStep(true, { targetDate: destinationDate, promptAddon, feedback: 'time-travel', signal }) },
     ],
 });
 
@@ -1205,7 +1204,7 @@ function collectTimeTravelContext(sourceDate, targetDate) {
     );
     const weekday = axisDateContext.weekdayFor(targetDate.month, targetDate.day, axisDateContext.weekdayRef(calendar), calendar);
     const targetWeekday = Number.isInteger(weekday) ? (ALM_WEEKDAYS[weekday] || '') : '';
-    const outlineSnapshot = outlineFeature.readSnapshot();
+    const outlineSnapshot = outlineFeature.readPlanningProjection();
     const outline = outlineSnapshot.beats;
     const outlineCursor = outlineSnapshot.cursor;
     const lines = parseCanonicalLines(readStore(getLinesCacheKey())?.raw || '')
@@ -1214,7 +1213,7 @@ function collectTimeTravelContext(sourceDate, targetDate) {
     const injectionOn = injectEnabled();
     const injectionState = {
         linesInjected: injectionOn && settings.linesEnabled !== false && settings.linesInject === true && lines.length > 0,
-        outlineInjected: injectionOn && settings.outlineInject === true && outline.length > 0 && outlineCursor >= 1,
+        outlineInjected: outline.length > 0,
         ledgerInjected: injectionOn && settings.ledgerInject === true && ledgerInjectionController.echo.length > 0,
     };
     return { sourceDate, targetDate, calendar, anniversaries, targetWeekday, outline, outlineCursor, lines, injectionState };
@@ -1233,6 +1232,15 @@ function directionValue(result) {
     return TIME_TRAVEL_DIRECTION_OPTIONS.find(option => option.value === result.value)?.prompt || '';
 }
 
+function timeTravelDirectionLoadErrorText(error) {
+    const phase = error?.phase || 'request';
+    const code = classifyGenerationError(error, { phase });
+    if (code === 'config-missing') return '请先在设置中填写自定义 API 的 URL 和 Key；也可以返回后直接采用。';
+    if (code === 'empty-output') return 'AI 没有返回可用的推演方向，请重新加载或返回后直接采用。';
+    if (code === 'unknown') return '读取 AI 推演方向失败，请检查自定义 API 设置后重试，或返回后直接采用。';
+    return `读取 AI 推演方向失败：${diagnosticMessage(error, { phase })}`;
+}
+
 async function startTimeTravel(targetDate) {
     const sourceDate = almTodayAnchor();
     const validTarget = almValidMonthDay(targetDate, loadCalDesc());
@@ -1240,7 +1248,7 @@ async function startTimeTravel(targetDate) {
     const initialChatId = getContext().chatId;
     const existing = timeTravel.getState();
     if (existing?.phase === 'syncing') {
-        showToast('时光旅行正在同步，完成或中断后才能开始新的时旅');
+        showToast('时光旅行正在同步，完成或中断后才能开始新的时旅', null, 'info');
         return false;
     }
     if (existing?.phase === 'waiting') {
@@ -1252,7 +1260,7 @@ async function startTimeTravel(targetDate) {
         });
         const current = timeTravel.getState();
         if (!current || current.sessionId !== existing.sessionId || current.phase !== existing.phase || getContext().chatId !== initialChatId) {
-            showToast('时旅状态已经变化，本次没有覆盖当前会话');
+            showToast('时旅状态已经变化，本次没有覆盖当前会话', null, 'info');
             return false;
         }
         if (!confirmed) return false;
@@ -1311,17 +1319,18 @@ async function startTimeTravel(targetDate) {
                 cancelValue: '__back__',
                 loadingText: '正在推演三个方向…',
                 emptyText: '没有得到可用方向，请刷新重试',
+                loadErrorText: timeTravelDirectionLoadErrorText,
                 loadChoices: async ({ signal }) => {
                     if (!isTimeTravelSelectionCurrent(run)) throw Object.assign(new Error('时旅选择已结束'), { name: 'AbortError' });
                     const cfg = loadCfg();
-                    if (!cfg.url || !cfg.key) throw new Error('请先在设置中填写自定义 API 的 URL 和 Key；也可以返回后直接采用');
+                    if (!cfg.url || !cfg.key) throw makeDiagnosticError('config-missing');
                     const live = collectTimeTravelContext(run.sourceDate, run.targetDate);
                     const prompt = buildTravelDirectionPrompt({ ...live, preference, excluded });
                     const ctx = getContext();
                     const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE, promptMode: 'creative', diagnosticModule: 'time-travel-direction' });
                     if (signal?.aborted || !isTimeTravelSelectionCurrent(run)) throw Object.assign(new Error('时旅选择已结束'), { name: 'AbortError' });
                     const directions = parseTravelDirections(raw, excluded);
-                    if (!directions.length) throw new Error('AI 没有返回可用方向，请刷新重试');
+                    if (!directions.length) throw makeDiagnosticError('empty-output');
                     excluded.push(...directions);
                     return directions.map(value => ({ value, label: value }));
                 },
@@ -1419,9 +1428,9 @@ const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" h
 
 // 模块介绍：内容标题旁「?」点开的小气泡文案。键对应侧栏 data-view，面向使用者讲清用途与真实操作。
 // 想改文字直接改这里即可（纯展示，不入库、不注入 AI）。
-// 小百科·图标图例：模块介绍气泡内容。lede（这模块干嘛的·一句话）+ 若干「真 FontAwesome 图标 + 名称 + 一句话」，
-// 图标与界面所见一致，用户对号入座即知每个钮啥意思。渲染端用 .html() 注入（内容全为作者手写、无用户输入，无注入面）。精简为主。
+// 介绍由用途段、普通说明段、短分节标题和图标操作行组成。内容全为作者手写，无用户输入。
 const _iLede = t => `<p class="sp-intro-lede">${t}</p>`;
+const _iText = t => `<p class="sp-intro-text">${t}</p>`;
 const _iSub  = t => `<div class="sp-intro-sub">${t}</div>`;
 const _iKey  = (icon, name, desc) => `<div class="sp-intro-key"><i class="fa-solid ${icon}"></i><b>${name}</b><span>${desc}</span></div>`;
 const _iSvgKey = (svg, name, desc) => `<div class="sp-intro-key">${svg}<b>${name}</b><span>${desc}</span></div>`;
@@ -1429,17 +1438,22 @@ const _coordinateIntroSvg = '<svg viewBox="0 0 24 24" width="1em" height="1em" f
 
 const MODULE_INTROS = {
     schedule:
-        _iLede('「点」从故事里的“今天”开始，为我／TA 安排接下来 3 天的事项，并把更远的事另列在“未来”；它不是人物此刻状态卡。时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出，构画只读取、解析和展示，不会自行生成；是否出现、格式完整与时间合理取决于模型是否遵循提示词和主楼剧情质量，缺失或不完整时无法凭空补出可靠时间，可能让时间判断失真；没有可靠记录时不猜现实星期。') +
-        _iSub('默认不会随日期变化自动重排，也不会潜伏注入主楼 AI。想更新就手动刷新；若要“今天”变化后后台重排，可在设置 → 推进设置 → 日期与点开启“点：后台自动跟随「今天」”（会额外调用 API）。') +
+        _iLede('「点」从故事里的“今天”开始，为我／TA 安排接下来 3 天的事项，并把更远的事另列在“未来”；它不是人物此刻状态卡。') +
+        _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示，不会自行生成；缺失或不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。模型给出的日期和时间仍可能与剧情不符。') +
+        _iSub('更新方式') +
+        _iText('默认不会随日期变化自动重排，也不会潜伏注入主楼 AI。需要更新时可手动刷新；若要“今天”变化后后台重排，可在设置 → 推进设置 → 日期与点开启“点：后台自动跟随「今天」”，这会额外调用 API。') +
         _iKey('fa-rotate-right', '生成／刷新', '按最新剧情重做未锁事项；新结果会覆盖旧的未锁数据') +
         _iKey('fa-thumbtack',    '固定 TA',    '只把当前 TA 留在 TA▾ 抽屉，方便下次查看；不是锁定事项') +
         _iKey('fa-ellipsis-vertical', '⋮ 菜单', '每条点的操作都收在这里') +
         _iKey('fa-pen',          '编辑',       '手动修改这条事项') +
         _iKey('fa-lock',         '锁定',       '刷新时保住同名事项不被删除；时间、说明等仍可能随新剧情推进') +
         _iKey('fa-arrow-right-to-bracket', '注入', '把这条点写进输入框，供你确认或修改后发送；不是后台注入') +
-        _iKey('fa-trash',        '删除',       '移除这条事项'),
+        _iKey('fa-trash',        '删除',       '移除这条事项') +
+        _iSub('去间讨论') +
+        _iText('想先讨论再新增或修改点，可去「间」说清人物与目标，例如“把下周的约定整理成可应用到点的方案”。有效回复出现按钮后，点击才写入；新增时还要选择人物。'),
     almanac:
-        _iLede('「轴」有“即将到来”“日历”“刻度”三页：前两页管理节日、生日、纪念日与故事历法；刻度页跟踪伤情、约定、周期等会随时间变化的账。时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出，构画只读取、解析和展示，不会自行生成；主楼未输出或格式不完整时无法凭空补出可靠时间，可能让时间判断失真；没有可靠记录时不猜现实星期。') +
+        _iLede('「轴」有“即将到来”“日历”“刻度”三页：前两页管理节日、生日、纪念日与故事历法；刻度页跟踪伤情、约定、周期等会随时间变化的账。') +
+        _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示；主楼未输出或格式不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。') +
         _iSub('节日 · 历法') +
         _iKey('fa-plus',          '添加',       '手动录入节日／生日／纪念日；手动项生成时会保留') +
         _iKey('fa-wand-magic-sparkles', '生成节日', '按世界观重做一整年：保留手动项和锁定项，替换未锁的旧 AI 日期') +
@@ -1449,31 +1463,42 @@ const MODULE_INTROS = {
         _iKey('fa-pen',           '编辑',       '修改名称、日期、说明等') +
         _iKey('fa-trash',         '删除',       '移除这条日期') +
         _iSub('刻度 · 时间账') +
-        _iLede('刻度分持续状态／约定待办／周期三类。自动标注默认关闭；也可在刻度页或楼内“标注池”点［标注］捞取新条、点［更新］按时间刷新现状。潜伏注入也默认关闭，并且必须同时开启“允许潜伏注入主楼 AI（线 / 面 / 刻度）”总开关和刻度自己的“潜伏注入主楼 AI”才生效。') +
+        _iText('刻度分持续状态、约定待办和周期三类。自动标注默认关闭；在设置 → 推进设置 → 刻度中，标注或更新间隔设为 0 可分别关闭对应任务，两个都设为 0 时完全手动，仍可手动标注和更新。') +
+        _iText('在刻度页或楼内“标注池”点［标注］捞取新条，点［更新］按时间刷新现状。') +
+        _iText('潜伏注入默认关闭；必须同时开启“允许潜伏注入主楼 AI（线 / 面 / 刻度）”总开关和刻度自己的“潜伏注入主楼 AI”才生效。') +
         _iKey('fa-pen',         '编辑',     '手动改字段；保存后自动成为用户锁') +
         _iKey('fa-lock',        '锁定',     'AI 更新不再改这条；与是否注入主楼是两回事') +
         _iKey('fa-bell',        '暂停埋入', '暂不注入主楼，但仍留在活跃账上继续跟进；再点恢复') +
         _iKey('fa-check',       '了结',     '从活跃区移到归档，之后仍可捞回') +
         _iKey('fa-rotate-left', '捞回',     '归档区：让已了结条目回到活跃区') +
-        _iKey('fa-trash',       '彻底删除', '归档区：不可恢复地删除'),
+        _iKey('fa-trash',       '彻底删除', '归档区：不可恢复地删除') +
+        _iSub('去间讨论') +
+        _iText('想先讨论日期或整套历法，可去「间」请 AI 整理成可应用的轴日期或历法方案，例如“把这天定为可应用到轴的纪念日”；有可用方案时点回复下方的应用按钮。刻度账在刻度页或楼内标注池操作，不使用间的应用卡片。'),
     lines:
-        _iLede('「线」有“平行事件”和“冷知识”两页。平行事件追踪仍在发展的伏笔、人物行动与局势；冷知识要先在设置 → 注入与内容设置 → 功能与内容开关开启“冷知识”，才会参与生成和显示。') +
-        _iSub('线可按回合数自动推进、在故事日期变化时推进，或只接受手动推进；策略在设置 → 推进设置 → 线。潜伏注入必须同时开启总开关和线自己的“潜伏注入主楼 AI”。') +
-        _iKey('fa-clock-rotate-left', '历史版本', '线主页“重新生成”左侧的回退入口。保留最近 10 份旧版，当前版另计；按真实生成时间从新到旧排列，旧数据时间未知时会如实标明。选择版本可先预览，再确认恢复；恢复后会成为当前线，供后台潜伏注入、“当前内容”手动注入和后续更新使用。恢复前的当前版也会保留，可再次选回。历史从功能启用后的内容更新开始积累，暂无版本时会提示。') +
+        _iLede('「线」有“平行事件”和“冷知识”两页。平行事件追踪仍在发展的伏笔、人物行动与局势。') +
+        _iText('冷知识要先在设置 → 注入与内容设置 → 功能与内容开关开启“冷知识”，才会参与生成和显示。') +
+        _iSub('推进与注入') +
+        _iText('线可按回合数自动推进、在故事日期变化时推进，或只接受手动推进；策略在设置 → 推进设置 → 线。') +
+        _iText('潜伏注入必须同时开启总开关和线自己的“潜伏注入主楼 AI”。') +
+        _iKey('fa-clock-rotate-left', '历史版本', '入口：线主页“重新生成”左侧的回退入口。保留最近 10 份旧版，当前版另计；按真实生成时间从新到旧排列，旧数据时间未知时会如实标明。<br>预览与恢复：选择版本可先预览，再确认恢复；恢复后会成为当前线，供后台潜伏注入、“当前内容”手动注入和后续更新使用。恢复前的当前版也会保留，可再次选回。<br>积累：历史从功能启用后的内容更新开始积累，暂无版本时会提示。') +
         _iKey('fa-rotate-right', '重新生成', '重做未锁定的线；锁定线保留') +
         _iKey('fa-forward',      '推进',     '更新已有线，并可能新增少量真正独立的事件') +
-        _iKey('fa-plus',         '新增冷知识', '在“冷知识”页选择主题生成；只在冷知识开关开启后可用') +
+        _iKey('fa-plus',         '新增冷知识', '冷知识开关控制随线自动生成和楼内显示；手动面板始终可用') +
         _iKey('fa-ellipsis-vertical', '⋮ 菜单', '每条平行事件的操作都收在这里') +
         _iKey('fa-pen',          '编辑',     '手动修改这条线') +
         _iKey('fa-lock',         '锁定',     '重新生成时保留这条线；AI 不能替你创建用户锁') +
         _iKey('fa-arrow-right-to-bracket', '注入', '把单条线写进输入框，供你确认后发送') +
-        _iKey('fa-trash',        '删除',     '移除这条线'),
+        _iKey('fa-trash',        '删除',     '移除这条线') +
+        _iSub('间内讨论') +
+        _iText('想新增或调整事件线，可去「间」说清目标，例如“把这个伏笔整理成可应用到线的方案”；看到可用方案的按钮后点击才写入。冷知识仍在本页操作。'),
     outline:
-        _iLede('「面」左侧是一整份剧情大纲，右侧是只针对这份面的 AI 讨论。［重新生成］会替换整份旧面，不是只补一个节点；讨论里的回复只有成功解析出至少一个有效节点时，才会出现可用的“应用此面”。') +
-        _iSub('自动判断会按设置的间隔识别故事演到哪，只会向后推进，不会自动倒退。大纲潜伏注入必须同时开启总开关、面自己的“大纲自动注入”，并且已经设有当前节点。') +
+        _iLede('「面」显示当前正式剧情大纲。') +
+        _iText('［重新生成］会直接替换整份面。想先讨论或修改草稿，可去「间」说明要一整版面；出现有效草稿后，点「应用到面」才会替换正式稿并从第 1 个节点开始。未点击时正式稿不变。') +
+        _iSub('自动判断与注入') +
+        _iText('自动判断会按设置的间隔识别故事演到哪，只会向后推进，不会自动倒退。') +
+        _iText('大纲潜伏注入必须同时开启总开关、面自己的“大纲自动注入”，并且已经设有当前节点。') +
         _iKey('fa-rotate-right',        '重新生成',   '按最新剧情重做并覆盖整份面') +
-        _iKey('fa-paper-plane',         '发送讨论',   '在右侧向 AI 讨论、修改或索要一版新面') +
-        _iKey('fa-broom',               '清空讨论',   '只清右侧讨论记录，不删除左侧现有面') +
+        _iKey('fa-comments',            '去间讨论',   '打开「间」并预填当前面讨论开头；只会导航和填字，不会自动发送') +
         _iKey('fa-ellipsis-vertical',   '⋮ 菜单',     '每个节点的操作都收在这里') +
         _iKey('fa-pen',                 '编辑',       '手动修改这个节点') +
         _iKey('fa-location-crosshairs', '设为当前',   '把这个节点标成正在进行；已是当前时显示“取消当前”') +
@@ -1481,26 +1506,37 @@ const MODULE_INTROS = {
         _iKey('fa-copy',                '复制',       '复制这个节点的文字') +
         _iKey('fa-trash',               '删除',       '只删除这个节点'),
     space:
-        _iLede('「间」是局外创作顾问：可以聊剧情、设定、人物和世界观，也能把 AI 给出的结构化卡片落到其他模块。这里不会写入正式角色扮演楼层，也不会直接推进剧情。发送新问题时会先清理较旧记录；一轮完整问答结束后，最多可能暂时显示 21 条间内消息。') +
-        _iSub('落地规则：新点追加到“未来”且不会自动锁；改点会替换指定条目。新线追加后自动锁定，改已有线则保留它原来的锁态。轴日期只做去重追加并自动锁定。应用历法会换掉当前月份／天数／纪年；若现有日期不适用，会先让你选择取消、删除冲突日期或自动修正。') +
+        _iLede('「间」用于讨论剧情想法和模块内容，不会写入正式角色扮演楼层，也不会直接推进剧情。') +
+        _iSub('索要可用方案') +
+        _iText('请说清目标和要新增或修改的内容。有可用方案时，点对应按钮才写入正式内容；自然语言示例（不是固定口令）：<br>“把这件事整理成可应用到点的方案”<br>“把这个伏笔整理成可应用到线的方案”<br>“把这天整理成可应用到轴的纪念日”<br>“按刚讨论的月份生成完整历法”<br>“把刚才的思路整理成可应用到面的方案”。') +
+        _iText('普通讨论、目标不清或方案不完整时不会出现可用按钮；可继续补充要求或编辑问题重发。') +
+        _iText('发送新问题时会清理较旧记录。一轮完整问答结束后，间内最多可能暂时显示 21 条消息。') +
+        _iSub('消息操作') +
         _iKey('fa-paper-plane',    '发送',       '把问题发给局外创作顾问') +
         _iKey('fa-pen',            '编辑并重发', '只在你的消息上出现；会从这里截断后续记录并重新提问') +
         _iKey('fa-copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
         _iKey('fa-trash',          '删除',       '删除单条间内消息') +
         _iKey('fa-broom',          '清空',       '清掉当前聊天的全部间内记录') +
-        _iKey('fa-plus',           '应用到点／线／轴', '按上面的规则写入对应模块') +
-        _iKey('fa-calendar-check', '应用历法',    '确认冲突处理后换用这套历法'),
+        _iSub('其他模块') +
+        _iText('模块入口只会打开对应页面，不会自动生成。刻度、冷知识、菜单、小剧场、坐标和记忆没有应用卡片，请在对应模块操作；今日菜单从点页餐具入口进入，设置项在构画设置页更改。旧面讨论可在此查看，只读。'),
     theater:
-        _iLede('「棱」＝小剧场：按当前故事背景写独立短篇／番外，结果不进入正式角色扮演楼层。可直接填写要求，也可从模板起草；模板库在设置 → 数据设置 → 小剧场模板库。') +
+        _iLede('「棱」是按当前故事背景写独立短篇或番外的地方，结果不进入正式角色扮演楼层。') +
+        _iText('可直接填写要求，也可从模板起草；模板库在设置 → 数据设置 → 小剧场模板库。') +
         _iKey('fa-shuffle', '随机',     '只从模板库随机填入一份模板；确认或修改输入后，还要点“生成小剧场”') +
         _iKey('fa-file-lines', '模板内容', '查看这次生成实际使用的模板文字') +
         _iKey('fa-expand',  '全屏浏览', '铺满视口阅读；再次点击或按 Esc 退出') +
-        _iSub('［重新生成］沿用当前小剧场的主题／模板再生成一版。可先改标题再点［永久保存］存到本对话；草稿最多 10 条，新稿会挤掉最旧草稿。草稿和永久稿列表里的［删除］只删除对应稿件。'),
+        _iSub('重新生成、保存与删除') +
+        _iText('［重新生成］沿用当前小剧场的主题／模板再生成一版。') +
+        _iText('可先改标题，再点［永久保存］存到本对话；草稿最多 10 条，新稿会挤掉最旧草稿。') +
+        _iText('草稿和永久稿列表里的［删除］只删除对应稿件。'),
     anchor:
-        _iLede('「坐标」收藏的是 AI 楼层正文的副本，方便以后回看，不是完整样式快照。入口受设置 → 通用设置 → 显示与通知管理里的“收藏按钮位置”控制，可放在原楼层位置、消息“…”菜单或两处同时显示；收藏后可立即选择标签，再点任一入口会取消收藏。') +
-        _iSub('收藏夹按角色 → 聊天 → 楼层分组，可用标签筛选和管理。删除收藏只删副本，不会删除或改动原楼层。') +
+        _iLede('「坐标」收藏 AI 楼层正文的副本，方便以后回看，不是完整样式快照。') +
+        _iText('收藏按钮位置可在设置 → 通用设置 → 显示与通知管理中选择原楼层位置、消息“…”菜单或两处同时显示。收藏后可立即选择标签，再点任一入口会取消收藏。') +
+        _iSub('收藏管理') +
+        _iText('收藏夹按角色 → 聊天 → 楼层分组，可用标签筛选和管理。删除收藏只删副本，不会删除或改动原楼层。') +
         _iSvgKey(_coordinateIntroSvg, '坐标形收藏', 'AI 楼原位置或消息“…”菜单里的这枚按钮：点击收藏，再次点击取消收藏') +
-        _iSub('［标签管理］可新建、改名、改色或删除标签，删标签不会删收藏。收藏全文右上角的［⛶］进入全屏，［×］删除这份收藏副本。'),
+        _iSub('标签与查看') +
+        _iText('［标签管理］可新建、改名、改色或删除标签；删标签不会删收藏。收藏全文右上角的［⛶］进入全屏，［×］删除这份收藏副本。'),
 };
 
 let lastDebugPayload = null;
@@ -1597,9 +1633,8 @@ function detectSTTheme() {
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night';
 }
 
-// Resolve the effective theme by combining the user's themeMode setting
-// with the detected ST theme. 'auto' follows ST (transparent-theme users get
-// the day/night fallback via explicit modes instead).
+// Resolve the palette class from the user's themeMode and detected ST theme;
+// auto color following and opaque shared surfaces are handled by the CSS tokens.
 function getEffectiveTheme() {
     const mode = getSettings().themeMode || 'auto';
     if (mode === 'day' || mode === 'night') return mode;
@@ -1689,7 +1724,6 @@ const linesFeature = createLinesFeature({
     writeStore,
     // store 在共享确认保存入口内捕获各业务子键意图；共根诊断与旁键不参与该业务写。
     writeStoreConfirmed,
-    readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     restoreBaseline: baseline => { if (!baseline || baseline.chatId !== getContext().chatId) return; const key = getLinesCacheKey(); if (!key) return; if (baseline.store && typeof baseline.store === 'object') writeStore(key, baseline.store); else if (baseline.raw) writeStore(key, { raw: baseline.raw, ts: baseline.ts || Date.now() }); else removeStore(key); },
     loadConfig: loadCfg, swipeId: mesId => getContext().chat?.[mesId]?.swipe_id ?? 0,
     refreshInlineWindow: refreshInlineWindow,
@@ -1749,15 +1783,20 @@ const linesFeature = createLinesFeature({
     readSavedAt: key => readStore(key) || {},
         participantIdentity: captureParticipantIdentity,
         sameParticipantIdentity,
-        contextSnapshot: captureGenerationContext,
+        contextSnapshot: ctx => {
+            const snapshot = captureGenerationContext(ctx);
+            // Capture the active outline with the line task's other input, before message-building awaits.
+            snapshot.outlinePlan = outlineFeature.readPlanningText();
+            return snapshot;
+        },
         buildPrompt: (previousRaw, travelContext, vectorContext, identity) => appendTravelPromptContext(buildLinesPrompt(identity?.userName || '用户', identity?.charName || '角色', 'user', previousRaw, getScale(identity?.characterKey || charStableKey(getContext())), vectorContext, getAdultMode(identity?.characterKey || charStableKey(getContext())), getLineDirection(identity?.characterKey || charStableKey(getContext())), getNarrativePace()), travelContext),
         random: () => Math.random(),
-        callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, options),
+        callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, { ...options, includeOutlinePlan: true }),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
         memoryFailure: error => { if (linesMode) linesFeature.renderBody(linesMemoryPreflightErrorHtml(diagnosticMessage(error))); },
         onStart: () => {},
         commit: () => {},
-        fail: (error, { silent = false } = {}) => { const code = classifyGenerationError(error, { phase: error?.phase || 'request' }); const manual = !silent; const notify = shouldNotifyGeneration({ manual, notifyMode: getSettings().notifyMode, code }); const diagnostic = safeDiagnosticLog('lines', error?.phase || 'request', error, { background: !manual }); console.warn('[SP lines failure]', diagnostic); if (notify && getContext().chatId) showToast(`线生成失败：${diagnosticMessage(error)}`, null, true); }, cleanup: () => {},
+        fail: (error, { silent = false, reasonCode } = {}) => { const code = classifyGenerationError(error, { phase: error?.phase || 'request' }); const manual = !silent; const notify = shouldNotifyGeneration({ manual, notifyMode: getSettings().notifyMode, code }); const diagnostic = safeDiagnosticLog('lines', error?.phase || 'request', error, { background: !manual }); console.warn('[SP lines failure]', diagnostic); if (notify && getContext().chatId) showToast(`线生成失败：${linesGenerationFailureText(error, reasonCode)}`, null, true); }, cleanup: () => {},
     },
     actionsEnv: {
         setEditing: value => { manualEditing.lines = value; },
@@ -1791,10 +1830,7 @@ const outlineFeature = createOutlineFeature({
     isAutomationSuppressed,
     automationModule: AUTOMATION_MODULES.OUTLINE,
     bridgeAbortSignal,
-    buildChatMessages: args => composeCreativeChatMessages(args),
-    postCompletion: ({ config, ...options }) => postChatCompletion({ cfg: config, ...options }),
-    temperature: GEN_TEMPERATURE,
-    chatPlaceholder: getCreativeChatPlaceholder,
+    now: () => Date.now(),
     cleanText,
     escapeHtml,
     confirm: spConfirm,
@@ -1816,6 +1852,13 @@ const outlineFeature = createOutlineFeature({
         isOutlineMode: () => outlineMode,
         isPanelVisible: () => $(`#${MODAL_ID}`).is(':visible'),
         toast: (message, error) => showToast(message, null, error),
+        openSpaceDiscussion: text => {
+            openSidebarView('space');
+            const input = $in('#sp-space-input');
+            input.val(text);
+            autoGrowTextarea(input[0]);
+            input.trigger('focus');
+        },
         closedSuccess: () => showToast('面已生成，点击查看', () => {
             if (!outlineMode) $in('.sp-view-btn[data-view="outline"]').trigger('click');
             showPanel();
@@ -1828,6 +1871,7 @@ const spaceFeature = createSpaceFeature({
     context: getContext,
     keyDesc,
     readStore,
+    readLegacyOutlineHistory: () => readStore(keyDesc('creative-chat', 'user', '')) || [],
     writeStore,
     loadConfig: loadCfg,
     postCompletion: ({ config, ...options }) => postChatCompletion({ cfg: config, ...options }),
@@ -1842,7 +1886,9 @@ const spaceFeature = createSpaceFeature({
             const characterKey = charStableKey(ctx);
             return { scale: getScale(characterKey), direction: getLineDirection(characterKey), narrativePace: getNarrativePace() };
         },
-        readOutline: () => outlineFeature.readRaw(),
+        readOutline: () => outlineFeature.readPlanningText(),
+        readOutlineDraftSnapshot: () => ({ raw: outlineFeature.readRaw() }),
+        rawToken: pointRawToken,
         readPointScopes: () => store.listScheduleScopes(),
         numberedPoints: numberedPointList,
         readLineRaw: () => readStore(getLinesCacheKey())?.raw || '',
@@ -1851,14 +1897,101 @@ const spaceFeature = createSpaceFeature({
             try {
                 const items = ledger.listEntries() || [];
                 return items.length ? formatLedgerList(items, { daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo }) : '';
-            } catch { return ''; }
+            } catch { return '【刻度读取失败】本轮暂时无法读取这项资料。'; }
         },
         readWorldInfo: (ctx, triggerText, referenceHistory, titleSupplementText = '') => buildWorldInfoContext(ctx, triggerText === undefined ? undefined : { triggerText, triggerMode: 'query', referenceHistory, titleSupplementText }),
-        readMemory: ctx => getMemText({ excludeMesIds: getRecentVisibleFloorIds(ctx, 6) }),
+        readMemory: (ctx, query) => getMemText({ query, excludeMesIds: getRecentVisibleFloorIds(ctx, 6) }),
         readRecent: ctx => buildRecentChatContext(ctx, 6, Infinity),
         readCardExtras,
         readAlmanacText: () => getAlmanacInjectText(),
         readCalendarText: () => getCalDescInjectText(),
+        readCharacterData: ctx => {
+            const data = worldInfoGlobalScanData(ctx);
+            return [data.characterDescription && `描述：${data.characterDescription}`, data.characterPersonality && `性格：${data.characterPersonality}`, data.scenario && `场景：${data.scenario}`].filter(Boolean).join('\n');
+        },
+        readStoryDate: () => {
+            const date = almTodayAnchorEvidence();
+            if (!date) return '';
+            return `${date.year != null ? `${date.year}年` : ''}${calMonthName(loadCalDesc(), date.month)}${date.day}日`;
+        },
+        readColdKnowledge: () => {
+            try {
+                const items = linesFeature.dashed.read?.() || [];
+                return items.length ? `【已存冷知识】\n${items.map(item => `- ${item.text}`).join('\n')}` : '';
+            } catch { return '【冷知识读取失败】本轮暂时无法读取这项资料。'; }
+        },
+        readDailyMenu: () => {
+            try {
+                const menu = readStore(keyDesc('daily-menu', 'user', ''));
+                const parsed = menu?.items ? menu : parseDailyMenu(menu?.raw || '');
+                const dishes = Array.isArray(parsed?.items) ? parsed.items : [];
+                if (!dishes.length) return '';
+                return `【已存今日菜单】${parsed.title || '今日菜单'}${parsed.storyDate ? `｜${parsed.storyDate}` : ''}${parsed.intro ? `\n${parsed.intro}` : ''}\n${dishes.map(item => `- ${item.name}（${item.category}）：${item.description}`).join('\n')}`;
+            } catch { return '【今日菜单读取失败】本轮暂时无法读取这项资料。'; }
+        },
+        readTheater: async (_target, ctx, message) => {
+            const runtime = theaterRuntime;
+            if (!runtime) return '【棱作品与模板读取失败】本轮暂时无法读取这项资料。';
+            let index = [];
+            let savedError = '';
+            try {
+                const root = getChatRoot('sp-theater', { create: false });
+                const metadata = root && typeof root === 'object' ? root : { version: 1, saved: [] };
+                const saved = runtime.repository.loadSaved({ chatId: ctx?.chatId, metadata, external: isExternalMode() });
+                const drafts = runtime.repository.loadDrafts(ctx?.chatId);
+                index = [...saved.map(item => ({ ...item, source: '已保存作品' })), ...drafts.map(item => ({ ...item, source: '本聊天草稿' }))];
+            } catch { savedError = '【棱作品索引读取失败】'; }
+            let templates = [];
+            let templateError = '';
+            try { templates = await runtime.templates.list(); }
+            catch { templateError = '【棱模板读取失败】'; }
+            const quote = String(message).match(/[“「"]([^”」"]{2,100})[”」"]/u)?.[1]?.trim() || '';
+            const pieceMatches = quote ? index.filter(item => String(item.title || '').trim() === quote) : [];
+            const templateMatches = quote ? templates.filter(item => String(item.title || '').trim() === quote) : [];
+            const uniquePiece = pieceMatches.length === 1 && templateMatches.length === 0 ? pieceMatches[0] : null;
+            const uniqueTemplate = templateMatches.length === 1 && pieceMatches.length === 0 ? templateMatches[0] : null;
+            return [
+                index.length ? `【棱作品索引】${index.map(item => `${item.title || '无标题'}（${item.source}）`).join('、')}` : '',
+                savedError,
+                templates.length ? `【棱模板索引】${templates.map(item => item.title).join('、')}` : '',
+                templateError,
+                uniquePiece ? `【选定棱作品正文｜${uniquePiece.title}】\n${uniquePiece.raw || ''}` : '',
+                uniqueTemplate ? `【选定棱模板正文｜${uniqueTemplate.title}】\n${uniqueTemplate.text || ''}` : '',
+            ].filter(Boolean).join('\n\n');
+        },
+        readCoordinates: async (_target, ctx, message) => {
+            const repo = coordinateRuntime?.repository;
+            if (!repo) return '【坐标读取失败】本轮暂时无法读取这项资料。';
+            const chatId = String(ctx?.chatId || '');
+            const chatHash = ctx?.chatMetadata?.chat_id_hash ?? ctx?.chatIdHash ?? ctx?.chat_id_hash ?? null;
+            let scoped;
+            try {
+                const items = await repo.getAllItems();
+                scoped = items.filter(item => chatHash != null
+                    ? String(item.chatIdHash ?? '') === String(chatHash) || (item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId)
+                    : item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId);
+            } catch { return '【坐标读取失败】本轮暂时无法读取这项资料。'; }
+            const rows = scoped.map(item => `- 楼层 ${item.floorIndex ?? item.messageId ?? '?'}：${item.textPreview || '（无摘要）'}${item.tags?.length ? `｜标签 ${item.tags.join('、')}` : ''}`);
+            const quote = String(message).match(/[“「"]([^”」"]{3,100})[”」"]/u)?.[1]?.trim() || '';
+            const floorMatch = String(message).match(/(?:展开|查看|显示|读)(?:第)?\s*(\d+)\s*(?:楼|层)(?:坐标)?(?:的)?(?:正文|原文|完整内容)?/u);
+            const selectedCandidates = floorMatch
+                ? scoped.filter(item => Number(item.floorIndex ?? item.messageId) === Number(floorMatch[1]))
+                : quote ? scoped.filter(item => String(item.textPreview || '').includes(quote)) : [];
+            const selected = /(?:正文|原文|完整内容|展开)/.test(message) && selectedCandidates.length === 1 ? selectedCandidates[0] : null;
+            let bodyText = '';
+            let bodyError = '';
+            if (selected) {
+                try {
+                    const body = await repo.getItem(selected.id);
+                    if (body?.html) {
+                        const template = document.createElement('template');
+                        template.innerHTML = String(body.html);
+                        bodyText = String(template.content?.textContent || '').replace(/\s+/g, ' ').trim();
+                    } else bodyError = '【坐标正文为空】';
+                } catch { bodyError = '【坐标正文读取失败】本轮暂时无法读取这项资料。'; }
+            }
+            return [rows.length ? `【本聊天坐标索引】\n${rows.join('\n')}` : '', bodyError, bodyText ? `【选定坐标正文｜${selected.textPreview || '收藏'}】\n${bodyText}` : ''].filter(Boolean).join('\n\n');
+        },
     },
     renderEnv: {
         escapeHtml,
@@ -1873,6 +2006,7 @@ const spaceFeature = createSpaceFeature({
     },
     ui: {
         $,
+        currentOutlineRaw: () => outlineFeature.readRaw(),
         query: $in,
         element: inEl,
         escapeHtml,
@@ -1881,12 +2015,14 @@ const spaceFeature = createSpaceFeature({
         copyText: copyPlainText,
         confirm: spConfirm,
         toast: (message, error) => showToast(message, null, error),
+        openQuickReplyShortcut,
         // 轴动作在本 facade 之后初始化；只在真实点击时读取，严禁顶层提前解引用造成 TDZ。
         widgetActions: () => ({
             point: (body, $button, options) => applyPointWidget(body, $button, options),
             lines: (body, editIdx, $button, locator) => linesFeature.widget.apply(body, editIdx, $button, locator),
             almanac: (body, $button, index) => axisWidgetActions.applyAlmanacWidget(body, $button, index),
             era: (body, $button) => axisWidgetActions.applyEraWidget(body, $button),
+            outline: (body, rawToken) => outlineFeature.actions.applyCandidate(body, rawToken),
         }),
     },
 });
@@ -1896,6 +2032,7 @@ const _injectTexts      = {};
 const _injectIdsByText  = new Map();
 let   _injectIdSeq      = 0;
 let viewportSyncBound   = false;
+let viewportSyncFrame = null;
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -1910,9 +2047,7 @@ const ACTION_MENU_CONFIGS = Object.freeze({
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-// Module-level handles so hot-reload / re-init doesn't double-register.
-// If the module loads again in the same page (rare but possible with ST's
-// dev workflows), we need to be able to unregister and rewire cleanly.
+// Repeated initialization removes old listeners before registering replacements.
 let _themeObserver = null;
 const _stListeners = { chat: null, char: null };
 // 柏宝书加载顺序不固定：就绪事件监听句柄（幂等注册，见 jQuery init）
@@ -2067,7 +2202,7 @@ jQuery(async () => {
             document, context: () => getContext(), settings: () => getSettings(), enabled: () => pluginEnabled(),
             sheet: () => _spShadow?.querySelector?.('.sp-sheet') || document.querySelector('.sp-sheet'),
             chatName: () => { const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name'); return el?.value || el?.textContent?.trim() || getContext().chatId || '当前聊天'; },
-            capture: el => { const ctx = getContext?.() || {}; return captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify, messageFormatting: ctx.messageFormatting }); },
+            capture: el => captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify }),
             toast: (message, action, error) => showToast(message, action, error),
             saveChatDebounced: () => { prepareNormalChatStoreForSave(getContext()); return scriptCore.saveChatDebounced(); },
             warn: (message, error) => console.warn(message, error),
@@ -2180,7 +2315,6 @@ jQuery(async () => {
             $in('#sp-body').show();
             $inAll('.sp-outline-btn').removeClass('sp-btn-active');
             updateCreativeChatModeUI();
-            $in('#sp-chat-msgs').empty();
             $in('#sp-space-msgs').empty();
             if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
             else setBody(pointScheduleEmptyHtml());
@@ -2381,6 +2515,7 @@ jQuery(async () => {
     _stListeners.ledgerCapture = async (messageId) => {
         if (!pluginEnabled()) return;   // 插件总关：停后台标注
         if (getSettings().ledgerCaptureEnabled !== true) return;
+        if (getLedgerCaptureInterval() === 0) return;
         const chat = getContext().chat;
         if (!Array.isArray(chat)) return;
         if (messageId !== chat.length - 1) return;
@@ -2408,6 +2543,7 @@ jQuery(async () => {
     _stListeners.ledgerJudge = async (messageId) => {
         if (!pluginEnabled()) return;   // 插件总关：停后台判定
         if (getSettings().ledgerCaptureEnabled !== true) return;
+        if (getLedgerJudgeInterval() === 0) return;
         const chat = getContext().chat;
         if (!Array.isArray(chat)) return;
         if (messageId !== chat.length - 1) return;
@@ -2458,7 +2594,11 @@ jQuery(async () => {
             // 让后续分桶/自愈有稳定键（改名多少次都并一个桶）。
             const hash = getContext()?.chatMetadata?.chat_id_hash ?? null;
             const n = await coordinateRuntime?.feature?.renameChatId(oldId, newId, newId, hash);
-            if (n) coordinateRuntime?.feature?.open('chars');
+            if (n > 0) {
+                await coordinateRuntime?.feature?.refreshSavedKeys?.();
+                coordinateRuntime?.feature?.scanButtons?.();
+                coordinateRuntime?.feature?.open('chars');
+            }
         } catch (err) { console.warn('[7dayscal] 坐标改名同步失败', safeDiagnosticLog('axis', 'save', err)); }
     };
     eventSource.on(event_types.CHAT_RENAMED, _stListeners.rename);
@@ -2547,7 +2687,6 @@ function _abortAllBackground({ abortStorageMigration = false } = {}) {
     ledgerJudgeController.reset('plugin-disabled');
     ledgerCaptureController.reset('plugin-disabled');
     invalidateLedgerAutomationQueue();
-    if (outlineMode) outlineFeature.chat.load();
 }
 
 // 导入会同时改动多个业务模块。提交前统一废止仍基于旧数据工作的构画任务，
@@ -2712,7 +2851,7 @@ inlineFeature = createInlineFeature({
         current: loadCalDesc(),
     }),
     chatMessage: floor => getContext()?.chat?.[floor]?.mes || '', parseStoryClock: (message, calendar) => parseStoryClockPure(message, calendar),
-    coordinateChanged: () => coordinateRuntime?.feature?.onChatDomChanged?.(),
+    coordinateChanged: input => coordinateRuntime?.feature?.onChatDomChanged?.(input),
     isStreaming: () => linesFeature.isStreaming(),
     syncTheme: () => syncVectorGlyphTheme(document, currentTheme, (getSettings().themeMode || 'auto') !== 'auto'),
 });
@@ -2768,16 +2907,14 @@ function getAlmanacJudgeInterval() {
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 3;
 }
 
-// 暗账标注间隔（缺省/非法 → 5；≥1）。抄 getAlmanacJudgeInterval。
+// 暗账标注间隔（缺省/非法 → 5；0 关闭自动标注）。
 function getLedgerCaptureInterval() {
-    const n = Number(getSettings().ledgerCaptureInterval);
-    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 5;
+    return normalizeLedgerInterval(getSettings().ledgerCaptureInterval, 5);
 }
 
-// 暗账判定（刷现状）间隔（缺省/非法 → 4；≥1）。抄 getLedgerCaptureInterval。
+// 暗账判定间隔（缺省/非法 → 4；0 关闭自动更新现状）。
 function getLedgerJudgeInterval() {
-    const n = Number(getSettings().ledgerJudgeInterval);
-    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 4;
+    return normalizeLedgerInterval(getSettings().ledgerJudgeInterval, 4);
 }
 
 // ─── 时间戳·时间锚点体系（注入 + 结构化回读 + 只读显示）─────────────────────────
@@ -2819,9 +2956,7 @@ function getLedgerJudgeInterval() {
 // ═══════════════════════════════════════════════════════════════════════════
 //  检索·注入前置选择器（挑「哪几条」喂主楼 AI——全亮注入会撑爆 token 且喧宾夺主）
 // ═══════════════════════════════════════════════════════════════════════════
-// 策略＝场景感知：读最近几楼正文，正文提到某条的牵扯/标签就加权，叠在「临近到期/用户锁/
-// 近期登记」基础权重上，砍到 N 条上限；活跃条少于上限时全带（兜底）。已了结由 listEntries
-// 天然排除。留 RAG 口子：scoreLedgerEntry 整个可换（将来接 arg 检索只改这一处打分器）。
+// 策略＝场景感知：先排除不显著条目；相关条目未超上限时全部注入，否则按场景相关度与到期情况排序取前 N 条。
 
 // 最近 N 楼 AI 正文拼成一段（去标记）。供场景加权命中判断；只读、无副作用。
 // ─── 共享锚点善后 ───────────────────────────────────────────────────────────
@@ -2906,7 +3041,7 @@ function initChatObserver() {
 }
 
 function injectExtButton() {
-    // No drawer content — panel opened via magic wand or FAB
+    // 侧栏入口由魔杖或悬浮按钮打开。
     const wandHtml = `
         <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
             <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开构画"></div>
@@ -3511,7 +3646,7 @@ function injectModal() {
                                         <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（创作链只用内置强化词）。也可追加创作规范，如：去八股、控制文风、叙事口吻…"></textarea>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成、间 / 面讨论的对话注入），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔；XML 包裹可写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效），双中括号包裹请固定填写 <code>[[...]]</code>（三个点是配置占位）。可组合填写 <code>content,[[...]]</code>，并支持中文、日文等 Unicode 标签名。</p>
+                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成及间内讨论材料），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔；XML 包裹可写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效），双中括号包裹请固定填写 <code>[[...]]</code>（三个点是配置占位）。可组合填写 <code>content,[[...]]</code>，并支持中文、日文等 Unicode 标签名。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
                                         <p class="sp-cfg-hint">标签本身去掉、<strong>内部文字保留</strong>（如正文被 <code>content</code> 包裹）。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
@@ -3527,7 +3662,7 @@ function injectModal() {
                                         <p class="sp-cfg-hint">间 = 跳出扮演、和 AI 聊剧情/设定/关系的「局外」空间。这里可给它换一套<strong>说话语气与人格</strong>。</p>
                                         <label class="sp-cfg-label">间的人格 / 说话风格</label>
                                         <textarea id="sp-space-persona" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝内置默认（柔和客观、含蓄内敛的中性顾问）。填了就换成你写的人格，如：深耕 ACG、熟知网络用语、爱用半个括号吐槽的重度宅女…"></textarea>
-                                        <p class="sp-cfg-hint">只换<strong>语气 / 行文 / 人格色彩</strong>；「间仍是创作顾问、不推进剧情、不扮演故事角色」这条内核<strong>恒定保留</strong>（写得再放飞它也不会跑去演戏）。<b>只作用于「间」</b>，不影响面·和间聊聊。支持 <code>{{char}}</code> / <code>{{user}}</code>。</p>
+                                        <p class="sp-cfg-hint">只换<strong>语气 / 行文 / 人格色彩</strong>；「间仍是创作顾问、不推进剧情、不扮演故事角色」这条内核<strong>恒定保留</strong>（写得再放飞它也不会跑去演戏）。<b>只作用于「间」</b>，不影响面正式稿生成；间内面方案只保留其创作顾问身份。支持 <code>{{char}}</code> / <code>{{user}}</code>。</p>
                                     </details>
                                     <details id="sp-theater-section" class="sp-settings-subsection sp-prompt-theater-write"><summary>棱 · 写作提示词</summary>
                                         <label class="sp-cfg-label">写作提示词（文风 + 范文）</label>
@@ -3550,7 +3685,7 @@ function injectModal() {
                                                 <input type="checkbox" id="sp-inject-enabled" ${getSettings().injectEnabled !== false ? 'checked' : ''}>
                                                 <span>允许潜伏注入主楼 AI（线 / 面 / 刻度）</span>
                                             </label>
-                                            <p class="sp-cfg-hint">总闸：关闭则线 / 面 / 刻度一律不注入主楼 AI（不影响楼内展示与手动生成）。各模块自身的注入开关仍需分别开启才生效。</p>
+                                            <p class="sp-cfg-hint">总闸：关闭则线 / 面 / 刻度一律不注入主楼 AI（不影响楼内展示、手动生成或间里的应用按钮）。各模块自身的注入开关仍需分别开启才生效；应用按钮仍须由你点击。</p>
                                         </div>
                                     </div>
 
@@ -3595,11 +3730,11 @@ function injectModal() {
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group" id="sp-scale-hint">创作关注尺度（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-scale-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">影响点、线、面的新生成与面内创作讨论；尺度决定观察焦点，不改变冲突强度或时间速度。线／面潜伏注入需分别开启各自开关后才会采用当前设置。</p>
+                                            <p class="sp-cfg-hint">影响点、线、面正式稿及间内面方案；尺度决定观察焦点，不改变冲突强度或时间速度。线／面潜伏注入需分别开启各自开关后才会采用当前设置。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">剧情走向倾向（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-line-direction-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">影响点、线、面的新生成与面内创作讨论；只在事实、动机、时间与因果均支持的合理走向中调整优先级。线／面潜伏注入需分别开启各自开关后才会采用当前设置；用户本轮明确要求优先。</p>
+                                            <p class="sp-cfg-hint">影响点、线、面正式稿及间内面方案；只在事实、动机、时间与因果均支持的合理走向中调整优先级。线／面潜伏注入需分别开启各自开关后才会采用当前设置；用户本轮明确要求优先。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">成人剧情模式（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-adult-row"><!-- populated when settings opens --></div>
@@ -3644,8 +3779,9 @@ function injectModal() {
                                     <details class="sp-settings-section" id="sp-pace-ledger-section">
                                         <summary class="sp-settings-section-title">刻度</summary>
                                         <div class="sp-settings-section-body">
-                                            <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-capture-interval" class="sp-input sp-interval-input" type="number" min="1" max="30" value="${escapeAttr(String(Math.max(1, Math.min(30, Number(getSettings().ledgerCaptureInterval) || 5))))}"><span>条 AI 回复标注一次</span></label>
-                                            <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-judge-interval" class="sp-input sp-interval-input" type="number" min="1" max="30" value="${escapeAttr(String(Math.max(1, Math.min(30, Number(getSettings().ledgerJudgeInterval) || 4))))}"><span>条 AI 回复更新一次现状</span></label>
+                                            <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-capture-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerCaptureInterval()))}"><span>条 AI 回复标注一次</span></label>
+                                            <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-judge-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerJudgeInterval()))}"><span>条 AI 回复更新一次现状</span></label>
+                                            <p class="sp-cfg-hint">间隔设为 0 可关闭对应自动任务；手动标注和更新仍可使用。默认每 5 条自动标注、每 4 条自动更新现状。</p>
                                             <p class="sp-cfg-group">首次历史溯源范围</p>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="recent" ${getSettings().ledgerHistoryScope !== 'all' && getSettings().ledgerHistoryScope !== 'custom' ? 'checked' : ''}><span>最近</span><input id="sp-ledger-history-limit" class="sp-input sp-interval-input" type="number" min="1" max="500" value="${escapeAttr(String(Math.max(1, Math.min(500, Number(getSettings().ledgerHistoryLimit) || 50))))}"><span>个有效历史角色回复（默认）</span></label>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="all" ${getSettings().ledgerHistoryScope === 'all' ? 'checked' : ''}><span>全部有效历史角色回复</span></label>
@@ -3740,20 +3876,10 @@ function injectModal() {
                                 <span class="sp-schedule-label" id="sp-outline-node-count">0 个节点</span>
                                 <button class="sp-panel-refresh sp-refresh-outline" title="重新生成面" aria-label="重新生成面"><i class="fa-solid fa-rotate-right"></i></button>
                             </div>
+                            <div class="sp-jump-hint">想先讨论或调整面？去「间」说说想法：<button type="button" class="sp-jump-link" id="sp-open-space-discussion">去间讨论草稿 →</button></div>
                             <div class="sp-outline-failure-slot" id="sp-outline-failure-slot"></div>
                             <div class="sp-outline-beats" id="sp-outline-beats">
-                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
-                            </div>
-                            <div class="sp-outline-divider" id="sp-outline-divider">
-                                <i class="fa-solid fa-grip-lines"></i>
-                            </div>
-                            <div class="sp-outline-chat" id="sp-outline-chat">
-                                <div class="sp-chat-msgs" id="sp-chat-msgs"></div>
-                                <div class="sp-chat-input-row">
-                                    <button id="sp-chat-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
-                                    <textarea id="sp-chat-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="和 AI 讨论面…"></textarea>
-                                    <button id="sp-chat-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
-                                </div>
+                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
                             </div>
                         </div>
 
@@ -3764,12 +3890,14 @@ function injectModal() {
                             </div>
                         </div>
 
-                        <div class="sp-space-wrap sp-outline-chat" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
+                        <div class="sp-space-wrap" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
+                            <details class="sp-space-modules"><summary>模块入口</summary><div class="sp-space-modules-list">${QUICK_REPLY_SHORTCUTS.filter(item => item.key !== 'space').map(item => `<button type="button" data-space-module-key="${escapeAttr(item.key)}">${escapeHtml(item.label)}</button>`).join('')}</div></details>
+                            <details class="sp-space-legacy"><summary>查看旧面讨论（只读）</summary><div id="sp-legacy-outline-history"></div></details>
                             <div class="sp-space-failure-slot" id="sp-space-failure-slot"></div>
                             <div class="sp-chat-msgs" id="sp-space-msgs"></div>
                             <div class="sp-chat-input-row">
                                 <button id="sp-space-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
-                                <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="局外聊聊：剧情、设定、关系、知识…"></textarea>
+                                <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊剧情设定，或请我生成可应用的点／线／轴日期／历法／面方案…"></textarea>
                                 <button id="sp-space-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
                             </div>
                         </div>
@@ -4023,8 +4151,8 @@ function injectModal() {
         if (text) injectToST(text);
     });
 
-    // 点/线面板底部「和间聊聊」引导 → 一键切到间（间能把讨论落地成点/线）
-    // 同上：逗号选择器用 $inAll，否则只有 #sp-body 那区能点、#sp-lines-list 区的「和间聊聊」静默失效。
+    // 点/线面板底部引导只切到间，不预填、不生成；用户需说明目标并请求可应用方案
+    // 点与线的入口都由同一委托处理。
     $inAll('#sp-body, #sp-lines-wrap').on('click', '.sp-jump-link', () => $in('.sp-view-btn[data-view="space"]').trigger('click'));
 
     // Abort buttons (event delegation) — 即时撤下 UI，见 abort*Gen
@@ -4038,8 +4166,25 @@ function injectModal() {
     // ── 历（日历）事件（委托到 #sp-almanac-wrap，两个 sheet 动态重渲染）──
     const $almanac = $in('#sp-almanac-wrap');
     $almanac.on('click', '.sp-alm-sheet-btn', function () { almSetSheet($(this).attr('data-sheet')); });
+    const updateBatchSelection = scope => {
+        if (getBatchScope() !== scope) return;
+        const ids = batchScopeIds(scope);
+        const selected = new Set([...getBatchSelected()].map(id => String(id)));
+        const count = ids.reduce((total, id) => total + Number(selected.has(String(id))), 0);
+        const rowSelector = scope === 'almanac' ? '.sp-alm-item[data-id]' : '.sp-ledger-row[data-id]';
+        $almanac.find(`${rowSelector} .sp-batch-check`).each(function () {
+            const row = $(this).closest(rowSelector);
+            const checked = selected.has(String(row.attr('data-id')));
+            $(this).prop('checked', checked);
+            row.toggleClass('sp-batch-checked', checked);
+        });
+        const batchBar = $almanac.find('.sp-batch-bar.sp-batch-active');
+        batchBar.find('.sp-batch-selall').prop('checked', ids.length > 0 && count === ids.length);
+        batchBar.find('.sp-batch-count').text(`已选 ${count} / ${ids.length}`);
+        batchBar.find('.sp-batch-exec').prop('disabled', count === 0);
+    };
     bindLedgerEvents({
-        almanac: $almanac, chat: $('#chat'), $, settings: getSettings, saveSettings: saveSettingsDebounced,
+        almanac: $almanac, chat: $('#chat'), $,
         capture: { run: runLedgerCaptureStep, abort: () => ledgerCaptureController.abort(), prepareAbandon: () => ledgerCaptureController.prepareAbandon?.(), abandon: token => ledgerCaptureController.abandon?.(token), confirmAbandon: () => spConfirm({ title: '放弃未确认候选', body: '只会放弃仍未找到可靠来源的候选；已经逐批保存的刻度条目不会删除。', confirmText: '放弃待查', cancelText: '继续保留' }) },
         judge: { run: runLedgerJudgeStep }, captureState: () => ({ busy: ledgerCaptureController.isBusy, controller: ledgerCaptureController.abortController }), actions: ledgerActions,
         render: renderAlmanacPanel,
@@ -4049,7 +4194,8 @@ function injectModal() {
         editor: { open: openLedgerEditor, save: saveLedgerEditor, close: closeLedgerEditor, get: getLedgerEditor },
         archive: { toggle: toggleLedgerArchiveOpen },
         batch: { scopes: BATCH_SCOPES, scope: getBatchScope, setScope: setBatchScope, selected: getBatchSelected, reset: batchReset, ids: batchScopeIds, exec: execBatch },
-        toast: showToast, resetCapture: () => { ledgerCaptureCounter = 0; },
+        updateBatchSelection,
+        toast: showToast,
     });
     // 轴面板「今天」栏：±1天 / 改（内联月日） / 自动（清锚）等操作经 runAnchorAftermath 共享善后；
     // 点后台是否重排由 scheduleAutoDetect 决定。
@@ -4143,7 +4289,7 @@ function injectModal() {
     // 历法管理使用同一内联容器；所有正式写入只从 commitCalendarDesc 汇流。
     $almanac.on('click', '.sp-alm-manager-back', closeCalendarManager);
     $almanac.on('click', '.sp-alm-manager-chat-link', async function () {
-        const filled = await openPluginViewWithPrefill('space', '#sp-space-input', '我想为当前世界设计一套自定义历法。请结合世界观和我讨论纪年名、月份数量、每个月的名称与天数，并在确认后给出完整历法。');
+        const filled = await openPluginViewWithPrefill('space', '#sp-space-input', '我想为当前世界设计一套自定义历法。请结合世界观和我讨论纪年名、月份数量、每个月的名称与天数；讨论定稿后，请整理成可应用的完整历法方案。');
         if (!filled) showToast('已经打开间，但没有找到输入框，请手动填写历法需求', null, true);
         else if (getSettings().notifyMode !== 'off') showToast('已把历法需求预填到间');
     });
@@ -4519,11 +4665,11 @@ function injectModal() {
         ledgerCaptureCounter = 0;
     });
     $in('#sp-ledger-capture-interval').on('change', function () {
-        const n = Math.max(1, Math.min(30, Math.floor(Number(this.value) || 5)));
+        const n = normalizeLedgerInterval(this.value, 5);
         getSettings().ledgerCaptureInterval = n; this.value = String(n); saveSettingsDebounced(); ledgerCaptureCounter = 0;
     });
     $in('#sp-ledger-judge-interval').on('change', function () {
-        const n = Math.max(1, Math.min(30, Math.floor(Number(this.value) || 4)));
+        const n = normalizeLedgerInterval(this.value, 4);
         getSettings().ledgerJudgeInterval = n; this.value = String(n); saveSettingsDebounced(); ledgerJudgeCounter = 0;
     });
     $in('input[name="sp-ledger-history-scope"]').on('change', function () {
@@ -4609,43 +4755,6 @@ function injectModal() {
     $in('#sp-resize-handle').on('mousedown', onResizeStart);
     inEl('#sp-resize-handle')?.addEventListener('touchstart', onResizeStart, { passive: false });
 
-    // Outline divider drag（面·聊天分隔条；inEl 防 shadow 下 null 崩掉 injectModal 尾部）
-    let divState = null;
-    const divEl  = inEl('#sp-outline-divider');
-    const chatEl = inEl('#sp-outline-chat');
-    function onDivStart(e) {
-        e.preventDefault();
-        const savedH = parseInt(localStorage.getItem('sp-outline-chat-h')) || 210;
-        chatEl.style.height = savedH + 'px';
-        divState = { startY: e.touches ? e.touches[0].clientY : e.clientY, startH: chatEl.offsetHeight };
-        document.addEventListener('mousemove', onDivMove);
-        document.addEventListener('mouseup',   onDivEnd);
-        document.addEventListener('touchmove', onDivMove, { passive: false });
-        document.addEventListener('touchend',  onDivEnd);
-        document.addEventListener('touchcancel', onDivEnd);   // 手机端被系统/滚动打断时派发的是 touchcancel 而非 touchend；漏接它 divState 就卡住 → 黏手
-    }
-    function onDivMove(e) {
-        if (!divState) return;
-        // 自愈：触点/按键已松开却还在收 move（手机 touchcancel 漏接、或 PC 鼠标出窗漏 mouseup）→ 立即收尾，别黏住。
-        if ((e.touches && e.touches.length === 0) || (!e.touches && e.buttons === 0)) { onDivEnd(); return; }
-        e.preventDefault();
-        const cy   = e.touches ? e.touches[0].clientY : e.clientY;
-        const newH = Math.max(80, Math.min(420, divState.startH + divState.startY - cy));
-        chatEl.style.height = newH + 'px';
-    }
-    function onDivEnd() {
-        if (!divState) return;
-        localStorage.setItem('sp-outline-chat-h', chatEl.offsetHeight);
-        divState = null;
-        document.removeEventListener('mousemove', onDivMove);
-        document.removeEventListener('mouseup',   onDivEnd);
-        document.removeEventListener('touchmove', onDivMove);
-        document.removeEventListener('touchend',  onDivEnd);
-        document.removeEventListener('touchcancel', onDivEnd);
-    }
-    divEl.addEventListener('mousedown',  onDivStart);
-    divEl.addEventListener('touchstart', onDivStart, { passive: false });
-    restoreOutlineChatHeight();
     bindMemoryHandlers();
     bindTheaterHandlers();
     bindStorageHandlers();
@@ -4658,7 +4767,7 @@ function onRegenClick() {
         void outlineFeature.generation.trigger({ reroll: true, module: 'outline' });
         return;
     }
-    if (axisState._almSyncingPoint) { showToast('点正在同步到今天，稍候再刷新', null, true); return; }   // 同步在飞：别让点这边的刷新跟后台同步抢 store（否则重排点会被同步写回）
+    if (axisState._almSyncingPoint) { showToast('点正在同步到今天，稍候再刷新', null, 'info'); return; }   // 同步在飞：别让点这边的刷新跟后台同步抢 store（否则重排点会被同步写回）
     if (pointState.isGenerating) return;
     // 刷新 = 对当前视角（我 / 当前 char）原地重排，永不弹填写框。
     // 「换人」已彻底交给 TA▾ 抽屉，与刷新解耦——故 user / char 两视角在此完全对称，同走 triggerGenerate。
@@ -4801,7 +4910,7 @@ function toggleTaDrawer() {
 function activateCharView(name) {
     const n = String(name || '').trim();
     if (!n) return;
-    if (pointState.isGenerating) { showToast('点正在生成，稍候再换人', null, true); return; }
+    if (pointState.isGenerating) { showToast('点正在生成，稍候再换人', null, 'info'); return; }
     closeTaDrawer();
     setView('char', n);          // 内部置 currentView/charViewName + active 态 + 载 pointState.cachedSchedule
     updateTaTriggerLabel();
@@ -4937,7 +5046,10 @@ function openSidebarView(view) {
             $in('#sp-theater-wrap').css('display', 'flex');
             $in('#sp-sub-toggle').hide();
             $in('#sp-content-title').text('棱');
-            if (theaterFeature.busy) setTheaterBody(loadingHtml('正在折射', 'sp-abort-theater'));
+            if (theaterFeature.busy) {
+                theaterFeature.refreshTemplates();
+                setTheaterBody(loadingHtml('正在折射', 'sp-abort-theater'));
+            }
             else theaterFeature.open();
             return;
         }
@@ -5074,7 +5186,7 @@ function openQuickReplyShortcut(key) {
     if (!shortcut) return;
     if (shortcut.mode === 'daily-menu') {
         if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
-        if (!pluginEnabled()) { showToast('构画已关闭', null, true); return; }
+        if (!pluginEnabled()) { showToast('构画已关闭', null, 'info'); return; }
         openDailyMenuDialog();
         return;
     }
@@ -5083,7 +5195,7 @@ function openQuickReplyShortcut(key) {
         return;
     }
     if (shortcut.mode !== 'settings' && shortcut.mode !== 'memory' && !pluginEnabled()) {
-        showToast('构画已关闭', null, true);
+        showToast('构画已关闭', null, 'info');
         return;
     }
 
@@ -5318,6 +5430,24 @@ function qianQianJieGenerationSnapshotCurrent(snapshot, operationToken, ctx = ge
         && snapshot.reader === qianQianJieMemoryAccess.reader()
         && qianQianJieGenerationBoundaryCurrent(snapshot, ctx);
 }
+function createConfirmedMemoryFallbackSnapshot(source, status = 'empty') {
+    return Object.freeze({
+        source,
+        status: 'fallback-confirmed',
+        reason: status,
+    });
+}
+function isConfirmedMemoryFallback(snapshot) {
+    return snapshot?.status === 'fallback-confirmed'
+        && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source);
+}
+function createMemoryReadSnapshot(source) {
+    return Object.freeze({ source, status: 'read-required' });
+}
+function isMemoryReadSnapshot(snapshot) {
+    return snapshot?.status === 'read-required'
+        && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source);
+}
 async function memoryPreCheckConfirm(request = {}) {
     if (getSettings().useQianQianJie) {
         const contextSnapshot = request.contextSnapshot || getContext();
@@ -5356,64 +5486,93 @@ async function memoryPreCheckConfirm(request = {}) {
     if (getSettings().useAnima) {
         const th = globalThis.TavernHelper;
         if (!th || typeof th.getChatWorldbookName !== 'function' || typeof th.getWorldbook !== 'function') {
-            return spConfirm({
+            const proceed = await spConfirm({
                 title  : 'Anima 记忆源未就绪',
-                body   : '当前选的是 Anima 记忆源，但检测不到酒馆助手(TavernHelper)接口。\n继续生成会没有历史记忆注入。',
-                note   : '请确认已安装并启用「酒馆助手」与「Anima 记忆系统」，或临时关掉本插件的"使用 Anima 作为记忆源"。',
+                body   : '当前选的是 Anima 记忆源，但检测不到酒馆助手(TavernHelper)接口。',
+                note   : '请启用酒馆助手与 Anima 记忆系统；确认后本次跳过 Anima，并使用最近最多 6 条可见 AI 回复。',
                 confirmText: '继续生成',
                 cancelText : '取消',
             });
+            return proceed ? { proceed: true, memorySnapshot: createConfirmedMemoryFallbackSnapshot('anima', 'api-unavailable') } : false;
         }
         let hasSummary = false;
-        try { hasSummary = !!(await getAnimaMemText()).trim(); } catch {}
+        try { hasSummary = !!(await getAnimaMemText()).trim(); }
+        catch (error) {
+            if (error?.code === 'memory-source-unavailable') {
+                const proceed = await spConfirm({
+                    title: 'Anima 未绑定当前聊天世界书',
+                    body: '当前聊天没有可读取的 Anima 世界书。',
+                    note: '确认后本次将跳过 Anima，并使用当前聊天最近最多 6 条可见 AI 回复作为上下文。',
+                    confirmText: '继续使用最近对话',
+                    cancelText: '取消',
+                });
+                return proceed ? { proceed: true, memorySnapshot: createConfirmedMemoryFallbackSnapshot('anima', 'worldbook-unavailable') } : false;
+            }
+            showToast('Anima 记忆读取失败，请确认酒馆助手可读取当前世界书后重试。', null, true);
+            return false;
+        }
         if (!hasSummary) {
-            return spConfirm({
+            const proceed = await spConfirm({
                 title  : 'Anima 记忆为空',
                 body   : '当前聊天绑定的世界书里没读到 Anima 摘要（anima_summary）。',
-                note   : '继续生成会没有历史记忆注入。请先让 Anima 跑出摘要，或确认世界书绑定正确。',
+                note   : '继续生成将使用当前聊天最近最多 6 条可见 AI 回复，不注入 Anima 摘要。你也可以先让 Anima 生成摘要。',
                 confirmText: '继续生成',
                 cancelText : '取消',
             });
+            return proceed ? { proceed: true, memorySnapshot: createConfirmedMemoryFallbackSnapshot('anima', 'empty') } : false;
         }
-        return true;
+        return { proceed: true, memorySnapshot: createMemoryReadSnapshot('anima') };
     }
     // 柏宝书 mode: skip built-in report (its "pending" is meaningless here).
     // Instead, warn only if 柏宝书 itself says coverage is incomplete.
     if (getSettings().useBaiBaiBook) {
         const api = globalThis.STBaiBaiBook;
         if (!api || typeof api.getInjectedHistory !== 'function') {
-            return spConfirm({
+            const proceed = await spConfirm({
                 title  : '柏宝书未就绪',
-                body   : '当前选的是柏宝书记忆源，但检测不到柏宝书 API。\n继续生成会没有历史记忆注入。',
-                note   : '请把柏宝书更新到最新版（旧版没有读取接口），或临时关掉本插件的"使用柏宝书作为记忆源"。',
+                body   : '当前选的是柏宝书记忆源，但检测不到柏宝书 API。',
+                note   : '请更新柏宝书或关闭此记忆源；确认后本次跳过柏宝书，并使用最近最多 6 条可见 AI 回复。',
                 confirmText: '仍然继续',
                 cancelText : '取消',
             });
+            return proceed ? { proceed: true, memorySnapshot: createConfirmedMemoryFallbackSnapshot('bai-bai-book', 'api-unavailable') } : false;
         }
         try {
             const cov = api.getInjectedHistory()?.coverage;
             if (cov?.complete === false) {
                 const miss = cov.missingAiFloors?.length ?? '?';
-                return spConfirm({
+                const proceed = await spConfirm({
                     title  : '柏宝书记忆未覆盖完整',
                     body   : `柏宝书报告缺 ${miss} 楼摘要（missingAiFloors）。`,
                     note   : '继续生成会使用当前柏宝书的历史（可能不完整）。你也可以先去柏宝书补齐。',
                     confirmText: '继续生成',
                     cancelText : '取消',
                 });
+                return proceed ? { proceed: true, memorySnapshot: createMemoryReadSnapshot('bai-bai-book') } : false;
             }
-        } catch {}
-        return true;
+        } catch (error) {
+            console.warn('[构画] 柏宝书记忆预检读取失败', safeDiagnosticLog('memory', 'request', error, { background: true }));
+            showToast('柏宝书读取失败，本次未开始生成。请检查柏宝书读取接口后重试。', null, true);
+            return false;
+        }
+        return { proceed: true, memorySnapshot: createMemoryReadSnapshot('bai-bai-book') };
     }
     if (getSettings().useDatabase) {
         const result = await databaseMemoryAccess.result({ query: '' });
-        if (result.text) return true;
-        return spConfirm({
-            title: '数据库记忆为空',
+        if (result.text) return { proceed: true, memorySnapshot: createMemoryReadSnapshot('database') };
+        const title = ['no-match', 'empty-content'].includes(result.status)
+            ? '数据库记忆为空'
+            : ['worldbook-unavailable', 'api-unavailable'].includes(result.status)
+                ? '数据库记忆不可用'
+                : '数据库记忆读取失败';
+        const proceed = await spConfirm({
+            title,
             body: `${databaseMemoryDiagnostic(result)}。继续生成将不注入数据库历史。`,
+            note: '确认后本次将使用当前聊天最近最多 6 条可见 AI 回复作为上下文。',
             confirmText: '继续生成',
             cancelText: '取消',
         });
+        return proceed ? { proceed: true, memorySnapshot: createConfirmedMemoryFallbackSnapshot('database', result.status) } : false;
     }
     const report = memory.getHealthReport();
     // No memory data yet is OK (fresh chat) — only warn when there ARE issues
@@ -5480,7 +5639,7 @@ function spConfirm({ title, body, note, confirmText = '确定', cancelText = '�
 // 三态：保留云端(丢 localStorage 副本) / 保留本机(localStorage 覆盖云端 + 重载) /
 // 点窗外=暂不决定(什么都不动，下次进本 chat 再问)。故意不设「默认破坏动作」——
 // 数据两难时，不选就谁都不动。
-const KIND_LABEL = { schedule: '点', outline: '面', lines: '线', 'creative-chat': '面·讨论', 'space-chat': '间', almanac: '轴' };
+const KIND_LABEL = { schedule: '点', outline: '正式面', lines: '线', 'creative-chat': '旧面讨论（只读资料）', 'space-chat': '间', almanac: '轴' };
 
 function fmtStoreSide(sum) {
     const labels = (sum?.kinds || []).map(k => KIND_LABEL[k] || k).join('、') || '（无）';
@@ -5583,7 +5742,8 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     // 生成使用本轮捕获角色的设置，避免异步任务切换角色后串入另一角色偏好。
     const characterKey = charStableKey(ctx);
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }, { scale: getScale(characterKey), direction: getLineDirection(characterKey) }), travelContext);
-    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'creative', diagnosticModule: 'point', diagnosticSink };
+    // 点按剧情事实作未来规划，沿用 planning 保留 BASE 与用户规范，并省去通用正文创作强化词。
+    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'planning', diagnosticModule: 'point', diagnosticSink };
     apiOpts.pointView = perspective;
     if (memoryContext?.memorySnapshot) {
         apiOpts.memorySnapshot = memoryContext.memorySnapshot;
@@ -5625,7 +5785,7 @@ async function restoreCurrentCharacterAfterExclusion() {
     $in('#sp-outline-wrap, #sp-lines-wrap, #sp-space-wrap, #sp-theater-wrap, #sp-anchor-wrap, #sp-almanac-wrap').hide();
     $in('#sp-body').show();
     $inAll('.sp-outline-btn').removeClass('sp-btn-active');
-    $in('#sp-chat-msgs, #sp-space-msgs').empty();
+    $in('#sp-space-msgs').empty();
     if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
     else setBody(pointScheduleEmptyHtml());
     void renderMemorySection();
@@ -5708,7 +5868,7 @@ function saveCurrentWiSelection() {
     if (merged.changed) setCurrentWiSelection(ctx, merged.bucket);
 }
 
-// ─── World-book global exclusion (B方案) ─────────────────────────────────────
+// ─── World-book global exclusion ────────────────────────────────────────────
 // 全局、按书名（非按条目、也非按角色卡）。被排除的书构画**一律不读**——优先级高于「角色卡
 // 关联 / 全局启用 / persona 链接」任何一条收录途径（这类书通常是给主楼 AI 读的，不该混进
 // 点/线/轴/暗历的判定）。剔除发生在 getCharBookEntries 末尾这一咽喉处，故连设置里「按角色卡
@@ -5924,19 +6084,21 @@ function getChatWorldNames(ctx) {
 
 // Returns live world-info entries for the current character. Uses ctx.loadWorldInfo
 // (the live editable copy), NOT ctx.characters[].data.character_book (stale snapshot).
-// Fallback to character_book if no linked world book exists.
+// Fall back to character_book when no linked entry was loaded; read failures are returned separately.
 // Each item: { key, uid, label, preview, content, source, embedded, scope, hostEnabled }
 //   scope = 'char'/'chat'/'persona'/'global' → 角色卡、当前聊天、用户 persona 或全局世界书来源
 async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
     const items = [];
     const seen = new Set();
+    const loadFailures = [];
+    const recordLoadFailure = (name, scope, error) => loadFailures.push({ name, scope, error });
 
     // 1. Primary linked world book(s) via loadWorldInfo — live state
     const worldNames = getLinkedWorldNames(ctx);
     for (const name of worldNames) {
         try {
             const data = await ctx.loadWorldInfo(name);
-            if (!data?.entries) continue;
+            if (!data || !data.entries || typeof data.entries !== 'object') { recordLoadFailure(name, 'char', new Error('世界书返回结构异常')); continue; }
             for (const [uid, entry] of Object.entries(data.entries)) {
                 const label = entry.comment
                     || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
@@ -5960,7 +6122,7 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
                     hostEnabled: entry?.disable !== true,
                 });
             }
-        } catch { /* ignore individual load failure */ }
+        } catch (error) { recordLoadFailure(name, 'char', error); }
     }
 
     // 2. Fallback: character_book embedded in the card (only if no external world worked)
@@ -6001,7 +6163,7 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
     for (const name of getChatWorldNames(ctx)) {
         try {
             const data = await ctx.loadWorldInfo(name);
-            if (!data?.entries) continue;
+            if (!data || !data.entries || typeof data.entries !== 'object') { recordLoadFailure(name, 'chat', new Error('世界书返回结构异常')); continue; }
             for (const [uid, entry] of Object.entries(data.entries)) {
                 const label = entry.comment || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key) || `条目 ${uid}`;
                 const key = `${name}::${uid}`;
@@ -6009,7 +6171,7 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
                 seen.add(key);
                 items.push({ key, uid, label, title: typeof entry.comment === 'string' ? entry.comment : '', activationEntry: entry, preview: String(entry.content || '').replace(/\s+/g, ' ').slice(0, 120), content: entry.content || '', source: name, embedded: false, scope: 'chat', hostEnabled: entry?.disable !== true });
             }
-        } catch {}
+        } catch (error) { recordLoadFailure(name, 'chat', error); }
     }
 
     // 4. Global world-info (enabled via ST's WI panel — top-right世界书面板中间"启用"列表)
@@ -6018,7 +6180,7 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
         if (worldNames.includes(name)) continue;   // skip if same book is already linked to char
         try {
             const data = await ctx.loadWorldInfo(name);
-            if (!data?.entries) continue;
+            if (!data || !data.entries || typeof data.entries !== 'object') { recordLoadFailure(name, 'global', new Error('世界书返回结构异常')); continue; }
             for (const [uid, entry] of Object.entries(data.entries)) {
                 const label = entry.comment
                     || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
@@ -6042,7 +6204,7 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
                     hostEnabled: entry?.disable !== true,
                 });
             }
-        } catch { /* ignore individual load failure */ }
+        } catch (error) { recordLoadFailure(name, 'global', error); }
     }
 
     // 5. 用户/persona 世界书：ST「人物设定」页给当前 persona 链接的世界书（power_user.persona_description_lorebook）。
@@ -6052,7 +6214,9 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
     if (personaBook && !worldNames.includes(personaBook) && !globalNames.includes(personaBook)) {
         try {
             const data = await ctx.loadWorldInfo(personaBook);
-            if (data?.entries) {
+            if (!data || !data.entries || typeof data.entries !== 'object') {
+                recordLoadFailure(personaBook, 'persona', new Error('世界书返回结构异常'));
+            } else {
                 for (const [uid, entry] of Object.entries(data.entries)) {
                     const label = entry.comment
                         || (Array.isArray(entry.key) ? entry.key.join(', ') : entry.key)
@@ -6073,13 +6237,19 @@ async function getCharBookEntries(ctx, { includeExcluded = false } = {}) {
                     });
                 }
             }
-        } catch { /* ignore persona book load failure */ }
+        } catch (error) { recordLoadFailure(personaBook, 'persona', error); }
     }
 
-    // 全局排除（B方案）：被拉黑的书名一律剔除——优先级压过上面任何一条收录途径。放在最末统一
+    // 全局排除：被拉黑的书名一律剔除，优先级高于其他收录途径。放在最末统一
     // 过滤，故设置里「按角色卡挑选」列表也看不到这些书（buildWorldInfoContext 与 renderWiList 共用本函数）。
     const excluded = getWiExcludeSet();
-    return !includeExcluded && excluded.size ? items.filter(e => !hasWiExcluded(e.source, excluded)) : items;
+    Object.defineProperty(items, 'loadFailures', { value: Object.freeze(loadFailures), enumerable: false });
+    if (!includeExcluded && excluded.size) {
+        const visible = items.filter(e => !hasWiExcluded(e.source, excluded));
+        Object.defineProperty(visible, 'loadFailures', { value: items.loadFailures, enumerable: false });
+        return visible;
+    }
+    return items;
 }
 
 // 近期聊天上下文补足延后一组的 L0/L1 记忆与当前用户输入之间的空窗；聊天为空时返回 ''。
@@ -6341,7 +6511,7 @@ function worldInfoReferenceTriggerText(query, names, entries) {
     return names.map(name => [name, query, ...spiritCategories, ...topics.map(topic => `${name}${topic}`)].join(' ')).join('\n');
 }
 
-function worldInfoTitleMatches(entry, query, triggerMode = 'query') {
+function worldInfoTitleMatches(entry, query) {
     const title = String(entry?.title || '').trim();
     const text = String(query || '').trim();
     if (!title || !text) return false;
@@ -6427,13 +6597,23 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
     const entries = scanEntries
         ? scanEntries.filter(entry => !hasWiExcluded(entry.source, excluded))
         : await getCharBookEntries(ctx);
+    const loadFailures = (scanEntries || entries).loadFailures || [];
+    if (loadFailures.length) {
+        showToast('有世界书未能读取，本次材料可能不完整。请检查世界书状态和读取权限。', null, true);
+        for (const failure of loadFailures) {
+            console.warn('[构画] 世界书读取失败', {
+                book: failure.name,
+                scope: failure.scope,
+                ...safeDiagnosticLog('world-info', 'request', failure.error),
+            });
+        }
+    }
     throwIfAborted();
     const selection = ensureCurrentWiSelection(ctx, entries);
     const selected = entries
         .filter(e => worldInfoSelectionAllows(selection, e.key))
         .filter(e => e.hostEnabled !== false);
     let effectiveTriggerText = triggerText;
-    let effectiveTriggerMode = triggerMode;
     // 「间」可凭自己的历史快照解析回指；面内只有本轮明确要求全体角色时才能直接列名单。
     const explicitAllRosterQuery = WORLD_INFO_ALL_ROLES.test(String(triggerText || ''))
         && WORLD_INFO_GROUP_INFO_TOPIC.test(String(triggerText || ''));
@@ -6450,7 +6630,6 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
                 // 面内当前问句要求全体但没有任何允许标题时，保留普通问答，不用缺失名单取消请求。
             } else {
                 effectiveTriggerText = worldInfoReferenceTriggerText(triggerText, reference.names, selected);
-                effectiveTriggerMode = 'reference';
             }
         }
     }
@@ -6491,7 +6670,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
     }
     const candidates = selected
         .filter(e => activation.keys.has(worldInfoCandidateKey(e.source, e.uid))
-            || (effectiveTriggerText !== undefined && worldInfoTitleMatches(e, effectiveTriggerText, effectiveTriggerMode) && worldInfoTitleSupplementAllows(e, effectiveTriggerText, ctx))
+            || (effectiveTriggerText !== undefined && worldInfoTitleMatches(e, effectiveTriggerText) && worldInfoTitleSupplementAllows(e, effectiveTriggerText, ctx))
             || (effectiveTriggerText !== undefined && worldInfoPersonTitleMatches(e, titleSupplementText) && worldInfoTitleSupplementAllows(e, effectiveTriggerText, ctx)))
         .map(e => e.content)
         .filter(Boolean);
@@ -6505,7 +6684,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
             estimatedScanTokens: scanBudgetTokens,
             scanPromptCount: scanPrompts,
             activatedCount: activation.keys.size,
-            titleMatchedCount: selected.filter(e => worldInfoTitleMatches(e, effectiveTriggerText, effectiveTriggerMode)).length,
+            titleMatchedCount: selected.filter(e => worldInfoTitleMatches(e, effectiveTriggerText)).length,
             candidateCount: candidates.length,
             warning: '宿主 API 未返回预算溢出标记；硬上限或外部扫描 prompt 可能导致宿主在构画筛选前省略候选。',
         });
@@ -6530,8 +6709,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
 // {unique_id,batch_id,slice_id,narrative_time} index (see Anima worldbook_api.js
 // saveSummaryBatchToWorldbook / getLatestRecentSummaries). Chapters/分卷 each get
 // their own entry, so we merge across all of them and stitch slices back in
-// chronological order. Goes through window.TavernHelper (Anima users always have
-// 酒馆助手 installed); returns '' if that runtime or the worldbook isn't there.
+// chronological order. Empty content is valid; missing interfaces and failed reads throw.
 // opts.full remains available for the caller, while normal recall ranks slices by
 // the current query and recent chat terms, then restores chronological order for
 // the selected window. This keeps relevant older summaries without truncating to
@@ -6571,19 +6749,16 @@ function selectAnimaSlices(slices, query, limit) {
 async function getAnimaMemText(opts = {}) {
     const th = globalThis.TavernHelper;
     if (!th || typeof th.getChatWorldbookName !== 'function' || typeof th.getWorldbook !== 'function') {
-        if (opts.strict) throw new Error('Anima 记忆接口未就绪');
-        if (!getMemText._animaWarned) {
-            getMemText._animaWarned = true;
-            console.info('[7dayscal] 选了 Anima 记忆源但酒馆助手(TavernHelper)接口未就绪，本次生成无历史注入');
-        }
-        return '';
+        throw new Error('Anima 记忆接口未就绪');
     }
     let wbName = null;
-    try { wbName = await th.getChatWorldbookName('current'); } catch (error) { if (opts.strict) throw error; }
-    if (!wbName) return '';
+    wbName = await th.getChatWorldbookName('current');
+    if (!wbName) throw Object.assign(new Error('Anima 当前聊天未绑定世界书'), { code: 'memory-source-unavailable' });
     let entries = null;
-    try { entries = await th.getWorldbook(wbName); } catch (error) { if (opts.strict) throw error; return ''; }
-    if (!Array.isArray(entries)) return '';
+    entries = await th.getWorldbook(wbName);
+    if (!Array.isArray(entries)) {
+        throw new Error('Anima 世界书读取失败');
+    }
 
     const all = [];
     for (const entry of entries) {
@@ -6672,31 +6847,52 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
     writeCache: (value, options) => writeStoreConfirmed(keyDesc('qqj-prompt-cache', 'user', ''), value, options),
 });
 
-// Alternate sources are mutually exclusive (enforced in bindMemoryHandlers); each
-// returns its own history or nothing (empty prompt block) — no fallback between them.
+// Alternate sources are mutually exclusive; only an explicitly confirmed per-request
+// fallback may omit a source. Read failures otherwise propagate to the generation UI.
 async function _getMemTextRaw(opts = {}) {
-    const { excludeMesIds, ...sourceOpts } = opts;
+    const { excludeMesIds, source, ...sourceOpts } = opts;
     const s = getSettings();
-    if (s.useQianQianJie) {
-        try { return await qianQianJieMemoryAccess.text(sourceOpts); }
-        catch (err) { console.warn('[7dayscal] 千千结取记忆出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
+    const selectedSource = source || (s.useQianQianJie ? 'qianqianjie'
+        : s.useAnima ? 'anima'
+            : s.useDatabase ? 'database'
+                : s.useBaiBaiBook ? 'bai-bai-book' : 'builtin');
+    if (selectedSource === 'qianqianjie') {
+        try {
+            const result = await qianQianJieMemoryAccess.result(sourceOpts);
+            if (['read-failed', 'timed-out', 'error', 'api-unavailable', 'disabled', 'stale'].includes(result.status)) {
+                throw makeDiagnosticError('memory-read', { phase: 'memory' });
+            }
+            return result.text || '';
+        } catch (err) {
+            console.warn('[7dayscal] 千千结取记忆出错', safeDiagnosticLog('memory', 'request', err, { background: true }));
+            throw err?.diagnosticCode ? err : makeDiagnosticError('memory-read', { phase: 'memory' });
+        }
     }
-    if (s.useAnima) {
+    if (selectedSource === 'anima') {
         try { return await getAnimaMemText(sourceOpts); }
-        catch (err) { console.warn('[7dayscal] Anima 取摘要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
+        catch (err) {
+            console.warn('[7dayscal] Anima 取摘要出错', safeDiagnosticLog('memory', 'request', err, { background: true }));
+            throw makeDiagnosticError('memory-read', { phase: 'memory' });
+        }
     }
-    if (s.useDatabase) {
-        try { return await databaseMemoryAccess.text(sourceOpts); }
-        catch (err) { console.warn('[7dayscal] 数据库取纪要出错', safeDiagnosticLog('memory', 'request', err, { background: true })); return ''; }
+    if (selectedSource === 'database') {
+        try {
+            const result = await databaseMemoryAccess.result(sourceOpts);
+            if (['ready', 'no-match', 'empty-content'].includes(result.status)) return result.text || '';
+            throw makeDiagnosticError('memory-read', { phase: 'memory' });
+        } catch (err) {
+            console.warn('[7dayscal] 数据库取纪要出错', safeDiagnosticLog('memory', 'request', err, { background: true }));
+            throw err?.diagnosticCode ? err : makeDiagnosticError('memory-read', { phase: 'memory' });
+        }
     }
-    if (s.useBaiBaiBook) {
+    if (selectedSource === 'bai-bai-book') {
         const api = globalThis.STBaiBaiBook;
         if (!api || typeof api.getInjectedHistory !== 'function') {
             if (!getMemText._bbbWarned) {
                 getMemText._bbbWarned = true;
                 console.info('[7dayscal] 使用柏宝书记忆但 API 未就绪，本次生成无历史注入');
             }
-            return '';
+            throw makeDiagnosticError('memory-read', { phase: 'memory' });
         }
         try {
             // opts.full：通读全故事的分析任务（如「历」编排全年纪念日）要完整时间线——
@@ -6709,7 +6905,7 @@ async function _getMemTextRaw(opts = {}) {
             return api.getInjectedHistory()?.relativeText || '';
         } catch (err) {
             console.warn('[7dayscal] 柏宝书取历史出错', safeDiagnosticLog('memory', 'request', err, { background: true }));
-            return '';
+            throw makeDiagnosticError('memory-read', { phase: 'memory' });
         }
     }
     return memory.getMemoryContext({ excludeMesIds, includeRecentRaw: true });
@@ -6732,8 +6928,9 @@ function readCardExtras(ctx) {
 }
 
 function buildRecentGenerationHistory(ctx, historyLimit, opts = {}) {
-    const effectiveHistoryLimit = opts.memorySnapshot?.source === 'qianqianjie'
-        && opts.memorySnapshot.status === 'empty' && historyLimit === 3 ? 6 : historyLimit;
+    const recentFallback = (opts.memorySnapshot?.source === 'qianqianjie' && opts.memorySnapshot.status === 'empty')
+        || opts.memorySnapshot?.status === 'fallback-confirmed';
+    const effectiveHistoryLimit = recentFallback && historyLimit === 3 ? 6 : historyLimit;
     if (!(Number(effectiveHistoryLimit) > 0)) return [];
     const settings = getSettings();
     const stripOpts = { keepTags: settings.keepTags, extraTags: settings.extraTags };
@@ -6807,8 +7004,19 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         let rawMemText;
         if (hasMemorySnapshot) {
             const snapshot = opts.memorySnapshot;
-            if (!qianQianJieGenerationSnapshotCurrent(snapshot, opts.memoryOperationToken, ctx)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
-            rawMemText = snapshot.text;
+            if (snapshot?.source === 'qianqianjie') {
+                if (!qianQianJieGenerationSnapshotCurrent(snapshot, opts.memoryOperationToken, ctx)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
+                rawMemText = snapshot.text;
+            } else if (snapshot?.status === 'fallback-confirmed') {
+                if (!isConfirmedMemoryFallback(snapshot)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
+                rawMemText = '';
+            } else if (snapshot?.status === 'read-required') {
+                if (!isMemoryReadSnapshot(snapshot)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
+                reportPhase('memory');
+                rawMemText = await getMemText({ source: snapshot.source, full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds });
+            } else {
+                throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
+            }
         } else {
             reportPhase('memory');
             rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds });
@@ -6838,6 +7046,8 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         ? `【本世界观·现行历法（纪年）】${calDescText}\n推演点/线/大纲涉及日期时，一律以此历法为准（月份数、每月天数、纪年名），不要默认套用公历的 12 月 / 31 日。`
         : '';
 
+    const outlinePlan = opts.includeOutlinePlan ? String(ctx.outlinePlan || '') : '';
+
     const sys  = [
         `你是一位旁观者和叙事分析助手，负责以第三人称视角分析 ${userName} 与 ${charName} 的故事。`,
         `不要扮演任何角色，不要使用第一人称。所有输出必须以第三人称叙述。`,
@@ -6850,6 +7060,7 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         memBlock,
         almanacBlock,
         calDescBlock,
+        outlinePlan,
     ].filter(Boolean).join('\n\n');
     // historyLimit=0 → 完全不喂历史（history 为空），只留 system + prompt。
     return [{ role: 'system', content: sys }, ...history, { role: 'user', content: prompt }];
@@ -6956,154 +7167,6 @@ const axisWidgetActions = createAxisWidgetActions({
     notifyEra: cal => { if (getSettings().notifyMode !== 'off') showToast(`历法已更新：${cal.era ? cal.era + '·' : ''}${calendarSummary(cal)}`); },
 });
 
-function captureCreativeChatMemorySelection() {
-    const settings = getSettings();
-    const source = settings.useQianQianJie ? 'qianqianjie'
-        : settings.useAnima ? 'anima'
-            : settings.useDatabase ? 'database'
-                : settings.useBaiBaiBook ? 'bai-bai-book' : 'builtin';
-    const databaseTarget = source === 'database' ? captureDatabaseMemoryTarget() : null;
-    return Object.freeze({
-        source,
-        sourceEpoch: memorySourceEpoch,
-        databaseWorldbookName: databaseTarget ? (databaseTarget.selectedName || databaseTarget.primaryName) : '',
-    });
-}
-
-function creativeChatMemorySelectionCurrent(selection) {
-    const current = captureCreativeChatMemorySelection();
-    return selection.source === current.source
-        && selection.sourceEpoch === current.sourceEpoch
-        && selection.databaseWorldbookName === current.databaseWorldbookName;
-}
-
-function outlineChatMemoryError(message) {
-    const error = new Error(message);
-    error.outlineChatMessage = `本次未携带故事记忆，未发送给 AI：${message}`;
-    return error;
-}
-
-async function readCreativeChatMemory({ ctx, userMsg, signal, selection, excludeMesIds = [] }) {
-    const ensureCurrent = () => {
-        if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-        if (!creativeChatMemorySelectionCurrent(selection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
-    };
-    let text = '';
-    if (selection.source === 'qianqianjie') {
-        const operationToken = Symbol('outline-chat-memory');
-        const preflight = await memoryPreCheckConfirm({ signal, contextSnapshot: ctx, operationToken });
-        ensureCurrent();
-        if (preflight === false) throw Object.assign(new Error('memory preflight cancelled or stale'), { name: 'AbortError' });
-        if (!preflight?.proceed || !preflight.memorySnapshot) {
-            throw outlineChatMemoryError(preflight?.memoryError || '千千结记忆尚未就绪');
-        }
-        if (!qianQianJieGenerationSnapshotCurrent(preflight.memorySnapshot, operationToken, ctx)) {
-            throw Object.assign(new Error('memory snapshot stale'), { name: 'AbortError' });
-        }
-        const cached = preflight.memorySnapshot.cached === true;
-        const rawRecall = preflight.memorySnapshot.text.replace(/^【千千结上次成功召回】\n/, '').trim();
-        text = rawRecall ? `${cached ? '【千千结上次成功召回】' : '【千千结本轮召回】'}\n${rawRecall}` : '';
-        return { text, recentFallback: preflight.memorySnapshot.status === 'empty' || !rawRecall };
-    } else if (selection.source === 'database') {
-        const result = await databaseMemoryAccess.result({ query: userMsg });
-        ensureCurrent();
-        if (result.status !== 'ready' || !result.text) throw outlineChatMemoryError(databaseMemoryDiagnostic(result));
-        text = result.text;
-    } else if (selection.source === 'anima') {
-        try { text = await getAnimaMemText({ query: userMsg, strict: true }); }
-        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`Anima 记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
-        ensureCurrent();
-        return { text, recentFallback: !text.trim() };
-    } else if (selection.source === 'bai-bai-book') {
-        const api = globalThis.STBaiBaiBook;
-        if (!api || typeof api.getInjectedHistory !== 'function') throw outlineChatMemoryError('柏宝书读取接口未就绪');
-        let injected;
-        try { injected = api.getInjectedHistory(); }
-        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`柏宝书记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
-        ensureCurrent();
-        text = String(injected?.relativeText || '');
-        if (injected?.coverage?.complete === false) {
-            const missing = injected.coverage.missingAiFloors?.length ?? '?';
-            const proceed = await spConfirm({
-                title: '柏宝书记忆未覆盖完整',
-                body: `柏宝书报告缺 ${missing} 楼摘要（missingAiFloors）。`,
-                note: text.trim()
-                    ? '继续讨论会使用当前柏宝书历史（可能不完整）。你也可以先去柏宝书补齐。'
-                    : '确认后将读取最近 6 条完整、可见的 AI 对话作为讨论上下文；也可以先去柏宝书补齐。',
-                confirmText: '继续讨论',
-                cancelText: '取消',
-            });
-            ensureCurrent();
-            if (!proceed) throw Object.assign(new Error('memory read cancelled'), { name: 'AbortError' });
-        }
-        return { text, recentFallback: !text.trim() };
-    } else {
-        const preflight = await memoryPreCheckConfirm({ signal, contextSnapshot: ctx });
-        ensureCurrent();
-        if (!preflight) throw Object.assign(new Error('memory preflight cancelled'), { name: 'AbortError' });
-        try { text = await getMemText({ query: userMsg, excludeMesIds }); }
-        catch (error) { ensureCurrent(); throw outlineChatMemoryError(`内置故事记忆读取失败：${diagnosticMessage(error, { phase: 'request' })}`); }
-    }
-    ensureCurrent();
-    return { text, recentFallback: false };
-}
-
-async function composeCreativeChatMessages({ target, userMsg, historySnapshot, signal }) {
-    const ctx      = getContext();
-    const characterKey = charStableKey(ctx);
-    const preferences = { scale: getScale(characterKey), direction: getLineDirection(characterKey) };
-    const memorySelection = captureCreativeChatMemorySelection();
-    const userName = ctx.name1 || '用户';
-    const charName = ctx.name2 || '角色';
-    const outlineCtx = outlineFeature.repository.readRaw(target);
-    const { personaDesc, authorNote } = readCardExtras(ctx);
-    const almanacText = getAlmanacInjectText();
-    const calDescText = getCalDescInjectText();
-    const recentMesIds = getRecentVisibleFloorIds(ctx, 6);
-    const memoryRead = await readCreativeChatMemory({ ctx, userMsg, signal, selection: memorySelection, excludeMesIds: recentMesIds });
-    const memText = memoryRead.text;
-    if (!creativeChatMemorySelectionCurrent(memorySelection)) throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
-    const recentCtx = await buildRecentChatContext(ctx, 6, memoryRead.recentFallback ? Infinity : 2500);
-    if (memoryRead.recentFallback && !recentCtx) {
-        throw outlineChatMemoryError('所选记忆源没有可用摘要，最近 6 条可见 AI 对话也没有可读正文');
-    }
-    // 宿主关键词扫描只看本轮问题；人物标题补充也看本轮真正送出的问答、记忆和剧情材料。
-    const titleSupplementText = [
-        userMsg,
-        ...historySnapshot.map(message => String(message?.content ?? '')),
-        outlineCtx,
-        memText,
-        recentCtx,
-        personaDesc,
-        authorNote,
-        almanacText,
-        calDescText,
-    ].filter(Boolean).join('\n\n');
-    const wiContext = await buildWorldInfoContext(ctx, {
-        triggerText: userMsg,
-        titleSupplementText,
-        triggerMode: 'query',
-    });
-    if (signal?.aborted || !creativeChatMemorySelectionCurrent(memorySelection)) {
-        throw Object.assign(new Error('memory source changed'), { name: 'AbortError' });
-    }
-    const sys = buildCreativeChatSystemPrompt({
-        userName,
-        charName,
-        personaDesc,
-        authorNote,
-        outlineRaw: outlineCtx,
-        wiContext,
-        recentCtx,
-        almanacText,
-        calDescText,
-        memText,
-        preferences,
-    });
-    // 历史快照已包含刚写入的 user turn；末尾再追加一次是当前生产合同，禁止在本轮去重。
-    return [{ role: 'system', content: sys }, ...historySnapshot, { role: 'user', content: userMsg }];
-}
-
 // 写剪贴板：优先 navigator.clipboard（需安全上下文），失败/不可用则退回 execCommand。
 // 酒馆常跑在非 https 的 WebView 里，clipboard API 可能缺失或抛权限错——execCommand 兜底保证手机也能复制。
 async function copyPlainText(text) {
@@ -7137,7 +7200,7 @@ function setOutlineBody(html) {
 
 // ─── Storylines (事件线) ─────────────────────────────────────────────────────
 
-function getLinesCacheKey(view, charName) {
+function getLinesCacheKey() {
     return keyDesc('lines', 'user', '');
 }
 
@@ -7175,14 +7238,14 @@ function _prevAiFloorLines(mesId) {
 }
 // swipe / 重 roll 事件本身不自动请求线 API；滑回旧 swipe 时只复用已有临时层并本地重画。
 // 正常新 AI 楼的线推进仍只走 MESSAGE_RECEIVED → CHARACTER_MESSAGE_RENDERED 的统一入口。
-function loadCachedLinesForCurrentChat(view, charName) {
-    const saved = readStore(getLinesCacheKey(view, charName));
+function loadCachedLinesForCurrentChat() {
+    const saved = readStore(getLinesCacheKey());
     if (saved?.raw) return linesFeature.renderLines(saved.raw);
     return null;
 }
 
 // ─── 存储管理面板 ──────────────────────────────────────────────────────────────
-// 三层：①本聊天 chat_metadata（点线面间讨论 + 记忆 + 棱永久）②收藏（坐标·服务器）
+// 三层：①本聊天 chat_metadata（点线面、间讨论 + 记忆 + 棱永久）②收藏（坐标·服务器）
 //       ③本机缓存（localStorage：棱草稿 + UI 位置）。构画只统计/清理自己的数据。
 
 const STORAGE_KIND_LABELS = {
@@ -7190,7 +7253,7 @@ const STORAGE_KIND_LABELS = {
     'daily-menu'   : '点·今日菜单',
     'outline'      : '面（大纲）',
     'lines'        : '线（伏笔）',
-    'creative-chat': '面讨论',
+    'creative-chat': '旧面讨论（只读资料）',
     'space-chat'   : '间（局外）',
     'dashed'       : '虚线·冷知识',
     'almanac'      : '轴·日历条目（节日/生日/纪念日）',
@@ -7262,10 +7325,11 @@ function mountMigrationOverlay() {
     document.getElementById('sp-storage-migration-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'sp-storage-migration-overlay';
-    overlay.innerHTML = `<div role="dialog" aria-modal="true" style="width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background:#17191f;color:#f5f5f7;box-shadow:0 20px 70px #000b;font-family:var(--sp-font-user,system-ui)">
-        <div style="font-size:18px;font-weight:700;margin-bottom:10px">正在迁移当前聊天的构画数据</div>
-        <div data-sp-migration-status style="font-size:14px;line-height:1.65;opacity:.86">准备复制并逐项回读校验…</div>
-        <button data-sp-migration-abort type="button" style="margin-top:18px;width:100%;min-height:42px;border:1px solid #ffffff30;border-radius:10px;background:#ffffff10;color:inherit">中断迁移</button>
+    const overlayTheme = `sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`;
+    overlay.innerHTML = `<div class="sp-root sp-progress-card ${overlayTheme}" role="dialog" aria-modal="true" style="position:relative;z-index:auto;width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background-color:var(--sp-sheet-bg-legacy);background-image:linear-gradient(var(--sp-sheet-bg),var(--sp-sheet-bg));color:var(--sp-on-surface);box-shadow:0 20px 70px #000b;font-family:var(--sp-font);font-size:var(--sp-fs-100)">
+        <div style="font-size:var(--sp-fs-115);font-weight:700;margin-bottom:10px">正在迁移当前聊天的构画数据</div>
+        <div data-sp-migration-status style="font-size:var(--sp-fs-88);line-height:1.65;opacity:.86">准备复制并逐项回读校验…</div>
+        <button class="sp-btn" data-sp-migration-abort type="button" style="margin-top:18px;width:100%;min-height:42px">中断迁移</button>
     </div>`;
     Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
     const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
@@ -7290,7 +7354,7 @@ function mountMigrationOverlay() {
 async function startCurrentChatMigration() {
     if (currentCharacterExcluded()) return;
     const initial = storageStatus();
-    if (initial.busy) { showToast('当前聊天的构画存储位置正在切换，请等待完成', null, true); return; }
+    if (initial.busy) { showToast('当前聊天的构画存储位置正在切换，请等待完成', null, 'info'); return; }
     if (!initial.chatId || initial.mode !== 'chat') return;
     const confirmed = await customDialog.confirm({
         title: '迁出当前聊天的构画数据',
@@ -7311,7 +7375,7 @@ async function startCurrentChatMigration() {
         overlay.unknown(result.error?.message || '最终提交结果未知，请刷新聊天核实后再继续使用构画。');
     } else {
         overlay.close();
-        showToast(result.reason === 'aborted' ? '迁移已中断，原聊天数据未切换' : `迁移失败：${result.error?.message || result.reason || '未知错误'}`, null, result.reason !== 'aborted');
+        showToast(result.reason === 'aborted' ? '迁移已中断，原聊天数据未切换' : '迁移失败，本次迁移未完成。', null, result.reason !== 'aborted');
         renderCurrentChatStorageMode();
     }
 }
@@ -7340,8 +7404,8 @@ let portableImportPickerIdentity = null;
 function portableStorageAvailable(actionLabel) {
     if (currentCharacterExcluded()) return false;
     const state = storageStatus();
-    if (!state.chatId) { showToast(`请先打开一个聊天，再${actionLabel}`, null, true); return false; }
-    if (state.busy) { showToast(`当前聊天的构画存储位置正在切换，请等待完成后再${actionLabel}`, null, true); return false; }
+    if (!state.chatId) { showToast(`请先打开一个聊天，再${actionLabel}`, null, 'info'); return false; }
+    if (state.busy) { showToast(`当前聊天的构画存储位置正在切换，请等待完成后再${actionLabel}`, null, 'info'); return false; }
     if (state.mode === 'external' && !isExternalReady()) {
         showToast(`当前聊天的白鳥数据尚未就绪，不能${actionLabel}。请先重试加载。`, null, true);
         return false;
@@ -7434,10 +7498,11 @@ function mountPortableImportOverlay() {
     document.getElementById('sp-portable-import-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'sp-portable-import-overlay';
-    overlay.innerHTML = `<div role="dialog" aria-modal="true" style="width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background:#17191f;color:#f5f5f7;box-shadow:0 20px 70px #000b;font-family:var(--sp-font-user,system-ui)">
-        <div style="font-size:18px;font-weight:700;margin-bottom:10px">正在导入所选模块</div>
-        <div data-sp-portable-status style="font-size:14px;line-height:1.65;opacity:.86">正在应用所选模块并更新界面…</div>
-        <button data-sp-portable-close type="button" hidden style="margin-top:18px;width:100%;min-height:42px;border:1px solid #ffffff30;border-radius:10px;background:#ffffff10;color:inherit">关闭</button>
+    const overlayTheme = `sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`;
+    overlay.innerHTML = `<div class="sp-root sp-progress-card ${overlayTheme}" role="dialog" aria-modal="true" style="position:relative;z-index:auto;width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background-color:var(--sp-sheet-bg-legacy);background-image:linear-gradient(var(--sp-sheet-bg),var(--sp-sheet-bg));color:var(--sp-on-surface);box-shadow:0 20px 70px #000b;font-family:var(--sp-font);font-size:var(--sp-fs-100)">
+        <div style="font-size:var(--sp-fs-115);font-weight:700;margin-bottom:10px">正在导入所选模块</div>
+        <div data-sp-portable-status style="font-size:var(--sp-fs-88);line-height:1.65;opacity:.86">正在应用所选模块并更新界面…</div>
+        <button class="sp-btn" data-sp-portable-close type="button" hidden style="margin-top:18px;width:100%;min-height:42px">关闭</button>
     </div>`;
     Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
     const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
@@ -7518,7 +7583,6 @@ function refreshPortableImportedModules(selectedModules) {
     }
     if (selected.has('outline')) {
         outlineFeature.refreshFromStore('outline');
-        outlineFeature.refreshFromStore('creative-chat');
     }
     if (selected.has('space')) spaceFeature.refreshFromStore('space-chat');
     if (selected.has('calendar')) {
@@ -7590,18 +7654,18 @@ async function importPortableFile(file, identity) {
     }
     overlay.close();
     const conflict = result.commitState === 'conflict' || String(result.reason || '').includes('conflict');
-    showToast(conflict ? '目标模块在确认期间发生了变化，本次没有覆盖；请重新导入。' : `导入失败：${result.error?.message || result.reason || '未能保存'}`, null, true);
+    showToast(conflict ? '目标模块在确认期间发生了变化，本次没有覆盖；请重新导入。' : '导入失败，所选模块未完成保存。', null, true);
 }
 
 async function exportCurrentChatDiagnosticPackage() {
     if (currentCharacterExcluded()) return;
     const choice = await customDialog.choose({
         title: '导出当前聊天诊断包',
-        body: '诊断包会包含最近两个有效 AI 楼的请求记录（每个模块仅保留最新一次），包括完整输入与原始回复，可能含剧情。默认不附带聊天正文，也绝不导出 API 配置、URL、密码、请求头或其它聊天。',
+        body: '诊断包会包含最近两个有效 AI 楼的请求记录（每个模块仅保留最新一次），包括 AI 输入与回复，可能含剧情。默认不附带完整聊天楼层，也绝不导出 API 配置、URL、密码、请求头或其它聊天。',
         note: '这不是完整可导入备份。若当前聊天已迁出，仍需另外保留白鳥数据后端。',
         choices: [
             { value: 'cancel', label: '取消' },
-            { value: 'safe', label: '导出（不附正文）', primary: true },
+            { value: 'safe', label: '导出诊断（不附完整聊天）', primary: true },
             { value: 'narrative', label: '导出并附正文' },
         ],
     });
@@ -7610,7 +7674,7 @@ async function exportCurrentChatDiagnosticPackage() {
         const data = await buildCurrentChatDiagnosticPackage({ includeNarrative: choice === 'narrative', safeTrace: readDiagnosticTrace() });
         const text = downloadDiagnosticPackage(data);
         showToast('当前聊天诊断包已导出', async () => { if (await copyPlainText(text)) showToast('诊断包已复制'); });
-    } catch (error) { showToast(`诊断包导出失败：${error?.message || '未知错误'}`, null, true); }
+    } catch { showToast('诊断包导出失败，请重试。', null, true); }
 }
 
 // 渲染三层用量到 #sp-storage-body。异步（坐标要读服务器索引）。
@@ -7683,7 +7747,7 @@ async function renderStorageUsage() {
         const bytes = usage.bytes;
         $in('#sp-storage-anchor-rows').html(
             cnt
-                ? storageRow(`共 ${cnt} 条收藏`, coordinateRuntime.feature.formatBytes(bytes),
+                ? storageRow(`共 ${cnt} 条收藏`, `约 ${coordinateRuntime.feature.formatBytes(bytes)}（按收藏内容估算）`,
                     `<button class="sp-storage-del sp-mini-btn sp-mini-btn-danger" data-scope="anchor">清空</button>`)
                 : `<div class="sp-cfg-hint" style="padding:4px 0">暂无收藏</div>`
         );
@@ -7735,8 +7799,6 @@ function invalidateKindTasksForStoreClear(kind) {
         linesFeature.abortGeneration({ reason: 'store-clear' });
     } else if (kind === 'space-chat') {
         spaceFeature.invalidateStoreKind(kind);
-    } else if (kind === 'creative-chat') {
-        outlineFeature.invalidateStoreKind(kind);
     } else if (kind === 'dashed') {
         linesFeature.dashed.abort('store-clear');
     }
@@ -7756,9 +7818,6 @@ function refreshEditorsAfterStoreClear(kind) {
         linesFeature.dashed.resetError();
         if (linesMode) linesFeature.refreshPanel();
         syncLatestInlineBlock();
-    }
-    if (kind === 'creative-chat') {
-        outlineFeature.refreshAfterStoreClear(kind);
     }
     if (kind === 'space-chat') {
         spaceFeature.refreshAfterStoreClear(kind);
@@ -7782,8 +7841,6 @@ function refreshEditorsFromCurrentStore(kind) {
         linesRuntime.reset();
         if (linesMode) linesFeature.refreshPanel();
         refreshLinesInjection();
-    } else if (kind === 'creative-chat') {
-        outlineFeature.refreshFromStore(kind);
     } else if (kind === 'space-chat') {
         spaceFeature.refreshFromStore(kind);
     } else if (kind === 'dashed') {
@@ -7928,7 +7985,13 @@ function bindStorageHandlers() {
     // ② 收藏（坐标·服务器）—— 清空全部
     $body.on('click', '.sp-storage-del[data-scope="anchor"]', async function () {
         if (currentCharacterExcluded()) return;
-        const cnt = await coordinateRuntime?.feature?.storageUsage?.().then(info => info.count).catch(() => 0);
+        let cnt;
+        try { cnt = (await coordinateRuntime?.feature?.storageUsage?.())?.count ?? 0; }
+        catch (error) {
+            console.error('[SP storage] 读取收藏目录失败', safeDiagnosticLog('storage', 'read', error));
+            showToast('收藏目录读取失败，请重试。', null, true);
+            return;
+        }
         if (!cnt) { showToast('还没有任何收藏'); return; }
         if (!await spConfirm({ title: '清空全部收藏', body: `确定删除全部 ${cnt} 条收藏吗？此操作不可恢复（原楼层不受影响）。` })) return;
         try {
@@ -7937,7 +8000,7 @@ function bindStorageHandlers() {
             showToast('已清空全部收藏');
         } catch (err) {
             console.error('[SP storage] 清空收藏失败', safeDiagnosticLog('storage', 'save', err));
-            showToast('清空失败：' + (err?.message || '未知错误'), null, true);
+            showToast('清空收藏未完成，请重新打开收藏目录核实已删除内容。', null, true);
         }
     });
 
@@ -7979,7 +8042,7 @@ const STAGE_COLORS = {
 
 // 点/线面板 header 下方另起一行的「去间改」引导，视觉对齐历法管理页的 .sp-alm-manager-hint。
 // 「间」能把讨论落地成点/线，想调整时一键跳过去（handler 见 injectModal 委托）。
-const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想调整这些线？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
+const SP_JUMP_HINT_LINES = `<div class="sp-jump-hint">想新增或调整线？去「间」说明目标：<button type="button" class="sp-jump-link">去间提出要求 →</button></div>`;
 
 
 // ─── 历（日历 / 历法）─────────────────────────────────────────────────────────
@@ -8081,8 +8144,7 @@ async function triggerGenerateAlmanac() { return axisGenerationController.trigge
 // 但合并阶段走**纯追加去重**（非 mergeAlmanac）+ pin=true，且补 0 条时给出「没有够格」的正常态提示、不报错。
 async function triggerSupplementAnniversary() { return axisGenerationController.trigger(true); }
 // ── 手动新增 / 编辑（内联窗，不用弹窗）──
-// 用户明确怕浮层弹窗出问题（会盖住/卡住），故表单直接渲进 #sp-almanac-wrap 里，
-// 走 renderAlmanacPanel 的正常重渲，跟着 CHAT_CHANGED 一起被清，绝不残留浮层。
+// 表单渲染在轴面板内，并随面板重绘更新。
 function openAlmanacEditor(id, prefill) {
     openAxisEditor(id, prefill, renderAlmanacPanel);
 }
@@ -8175,7 +8237,7 @@ async function fetchModels() {
                 proxy_password        : key,
             }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`);
+        if (!res.ok) { const error = new Error(`模型列表接口返回 HTTP ${res.status}`); error.status = res.status; throw error; }
         const data = await res.json();
         if (data?.error) throw makeDiagnosticError('unknown', { phase: 'request' });
         const models = (data.data || data.models || [])
@@ -8193,7 +8255,13 @@ async function fetchModels() {
         $in('#sp-model-list-section').attr('open', 'open').show();
         showToast(`已加载 ${models.length} 个模型`);
     } catch (err) {
-        showToast(`获取模型失败：${diagnosticMessage(err)}`, null, true);
+        const status = Number(err?.status || 0);
+        const message = status === 401 || status === 403
+            ? '模型列表读取失败：接口拒绝访问，请检查 URL 和 Key。'
+            : status === 404 ? '模型列表读取失败：接口地址不可用，请检查 URL。'
+                : /接口未返回任何模型/.test(String(err?.message || '')) ? '接口没有返回模型，请检查模型服务。'
+                    : '模型列表读取失败，请稍后重试。';
+        showToast(message, null, true);
     } finally {
         $btn.prop('disabled', false).html('<i class="fa-solid fa-list"></i>');
     }
@@ -8309,12 +8377,16 @@ function renderMemorySection() {
         $in('#sp-mem-bbb-status').show();
         const api = globalThis.STBaiBaiBook;
         if (api && typeof api.getInjectedHistory === 'function') {
-            let coverageMsg = '柏宝书已就绪';
+            let cov;
             try {
-                const cov = api.getInjectedHistory()?.coverage;
-                if (cov?.complete === false) coverageMsg += `（缺 ${cov.missingAiFloors?.length ?? '?'} 楼摘要）`;
-                else coverageMsg += '（覆盖完整）';
-            } catch {}
+                cov = api.getInjectedHistory()?.coverage;
+            } catch {
+                $in('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 柏宝书读取状态失败，无法确认覆盖情况');
+                return;
+            }
+            let coverageMsg = '柏宝书已就绪';
+            if (cov?.complete === false) coverageMsg += `（缺 ${cov.missingAiFloors?.length ?? '?'} 楼摘要）`;
+            else coverageMsg += '（覆盖完整）';
             $in('#sp-mem-bbb-status').html(`<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> ${escapeHtml(coverageMsg)}`);
         } else {
             $in('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 检测不到柏宝书 API：请确认已安装并把柏宝书更新到最新版（旧版无读取接口）；点 / 线 / 面 / 间 生成时不会注入历史记忆');
@@ -8373,7 +8445,10 @@ async function renderAnimaStatus() {
     }
     $st.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在读取 Anima 摘要…');
     let wbName = null;
-    try { wbName = await th.getChatWorldbookName('current'); } catch {}
+    try { wbName = await th.getChatWorldbookName('current'); } catch {
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> Anima 世界书读取失败，请重试。');
+        return;
+    }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;   // await 期间用户切走了源或排除了当前卡
     if (!wbName) {
         $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 当前聊天没有绑定世界书，读不到 Anima 摘要');
@@ -8382,12 +8457,14 @@ async function renderAnimaStatus() {
     let count = 0;
     try {
         const entries = await th.getWorldbook(wbName);
-        if (Array.isArray(entries)) {
-            for (const e of entries) {
-                if (e?.extra?.createdBy === 'anima_summary' && Array.isArray(e.extra.history)) count += e.extra.history.length;
-            }
+        if (!Array.isArray(entries)) throw new Error('Anima 世界书返回内容无法读取');
+        for (const e of entries) {
+            if (e?.extra?.createdBy === 'anima_summary' && Array.isArray(e.extra.history)) count += e.extra.history.length;
         }
-    } catch {}
+    } catch {
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> Anima 世界书读取失败，请重试。');
+        return;
+    }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;
     if (count > 0) {
         $st.html(`<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> Anima 已就绪（世界书「${escapeHtml(wbName)}」读到 ${count} 段摘要）`);
@@ -8555,7 +8632,7 @@ function bindMemoryHandlers() {
         getSettings().spacePersona = this.value;
         stSaveSettings();
     });
-    // 时间戳·强注词二改：与 customPrompt 同套持久化；改后立即重设常驻注入让新词当楼生效。
+    // 时间戳提示词沿用自定义提示词的持久化方式；保存后立即更新常驻注入。
     $in('#sp-storyclock-prompt').on('input', function () {
         getSettings().storyClockPrompt = this.value;
         getSettings().storyClockPromptVersion = 2;
@@ -8791,6 +8868,10 @@ async function renderWiList() {
 
     // Build HTML in one pass.
     const parts = [];
+    const loadFailures = entries.loadFailures || [];
+    if (loadFailures.length) {
+        parts.push('<span class="sp-cfg-hint">有世界书未能读取，当前列表可能不完整。</span>');
+    }
     if (entries.length) {
         parts.push(`<div class="sp-wi-all-row">
             <label class="sp-wi-toggle-all">
@@ -8798,7 +8879,7 @@ async function renderWiList() {
             </label>
             <span class="sp-wi-count">${entries.length} 条</span>
         </div>`);
-    } else {
+    } else if (!loadFailures.length) {
         parts.push('<span class="sp-cfg-hint">当前角色没有关联 / 全局启用的世界书。</span>');
     }
 
@@ -8952,7 +9033,7 @@ async function getAllWorldNames(ctx) {
     return [];
 }
 
-// 全局排除清单（B方案）：列出 ST 里所有世界书（与角色卡无关），勾选 = 拉黑、构画一律不读。
+// 全局排除清单列出 ST 中所有世界书；勾选后构画不读取该书。
 // 存 s.wiExcludeBooks（全局），与 renderWiList 的按角色卡挑选正交。书多（三四十本）时套进
 // 内联抽屉 + 查找框：本函数只铺行，查找靠 _filterWiExcludeList 纯前端隐/显，不重渲（重渲会
 // 打断查找框输入焦点）。名单经 getAllWorldNames 解析（冷缓存会强刷 /api/worldinfo/list）。
@@ -9601,12 +9682,6 @@ function onResizeEnd() {
     window.removeEventListener('blur', onResizeEnd);
 }
 
-function restoreOutlineChatHeight() {
-    const h = parseInt(localStorage.getItem('sp-outline-chat-h')) || 210;
-    const el = inEl('#sp-outline-chat');
-    if (el) el.style.height = h + 'px';
-}
-
 function positionPanel() {
     const sheet = inEl('.sp-sheet');
     if (!sheet) return;
@@ -9632,7 +9707,13 @@ function positionPanel() {
 function bindViewportSync() {
     if (viewportSyncBound) return;
     viewportSyncBound = true;
-    const onViewportChange = () => syncMobileViewport();
+    const onViewportChange = () => {
+        if (viewportSyncFrame !== null) return;
+        const callback = () => { viewportSyncFrame = null; syncMobileViewport(); };
+        viewportSyncFrame = typeof window.requestAnimationFrame === 'function'
+            ? window.requestAnimationFrame(callback)
+            : setTimeout(callback, 16);
+    };
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('orientationchange', onViewportChange);
     if (window.visualViewport) {
@@ -9713,9 +9794,10 @@ function injectToastContainer() {
 }
 
 function showToast(msg, onClick, isError = false) {
-    // 失败 toast 停留更久：失败需要用户处置（查 API/网络/重试），4 秒对不盯屏的用户太短、易错过；
-    // 成功仍 4 秒。（用户反馈：生成失败常没留意到，正是因为告警一闪而过。）
-    const holdMs = isError ? 10000 : 4000;
+    const isInfo = isError === 'info';
+    const isFailure = isError === true || (isError !== false && isError !== 'info' && !!isError);
+    // 只延长真实失败；信息与成功保持原来的四秒时长。
+    const holdMs = isFailure ? 10000 : 4000;
     // 若装了「酒馆提示框美化 (zmer-toast-theme-loader)」插件，改走原生 toastr，
     // 让它的 MutationObserver 捕获 #toast-container 里的 toast 并统一美化风格。
     // 探测其 init 时无条件挂上的全局清理钩子——与任何 UI 开关无关，最稳；
@@ -9724,18 +9806,18 @@ function showToast(msg, onClick, isError = false) {
     if (globalThis.__zmerUniversalToastThemeCleanup && tr) {
         // 视觉参数交给美化插件统一；但失败破例覆盖 timeOut，保证告警停留够久（可靠性 > 风格统一）。
         const opts = onClick ? { onclick: onClick } : {};
-        if (isError) { opts.timeOut = holdMs; opts.extendedTimeOut = holdMs; }
-        (isError ? tr.error : tr.success)(msg, '', opts);
+        if (isFailure || isInfo) { opts.timeOut = holdMs; opts.extendedTimeOut = holdMs; }
+        (isFailure ? tr.error : isInfo ? tr.info : tr.success)(msg, '', opts);
         return;
     }
-    const $t = $(`<div class="sp-toast${isError ? ' sp-toast-error' : ''}">
-        <i class="fa-solid ${isError ? 'fa-circle-exclamation' : 'fa-calendar-check'}"></i>
+    const $t = $(`<div class="sp-toast${isFailure ? ' sp-toast-error' : isInfo ? ' sp-toast-info' : ''}">
+        <i class="fa-solid ${isFailure ? 'fa-circle-exclamation' : isInfo ? 'fa-circle-info' : 'fa-calendar-check'}"></i>
         <span>${escapeHtml(msg)}</span>
     </div>`);
     $('#sp-toast-wrap').append($t);
     requestAnimationFrame(() => $t.addClass('sp-toast-show'));
     if (onClick) $t.css('cursor', 'pointer').on('click', () => { onClick(); $t.remove(); });
-    else if (isError) $t.css('cursor', 'pointer').on('click', () => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); });   // 失败 toast 停留久，允许点掉提前消失，免堆叠挡视线
+    else if (isFailure) $t.css('cursor', 'pointer').on('click', () => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); });   // 失败 toast 停留久，允许点掉提前消失，免堆叠挡视线
     setTimeout(() => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); }, holdMs);
 }
 

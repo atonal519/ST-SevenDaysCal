@@ -13,11 +13,12 @@ Subtext: 留有余地
 Think: 记住细节
 </outline_widget>`;
 
-function makeFeature({ switchChatDuringRefresh = false, memoryFailure = false } = {}) {
+function makeFeature({ switchChatDuringRefresh = false, memoryFailure = false, raw = rawOutline } = {}) {
     let chatId = 'chat-A';
     const store = new Map();
     let feature;
     let failureHtml = '';
+    let apiCalls = 0;
     const identityKey = key => JSON.stringify(key);
     feature = createOutlineFeature({
         context: () => ({ chatId, chat: [{}], name1: 'User', name2: 'Character' }),
@@ -28,7 +29,7 @@ function makeFeature({ switchChatDuringRefresh = false, memoryFailure = false } 
         loadConfig: () => ({ url: 'local-test', key: 'fixture' }),
         loadUtilityConfig: () => ({ url: 'local-test', key: 'fixture' }),
         precheck: async () => { if (memoryFailure) throw new Error('synthetic memory failure'); return true; },
-        callApi: async () => '推进',
+        callApi: async () => { apiCalls++; return '推进'; },
         settings: () => ({ notifyMode: 'off', outlineInject: true }),
         pluginEnabled: () => true,
         injectEnabled: () => true,
@@ -50,9 +51,20 @@ function makeFeature({ switchChatDuringRefresh = false, memoryFailure = false } 
         },
     });
     const target = feature.repository.capture();
-    assert.equal(feature.repository.commitOutline(target, { raw: rawOutline, cursor: 1 }), true);
-    return { feature, getFailureHtml: () => failureHtml, getCursor: () => feature.repository.cursor(feature.repository.capture()) };
+    assert.equal(feature.repository.commitOutline(target, { raw, cursor: 1 }), true);
+    return { feature, getFailureHtml: () => failureHtml, getCursor: () => feature.repository.cursor(feature.repository.capture()), getApiCalls: () => apiCalls };
 }
+
+test('automatic judge skips an incomplete current or next node before calling the API', async () => {
+    const invalidCurrent = `<outline_widget>\nBeat: D1|第一面|日常|主线|初识\nBeat: D2|第二面|日常|主线|熟悉\nScene: 慢慢建立信任\n</outline_widget>`;
+    const invalidNext = `<outline_widget>\nBeat: D1|第一面|日常|主线|初识\nScene: 两人初次见面\nBeat: D2|第二面|日常|主线|熟悉\n</outline_widget>`;
+    for (const raw of [invalidCurrent, invalidNext]) {
+        const fixture = makeFeature({ raw });
+        assert.equal((await fixture.feature.judge.runAdvance()).status, 'skipped');
+        assert.equal(fixture.getApiCalls(), 0);
+        assert.equal(fixture.getCursor(), 1, 'invalid planning input does not move the saved cursor');
+    }
+});
 
 test('confirmed judge cursor save leaves a saved-but-refresh-failed hint', async () => {
     const fixture = makeFeature();

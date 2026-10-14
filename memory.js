@@ -9,6 +9,7 @@ import { LITERAL_DOUBLE_BRACKET_RULE, normalizeTagRules, TAG_NAME_SOURCE } from 
 import { createGenerationDiagnosticScope, diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
 import { getChatRoot, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from './runtime/external-chat-storage.js';
 import { ledgerHistoricalNarrativeMessage } from './business/ledger/capture.js';
+import { normalizeMemorySummary } from './business/memory/summary-schema.js';
 
 registerExternalStorageContext(getContext);
 
@@ -33,7 +34,7 @@ let _onPause = null;
 let _queue = [];
 let _running = false;
 let _abortController = null;      // 手动补齐/重构的用户中止信号
-let _jobAbortController = null;   // 当前聊天任务信号，切聊天时中止
+let _jobAbortController = null;   // 当前生成任务的取消信号。
 let _lifecycleEpoch = 0;          // invalidates late completions even when upstream ignores AbortSignal
 let _aiFloorSnapshot = [];
 let _activeRebuild = null;
@@ -77,7 +78,6 @@ function hashStr(s) {
 
 // ─── chat_metadata access ────────────────────────────────────────────────────
 function meta() {
-    const ctx = getContext();
     const existing = getChatRoot(MEMORY_KEY);
     const root = existing || getChatRoot(MEMORY_KEY, { create: true, factory: freshMeta });
     if (!root) return null;
@@ -127,7 +127,7 @@ function freshMeta() {
 }
 
 function persist() {
-    // 后台队列采用即时保存；切档会取消宿主防抖并替换 metadata，不能把多组结果只挂在末次防抖上。
+    // 后台队列逐步应用结果；普通 metadata 写入沿用宿主标准保存入口。
     const ctx = getContext();
     const external = persistExternalRoots();
     if (external !== null) return external;
@@ -193,8 +193,7 @@ function restoreMemoryRoot(root, snapshot) {
 // Two user-configurable name lists override the default behavior:
 //   keepTags  → PROTECT list. Contents inside these tags survive stripping;
 //               the tags themselves are removed but their inner text is kept.
-//               Default 'content'. Fixes the "AI wraps narrative in <content>
-//               and default strip nukes it" edge case some cards hit.
+//               Default 'content' preserves narrative wrapped in that tag.
 //   extraTags → EXTRA strip list. Explicitly names tags that MUST be removed
 //               with their content. Redundant with default behavior but lets
 //               users document intent (e.g. write 'think,reasoning').
@@ -305,17 +304,16 @@ function getAiFloors() {
     return out;
 }
 
-function captureAiFloorSnapshot() {
-    return getAiFloors().map(floor => ({ mesid: floor.mesid, hash: hashStr(floor.text) }));
+function captureAiFloorSnapshot(floors = getAiFloors()) {
+    return floors.map(floor => ({ mesid: floor.mesid, hash: hashStr(floor.text) }));
 }
 
 // Group AI floors into fixed-size chunks. Returns array of groups, each:
 // { key: "startMid-endMid", floors: [{mesid, text}, ...] }
 // Latest group (containing the newest AI floor) is EXCLUDED — never summarized.
-function getStableGroups() {
+function getStableGroups(floors = getAiFloors()) {
     const settings = _getSettings();
     const N = Math.max(1, +settings.memoryL0Group || 5);
-    const floors = getAiFloors();
     const groups = [];
     for (let i = 0; i + N <= floors.length; i += N) {
         const slice = floors.slice(i, i + N);
@@ -362,7 +360,7 @@ function validL1Entries(m, groups = getStableGroups()) {
         const matchingChunk = chunks.find(chunk => chunk.length === sources.length
             && chunk.every((group, index) => sources[index]?.groupKey === group.key));
         if (!matchingChunk) continue;
-        const current = sources.every((source, index) => {
+        const current = sources.every(source => {
             const group = byKey.get(source.groupKey);
             const l0 = m.L0?.[source.groupKey];
             return !!group && validL0(group, m)
@@ -378,8 +376,8 @@ function validL1Entries(m, groups = getStableGroups()) {
     return valid;
 }
 
-function isCoveredByL1(group, m) {
-    return validL1Entries(m).some(l1 => l1.sources.some(source => source.groupKey === group.key));
+function coveredL1GroupKeys(m, groups) {
+    return new Set(validL1Entries(m, groups).flatMap(l1 => l1.sources.map(source => source.groupKey)));
 }
 
 // 判定「这组楼有实打实的原文、但净化后几乎空了」——典型是卡片把正文全裹在自定义标签里
@@ -415,12 +413,12 @@ function buildL0Prompt(prevSummary, groupFloors) {
             const length = String(f.text || '').trim().length;
             return length > 0 && length >= skipShort;
         })
-        .map((f, i) => `【楼 ${f.mesid}】\n${String(f.text || '').slice(0, 2000)}`)
+        .map(f => `【楼 ${f.mesid}】\n${String(f.text || '').slice(0, 2000)}`)
         .join('\n\n');
     return [
         {
             role: 'system',
-            content: `你是一个客观的第三方叙事记录员，负责将连续 ${groupFloors.length} 楼对话合并为结构化摘要。
+            content: `你是一个客观的第三方叙事记录员，负责将连续 ${groupFloors.length} 楼对话整理为短摘要。
 
 【核心原则】
 - 客观第三人称，不带感情色彩、不做代入、不做视角判断
@@ -430,7 +428,8 @@ function buildL0Prompt(prevSummary, groupFloors) {
 - 意味深长的对白、异常动作、未说完的话、说漏嘴等潜在伏笔，直接写进"事件"字段作为客观描述的一部分（如"李四提到父亲留下一封未开封的信"），不要单独归纳
 - 若组内某楼是低价值闲聊或极短，可以在摘要里省略
 - NSFW / 亲密内容不记录具体细节，只归纳成一句叙事性事实（如"两人发生关系"），除非其中包含承诺、真实伤害、身份揭示、怀孕、疾病等具有后续影响的重要事件
-- 每个字段独立一行，格式严格`,
+- 只写原文支持的事实；人物、地点或场景未提及就写“未提及”，不补造。没有值得记录的新事件或人物变化时，照字段写“无”。
+- 每个字段独立一行`,
         },
         {
             role: 'user',
@@ -444,8 +443,8 @@ ${body}
 
 时间锚点: 本段的时间跨度，格式"起点 → 终点"（**优先使用绝对时间**如"2024-03-15 上午 → 2024-03-16 傍晚"；如果原文只给了相对天数则用"第三天上午 → 第四天黄昏"；两者不要混用，只用一种）；如剧情里出现了关键时间转折点（真正驱动剧情的节点，不是每一楼的时间戳），在跨度后用括号补充（如"...（第三天午夜 XX 发生）"）；如无则填"未提及"
 场景: 主要发生地点（可能多个，按顺序），如无则填"未提及"
-事件: 本段内真实发生的关键动作与情节，按时间顺序，80-150字（客观陈述，含对白、动作、意味深长的细节；不含内心独白）
-人物: 出场角色的立场、关系、情绪的实质变化，40-70字；如无实质变化则填"无"
+事件: 本段内真实发生的关键动作与情节，按时间顺序简要记录（客观陈述，不含内心独白）；无值得记录的新事件则填"无"
+人物: 原文明确支持的人物变化；没有则填"无"，不推测
 
 只输出这四行，不要额外说明。`,
         },
@@ -475,9 +474,9 @@ ${body}
 
 请按以下字段结构输出，每字段一行：
 
-时间跨度: 从本章第一个时间锚点到最后一个（**优先绝对时间** YYYY-MM-DD，无则退回"第N天"，与 L0 保持一致，不要混用）
-主要事件: 按时间顺序列出重要事件，事件必须提到具体人物和地点，含关键对白、行动、意味深长的细节，160-260字
-关系变化: 人物立场/关系的实质变化，50-90字；如无则填"无明显变化"
+时间跨度: 按 L0 的时间锚点记录；原文没有则填"未提及"
+主要事件: 按时间顺序简要记录原文支持的重要事件；人物和地点只在材料明确时写，无重要新事件则填"无"
+关系变化: 记录材料明确支持的变化；没有则填"无明显变化"
 
 只输出这三行，不要额外说明。`,
         },
@@ -578,15 +577,17 @@ async function runL0(groupKey, { queueL1 = true, memory = null, diagnosticScope 
     const liveGroup = getStableGroups().find(item => item.key === groupKey);
     if (_lifecycleEpoch !== lifecycleEpoch || !builtInMemoryEnabled() || !liveGroup || groupHash(liveGroup) !== hash) return false;
 
-    if (!response || response.length < 10) {
-        const error = new Error('响应为空或过短'); diagnostic.rejected(error, { phase: 'parse', reasonCode: 'empty-output' });
+    const summary = normalizeMemorySummary(response, 'L0');
+    if (!summary) {
+        const error = Object.assign(new Error('未能确认 L0 摘要的事件或人物字段'), { diagnosticCode: 'invalid-structure' });
+        diagnostic.rejected(error, { phase: 'parse', reasonCode: 'invalid-structure' });
         recordFailure(groupKey, error, 'request', m);
         return false;
     }
 
     m.L0[groupKey] = {
         range: [group.floors[0].mesid, group.floors[group.floors.length - 1].mesid],
-        text : response.trim(),
+        text : summary,
         hash,
         source: { groupKey, groupHash: hash },
         ts   : Date.now(),
@@ -675,9 +676,14 @@ async function runL1(groupKeys, memory = null, diagnosticScope = null) {
             && l0TextHash(l0) === source.l0Hash && validL0(group, m);
     });
     if (_lifecycleEpoch !== lifecycleEpoch || !builtInMemoryEnabled() || !sourcesStillCurrent) return false;
-    if (!response || response.length < 20) { diagnostic.rejected(new Error('响应为空或过短'), { phase: 'parse', reasonCode: 'empty-output' }); return false; }
+    const summary = normalizeMemorySummary(response, 'L1');
+    if (!summary) {
+        const error = Object.assign(new Error('未能确认 L1 摘要的事件或关系变化字段'), { diagnosticCode: 'invalid-structure' });
+        diagnostic.rejected(error, { phase: 'parse', reasonCode: 'invalid-structure' });
+        return false;
+    }
 
-    const next = { range, text: response.trim(), ts: Date.now(), builtFrom: entries.length, sources };
+    const next = { range, text: summary, ts: Date.now(), builtFrom: entries.length, sources };
     m.L1 = (m.L1 || []).filter(l1 => !(Array.isArray(l1.sources) && l1.sources.length === groupKeys.length && l1.sources.every((source, index) => source.groupKey === groupKeys[index])));
     m.L1.push(next);
     m.L1.sort((a, b) => parseInt(a.range[0], 10) - parseInt(b.range[0], 10));
@@ -688,17 +694,18 @@ async function runL1(groupKeys, memory = null, diagnosticScope = null) {
 export function getHealthReport() {
     const m = meta();
     if (!m) return { totalAi: 0, totalGroups: 0, withL0: 0, pending: 0, permaFailed: 0, strippedEmpty: 0, l1Chapters: 0, latestFloorPending: false, paused: true, lastError: '当前聊天的外置构画数据不可用', busy: false, unavailable: true };
-    const groups = getStableGroups();
     const floors = getAiFloors();
+    const groups = getStableGroups(floors);
     const totalGroups = groups.length;
     const effectiveL1 = validL1Entries(m, groups);
+    const coveredGroupKeys = new Set(effectiveL1.flatMap(entry => entry.sources.map(source => source.groupKey)));
 
     let withL0 = 0, permaFailed = 0, pending = 0, strippedEmpty = 0, shortGroups = 0;
     for (const g of groups) {
         const failure = m.failed[g.key];
         const failureCurrent = !failure?.hash || failure.hash === groupHash(g);
         if (validL0(g, m)) withL0++;
-        else if (isCoveredByL1(g, m)) withL0++;   // 已被 L1 章节吸收 = 已记忆，别再算 pending（否则老楼被反复判「待总结」）
+        else if (coveredGroupKeys.has(g.key)) withL0++;   // 已被 L1 章节吸收 = 已记忆，别再算 pending（否则老楼被反复判「待总结」）
         else if (failureCurrent && failure?.stripped) strippedEmpty++;
         else if (failureCurrent && failure?.short) shortGroups++;
         else if (failureCurrent && failure?.count >= 3) permaFailed++;
@@ -745,7 +752,8 @@ export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false 
     const m = meta();
     if (!m) return '';
     const parts = [];
-    const groups = getStableGroups();
+    const floors = getAiFloors();
+    const groups = getStableGroups(floors);
     const legacy = sourcePolicy(m) === 'legacy-needs-rebuild';
     const l1Entries = legacy ? (m.L1 || []) : validL1Entries(m, groups).filter(l1 => String(l1.text || '').trim());
     if (l1Entries.length) {
@@ -781,7 +789,7 @@ export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false 
     // suffix after the latest source actually present in this context. Legacy
     // L1 entries have no verifiable source list, so never guess their coverage.
     if (includeRecentRaw && !legacy) {
-        const allFloors = getAiFloors();
+        const allFloors = floors;
         let tailFloors;
         if (coveredMesIds.size) {
             const coveredNumbers = [...coveredMesIds].map(Number).filter(Number.isFinite);
@@ -814,7 +822,7 @@ export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false 
 // ─── Fill missing ────────────────────────────────────────────────────────────
 export async function fillMissing(onProgress) {
     if (!builtInMemoryEnabled()) return { aborted: true, current: 0, total: 0 };
-    // 循环固定读取本轮 controller；切聊天会清空模块引用，但仍会中止这个对象。
+    // 本轮循环持有自己的 controller，供任务取消时检查。
     const ctrl = _abortController = new AbortController();
     const lifecycleEpoch = _lifecycleEpoch;
     const ownerGuard = () => !ctrl.signal.aborted
@@ -831,10 +839,11 @@ export async function fillMissing(onProgress) {
     m.system.consecutiveFails = 0;
 
     const groups = getStableGroups();
+    const coveredGroups = coveredL1GroupKeys(m, groups);
     const targets = [];
     for (const g of groups) {
         if (validL0(g, m)) continue;
-        if (isCoveredByL1(g, m)) continue;   // 已滚进 L1 的老楼别再补总结（切档/重启冗余调用的根因）
+        if (coveredGroups.has(g.key)) continue;   // 已纳入 L1 的楼不再重复补齐。
         const failure = m.failed[g.key];
         if (failure?.hash === groupHash(g) && (failure.stripped || (failure.short && !hasSummarizableFloor(g)))) continue;
         if (failure?.count >= 3) delete m.failed[g.key];
@@ -906,7 +915,9 @@ export async function fillMissing(onProgress) {
             if (!m) throw new Error('保存后无法重新读取当前聊天记忆');
             l1Generated++;
         }
-        const unresolvedGroups = getStableGroups().filter(group => !validL0(group, m) && !isCoveredByL1(group, m)).length;
+        const finalGroups = getStableGroups();
+        const coveredAfterFill = coveredL1GroupKeys(m, finalGroups);
+        const unresolvedGroups = finalGroups.filter(group => !validL0(group, m) && !coveredAfterFill.has(group.key)).length;
         onProgress?.({ current: targets.length, total: targets.length, done: true });
         return { aborted: false, current: targets.length, total: targets.length, l1Generated, unresolvedGroups };
     } finally {
@@ -917,7 +928,7 @@ export async function fillMissing(onProgress) {
 // ─── Rebuild all ─────────────────────────────────────────────────────────────
 export async function rebuildAll(onProgress) {
     if (!builtInMemoryEnabled()) return { aborted: true, current: 0, total: 0 };
-    const ctrl = _abortController = new AbortController();   // 本地引用，防切聊天置空后 null 解引用（同 fillMissing）
+    const ctrl = _abortController = new AbortController();   // 本轮重建任务的取消信号。
     const lifecycleEpoch = _lifecycleEpoch;
     const ownerGuard = () => !ctrl.signal.aborted
         && _lifecycleEpoch === lifecycleEpoch
@@ -957,7 +968,8 @@ export async function rebuildAll(onProgress) {
             if (ctrl.signal.aborted || !ownerGuard()) return aborted(groups.length);
             if (!succeeded) throw new Error(`L1 重建失败：${range.join('-')}（${working.system.lastError || '未生成有效摘要'}）`);
         }
-        const unresolvedGroups = groups.filter(group => !validL0(group, working) && !isCoveredByL1(group, working)).length;
+        const coveredGroups = coveredL1GroupKeys(working, groups);
+        const unresolvedGroups = groups.filter(group => !validL0(group, working) && !coveredGroups.has(group.key)).length;
         if (ctrl.signal.aborted || !ownerGuard()) return aborted(groups.length);
         const previous = cloneMemoryRoot(m);
         for (const key of Object.keys(m)) delete m[key];
@@ -1008,22 +1020,24 @@ export function abortAll(reason = 'reset') {
 function onCharacterMessageRendered() {
     if (!builtInMemoryEnabled()) return;
     const current = meta();
-    const groups = getStableGroups();
+    const floors = getAiFloors();
+    const groups = getStableGroups(floors);
     if (!current) return;
     const previous = _stableGroupBaseline;
     _stableGroupBaseline = new Set(groups.map(group => group.key));
     if (sourcePolicy(current) === 'current' && !current.system.paused) {
+        const coveredGroups = coveredL1GroupKeys(current, groups);
         for (const group of groups) {
             if (previous.has(group.key)) continue;
             _autoEligibleGroups.add(group.key);
             const failure = current.failed[group.key];
             const shortFailureNowEligible = failure?.short && hasSummarizableFloor(group);
-            if (validL0(group, current) || isCoveredByL1(group, current)
+            if (validL0(group, current) || coveredGroups.has(group.key)
                 || (failure?.count >= 3 && (!failure.hash || failure.hash === groupHash(group)) && !shortFailureNowEligible)) continue;
             enqueue({ type: 'L0', groupKey: group.key });
         }
     }
-    _aiFloorSnapshot = captureAiFloorSnapshot();
+    _aiFloorSnapshot = captureAiFloorSnapshot(floors);
 }
 
 function onMessageMutated(mesId) {
@@ -1031,14 +1045,15 @@ function onMessageMutated(mesId) {
     const m = meta();
     if (!m) return;
     const midNum = parseInt(String(mesId?.messageId ?? mesId?.mesId ?? mesId?.mesid ?? mesId), 10);
+    const liveFloors = getAiFloors();
     const previousAi = _aiFloorSnapshot.find(floor => Number(floor.mesid) === midNum);
-    const currentAi = getAiFloors().find(floor => Number(floor.mesid) === midNum);
+    const currentAi = liveFloors.find(floor => Number(floor.mesid) === midNum);
     const aiSourceChanged = !!previousAi !== !!currentAi || previousAi?.hash !== currentAi?.hash;
     if (_activeRebuild?.sources.has(midNum)) {
-        const current = getAiFloors().find(floor => Number(floor.mesid) === midNum);
+        const current = currentAi;
         if (!current || hashStr(current.text) !== _activeRebuild.sources.get(midNum)) _activeRebuild.ctrl.abort('memory-source-mutated');
     }
-    const liveGroups = getStableGroups();
+    const liveGroups = getStableGroups(liveFloors);
     let dirty = false;
     for (const [key, l0] of Object.entries(m.L0 || {})) {
         const group = liveGroups.find(item => item.key === key);
@@ -1060,7 +1075,7 @@ function onMessageMutated(mesId) {
     }
     _autoEligibleGroups.clear();
     _stableGroupBaseline = new Set(liveGroups.map(group => group.key));
-    _aiFloorSnapshot = captureAiFloorSnapshot();
+    _aiFloorSnapshot = captureAiFloorSnapshot(liveFloors);
 }
 
 function onChatChanged() {
@@ -1129,7 +1144,7 @@ export function initMemory({ getSettings, callApi, onPause }) {
     _onPause = typeof onPause === 'function' ? onPause : null;
     _jobAbortController = new AbortController();
 
-    // Idempotent (un)register — hot reload / double init won't stack handlers
+    // Repeated initialization removes existing listeners before registering them again.
     const off = (evt, fn) => { if (fn) eventSource.removeListener?.(evt, fn); };
     off(event_types.CHARACTER_MESSAGE_RENDERED, _listeners.char);
     off(event_types.MESSAGE_SWIPED, _listeners.swipe);

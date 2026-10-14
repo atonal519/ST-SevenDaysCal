@@ -757,7 +757,7 @@ function retainDiagnosticInputs(floors, previousFloors, now) {
 }
 
 async function persistDiagnosticsNow() {
-    const ctx = context(); const root = normalRoot('sp-store', true, () => ({ version: 1, data: {} }));
+    const root = normalRoot('sp-store', true, () => ({ version: 1, data: {} }));
     if (!root.data || typeof root.data !== 'object') root.data = {};
     root.data[DIAGNOSTICS_DATA_KEY] = encodeStoreEntry(DIAGNOSTICS_DATA_KEY, { schemaVersion: 1, floors: clone(active.diagnostics?.data?.floors || getExternalDiagnostics()) });
     // Diagnostics are fail-open and must not add business-commit writes. ST's

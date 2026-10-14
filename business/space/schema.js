@@ -1,3 +1,5 @@
+import { normalizeOutlineResponse } from '../outline/schema.js';
+
 export const SPACE_HISTORY_CAP = 20;
 
 export function normalizeSpaceHistory(saved) {
@@ -11,12 +13,20 @@ export function appendSpaceUser(history, content, cap = SPACE_HISTORY_CAP) {
 }
 
 export function appendSpaceAssistant(history, content, context = null) {
-    const message = { role: 'assistant', content };
+    let savedContent = content;
+    if (context?.expectedWidgetKind === 'outline_widget') {
+        const normalized = normalizeOutlineResponse(content);
+        if (normalized) savedContent = normalized;
+    }
+    const message = { role: 'assistant', content: savedContent };
     if (Array.isArray(context?.pointBaselines)) message.pointBaselines = context.pointBaselines;
     if (Array.isArray(context?.lineBaselines)) message.lineBaselines = context.lineBaselines;
     // 预期卡型随 assistant 历史保存，刷新或重绘仍按原请求校验；旧历史缺字段时保持宽松兼容。
-    if (['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget'].includes(context?.expectedWidgetKind)) {
+    if (['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'].includes(context?.expectedWidgetKind)) {
         message.expectedWidgetKind = context.expectedWidgetKind;
+    }
+    if (context?.expectedWidgetKind === 'outline_widget' && typeof context.outlineRawToken === 'string') {
+        message.outlineRawToken = context.outlineRawToken;
     }
     return [...history, message];
 }
@@ -38,7 +48,7 @@ export function compactLineBaselines(raw, parseLines) {
     }));
 }
 
-const SPACE_WIDGET_RX = /<(schedule_widget|line_widget|almanac_widget|era_widget)([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
+const SPACE_WIDGET_RX = /<(schedule_widget|line_widget|almanac_widget|era_widget|outline_widget)([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
 
 const decodeCodePoint = (match, code, radix) => {
     const value = parseInt(code, radix);
@@ -126,6 +136,7 @@ export function latestSpaceWidget(history) {
             snapshot.owner = widget.owner;
             snapshot.pointBaselines = Array.isArray(message.pointBaselines) ? message.pointBaselines : null;
         }
+        if (widget.kind === 'outline_widget') snapshot.outlineRawToken = message.outlineRawToken || null;
         return Object.freeze(snapshot);
     }
     return null;
@@ -133,13 +144,26 @@ export function latestSpaceWidget(history) {
 
 export function stripWidgetsForApi(history) {
     return history.map(message => {
-        if (message.role !== 'assistant') return message;
-        const cleaned = String(message.content || '')
-            .replace(/<schedule_widget[^>]*>[\s\S]*?<\/schedule_widget\s*>/gi, '【已输出一张点卡片（内容以当前面板为准）】')
-            .replace(/<line_widget[^>]*>[\s\S]*?<\/line_widget\s*>/gi, '【已输出一张线卡片（内容以当前面板为准）】')
-            .replace(/<almanac_widget[^>]*>[\s\S]*?<\/almanac_widget\s*>/gi, '【已输出一张历卡片（内容以当前面板为准）】')
-            .replace(/<era_widget[^>]*>[\s\S]*?<\/era_widget\s*>/gi, '【已输出一张历法卡片（内容以当前面板为准）】');
-        return cleaned === message.content ? message : { ...message, content: cleaned };
+        let cleaned = String(message.content || '');
+        if (message.role === 'assistant') {
+            cleaned = cleaned
+                .replace(/<schedule_widget[^>]*>[\s\S]*?<\/schedule_widget\s*>/gi, '【已输出一张点卡片（内容以当前面板为准）】')
+                .replace(/<line_widget[^>]*>[\s\S]*?<\/line_widget\s*>/gi, '【已输出一张线卡片（内容以当前面板为准）】')
+                .replace(/<almanac_widget[^>]*>[\s\S]*?<\/almanac_widget\s*>/gi, '【已输出一张历卡片（内容以当前面板为准）】')
+                .replace(/<era_widget[^>]*>[\s\S]*?<\/era_widget\s*>/gi, '【已输出一张历法卡片（内容以当前面板为准）】')
+                .replace(/<outline_widget[^>]*>[\s\S]*?<\/outline_widget\s*>/gi, '【已输出一张面草稿（内容以当前面板为准）】');
+            if (message.expectedWidgetKind === 'outline_widget' && !/<outline_widget\b/i.test(String(message.content || ''))
+                && normalizeOutlineResponse(message.content)) {
+                cleaned = '【已输出一张面草稿（内容以当前面板为准）】';
+            }
+        }
+        const apiMessage = { ...message, content: cleaned };
+        delete apiMessage.pointBaselines;
+        delete apiMessage.lineBaselines;
+        delete apiMessage.expectedWidgetKind;
+        delete apiMessage.outlineRawToken;
+        delete apiMessage.portableReadonly;
+        return apiMessage;
     });
 }
 

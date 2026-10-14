@@ -24,7 +24,7 @@ export function buildLineInjectText(line = {}) {
 
 export function selectInlineLines(raw, { readOnly = false, max = Number.POSITIVE_INFINITY } = {}) {
     const parsed = parseLines(raw);
-    // 展示层不截断已落库的线；旧数据或未来合同扩展都应完整呈现。
+    // 默认展示全部；调用方传入 max 时只展示前 max 条。
     const visible = parsed.slice(0, max);
     return visible.map((line, index) => ({ ...line, index, readOnly, nextText: line.next ? prefixNext(line.next, line.stall) : '' }));
 }

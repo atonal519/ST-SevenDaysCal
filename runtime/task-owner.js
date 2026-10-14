@@ -38,16 +38,16 @@ export function createTaskOwnerManager() {
         return owner;
     }
 
-    function isOwner(owner, identity = {}) {
+    function isOwner(owner) {
         if (!owner || channels.get(owner.channel) !== owner) return false;
         return true;
     }
 
-    function isCurrent(owner, identity = {}) {
-        return isOwner(owner, identity) && owner.status === 'active' && !owner.controller.signal.aborted;
+    function isCurrent(owner) {
+        return isOwner(owner) && owner.status === 'active' && !owner.controller.signal.aborted;
     }
 
-    function isValid(owner, identity = {}) {
+    function isValid(owner) {
         if (!owner || latest.get(owner.channel) !== owner || owner.status === 'invalidated' || owner.controller.signal.aborted) return false;
         return true;
     }
@@ -75,7 +75,7 @@ export function createTaskOwnerManager() {
 
     function setPending(channel, identity = {}) {
         const owner = channels.get(channel);
-        if (!isCurrent(owner, identity)) return false;
+        if (!isCurrent(owner)) return false;
         pending.set(channel, {
             owner,
             chatId: identity.chatId ?? owner.chatId,

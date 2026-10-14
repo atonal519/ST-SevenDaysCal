@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS = {
     apiPresets       : [],
     apiPresetActiveId: '',   // 上次选中的预设 id，纯 UI 高亮/回显用，不代表已生效
     // 机械任务分流：把「记忆摘要 / 大纲推进判定」这类机械调用路由到某个预设（如便宜小模型），
-    // 生成类（点/线/面/间/棱/历）始终走上面主 API。空=不分流、全走主 API（与旧版行为一致）。
+    // 生成类（点/线/面/间/棱/历）始终走上面主 API。空值表示不分流。
     // 存的是预设 id；指向的预设被删或缺 url/key 时，loadUtilityCfg() 自动退回主 API。
     utilityPresetId  : '',
     fabShow : true,
@@ -67,8 +67,8 @@ export const DEFAULT_SETTINGS = {
     // 暗账·标注：每 N 楼构画 AI 从正文捞「需按时间追踪」的新事件写入 sp-ledger（伤情/身心/约定/周期）。
     // 独立开关+间隔，关掉即不触发 API；默认关（opt-in，多一路后台判定+API 成本，照 outlineInject 的克制）。
     ledgerCaptureEnabled : false, // 暗账标注：默认关
-    ledgerCaptureInterval: 5,     // 标注节奏：每几条 AI 回复捞一次新事件
-    ledgerJudgeInterval  : 4,     // 判定节奏：每几条 AI 回复重算一次现状（与标注同受 ledgerCaptureEnabled 总闸）
+    ledgerCaptureInterval: 5,     // 标注节奏：0 关闭自动标注；手动标注仍可用
+    ledgerJudgeInterval  : 4,     // 判定节奏：0 关闭自动更新；手动更新仍可用
     ledgerHistoryScope   : 'recent', // 首次来源溯源范围：all / recent / custom
     ledgerHistoryLimit   : 50,       // recent 模式读取的有效可见 AI 楼数量
     ledgerHistoryStartFloor: 0,      // custom 模式真实楼号（含）

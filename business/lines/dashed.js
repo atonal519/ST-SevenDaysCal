@@ -44,12 +44,76 @@ export function pickRandomDashedTopics(entries = DASHED_TOPIC_CONFIG, random = M
     const pool = [...entries]; for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
     return pool.slice(0, 2).map(item => item.value);
 }
+const DASHED_NO_CONTENT = '无可用冷知识';
+function dashedItemText(value) {
+    const text = String(value ?? '').trim().replace(/^[\s\-*·•#>]+/u, '').replace(/^\d{1,2}[.、．)）]\s*/u, '').trim();
+    if (!text) return '';
+    const title = text.replace(/^["“‘「『](.*)["”’」』]$/u, '$1').trim();
+    if (/^(?:世界观)?(?:冷知识|补充设定)(?:列表)?\s*[:：]?$/u.test(title)) return '';
+    if (/^(?:以下是|下面是).{0,12}(?:冷知识|补充设定)\s*[:：]?$/u.test(title)) return '';
+    return normalizeDashedText(text);
+}
+function parseDashedJsonValue(value) {
+    let values, explicitlyEmpty = false;
+    if (typeof value === 'string') values = [value];
+    else if (Array.isArray(value)) { values = value; explicitlyEmpty = value.length === 0; }
+    else if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if (Object.hasOwn(value, 'items')) {
+            if (!Array.isArray(value.items)) return { status: 'invalid', items: [] };
+            values = value.items; explicitlyEmpty = value.items.length === 0;
+        } else if (typeof value.text === 'string') values = [value.text];
+        else return { status: 'invalid', items: [] };
+    } else return { status: 'invalid', items: [] };
+
+    const texts = values.map(item => typeof item === 'string' ? item : item && typeof item === 'object' && !Array.isArray(item) && typeof item.text === 'string' ? item.text : null);
+    const nonEmptyTexts = texts.filter(text => typeof text === 'string' && text.trim());
+    if (explicitlyEmpty || (nonEmptyTexts.length === 1 && nonEmptyTexts[0].trim() === DASHED_NO_CONTENT)) return { status: 'empty', items: [] };
+    const items = nonEmptyTexts.filter(text => text.trim() !== DASHED_NO_CONTENT).map(dashedItemText).filter(Boolean);
+    return items.length ? { status: 'items', items } : { status: 'invalid', items: [] };
+}
+function parseDashedJsonBlock(source, malformedIsJson = false) {
+    const text = String(source ?? '').trim();
+    if (!text) return malformedIsJson ? { status: 'invalid', items: [] } : null;
+    try { return parseDashedJsonValue(JSON.parse(text)); }
+    catch {
+        // A leading category such as [风俗] is ordinary prose, while JSON
+        // arrays begin with a JSON value token after the opening bracket.
+        if (malformedIsJson || /^(?:\{|"|\[\s*(?:[\]"{\d\-]|(?:true|false|null)(?:\s|,|\]|$)))/u.test(text)) return { status: 'invalid', items: [] };
+        return null;
+    }
+}
+function parseDashedResponse(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return { status: 'invalid', items: [] };
+    const source = raw.trim();
+    if (source === DASHED_NO_CONTENT) return { status: 'empty', items: [] };
+
+    const blocks = [...source.matchAll(/```([^\r\n`]*)\r?\n([\s\S]*?)\r?\n```/gu)];
+    const jsonBlocks = [];
+    for (const match of blocks) {
+        const language = match[1].trim().toLowerCase();
+        if (language === 'json') jsonBlocks.push({ content: match[2], explicit: true });
+        else if (!language) {
+            const parsed = parseDashedJsonBlock(match[2]);
+            if (parsed) jsonBlocks.push({ content: match[2], explicit: false, parsed });
+        }
+    }
+    if (jsonBlocks.length) {
+        if (jsonBlocks.length !== 1 || blocks.length !== 1) return { status: 'invalid', items: [] };
+        const block = jsonBlocks[0];
+        return block.parsed || parseDashedJsonBlock(block.content, block.explicit) || { status: 'invalid', items: [] };
+    }
+
+    const wholeJson = parseDashedJsonBlock(source);
+    if (wholeJson) return wholeJson;
+    const plainSource = source.split('\n').filter(line => !/^\s*```/u.test(line)).join('\n').trim();
+    if (plainSource === DASHED_NO_CONTENT) return { status: 'empty', items: [] };
+    const items = plainSource.split('\n').map(line => line.trim()).filter(line => line && line !== DASHED_NO_CONTENT)
+        .map(dashedItemText).filter(Boolean);
+    return items.length ? { status: 'items', items } : { status: 'invalid', items: [] };
+}
 export function dashedItemsFromRaw(raw) {
-    return String(raw || '').split('\n').map(line => line.trim()).filter(line => {
-        if (!line || /^```/.test(line)) return false;
-        if (/^(?:#{1,6}\s*)?(?:世界观)?(?:冷知识|补充设定)(?:列表)?\s*[:：]?$/.test(line)) return false;
-        return !/^(?:以下是|下面是).{0,12}(?:冷知识|补充设定)\s*[:：]?$/.test(line);
-    }).map(line => normalizeDashedText(line.replace(/^[\s\-*·•#>]+/, '').replace(/^\d{1,2}[.、．)）]\s*/, '').trim())).filter(Boolean);
+    const parsed = parseDashedResponse(raw);
+    return parsed.status === 'items' ? parsed.items : [];
 }
 export function normalizeDashedKeepCount(value) { const n = Math.floor(Number(value)); return Number.isFinite(n) && n >= 2 ? Math.min(n, Number.MAX_SAFE_INTEGER) : 15; }
 export function pruneDashedItems(items, keepCount, enabled = true) {
@@ -70,9 +134,9 @@ export function mergeDashedItems(newTexts, currentItems, createdAt = Date.now(),
 }
 export function buildDashedPrompt(userName, charName, avoidItems = [], options = {}) {
     const topics = (options.topics || []).map(String).filter(Boolean);
-    const broad = `取材面要开阔——世界观设定、历史与传说、势力/组织、地点/风物、物品/造物的隐藏特性、未被明说的规则或因果、习俗与禁忌都可以写；${userName} 和 ${charName} 只是世界里的成员之一，可以偶尔涉及，但不要每条都围着他们转。`;
-    let focus = broad; if (topics.length === 1) focus = `本次只围绕「${topics[0]}」取材，写出若干条角度不同、互不重复的冷知识，数量随有效素材浮动。`; else if (topics.length > 1) focus = `本次依次围绕以下主题取材，每个主题至少考虑一条，数量随有效素材浮动，不要凑数：\n${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
-    let prompt = `请暂停角色扮演，跳出正文叙事，以设定考据者的身份回答。这是设定考据、不是续写正文：不要输出任何剧情场景、对话、动作或第一/第二人称叙述，不要推进故事，也不要复述记忆库/世界书里已发生的事件经过。\n请无视上文里的状态栏、数值面板、表格等格式化内容，绝对不要复述或模仿它们。\n完全遵循当前世界的设定与世界观。${focus}\n优先挖容易被忽略、却让世界更立体的角落；每条都要展开讲清来龙去脉、背景和细节，不要只丢一句结论，绝对禁止 OOC 和脱离当前背景。\n直接从第一条写起，不要开场白或旁白。输出所有非空有效条目即可，数量随素材浮动，不要凑数；每行一条，每条 50 到 100 个汉字；绝对不得超过 300 个 Unicode 字符。纯中文叙述，不要序号、状态栏或任何格式符号。`;
+    const broad = `取材可涵盖世界观、历史传说、势力组织、地点风物、物品造物、规则因果与习俗禁忌；${userName} 和 ${charName} 只是世界成员之一，可以偶尔涉及，不要每条都围着他们转。`;
+    let focus = broad; if (topics.length === 1) focus = `围绕「${topics[0]}」取材，写不同角度的冷知识。`; else if (topics.length > 1) focus = `围绕以下主题取材，有合适素材时兼顾各项，不要凑数：\n${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+    let prompt = `你是世界设定考据者。结合本轮提供的人设、世界书和故事记忆，补充这个世界容易忽略的冷知识。尊重已知设定，可合理补充未明说的背景、规则与细节；不要与既定事实冲突，也不要复述已经发生的剧情。\n${focus}\n只写设定，不续写场景、对话、动作或状态栏。每条讲清来龙去脉与具体细节，50到100个汉字，最多300个Unicode字符；每行一条纯中文，不写序号、标题、开场白或代码块。数量随素材浮动，不凑数。没有合适内容时只输出单独一行：${DASHED_NO_CONTENT}。`;
     const avoid = (avoidItems || []).map(x => String(x || '').trim()).filter(Boolean); if (avoid.length) prompt += `\n【以下内容最近已经讲过，务必避开；换全新的素材，改写同一件事也不允许】：\n${avoid.map(x => `- ${x}`).join('\n')}`;
     return prompt.replace(/\{\{user\}\}/g, userName).replace(/\{\{char\}\}/g, charName);
 }
@@ -118,14 +182,21 @@ export function createDashedModule(env = {}) {
     const reportUiFailure = () => { panelError = UI_REFRESH_FAILURE_TEXT; try { refresh(); } catch {} try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} };
     const state = () => ({ busy, error: panelError });
     async function run(options = {}) {
-        if (busy) return; const manual = options.manual === true, reroll = manual || options.reroll === true; const diagnostic = createGenerationDiagnosticScope('dashed', { background: !manual }); const selected = Array.isArray(options.topics) && options.topics.length ? options.topics : pickRandomDashedTopics(DASHED_TOPIC_CONFIG, random); const count = dashedTargetCount(options.count || selected.length || 2); const chatId = env.chatId(); const ctrl = controller = new AbortController(); busy = true; panelError = ''; refresh();
-        try { const ctx = env.context(), user = ctx.name1 || '用户', char = ctx.name2 || '角色', cfg = env.loadConfig(); if (!cfg.url || !cfg.key) throw makeDiagnosticError('config-missing'); const topics = selected.map(value => { if (value === 'custom') return String(options.customValue || '').trim(); const item = DASHED_TOPIC_CONFIG.find(x => x.value === value); return item ? item.prompt(value === 'user' ? user : value === 'char' ? char : '') : ''; }).filter(Boolean); const prompt = buildDashedPrompt(user, char, reroll ? [] : parse(DASHED_AVOID_COUNT), { topics, count }); const raw = await env.callApi(ctx, prompt, cfg, user, char, ctrl.signal, 0, { ...(reroll ? { reroll: true, module: 'dashed' } : {}), promptMode: 'creative', diagnosticModule: 'dashed', diagnosticSink: diagnostic.sink }); if (controller !== ctrl) return; const returned = dashedItemsFromRaw(raw); if (!returned.length) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'dashed-no-items' }); const current = env.filterRerollItems ? env.filterRerollItems(read(), reroll) : read(); const timestamp = now(); const merged = mergeDashedItems(returned, current, timestamp, (ts, i) => `dashed-${uuid() || `${ts.toString(36)}-${i}-${random().toString(36).slice(2, 9)}`}`); diagnostic.accepted({ phase: 'validation', reasonCode: merged.added.length ? 'dashed-valid' : 'dashed-duplicate' }); let committed; try { committed = merged.added.length ? await commitConfirmed(merged.items, timestamp, () => controller === ctrl, () => {
+        if (busy) return; const manual = options.manual === true, reroll = manual || options.reroll === true; const diagnostic = createGenerationDiagnosticScope('dashed', { background: !manual }); const selected = Array.isArray(options.topics) && options.topics.length ? options.topics : pickRandomDashedTopics(DASHED_TOPIC_CONFIG, random); const ctrl = controller = new AbortController(); busy = true; panelError = ''; refresh();
+        try { const ctx = env.context(), user = ctx.name1 || '用户', char = ctx.name2 || '角色', cfg = env.loadConfig(); if (!cfg.url || !cfg.key) throw makeDiagnosticError('config-missing'); const topics = selected.map(value => { if (value === 'custom') return String(options.customValue || '').trim(); const item = DASHED_TOPIC_CONFIG.find(x => x.value === value); return item ? item.prompt(value === 'user' ? user : value === 'char' ? char : '') : ''; }).filter(Boolean); const prompt = buildDashedPrompt(user, char, reroll ? [] : parse(DASHED_AVOID_COUNT), { topics }); const raw = await env.callApi(ctx, prompt, cfg, user, char, ctrl.signal, 0, { ...(reroll ? { reroll: true, module: 'dashed' } : {}), promptMode: 'planning', diagnosticModule: 'dashed', diagnosticSink: diagnostic.sink }); if (controller !== ctrl) return; const parsed = parseDashedResponse(raw); if (parsed.status === 'empty') {
+            diagnostic.accepted({ phase: 'validation', reasonCode: 'dashed-no-content' });
+            busy = false; controller = null; panelError = ''; let uiError = null;
+            try { if (manual && env.getSettings().notifyMode !== 'off') env.toast('本次没有可用的新冷知识'); refresh(); diagnostic.uiDisplayed({ reasonCode: 'dashed-no-content' }); }
+            catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'dashed-ui-refresh-failed' }); reportUiFailure(); }
+            return { status: 'updated', added: 0, ...(uiError ? { uiError } : {}) };
+        }
+        if (parsed.status !== 'items') throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'dashed-no-items' }); const returned = parsed.items; const current = env.filterRerollItems ? env.filterRerollItems(read(), reroll) : read(); const timestamp = now(); const merged = mergeDashedItems(returned, current, timestamp, (ts, i) => `dashed-${uuid() || `${ts.toString(36)}-${i}-${random().toString(36).slice(2, 9)}`}`); diagnostic.accepted({ phase: 'validation', reasonCode: merged.added.length ? 'dashed-valid' : 'dashed-duplicate' }); let committed; try { committed = merged.added.length ? await commitConfirmed(merged.items, timestamp, () => controller === ctrl, () => {
             // A rejected ordinary host save is feedback only; keep locally applied facts while this module still owns the result.
             const sameItems = JSON.stringify(read()) === JSON.stringify(pruneDashedItems(merged.items, keep(), env.getSettings().dashedCleanupEnabled !== false).items);
             if (!sameItems) return;
             panelError = '上次保存未确认；当前冷知识仍在本地，请手动刷新核对。';
             refresh();
-        }) : { items: merged.items, removed: [], ok: true }; } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'dashed-save-failed' }); } if (committed.ok !== true) { const status = Number(committed.saveResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (committed.saveResult) error.saveResult = committed.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'dashed-save-rejected' }); } if (committed.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'dashed-local-applied' }); else if (committed.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'dashed-saved' }); if (committed.stale || controller !== ctrl) { busy = false; controller = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true }; } const kept = new Set(committed.items.map(item => item.id)); const addedCount = merged.added.filter(item => kept.has(item.id)).length; busy = false; controller = null; let uiError = null; try { if (manual && env.getSettings().notifyMode !== 'off') { const suffix = addedCount < count ? `（实际有效新增 ${addedCount} 条）` : ''; env.toast(addedCount ? `已新增 ${addedCount} 条冷知识${suffix}` : '本次内容与已有冷知识重复，没有新增'); } refresh(); diagnostic.uiDisplayed({ reasonCode: 'dashed-ui-applied' }); } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'dashed-ui-refresh-failed' }); reportUiFailure(); } return { status: 'updated', added: addedCount, ...(uiError ? { uiError } : {}) }; } catch (err) { if (controller !== ctrl) return; busy = false; controller = null; if (err?.name === 'AbortError') return; env.logDiagnostic?.(safeDiagnosticLog('dashed', err?.phase || 'request', err, { background: !manual })); panelError = `生成失败：${diagnosticMessage(err)}`; refresh(); if (manual || env.getSettings().notifyMode === 'full') env.toast(`冷知识生成失败：${diagnosticMessage(err)}`, true); }
+        }) : { items: merged.items, removed: [], ok: true }; } catch (cause) { const status = Number(cause?.saveResult?.status ?? cause?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (cause?.saveResult) error.saveResult = cause.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'dashed-save-failed' }); } if (committed.ok !== true) { const status = Number(committed.saveResult?.status); const error = makeDiagnosticError('save', { phase: 'save', ...(Number.isInteger(status) ? { status } : {}) }); if (committed.saveResult) error.saveResult = committed.saveResult; throw diagnostic.rejected(error, { phase: 'save', reasonCode: 'dashed-save-rejected' }); } if (committed.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'dashed-local-applied' }); else if (committed.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'dashed-saved' }); if (committed.stale || controller !== ctrl) { busy = false; controller = null; return { status: 'cancelled', reason: 'committed-but-stale', committed: true }; } const kept = new Set(committed.items.map(item => item.id)); const addedCount = merged.added.filter(item => kept.has(item.id)).length; busy = false; controller = null; let uiError = null; try { if (manual && env.getSettings().notifyMode !== 'off') env.toast(addedCount ? `已新增 ${addedCount} 条冷知识` : '本次内容与已有冷知识重复，没有新增'); refresh(); diagnostic.uiDisplayed({ reasonCode: 'dashed-ui-applied' }); } catch (error) { uiError = error; diagnostic.uiFailed(error, { reasonCode: 'dashed-ui-refresh-failed' }); reportUiFailure(); } return { status: 'updated', added: addedCount, ...(uiError ? { uiError } : {}) }; } catch (err) { if (controller !== ctrl) return; busy = false; controller = null; if (err?.name === 'AbortError') return; env.logDiagnostic?.(safeDiagnosticLog('dashed', err?.phase || 'request', err, { background: !manual })); panelError = `生成失败：${diagnosticMessage(err)}`; refresh(); if (manual || env.getSettings().notifyMode === 'full') env.toast(`冷知识生成失败：${diagnosticMessage(err)}`, true); }
     }
     async function openDialog() { if (busy) return; const ctx = env.context(), user = ctx.name1 || '用户', char = ctx.name2 || '角色'; const choices = [{ value: 'random', label: '随机抽取主题', exclusive: true }, ...DASHED_TOPIC_CONFIG.map(x => ({ value: x.value, label: x.value === 'user' ? user : x.value === 'char' ? char : x.label })), { value: 'custom', label: '自定义' }]; const result = await env.dialog.selectMany({ title: '新增冷知识', body: '选择想了解的主题，生成数量按有效素材浮动。', choices, initialValues: ['random'], custom: { value: 'custom', placeholder: '填写自定义主题…', maxLength: 200 }, confirmText: '生成', validate: value => !value.values.length ? '请至少选择一个主题' : value.values.includes('custom') && !value.customValue ? '请填写自定义主题' : '' }); if (!result) return; let topics = result.values; if (topics.includes('random')) topics = pickRandomDashedTopics(DASHED_TOPIC_CONFIG, random); return run({ manual: true, topics, customValue: result.customValue, count: dashedTargetCount(topics.length) }); }
     async function remove(id) { const target = read().find(x => x.id === id); if (!target) { env.toast('这条冷知识已不存在', true); refresh(); return; } if (!await env.dialog.confirm({ title: '删除冷知识', body: '确认删除这条冷知识吗？', confirmText: '删除', cancelText: '取消' })) return; const latest = read(); if (!latest.some(x => x.id === id)) return refresh(); commit(latest.filter(x => x.id !== id)); refresh(); }

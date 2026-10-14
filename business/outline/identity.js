@@ -1,10 +1,9 @@
-export function createOutlineIdentity({ chatId, chatRevision = 0, outlineKey = null, creativeChatKey = null } = {}) {
+export function createOutlineIdentity({ chatId, chatRevision = 0, outlineKey = null } = {}) {
     const id = String(typeof chatId === 'function' ? chatId() : chatId ?? '').trim();
     return Object.freeze({
         chatId: id,
         chatRevision: Number(chatRevision) || 0,
         outlineKey: freezeKey(outlineKey, 'outline', id),
-        creativeChatKey: freezeKey(creativeChatKey, 'creative-chat', id),
     });
 }
 

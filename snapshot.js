@@ -111,7 +111,7 @@ export function writeSnapshot(mesId, snap) {
     if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
     msg.extra[SNAP_KEY] = payload;
 
-    // 双写：镜像到当前 swipe 的 swipe_info[swipe_id].extra，随 swipe/删楼/分支正确回滚。
+    // 同时镜像到当前 swipe，便于切换 swipe 时恢复对应快照。
     _mirrorToCurrentSwipe(msg, payload);
 
     prepareNormalChatStoreForSave(context);

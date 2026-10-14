@@ -11,7 +11,7 @@ function stripRenderBoxes(root) {
     return root;
 }
 
-export function captureSnapshotElement(element, { DOMPurify: purifier = globalThis.DOMPurify, documentRef = globalThis.document, messageFormatting } = {}) {
+export function captureSnapshotElement(element, { DOMPurify: purifier = globalThis.DOMPurify, documentRef = globalThis.document } = {}) {
     if (!element) return { html: '', preview: '' };
     if (!documentRef?.createElement || !element.cloneNode) return captureMesText(element, { DOMPurify: purifier });
     const clone = element.cloneNode(true);
@@ -53,9 +53,4 @@ export function captureMesText(mesText, options = {}) {
     if (!mesText) return { html: '', preview: '' };
     const html = sanitizeSnapshot(mesText.innerHTML || '', options);
     return { html, preview: makePreview(html, options.previewMax || 140) };
-}
-
-export function collectStylesheets(doc = globalThis.document) {
-    if (!doc) return [];
-    return [...doc.querySelectorAll('style')].map(node => node.textContent || '').filter(css => /\.custom-[\w-]+|\.mes_text\b|\.TH-render\b/.test(css));
 }

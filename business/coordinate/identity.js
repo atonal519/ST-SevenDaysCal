@@ -1,10 +1,4 @@
-export function floorKey(chatId, messageId) { return `${chatId ?? ''}::${messageId ?? ''}`; }
 export function normalizeId(value) { return value == null ? '' : String(value); }
-export function sameFloor(item, chatId, floorIndex) {
-    const floor = Number(floorIndex);
-    return normalizeId(item?.chatId) === normalizeId(chatId) && Number.isFinite(floor) &&
-        (Number(item?.messageId) === floor || Number(item?.floorIndex) === floor);
-}
 
 export const REPLY_MARKER_KEY = 'sp_coordinate_anchor';
 

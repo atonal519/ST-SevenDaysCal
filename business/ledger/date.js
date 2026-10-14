@@ -1,5 +1,6 @@
 // 刻度日期纯逻辑：只依赖轴提供的当前日期与环形日期差，不读取宿主状态。
 let deps = { today: () => null, daysUntil: () => null, daysUntilFull: null, listEntries: () => [] };
+const hasYear = value => value != null && value !== '' && Number.isFinite(Number(value));
 
 export function bindLedgerDate(next = {}) {
     deps = { ...deps, ...next };
@@ -16,8 +17,8 @@ export function ledgerDueInfo(entry, today = deps.today()) {
     if (!d || !Number.isFinite(+d.month) || !Number.isFinite(+d.day)) return null;
     // 一次性事项没有年份/周期时无法判断它属于哪一轮，保持 unknown，禁止猜未来或过期；
     // 周期事项则按历法差值计算下一次正向发生日。
-    if (entry?.类型 !== '周期' && entry?.周期长度 == null && (!Number.isFinite(+d.year) || !Number.isFinite(+today?.year))) return null;
-    if (entry?.类型 !== '周期' && Number.isFinite(+d.year) && Number.isFinite(+today?.year)) {
+    if (entry?.类型 !== '周期' && entry?.周期长度 == null && (!hasYear(d.year) || !hasYear(today?.year))) return null;
+    if (entry?.类型 !== '周期' && hasYear(d.year) && hasYear(today?.year)) {
         if (typeof deps.daysUntilFull !== 'function') return null;
         const delta = deps.daysUntilFull(today, d);
         if (!Number.isFinite(delta)) return null;
@@ -39,7 +40,16 @@ export function fmtLedgerForJudge(entry, today = deps.today()) {
     const since = ledgerDaysSince(entry, today);
     const sinceText = since == null ? '起始不明' : (since === 0 ? '今天登记' : `距登记 ${since} 天`);
     const due = ledgerDueInfo(entry, today);
-    const dueText = !due ? '' : (due.天数 === 0 ? '·今天到期' : (due.过期 ? `·已过期 ${due.天数} 天` : `·还有 ${due.天数} 天到期`));
+    const dueAnchor = entry?.到期锚?.历日期;
+    const unresolvedDueDate = !due && dueAnchor && Number.isFinite(+dueAnchor.month) && Number.isFinite(+dueAnchor.day)
+        && entry?.类型 !== '周期' && entry?.周期长度 == null
+        && (!hasYear(dueAnchor.year) || !hasYear(today?.year));
+    const dueDateText = unresolvedDueDate
+        ? `${hasYear(dueAnchor.year) ? `${dueAnchor.year}年` : ''}${dueAnchor.month}月${dueAnchor.day}日（年份信息不全，不推算剩余天数）`
+        : '';
+    const dueText = due
+        ? (due.天数 === 0 ? '·今天到期' : (due.过期 ? `·已过期 ${due.天数} 天` : `·还有 ${due.天数} 天到期`))
+        : dueDateText ? `·到期 ${dueDateText}` : '';
     const cycle = entry.周期长度 ? `·周期 ${entry.周期长度} 天` : '';
     const who = entry.牵扯?.length ? `·涉及 ${entry.牵扯.join('、')}` : '';
     const pending = entry.来源状态 === '待确认' ? '·来源待确认，请以最新可见正文校对' : '';

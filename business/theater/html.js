@@ -12,8 +12,36 @@ export function safePlainTextHtml(raw) {
     return `<div class="sp-theater-prose"><p>${escaped.replace(/\r?\n/g, '<br>')}</p></div>`;
 }
 
-export function ensureTheaterHtml(html, raw) {
-    // 兼容旧 UI seam；新的 renderTheaterPieceHtml 在持久化展示时强制二次净化。
-    if (!String(html || '').trim() && String(raw || '').trim()) return safePlainTextHtml(raw);
-    return html;
+const VOID_ELEMENTS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+function isHtmlFragment(value) {
+    const text = String(value || '').trim();
+    if (!text.startsWith('<') || !text.endsWith('>')) return false;
+    const token = /<!--[\s\S]*?-->|<![^>]*>|<\/?([a-z][\w:-]*)\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+    const stack = []; let match; let sawElement = false; let end = 0;
+    while ((match = token.exec(text))) {
+        if (text.slice(end, match.index).includes('<') || text.slice(end, match.index).includes('>')) return false;
+        end = token.lastIndex;
+        const whole = match[0]; const name = match[1]?.toLowerCase();
+        if (!name) continue;
+        sawElement = true;
+        if (whole.startsWith('</')) {
+            if (stack.pop() !== name) return false;
+        } else if (!whole.endsWith('/>') && !VOID_ELEMENTS.has(name)) stack.push(name);
+    }
+    if (text.slice(end).includes('<') || text.slice(end).includes('>')) return false;
+    return sawElement && stack.length === 0;
+}
+
+export function extractTheaterHtmlResponse(response) {
+    const text = String(response || '').trim();
+    if (!text) return null;
+    const fences = [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)];
+    if (fences.length) {
+        if (fences.length !== 1 || fences[0][1].trim().toLowerCase() !== 'html') return null;
+        const candidate = fences[0][2].trim();
+        return isHtmlFragment(candidate) ? candidate : null;
+    }
+    if (text.includes('```')) return null;
+    return isHtmlFragment(text) ? text : null;
 }

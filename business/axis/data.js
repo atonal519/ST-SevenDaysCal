@@ -208,10 +208,16 @@ export function normalizeAlmanacNoteTerminal(value) {
     return closing ? `${body}。${closing}` : `${text}。`;
 }
 
+function almanacWidgetBody(raw) {
+    const source = String(raw || '');
+    const match = source.match(/<almanac_widget\b[^>]*>([\s\S]*?)<\/almanac_widget\s*>/i);
+    return match ? match[1] : source;
+}
+
+function isEmptyAlmanacWidget(raw) { return almanacWidgetBody(raw).trim() === ''; }
+
 function parseAlmanacWidget(raw) {
-    const s = String(raw || '');
-    const m = s.match(/<almanac_widget\b[^>]*>([\s\S]*?)<\/almanac_widget\s*>/i);
-    const body = m ? m[1] : s;
+    const body = almanacWidgetBody(raw);
     const out = [];
     for (const line of body.split('\n')) {
         let cleaned = line.trim();
@@ -315,8 +321,7 @@ function normalizeCalDesc(raw) {
 function saveCalDesc(desc) {
     const n = normalizeCalDesc(desc);
     if (!n) return false;
-    writeStore(getCalDescKey(), { ...n, ts: Date.now() });
-    return true;
+    return writeStore(getCalDescKey(), { ...n, ts: Date.now() });
 }
 
 const ALM_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -377,32 +382,6 @@ function cloneCalDesc(cal) {
 
 function validateCalendarDesc(raw) {
     return validateFormalCalendarDescriptor(raw);
-    /*
-    const era = String(raw?.era || '').trim();
-    if (era.length > CALENDAR_LIMITS.eraNameLength) return { error: `纪年名最多 ${CALENDAR_LIMITS.eraNameLength} 个字` };
-    const months = Array.isArray(raw?.months) ? raw.months : [];
-    if (!months.length) return { error: '至少需要一个月份' };
-    if (months.length > CALENDAR_LIMITS.monthCount) return { error: `最多只能有 ${CALENDAR_LIMITS.monthCount} 个月份` };
-    const out = [];
-    for (let index = 0; index < months.length; index++) {
-        const name = String(months[index]?.name || '').trim();
-        const days = Number(months[index]?.days);
-        if (!name) return { error: `第 ${index + 1} 个月需要填写名称` };
-        if (name.length > CALENDAR_LIMITS.monthNameLength) return { error: `第 ${index + 1} 个月名称最多 ${CALENDAR_LIMITS.monthNameLength} 个字` };
-        if (!Number.isInteger(days) || days < CALENDAR_LIMITS.monthDaysMin || days > CALENDAR_LIMITS.monthDaysMax) return { error: `${name}的天数必须是 ${CALENDAR_LIMITS.monthDaysMin}–${CALENDAR_LIMITS.monthDaysMax} 的整数` };
-        out.push({ name, days });
-    }
-    if (out.reduce((sum, month) => sum + month.days, 0) > CALENDAR_LIMITS.yearDays) return { error: `全年总天数不能超过 ${CALENDAR_LIMITS.yearDays} 天` };
-    const value = {
-        kind: raw?.kind === 'gregorian' ? 'gregorian' : 'custom',
-        id: String(raw?.id || (raw?.kind === 'gregorian' ? 'default-gregorian' : 'custom-calendar')),
-        revision: Number.isInteger(raw?.revision) && raw.revision > 0 ? raw.revision : 1,
-        weekdayCycle: Number.isInteger(raw?.weekdayCycle) && raw.weekdayCycle > 0 ? raw.weekdayCycle : 7,
-        era, months: out,
-    };
-    for (const key of ['epochYear', 'epochOrdinal', 'epochWeekday']) if (Number.isInteger(raw?.[key])) value[key] = raw[key];
-    if (raw?.absoluteCycle === true) value.absoluteCycle = true;
-    return { value }; */
 }
 
 function loadCalendarTemplates() {
@@ -514,6 +493,7 @@ export {
     almItemCoversDoy,
     getCalDescInjectText,
     almMapType,
+    isEmptyAlmanacWidget,
     parseAlmanacWidget,
     parseEraWidget,
     almDedupKey,

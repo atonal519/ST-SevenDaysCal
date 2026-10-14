@@ -1,6 +1,6 @@
 import { isTerminalLineStage } from './schema.js';
 
-export function auditLineEvolution({ previousLines = [], generatedLines = [], freshTickets = [], intent = 'advance' } = {}) {
+export function auditLineEvolution({ previousLines = [], generatedLines = [], freshTickets = [] } = {}) {
     const previous = Array.isArray(previousLines) ? previousLines : [];
     const generated = Array.isArray(generatedLines) ? generatedLines : [];
     const identityQueues = new Map();

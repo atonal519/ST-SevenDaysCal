@@ -119,8 +119,7 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
             const session = mountDialog($overlay, resolve);
             const submit = () => {
                 const value = String($overlay.find('.sp-dialog-input').val() ?? '').trim();
-                // 校验约定：返回非空字符串＝错误信息，其它（''/null/undefined/true/数字/对象）一律算通过。
-                // 旧写法 String(validate()||'') 会把 true→"true"、对象→"[object Object]" 误当错误显示，且吞掉 0/false。
+                // 校验器返回非空字符串时显示错误，其它返回值均视为通过。
                 const raw = typeof validate === 'function' ? validate(value) : '';
                 const error = typeof raw === 'string' ? raw : '';
                 if (error) {
@@ -302,7 +301,7 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
     }
 
     // 通用异步单选：第二类弹窗自行加载选项，可在同一弹窗内重新加载并中止上一轮请求。
-    function selectOneAsync({ title = '', body = '', loadChoices, refreshable = false, refreshText = '重新加载', confirmText = '确定', cancelText = '取消', cancelValue = null, loadingText = '正在加载…', emptyText = '没有可选内容' } = {}) {
+    function selectOneAsync({ title = '', body = '', loadChoices, refreshable = false, refreshText = '重新加载', confirmText = '确定', cancelText = '取消', cancelValue = null, loadingText = '正在加载…', emptyText = '没有可选内容', loadErrorText = '读取失败，请稍后重试' } = {}) {
         if (typeof loadChoices !== 'function') return Promise.resolve(null);
         return new Promise(resolve => {
             prepareDialog();
@@ -356,8 +355,9 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
                     renderChoices();
                 } catch (error) {
                     if (session.isDone() || myRun !== runId || error?.name === 'AbortError') return;
-                    $overlay.find('.sp-dialog-async-body').html(`<div class="sp-dialog-async-empty">${escapeHtml(emptyText)}</div>`);
-                    $overlay.find('.sp-dialog-input-error').html(`<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml(error?.message || '加载失败')}`);
+                    const message = typeof loadErrorText === 'function' ? loadErrorText(error) : loadErrorText;
+                    $overlay.find('.sp-dialog-async-body').html(`<div class="sp-dialog-async-empty"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml(message || '读取失败，请稍后重试')}</div>`);
+                    $overlay.find('.sp-dialog-input-error').empty();
                 } finally {
                     if (!session.isDone() && myRun === runId) {
                         requestAbort = null;

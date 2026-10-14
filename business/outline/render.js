@@ -6,7 +6,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
     const clean = value => cleanText?.(value) ?? String(value ?? '');
     const empty = () => {
         beginRender?.();
-        return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面，可以先直接聊天讨论，也可以生成一版面作为起点</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>`;
+        return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>`;
     };
     const render = (raw, cursor = 0) => {
         beginRender?.();

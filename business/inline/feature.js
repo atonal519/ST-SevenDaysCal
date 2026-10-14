@@ -55,17 +55,7 @@ export function createInlineFeature(env = {}) {
     const $ = env.$;
     const _buildLedgerBlockHtml = env._buildLedgerBlockHtml;
 
-    // ─── 历·楼内日历块（只读，反映历+锚点，无生成）─────────────────────────────────
-    // 与线块平行、共存于最新 AI 楼。外壳（标题条）仿线：一个 <details>，收起时是扁扁的
-    // 「历 · N个日程」条，点整条即展开——配色/圆角/边框全走线的 .sp-inline-* 类。
-    // 展开后的内容是历自己的「往后六天」条：6 格（周X + M/D，从明天起，今天已在大头日期块里、
-    // 这里不重复），覆盖到历条目的日子高亮打点；窗口内有节日则每格可点、点下方就地展开当天安排（.sp-alm-sday）。
-    // 纯读 loadAlmanac()+锚点，不请求 API、不受 linesEnabled 影响，只受 almanacInlineEnabled 开关控制。
-    // itemsArg：null=读当前活历 loadAlmanac()（最新楼）；数组=快照里的历条目（历史楼）。
-    // anchorArg：null=读当前锚点 almTodayAnchor()；{month,day}=快照锚点。历本就只读，无按钮需 gate。
-    // 楼内轴渲染统一由 axisInlineRenderer 提供。
-
-    // 历楼内只读渲染由 axis inline seam 持有；宿主仅提供实时数据与纯历法 helper。
+    // 轴块的历法渲染由 axisInlineRenderer 持有；最新楼读实时数据，历史楼使用快照。
     const _buildAlmanacBlockHtml = (...args) => axisInlineRenderer.buildAlmanacBlock(...args);
     const _almanacStripDayHtml = (...args) => axisInlineRenderer.buildAlmanacDay(...args);
 
@@ -95,13 +85,7 @@ export function createInlineFeature(env = {}) {
         });
     }
 
-    // ─── 点·楼内日程条（只读，反映当前视角的点，无生成）──────────────────────────────
-    // 与线块/历条平行、共存于最新 AI 楼。收起态是扁扁的「点 · N件待办」条，点整条展开是「日程条」：
-    // 每个 Day 一格（周X + 日期 + 天气图标 + 待办数），Future 另起一格；点某格就地展开当天事件（标题+时间）。
-    // 纯读楼内 canonical 点 raw（schedule-user），不请求 API、不受 linesEnabled 影响，只受 scheduleInlineEnabled 控制。
-    // 外壳/标题条走线的 .sp-inline-* 类，与线块/历条一致；只有条内格子用独立的 .sp-sch-* 类。
-    // rawArg：null=读 canonical user 活缓存（最新楼）；字符串=用快照里的点 raw（历史楼）。
-    // readOnly：true=历史楼，drawer 去掉逐条注入/删除操作（历史楼无可变操作）。
+    // 点块委托给 pointInlineRenderer；最新楼读当前用户数据，历史楼读快照且只读。
     const _buildScheduleBlockHtml = (...args) => pointInlineRenderer.buildScheduleBlock(...args);
 
     // 日程条：某一天(dayKey='0'|'1'|…|'future') 的就地详情 HTML（点某格时填进 .sp-sch-sday）。
@@ -205,38 +189,14 @@ export function createInlineFeature(env = {}) {
         });
     };
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  楼内仪表盘（今头 + 历/点/线三区·融进一个面板·最新楼全功能 / 历史楼只读）
-    // ═══════════════════════════════════════════════════════════════════════════
-    //
-    // 结构（对齐用户手绘图，不是三段并列）：以「今」为主心骨的一个面板。
-    //   ┌─────────────────────────────────────────────┐
-    //   │ ┌───────┐  历区（即将到来 ≡ + 往后六天格）     │  ← 顶行：今头 + 历
-    //   │ │今 M/D │                                     │
-    //   │ │周X ☀  │                                     │
-    //   │ └───────┘                                     │
-    //   │ 点区（今日待办）                               │
-    //   │ 线区（活跃事件线）                             │
-    //   └─────────────────────────────────────────────┘
-    //
-    // 铁律「模块可拆」：历/点/线各自独立开关（各 builder 自门控，关/空→返回 ''）。
-    //   某区关 → 面板里根本没这区、其余区流式补位、不留空洞。
-    //   今头的日期来源是历/点的锚点 → 历、点全无 → 今头连带收起，面板退成纯线区。
-    //   三区全空 → 返回 ''（该楼不挂框）。
-    //
-    // snap=null → 最新楼：读活缓存、全功能（注入/删除/推进/锁定按钮都在）。
-    // snap=对象 → 历史楼：读该楼快照、只读（各 builder 收到 readOnly=true，剥掉可变按钮）。
-
-    // 今头/摘要共用的锚点解析：快照有合法锚点用快照，否则退活锚点。
+    // 楼内块按轴、标注池、点、线顺序组合；最新楼读实时数据，历史楼读快照并只读。
     function dashAnchor(snap) {
         return (snap?.anchor && Number.isFinite(+snap.anchor.month) && Number.isFinite(+snap.anchor.day))
             ? { month: +snap.anchor.month, day: +snap.anchor.day, ...(Number.isInteger(+snap.anchor.year) ? { year: +snap.anchor.year } : {}), ...(typeof snap.anchor.eraLabel === 'string' && snap.anchor.eraLabel.trim() ? { eraLabel: snap.anchor.eraLabel.trim() } : {}) }
             : almTodayAnchor();
     }
 
-    // 「是否真有日期上下文」——与点/线/历三个显示开关无关，只看底层数据在不在：钉了锚点、
-    // 或有历条目、或有点 raw。用来决定：三区全关（或都空）时，最扁的折叠条是否仍值得显「今 M/D 周X ☀」。
-    // 全空（新聊天、没数据）→ false，别硬造个「今 1/1」噪声条。历史楼看快照自带的 almanac/point/anchor。
+    // 日期上下文来自锚点、历条目或点数据；没有日期和任何内容时不显示楼内块。
     function hasDateContext(snap) {
         if (snap) return !!((Array.isArray(snap.almanac) && snap.almanac.length) || snap.point || snap.anchor);
         let pinned = false;
@@ -343,7 +303,7 @@ export function createInlineFeature(env = {}) {
         if (!p) return format({ rawStamp: stamp, tip });   // 古风/无法解析 → 原样抬
         return format({ stampDate: p, tip });
     }
-    function dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined) {
+    function dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined, ledgerOn = false) {
         const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
         let head = '';
         if (hasDate) {
@@ -389,6 +349,7 @@ export function createInlineFeature(env = {}) {
             } catch { n = 0; }
             chips.push(`<span class="sp-dash-sum-chip">线${n}</span>`);
         }
+        if (ledgerOn) chips.push('<span class="sp-dash-sum-chip">标注池</span>');
         const chipsHtml = chips.length ? `<span class="sp-dash-sum-chips">${chips.join('')}</span>` : '';
         // 时间戳已抬进 head 的「今 …」那截（见 clockHeadParts），此处不再单列一段。
         const inner = `${head}${chipsHtml}`;
@@ -397,18 +358,14 @@ export function createInlineFeature(env = {}) {
         return `<summary class="sp-dash-summary">${inner}<i class="fa-solid fa-chevron-down sp-dash-sum-caret"></i></summary>`;
     }
 
-    // 组一个仪表盘的完整 HTML（含外壳）。三区全空且无日期 → 返回 ''（该楼不挂框）。
-    // 外壳是 <details>：收起 = 一小条摘要（今 M/D 周X ☀ · 历N 点N 线N），展开 = 完整面板。
-    // 面板内点/线各自是 <details> 可折叠；历区顶行（今头+即将到来）+ 满宽六格条构成一组。
-    // 「今 M/D 周X ☀」在折叠条里恒显（只要有日期数据，与三个显示开关无关）；三区全关但有日期
-    // → 退成纯日期扁条（不可展开）。isLatest=true：最新楼、全功能；false：历史楼、只读。
+    // 组合轴、标注池、点、线内容；只有日期或内容均为空时才不挂楼内块。
     function composeInlineBox(snap, isLatest, floorClock = null, floor = null) {
         const readOnly = !isLatest;
         const fallbackRecord = readStore(keyDesc('caldesc-fallback', 'user', ''));
         const resolvedResult = isLatest ? { resolved: true, calendar: loadCalDesc() } : snapshot.resolveSnapshotCalendar(snap, { fallback: fallbackRecord, marker: !!fallbackRecord, current: loadCalDesc() });
         const resolvedCalendar = resolvedResult.calendar;
         if (!resolvedCalendar) return '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>';
-        // 历区返回结构 {summary,upHtml,stripHtml}|null；点/线返回内层字符串或 ''。各自门控开关/空态。
+        // 轴渲染返回 summary/upHtml/stripHtml；点、线和标注池返回内容或空字符串。
         const localWeekdayRef = isLatest ? undefined : createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor, resolveLocal: f => storyWeekdayRefPure(getContext(), resolvedCalendar, ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
         const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar, localWeekdayRef);
         const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar, localWeekdayRef);
@@ -416,11 +373,11 @@ export function createInlineFeature(env = {}) {
         // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
         const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
 
-        // 日期是否真实存在（与显示开关无关）：决定折叠条头 + 纯日期扁条兜底。
+        // 日期上下文和各区内容共同决定折叠摘要与纯日期条。
         const hasDateData = hasDateContext(snap);
-        if (!alm && !schInner && !linesInner && !ledgerInner && !hasDateData) return '';   // 啥也没有 → 不挂框
+        if (!alm && !schInner && !linesInner && !ledgerInner && !hasDateData) return '';
 
-        // 展开面板里的大头 masthead：仅当有「历/点」区在场时出现（线独存时不显大头——edge case A）。
+        // 展开面板仅在轴或点区域存在时显示日期大头。
         const hasDateRegion = !!alm || !!schInner;
 
         const collapseControl = label => `<button type="button" class="sp-inline-region-collapse" aria-label="收起${label}" title="收起${label}"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i><span>收起</span></button>`;
@@ -428,9 +385,8 @@ export function createInlineFeature(env = {}) {
             ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}${collapseControl(label)}</details>`
             : '';
 
-        // 顶行 + 历满宽条：历在场 → 顶行 [方形今头 + 历(summary+即将到来清单)]，六格条满宽落在顶行下方。
-        // 无历但有点 → 顶行只放今头（点提供日期）。历/点全无 → 无顶行（面板从点/线区起）。
-        let top = '', almStripRow = '';
+        // 有历时顶行包含日期大头和历内容；只有点区时顶行只显示日期大头。
+        let top = '';
         if (alm) {
             // 历整块：满宽 summary 头（点它折叠整个历单元）+ [方形今头 + 即将到来清单] 行 + 满宽六格条。
             // summary 占满通栏；今头、清单与六格条一起放入 details，依靠原生折叠同步收起。
@@ -445,17 +401,17 @@ export function createInlineFeature(env = {}) {
         const ledgerRegion = region('sp-ledger-inline', 'ledger', '标注池模块', ledgerInner);
 
         // 段序：轴(top) → 标注池 → 点 → 线。标注池与日历同属「轴」范畴，紧贴轴放；点/线在其下。
-        const body = `${top}${almStripRow}${ledgerRegion}${schRegion}${linesRegion}`;
-        // 面板体为空但有日期数据（三区都关，只剩日期）→ 纯日期扁条：不可折叠，只显今头缩写。
+        const body = `${top}${ledgerRegion}${schRegion}${linesRegion}`;
+        // 没有可展开区域但有日期数据时显示纯日期条。
         if (!body) {
             const flatBar = dashSummaryHtml(snap, true, false, false, false, true, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
             const cls = 'sp-inline-box sp-dash sp-dash-flat' + (readOnly ? ' sp-inline-box-ro' : '');
             return `<div class="${cls}">${flatBar}</div>`;
         }
 
-        const summary = dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar, localWeekdayRef);
+        const summary = dashSummaryHtml(snap, hasDateData, !!alm, !!schInner, !!linesInner, false, isLatest, floorClock, resolvedCalendar, localWeekdayRef, !!ledgerInner);
         const cls = 'sp-inline-box sp-dash' + (readOnly ? ' sp-inline-box-ro' : '');
-        // 默认折叠成一小条（不带 open）：只显摘要「今 M/D 周X ☀ · 历N 点N 线N」，点开才展开完整面板。
+        // 面板默认折叠，摘要显示日期与当前存在的区域。
         return `<details class="${cls}">${summary}<div class="sp-dash-body">${body}</div></details>`;
     }
 
@@ -484,8 +440,8 @@ export function createInlineFeature(env = {}) {
     //
     // 当前窗口由深度与视口共同决定；超窗只留 message.extra 快照，不挂 DOM，滑回再重建。
     //
-    // 深度窗口：最新 N 层 AI 楼（N=有效 render_depth）。N=0（跟随酒馆助手且它设 0=全渲）→ 不设上限、全挂。
-    //   inlineRenderDepth>0 → 用它；=0 → 跟随酒馆助手 render.depth；读不到/为 0 → 用兜底常量。
+    // 插件设置为正数时使用它；否则取酒馆助手的正数深度；两者都无效时回退 6 层 AI 楼。
+    // inlineRenderDepth>0 时优先使用插件设置，否则读取酒馆助手深度。
     // 视口：IntersectionObserver 观察每层 AI 楼，进视口才真正 build DOM、离开视口卸 DOM（省重排）。
     //   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
     //
@@ -541,12 +497,11 @@ export function createInlineFeature(env = {}) {
             return value === undefined ? true : !!value;
         } catch { return true; }
     };
-    const computeWindow = () => {
+    const computeWindow = (messageFloors = null) => {
         const hidden = ignoreHidden();
-        const allSelector = hidden ? '#chat .mes:not([is_system="true"])' : '#chat .mes';
-        const aiSelector = hidden ? '#chat .mes:not([is_user="true"]):not([is_system="true"])' : '#chat .mes:not([is_user="true"])';
-        const all = [...(doc?.querySelectorAll?.(allSelector) || [])];
-        const ai = [...(doc?.querySelectorAll?.(aiSelector) || [])];
+        const chatFloors = messageFloors ? [...messageFloors] : [...(doc?.querySelectorAll?.('#chat .mes') || [])];
+        const all = hidden ? chatFloors.filter(el => el.getAttribute('is_system') !== 'true') : chatFloors;
+        const ai = all.filter(el => el.getAttribute('is_user') !== 'true');
         const users = all.filter(el => el.getAttribute('is_user') === 'true');
         const latestAiEl = ai.at(-1) || null;
         const latestUserEl = users.at(-1) || null;
@@ -557,7 +512,7 @@ export function createInlineFeature(env = {}) {
             const start = all.indexOf(ai[ai.length - depth]);
             floors = start >= 0 ? all.slice(start) : all;
         }
-        return { winSet: new Set(floors), latestAiEl, latestUserEl, currentEl };
+        return { winSet: new Set(floors), latestAiEl, latestUserEl, currentEl, chatFloors, renderFloors: chatFloors.filter(el => el.getAttribute('is_system') !== 'true') };
     };
     const inViewport = el => {
         if (!el?.getBoundingClientRect) return true;
@@ -633,11 +588,11 @@ export function createInlineFeature(env = {}) {
             }
         }, { root: null, rootMargin: '200px 0px', threshold: 0 });
     };
-    const recompute = () => {
+    const recompute = (shared = null) => {
         if (!pluginEnabled() || getSettings().inlineRenderEnabled === false) { clear(); return; }
         ensureInlineObserver();
-        const current = computeWindow();
-        const floors = doc?.querySelectorAll?.('#chat .mes:not([is_system="true"])') || [];
+        const current = shared?.window || computeWindow(shared?.floors);
+        const floors = current.renderFloors;
         for (const el of floors) {
             const latest = el === current.currentEl;
             if (current.winSet.has(el)) {
@@ -649,12 +604,16 @@ export function createInlineFeature(env = {}) {
             }
         }
     };
-    const refresh = (immediate = false) => {
+    let refreshInput = null;
+    const refresh = (immediate = false, shared = null) => {
         if (!pluginEnabled()) { clear(); return; }
         clearTimer(refreshTimer);
         refreshTimer = null;
-        if (immediate) recompute();
-        else refreshTimer = setTimeout(() => { refreshTimer = null; recompute(); }, 120);
+        if (immediate) recompute(shared);
+        else {
+            refreshInput = shared;
+            refreshTimer = setTimeout(() => { refreshTimer = null; const input = refreshInput; refreshInput = null; recompute(input); }, 120);
+        }
     };
     const bindChatObserver = () => {
         const chat = doc?.querySelector?.('#chat');
@@ -668,8 +627,11 @@ export function createInlineFeature(env = {}) {
             clearTimer(chatMutationTimer);
             chatMutationTimer = setTimeout(() => {
                 chatMutationTimer = null;
-                env.coordinateChanged?.();
-                if (!env.isStreaming?.()) refresh(false);
+                const floors = [...(doc?.querySelectorAll?.('#chat .mes') || [])];
+                const context = env.getContext?.() || {};
+                const window = computeWindow(floors);
+                env.coordinateChanged?.({ floors, context });
+                if (!env.isStreaming?.()) refresh(true, { floors, context, window });
             }, 400);
         });
         chatObserver.observe(chat, { childList: true, subtree: true });
@@ -692,6 +654,7 @@ export function createInlineFeature(env = {}) {
         chatObserver = null;
         clearTimer(refreshTimer); clearTimer(chatMutationTimer); clearTimer(chatRetryTimer);
         refreshTimer = chatMutationTimer = chatRetryTimer = null;
+        refreshInput = null;
         cancelExpandScroll();
         if ($) $(doc).off('.spalmstrip').off('.spschstrip').off('.spinlineregioncollapse').off('.spinlinescroll');
         delegated = false;

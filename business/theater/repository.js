@@ -4,8 +4,8 @@ export function createTheaterRepository({ storage, metadata, persist, keyForChat
     const operationKey = (operation, chatId, id = '') => [operation, chatId, id].map(value => encodeURIComponent(String(value ?? ''))).join('|');
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const rollback = (meta, before, owned) => { if (meta.saved === owned || same(meta.saved, owned)) meta.saved = before; };
-    // 入队时绑定 target；切聊天后取消，避免队列出队时把 A 的永久操作落到 B。
-    // 永久层所有 mutate + persist 必须串行；失败也要让后续操作继续排队。
+    // 入队时固定目标；永久层 mutate 与 persist 串行，真实 CAS/冲突沿固定目标处理。
+    // 失败不阻断后续排队操作。
     let permanentQueue = Promise.resolve();
     const unknownCommits = new Map();
     const confirmUnknown = async (key, fixed) => {
@@ -146,7 +146,7 @@ export function createTheaterRepository({ storage, metadata, persist, keyForChat
             }
             catch (error) { rollback(m, before, owned); return { ok: false, error }; }
         }),
-        clearSaved: (target, options = {}) => enqueuePermanent(async () => {
+        clearSaved: target => enqueuePermanent(async () => {
             const fixed = resolveTarget(target);
             if (fixedUnavailable(fixed)) return notDispatched();
             if (fixed.external && metadataSaver && !fixed.target) return { ok: false, commitState: 'not-dispatched', reason: 'fixed-target-unavailable', error: new Error('theater-target-unavailable') };

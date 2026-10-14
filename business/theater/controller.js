@@ -6,8 +6,7 @@ export function createTheaterController({ owners, repository, generate, current,
     const cancellationReason = owner => owner?.cancelReason === 'user-abort' ? 'aborted' : (owner?.cancelReason || 'stale');
     async function run(input, options = {}) {
         if (active) return { status: 'skipped' };
-        // Freeze the host names exactly once. Story loading and both API stages may
-        // outlive a chat switch, so no later context snapshot may replace them.
+        // 开始时固定姓名、输入和设置；生成阶段沿用这些值，故事材料在请求启动时读取。
         const frozenNames = names?.() || {};
         const owner = owners.create('theater', { chatId: chatId(), chatRevision: chatRevision(), userName: frozenNames.userName || '用户', charName: frozenNames.charName || '角色', input: String(input || ''), templateSource: options.templateSource || null });
         owner.input = String(input || '');
@@ -34,7 +33,7 @@ export function createTheaterController({ owners, repository, generate, current,
             };
             return { status: 'updated', piece, reportUi };
         } catch (err) {
-            // 请求可能不遵守 AbortSignal，并在 owner 已换代后抛普通 Error；先验身份，绝不能把 A 的迟到错误反馈到 B。
+            // Owner 已失效时忽略其迟到错误，避免覆盖当前任务反馈。
             if (!valid(owner)) return { status: 'cancelled', reason: cancellationReason(owner) };
             if (err?.name === 'AbortError') return { status: 'cancelled', reason: 'aborted' };
             error?.(err, owner);

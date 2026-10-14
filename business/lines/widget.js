@@ -42,10 +42,23 @@ function locateLineWidgetTarget(raw, locator, body = '') {
 
 export function resolveLineWidgetTarget(raw, locator, body = '') { return locateLineWidgetTarget(raw, locator, body).index; }
 
+function matchesCapturedLine(line, locator) {
+    const fields = ['name', 'stage', 'when', 'agency', 'stall', 'desc', 'next', 'cue'];
+    if (!fields.every(key => Object.prototype.hasOwnProperty.call(locator || {}, key))) return true;
+    return fields.every(key => key === 'stall'
+        ? (line?.stall === true) === (locator.stall === true)
+        : key === 'cue'
+            ? serializeVectorCue(line?.cue) === serializeVectorCue(locator.cue)
+            : String(line?.[key] ?? '') === String(locator[key] ?? ''));
+}
+
 export function commitLineWidget(raw, body, { editIndex = null, pin = true, locator = null } = {}) {
     if (editIndex == null) return addLineWidget(raw, body, { pin });
     const target = locateLineWidgetTarget(raw, locator, body);
-    return target.index == null ? { ok: false, reason: target.reason, raw } : editLineWidget(raw, target.index, body);
+    if (target.index == null) return { ok: false, reason: target.reason, raw };
+    const model = parseLines(raw);
+    if (locator && !matchesCapturedLine(model[target.index], locator)) return { ok: false, reason: 'line-target-changed', raw };
+    return editLineWidget(raw, target.index, body);
 }
 
 export function replaceLineBlock(raw, index, newBlock) {

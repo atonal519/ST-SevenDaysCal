@@ -45,7 +45,7 @@ export function registerQuickReplyShortcutCommand({ parser, commandClass, open, 
                 await open(key);
                 return '';
             } catch (error) {
-                notify(`构画快捷入口打开失败：${String(error?.message || error)}`, true);
+                notify('构画快捷入口打开失败，请检查对应页面后重试。', true);
                 return '';
             }
         },
@@ -129,7 +129,7 @@ export function createQuickReplyShortcutSync({ getApi, notify = () => {} }) {
 
     return keys => {
         const task = pending.then(() => reconcile(keys));
-        pending = task.catch(error => notify(`快捷入口同步失败：${String(error?.message || error)}`, true));
+        pending = task.catch(() => notify('快捷入口同步失败，请检查 Quick Replies 后重试。', true));
         return pending;
     };
 }

@@ -35,12 +35,12 @@ export function createTheaterRuntime(host = {}) {
     const generation = createTheaterGeneration({
         write: host.callTheaterApi, beautify: host.callTheaterApi,
         buildWriteMessages: (input, options, settings) => buildWriteMessages(input, { ...(options?.storyContext || {}), userName: options?.userName || '用户', charName: options?.charName || '角色', sysBlocks: Array.isArray(options?.storyContext?.sysBlocks) ? options.storyContext.sysBlocks : [] }, settings),
-        buildBeautifyMessages, sanitize: sanitizeHtml, fallback: host.renderAiMessageHtml, plainTextFallback: safePlainTextHtml,
+        buildBeautifyMessages, sanitize: sanitizeHtml, plainTextFallback: safePlainTextHtml,
         onDiagnostic: host.onDiagnostic,
     });
-    const storyContext = createTheaterStoryContext({ getContext: host.getContext, buildWorldInfoContext: host.buildWorldInfoContext, readCardExtras: host.readCardExtras, getMemText: host.getMemText, owners });
+    const storyContext = createTheaterStoryContext({ getContext: host.getContext, buildWorldInfoContext: host.buildWorldInfoContext, readCardExtras: host.readCardExtras, buildRecentContext: host.buildRecentContext, getRecentMesIds: host.getRecentMesIds, getMemText: host.getMemText, owners });
     const feature = createTheaterFeature({
-        repository, templates, generation, storyContext, owners, captureTarget, draftCap: THEATER_DRAFT_CAP,
+        repository, templates, generation, owners, captureTarget, draftCap: THEATER_DRAFT_CAP,
         resolveRegen: (piece, fallback) => ({ input: String(piece?.request || piece?.templateSource?.input || fallback || '').trim(), templateSource: piece?.templateSource?.input ? { ...piece.templateSource, input: String(piece.templateSource.input).trim() } : null }),
         generate: (...args) => generation(...args), chatId: () => host.getContext?.().chatId, chatRevision: () => owners.currentChatRevision(),
         names: host.names, settings: host.settings, storyContext: owner => storyContext(owner), stage: host.stage, current: () => {},

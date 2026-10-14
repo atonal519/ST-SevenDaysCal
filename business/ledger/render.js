@@ -9,7 +9,7 @@
 //    $in, showToast, splitCnList, spConfirm, syncLatestAlmanacBlock, renderAlmanacPanel,
 //    getLedgerCaptureInterval, isCapturingLedger(), isJudgingLedger()
 //
-// 自动标注开关的唯一来源是 settings.ledgerCaptureEnabled；渲染层不持有第二份状态。
+// 自动标注状态由总开关与标注间隔共同决定；渲染层不持有第二份状态。
 
 import { escapeHtml, escapeAttr } from '../../utils/dom.js';
 import { getSettings } from '../../runtime/settings.js';
@@ -25,9 +25,9 @@ let _ledgerEditor = null;       // { id, advanced } 内联编辑窗，null=未�
 let _ledgerArchiveOpen = false; // 归档折叠区展开态
 let _batchScope = null;         // 当前批量 scope（null=未进入批量）
 let _batchSelected = new Set(); // 批量选中 id 集
-// 退出批量并清空选择（供 execBatch 收尾、以及外部 CHAT_CHANGED 复位调用）。
+// 退出批量并清空选择，供 execBatch 收尾及视图生命周期复位使用。
 export function batchReset() { _batchScope = null; _batchSelected = new Set(); }
-// CHAT_CHANGED、切档或退出面板时统一复位编辑、归档展开与批量选择。
+// 视图复位时同时关闭编辑器、归档展开和批量选择。
 export function resetLedgerRenderState() { _ledgerEditor = null; _ledgerArchiveOpen = false; batchReset(); }
 // 批量态访问器（供 axis/panel 的事件层读写：进入/退出/勾选/全选）。
 export function getBatchScope() { return _batchScope; }
@@ -90,7 +90,7 @@ export function ledgerRowHtml(e, cal, archived = false) {
         ${r3}
     </div>`;
 }
-// ── 暗历·内联编辑窗（照 _almanacEditor 同款：渲进 #sp-almanac-wrap，不用弹窗，跟 CHAT_CHANGED 一起清）──
+// ── 暗历内联编辑窗，渲染在轴面板内。──
 // 只改现有条目（新增走 AI 标注，不在此手加）。保存即上「用户锁」——判定车 gate 掉锁条、不再动你手改的。
 // 起始锚是底账·判定车算「距今几天」的基准，默认折叠只读、advanced 才可改，防手滑改崩时间基线。
 export function openLedgerEditor(id) {
@@ -305,7 +305,7 @@ export function renderLedgerControls() {
 export function renderLedgerSheet({ includeControls = true } = {}) {
     const s = getSettings();
     const busy = env.isCapturingLedger();
-    const on = s.ledgerCaptureEnabled;
+    const autoCaptureOn = s.ledgerCaptureEnabled === true && env.getLedgerCaptureInterval() > 0;
     const entries = ledger.listEntries();
     const cal = loadCalDesc();
     const closed = ledger.listEntries({ includeClosed: true }).filter(e => e.状态 === '已了结');
@@ -321,7 +321,9 @@ export function renderLedgerSheet({ includeControls = true } = {}) {
         : '';
     if (!entries.length) {
         const hint = busy ? '正在标注…'
-            : `暂无活跃刻度条目。聊几楼后${on ? '自动标注' : '（先勾上「自动标注」）'}，或点右上「立即标注」。`;
+            : autoCaptureOn
+                ? '暂无活跃刻度条目。聊几楼后自动标注，或点右上「立即标注」。'
+                : '暂无活跃刻度条目。当前不会自动标注；点右上「立即标注」可手动标注。';
         const initialized = env.getLedgerCaptureStatus?.()?.initialized === true;
         const initHint = initialized ? '' : '<div>世界书初始化：待首次标注</div>';
         return (includeControls ? renderLedgerControls() : '') + `<div class="sp-ledger-empty"><div>${hint}</div>${initHint}</div>` + archive;

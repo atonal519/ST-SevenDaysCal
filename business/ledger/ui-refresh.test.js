@@ -30,7 +30,7 @@ test('刻度 capture local apply survives a refresh exception and does not repea
     const context = () => ({ chatId: 'capture-chat', name1: 'User', name2: 'Character', chat: [] });
     bindLedgerCapture({ context, parseClock: () => ({}), parseDate: () => null, stripTags: value => value, settings: () => ({}) });
     const writes = [], toasts = [];
-    let refreshes = 0, apiCalls = 0;
+    let apiCalls = 0;
     const controller = createLedgerCaptureController({
         context, charKey: () => 'character', target: () => null, config: () => ({ url: 'fixture', key: 'fixture' }),
         appendTravel: prompt => prompt, validDate: () => null, floorContext: () => ({ floor: null, date: null }), today: () => ({ month: 1, day: 1 }),
@@ -38,7 +38,7 @@ test('刻度 capture local apply survives a refresh exception and does not repea
         callApi: async () => { apiCalls++; return 'fixture'; },
         parseCapture: () => [{ 事由: '归还借书', 类型: '约定待办', 牵扯: ['User'], 标签: ['借书'], 现状: '已约定明日归还。', _sourceToken: 'SET' }],
         addAtomic: async additions => { writes.push(additions); return additions.map((item, index) => ({ ...item, id: `L${index + 1}` })); },
-        refresh: () => { refreshes++; throw new Error('synthetic capture refresh failure'); }, refreshInline: () => {}, render: () => {},
+        refresh: () => { throw new Error('synthetic capture refresh failure'); }, refreshInline: () => {}, render: () => {},
         toast: message => toasts.push(message),
     });
     const result = await controller.run(false);

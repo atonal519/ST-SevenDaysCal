@@ -101,10 +101,7 @@ function persistNow(ctx) {
 }
 
 function persist(options = {}) {
-    // 立即落盘，而非 saveMetadataDebounced：切档时 ST 的 clearChat() 会
-    // cancelDebouncedMetadataSave() 取消还没触发的防抖保存，紧接着 chat_metadata={}，
-    // 防抖那份就永不落盘 → 点线面/记忆丢失。saveMetadata() 同步快照 chat_metadata、
-    // 走 diff patch（无变化即 no-op），写完当场发出，切档取消不掉。
+    // 普通聊天数据先应用到当前 metadata，再通过宿主标准保存入口提交。
     const ctx = getContext?.();
     if (!ctx) return;
     const external = persistExternalRoots();
@@ -279,8 +276,7 @@ export function writeData(kind, view, charName, value, options = {}) {
     return true;
 }
 
-// 同一业务需要同时更新多份子数据时，只改一次内存对象并统一落盘，避免两次 saveMetadata
-// 之间切档造成“只写成功一半”。entries: [{ kind, view, charName, value }]。
+// 同一业务更新多份子数据时，先统一修改内存对象再保存一次。entries: [{ kind, view, charName, value }]。
 export function writeBatch(entries) {
     const list = Array.isArray(entries) ? entries.filter(it => it?.kind) : [];
     if (!list.length) return false;

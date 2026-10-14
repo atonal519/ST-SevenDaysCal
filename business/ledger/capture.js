@@ -72,18 +72,35 @@ export function ledgerFloorDateContext(floor = null) {
     const date = sideClock(clock, 'E', calendar).date || sideClock(clock, 'S', calendar).date;
     return { floor: floorId, date: date || null };
 }
-function ledgerFloorRecords(predicate, limit = null) {
-    const chat = env.context().chat || [], floors = [];
-    for (let i = 0; i < chat.length; i++) {
-        const msg = chat[i]; if (!predicate(msg)) continue;
+function ledgerFloorRecord(msg, i) {
         const { calendar, clock } = parseFloorClock(msg.mes, i); const parts = [];
         const start = sideClock(clock, 'S', calendar), end = sideClock(clock, 'E', calendar);
         if (start.date) parts.push({ side: 'S', stamp: start.stamp, date: start.date });
         if (end.date) parts.push({ side: 'E', stamp: end.stamp, date: end.date });
-    floors.push({ floor: i, signature: String(msg.mes), identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') }, content: env.stripTags(String(msg.mes), env.settings()).trim(), sources: parts.map(part => ({ token: `F${i}${part.side}`, floor: i, date: part.date, stamp: part.stamp, signature: String(msg.mes), fingerprint: ledgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes), { floor: i, date: part.date }), legacyFingerprint: legacyLedgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes)) })) });
+    return { floor: i, signature: String(msg.mes), identity: { is_user: !!msg.is_user, is_system: !!msg.is_system, name: String(msg.name || ''), type: String(msg.extra?.type || '') }, content: env.stripTags(String(msg.mes), env.settings()).trim(), sources: parts.map(part => ({ token: `F${i}${part.side}`, floor: i, date: part.date, stamp: part.stamp, signature: String(msg.mes), fingerprint: ledgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes), { floor: i, date: part.date }), legacyFingerprint: legacyLedgerSourceFingerprint(`F${i}${part.side}`, String(msg.mes)) })) };
+}
+function cloneLedgerFloorRecord(item) {
+    return { ...item, sources: item.sources.map(source => ({ ...source, content: item.content })) };
+}
+function ledgerFloorRecords(predicate, limit = null) {
+    const chat = env.context().chat || [];
+    const candidates = [];
+    for (let i = 0; i < chat.length; i++) if (predicate(chat[i])) candidates.push(i);
+    const selected = limit == null ? candidates : candidates.slice(-Math.max(0, limit));
+    return selected.map(i => cloneLedgerFloorRecord(ledgerFloorRecord(chat[i], i)));
+}
+function ledgerCaptureFloorRecordSets() {
+    const chat = env.context().chat || [], visible = [], historical = [];
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        const isVisible = ledgerNarrativeMessage(msg);
+        const isHistorical = ledgerHistoricalNarrativeMessage(msg);
+        if (!isVisible && !isHistorical) continue;
+        const record = ledgerFloorRecord(msg, i);
+        if (isVisible) visible.push(record);
+        if (isHistorical) historical.push(record);
     }
-    const selected = limit == null ? floors : floors.slice(-Math.max(0, limit));
-    return selected.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, content: item.content })) }));
+    return { visible: visible.map(cloneLedgerFloorRecord), historical: historical.map(cloneLedgerFloorRecord) };
 }
 export function ledgerAiFloorRecords(limit = null) { return ledgerFloorRecords(ledgerNarrativeMessage, limit); }
 export function ledgerHistoricalAiFloorRecords(limit = null) { return ledgerFloorRecords(ledgerHistoricalNarrativeMessage, limit); }
@@ -316,8 +333,7 @@ function createPersistentLedgerCaptureController(options) {
         const owner = { chatId, target: fixedTarget, guard: () => current(ctrl, chatId, ownerSnapshot, travel) };
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         try {
-            const visibleRecords = ledgerAiFloorRecords();
-            const allRecords = ledgerHistoricalAiFloorRecords();
+            const { visible: visibleRecords, historical: allRecords } = ledgerCaptureFloorRecordSets();
             let checkpoint = resumed?.checkpoint || null;
             let historyRecords = resumed?.records || null;
             if (checkpoint) {

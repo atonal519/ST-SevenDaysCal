@@ -4,7 +4,7 @@ export function enterCoordinateSidebar({ resetModes, hidePanels, showCoordinate,
 
 export function createCoordinateUI({ root = null, onDestroy = null } = {}) {
     const route = { level: 'chars', charName: null, chatId: null, itemId: null, filter: null, fullTagEdit: false, tagEditId: null, tagEditColor: 'slate', tagNewColor: 'rose', tagDeleteId: null };
-    let destroyed = false; let interactionItemId = null; const cleanups = new Set();
+    let destroyed = false; const cleanups = new Set();
     const listen = (target, event, handler, options) => { target?.addEventListener?.(event, handler, options); const off = () => target?.removeEventListener?.(event, handler, options); cleanups.add(off); return off; };
     return {
         bind(target = root, event, handler, options) { return listen(target, event, handler, options); },
@@ -17,9 +17,7 @@ export function createCoordinateUI({ root = null, onDestroy = null } = {}) {
         setTagNewColor(color) { route.tagNewColor = String(color || 'rose'); },
         setTagDelete(id) { route.tagDeleteId = id == null ? null : String(id); route.tagEditId = null; },
         fullTagEdit: () => route.fullTagEdit,
-        route: () => route.level, itemId: () => interactionItemId ?? route.itemId,
-        freezeInteraction: () => { interactionItemId = route.itemId; return interactionItemId; },
-        clearInteraction: () => { interactionItemId = null; },
+        route: () => route.level, itemId: () => route.itemId,
         open(next = 'chars') { this.setRoute(next); root?.classList?.add('sp-coordinate-open'); },
         close() { this.setRoute('chars'); root?.classList?.remove('sp-coordinate-open'); },
         destroy() { if (destroyed) return; destroyed = true; for (const off of cleanups) off(); cleanups.clear(); this.close(); onDestroy?.(); },

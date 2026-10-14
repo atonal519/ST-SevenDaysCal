@@ -46,7 +46,7 @@ export function createSpaceChat(env = {}) {
                 messages,
                 temperature: env.temperature,
                 signal: controller.signal,
-                promptMode: 'creative',
+                promptMode: 'planning',
                 diagnosticModule: 'space',
                 diagnosticSink: diagnostic.sink,
             });
@@ -62,6 +62,7 @@ export function createSpaceChat(env = {}) {
                 ...(Array.isArray(messages?.pointBaselines) ? { pointBaselines: messages.pointBaselines } : {}),
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
+                ...(messages?.expectedWidgetKind === 'outline_widget' && messages?.outlineRawToken ? { outlineRawToken: messages.outlineRawToken } : {}),
             };
             if (!repository.replace(liveTarget, appendSpaceAssistant(userHistory, reply, widgetContext))) {
                 const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'space-save-failed' });
@@ -73,10 +74,12 @@ export function createSpaceChat(env = {}) {
             try {
                 env.ui?.endThinking?.(thinking);
                 const savedReply = history().at(-1);
-                env.ui?.appendMessage?.('ai', reply, history().length - 1, {
+                env.ui?.appendMessage?.('ai', savedReply?.content ?? reply, history().length - 1, {
                     pointBaselines: savedReply?.pointBaselines,
                     lineBaselines: savedReply?.lineBaselines,
                     expectedWidgetKind: savedReply?.expectedWidgetKind,
+                    outlineRawToken: savedReply?.outlineRawToken,
+                    historyIndex: history().length - 1,
                     legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),
                 });
                 diagnostic.uiDisplayed({ reasonCode: 'space-chat-ui-applied' });
@@ -107,14 +110,14 @@ export function createSpaceChat(env = {}) {
         const target = repository.capture();
         const next = [...history()];
         next.splice(index, 1);
-        if (!repository.replace(target, next)) return false;
+        if (!repository.replace(target, next)) { env.ui?.toast?.('删除失败，对话记录未变更', true); return false; }
         env.ui?.renderHistory?.(history());
         return true;
     };
     const clear = () => {
         if (busy || !history().length) return false;
         const target = repository.capture();
-        if (!repository.clear(target)) return false;
+        if (!repository.clear(target)) { env.ui?.toast?.('清空失败，对话记录未变更', true); return false; }
         env.ui?.emptyMessages?.();
         return true;
     };
@@ -123,7 +126,10 @@ export function createSpaceChat(env = {}) {
             return Promise.resolve(Object.freeze({ status: 'invalid' }));
         }
         const target = repository.capture();
-        if (!repository.replace(target, history().slice(0, index))) return Promise.resolve(Object.freeze({ status: 'stale' }));
+        if (!repository.replace(target, history().slice(0, index))) {
+            env.ui?.toast?.('重发失败，对话记录未变更', true);
+            return Promise.resolve(Object.freeze({ status: 'stale' }));
+        }
         env.ui?.renderHistory?.(history());
         return send(String(content).trim());
     };

@@ -44,3 +44,19 @@ test('间讨论的呈现异常保留已本地应用的回复', async () => {
     assert.match(result.uiError.message, /render failed/);
     assert.equal(roots.get('A').at(-1).content, '已生成回复');
 });
+
+test('间删除、清空和重发遇到保存拒绝时提示失败并保留原历史', async () => {
+    const stored = [{ role: 'user', content: '保留' }]; const notices = []; const renders = [];
+    const repository = createSpaceRepository({
+        captureIdentity: () => createSpaceIdentity({ chatId: 'A', historyKey: { kind: 'space-chat', view: 'user', charName: '' } }),
+        isCurrent: () => true, readStore: () => stored, writeStore: () => false,
+    });
+    repository.load();
+    const chat = createSpaceChat({ repository, ui: { toast: (...args) => notices.push(args), renderHistory: value => renders.push(value), emptyMessages: () => renders.push([]) } });
+    assert.equal(chat.remove(0), false);
+    assert.equal(chat.clear(), false);
+    assert.equal((await chat.resendFrom(0, '改写')).status, 'stale');
+    assert.equal(repository.history()[0]?.content, '保留');
+    assert.equal(notices.length, 3);
+    assert.equal(renders.length, 0);
+});

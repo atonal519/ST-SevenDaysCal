@@ -14,7 +14,7 @@ function eventKeys(entry) {
 // env: { ledgerDaysSince(entry)->number|null, ledgerDueInfo(entry)->{天数,过期}|null }
 export function bindLedgerSelect(e) { env = e; }
 
-// 单条打分（RAG 可换钩子·整体可替换）：基础权重 + 场景加权。分越高越该注入。
+// 单条打分结合基础权重与场景相关度；分数越高越优先注入。
 //   基础：用户锁（用户在意）> 临近/过期到期 > 近期登记 > 持续状态活跃底分。
 //   场景：牵扯∪标签 任一命中最近正文 → 显著加分（正文正谈到 → 此刻最相关）。
 export function scoreLedgerEntry(entry, sceneText, _today) {
@@ -58,7 +58,6 @@ export function isLedgerSalient(entry, sceneText) {
 // 相关条 ≤ limit 全带（有几条埋几条·凑不满就不凑）；超 limit 才按 score 降序截前 limit（取最相关的）。空进空出。
 // 静音（暂停埋入）条一律排除：不进注入集 → 连带不进召回（_ledgerInjectEcho 从 picked 派生）。仍是活跃、仍显示在标注池。
 // 门槛防止活跃池变大后用无关条目硬凑 limit；静音条也不会被下一名自动补位。
-// RAG 口子：将来换外部检索，替换排序来源即可（打分器 scoreLedgerEntry / 门槛 isLedgerSalient 单点可换）。
 export function selectLedgerForInject(entries, sceneText, today, limit = 8) {
     const active  = (entries || []).filter(e => e && e.状态 !== '已了结' && e.静音 !== true);
     const salient = active.filter(e => isLedgerSalient(e, sceneText));

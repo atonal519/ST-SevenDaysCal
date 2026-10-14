@@ -291,10 +291,7 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     // 覆盖建连 + 非流式 JSON 读取 + 流式 SSE 读取。超时转成明确报错而非静默卡死。
     const timeoutSec = Number.isFinite(cfg.timeoutSec) && cfg.timeoutSec > 0 ? cfg.timeoutSec : 180;
 
-    // 429 / 5xx 自动重试：构画会在主楼回复的同一限流窗口里额外并发多路后台请求
-    // （日期判定、历判定等），比单串行的主楼更容易撞上游 429 或瞬时 5xx。这里做指数
-    // 退避 + 抖动的短重试，让偶发限流自愈；gcli2api 是随机负载均衡的凭证池，重试往往
-    // 换到另一份没耗尽配额的凭证就过了，比立刻甩错给用户更稳。
+    // 对限流、服务端错误和网络抖动做短重试；配置类 4xx 与明确取消直接返回错误。
     // - 只重试 429 / 5xx / fetch 网络抖动；4xx（400/401/403/404）是配置问题重试无益，立即抛。
     // - 用户主动中止（外部 signal）与超时不重试：原样抛出；退避睡眠也可被中止打断。
     const RETRY_MAX = 2;   // 首次 + 最多 2 次重试 = 至多 3 次尝试

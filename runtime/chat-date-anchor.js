@@ -20,7 +20,7 @@ export function normalizeChatAnchor(value, chatId) {
 }
 export function unresolvedLegacyAnchor(identity = null) { return { status: 'unresolved', reason: 'legacy-global-anchor-needs-explicit-claim', identity }; }
 
-export function createChatAnchorRepository({ chatId, read, write, writeConfirmed, legacy = null, claimMarkerRead = null, claimMarkerWrite = null } = {}) {
+export function createChatAnchorRepository({ chatId, read, write, writeConfirmed, legacy = null, claimMarkerRead = null } = {}) {
     const id = () => String(typeof chatId === 'function' ? chatId() || '' : chatId || '');
     const localRecord = () => { try { return read?.() || null; } catch { return null; } };
     const local = () => { const r = localRecord(); if (r?.state === 'auto') return null; return r?.state === 'set' ? normalizeChatAnchor(r, id()) : normalizeChatAnchor(r?.anchor ? r : null, id()); };

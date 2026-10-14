@@ -1,5 +1,6 @@
-import { outlineBaseline, parseOutline, parseOutlineRelocationAnswer, shouldAdvanceOutline } from './schema.js';
+import { outlineBaseline, parseOutline, parseOutlineAdvanceDecision, parseOutlineRelocationAnswer } from './schema.js';
 import { buildOutlineJudgePrompt, buildOutlineRelocationPrompt } from './prompts.js';
+import { isOutlinePlanningEnabled, projectOutlineBeats } from './injection.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 
 export function createOutlineJudge({
@@ -7,6 +8,7 @@ export function createOutlineJudge({
     context,
     settings,
     pluginEnabled,
+    injectEnabled,
     loadConfig,
     callApi,
     cleanText,
@@ -58,6 +60,7 @@ export function createOutlineJudge({
 
     const runAdvance = async () => {
         const diagnostic = createGenerationDiagnosticScope('outline-judge', { background: true });
+        if (!isOutlinePlanningEnabled(injectEnabled || pluginEnabled, settings)) return { status: 'skipped' };
         if (busy && owner?.controller?.signal?.aborted) {
             owner = null;
             busy = false;
@@ -69,9 +72,10 @@ export function createOutlineJudge({
         const beats = parseOutline(saved.raw);
         const cursor = repository.cursor(target);
         const baseline = outlineBaseline(saved);
-        if (!beats.length || cursor < 1 || cursor >= beats.length) return { status: 'skipped' };
-        const current = beats[cursor - 1];
-        const next = beats[cursor];
+        const projection = projectOutlineBeats(beats, cursor);
+        if (!projection.current || !projection.next) return { status: 'skipped' };
+        const current = projection.current;
+        const next = projection.next;
         const task = makeOwner(target, baseline);
         clearFailure('judge-advance', target);
         try {
@@ -98,8 +102,8 @@ export function createOutlineJudge({
                 options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
             });
             if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
-            const decision = String(answer || '').replace(/\s+/g, '').replace(/[。.!！]+$/u, '');
-            if (!/^(?:推进|未推进|没推进|不推进|无推进)$/u.test(decision)) {
+            const decision = parseOutlineAdvanceDecision(answer);
+            if (!decision) {
                 const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'outline-judge-format' });
                 if (currentAndOwned(task) && repository.matches(target, baseline)) failure('judge-advance', target, error);
                 finish(task); logDiagnostic?.(safeDiagnosticLog('outline', 'parse', error, { background: true }));
@@ -107,7 +111,7 @@ export function createOutlineJudge({
                 return { status: 'failed', error };
             }
             diagnostic.accepted({ phase: 'validation', reasonCode: decision === '推进' ? 'advance' : 'no-advance' });
-            if (!shouldAdvanceOutline(answer)) {
+            if (decision !== '推进') {
                 finish(task);
                 return { status: 'unchanged' };
             }
@@ -205,7 +209,7 @@ export function createOutlineJudge({
         return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 3;
     };
     const onCharacterMessage = messageId => {
-        if (!pluginEnabled?.() || settings?.().outlineInject !== true) return false;
+        if (!isOutlinePlanningEnabled(injectEnabled || pluginEnabled, settings)) return false;
         const chat = context?.()?.chat;
         if (!Array.isArray(chat) || messageId !== chat.length - 1 || messageId <= lastJudgedMessageId) return false;
         lastJudgedMessageId = messageId;

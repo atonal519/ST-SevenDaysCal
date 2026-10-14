@@ -6,7 +6,8 @@ export function createAxisWidgetActions(env = {}) {
         if (!env.key?.()) return env.error?.('当前对话没有可写入的轴缓存');
         item.pin = true; const existing = env.loadItems?.() || []; const seen = new Set(existing.map(env.dedupKey));
         if (seen.has(env.dedupKey(item))) { env.done?.(button, '轴里已有'); return env.error?.('这个日期轴里已经有了'); }
-        env.saveItems?.([...existing, item]); env.render?.(); env.sync?.(); env.done?.(button, '已加到轴'); env.notify?.(`已加到轴：${item.name}`); return { ok: true, item };
+        if (env.saveItems?.([...existing, item]) === false) return env.error?.('日期轴保存失败，请重试') || { ok: false, reason: 'save' };
+        env.render?.(); env.sync?.(); env.done?.(button, '已加到轴'); env.notify?.(`已加到轴：${item.name}`); return { ok: true, item };
     }
     async function applyEraWidget(body, button) {
         const desc = env.parseEra?.(body); if (!desc) return env.error?.('历法卡片格式不完整，无法应用');

@@ -35,7 +35,6 @@ export function vectorGlyphSvg(value) {
     return `<svg class="sp-line-vector-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${edges}${nodes}</svg>`;
 }
 
-export const renderVectorGlyph = vectorGlyphSvg;
 
 /** Synchronize only already-mounted glyphs with the host theme. */
 export function syncVectorGlyphTheme(root, theme, forced = false) {

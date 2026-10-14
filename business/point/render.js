@@ -23,7 +23,7 @@ export const TYPE_META = {
     bond  : { icon: 'fa-heart',     label: '红线', cls: 'sp-type-character' },
 };
 
-export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想调整这些点？<button type="button" class="sp-jump-link">和「间」聊聊 →</button></div>`;
+export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想新增或调整点？去「间」说明人物与目标，例如“把下周的约定整理成可应用到点的方案”：<button type="button" class="sp-jump-link">去间提出要求 →</button></div>`;
 
 // 点条第 0..n-1 天的日期上下文（供点面板/楼内点条取 月/日/周几 用，与「历」同锚同源）
 export function scheduleDayCtx(startDate = null, calendarOverride = null, weekdayRefOverride = undefined) {
@@ -51,8 +51,8 @@ export function scheduleDayLabel(i, startDate, ctx) {
 function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', dateLabel = '', owner = null) {
     const adult = ev.adult === true;
     const meta = TYPE_META[ev.type] || TYPE_META.main;
-    // F5 锁点：仅面板内渲染（有定位 dayKey）且事件有标题时给锁钮；注入卡/无定位场景不显示
-    // 删除钮：仅面板内渲染（有定位 dayKey）才给；注入卡/无定位场景不显示。走 .sp-sch-del-one，
+    // 有日期定位的面板条目显示编辑、锁定和删除操作；注入卡保留独立注入入口。
+    // 删除钮走 .sp-sch-del-one，
     // 与楼内块抽屉同类、共用 handler（#sp-body/#chat 委托）与 triggerDeletePointEvent（同刷主面板+楼内块）。
     const inject = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel, owner));
     const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';

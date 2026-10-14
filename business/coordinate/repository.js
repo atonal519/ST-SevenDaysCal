@@ -37,6 +37,15 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
     };
     const partialError = (error, detail) => Object.assign(error instanceof Error ? error : new Error(String(error || 'coordinate mutation failed')), detail);
     const serial = task => { const next = mutation.then(task, task); mutation = next.catch(() => {}); return next; };
+    const addItemUnlocked = async item => {
+        const idx = cloneIndex(await readIndex());
+        const meta = toMeta(item); const i = idx.items.findIndex(x => x.id === meta.id);
+        if (i < 0) idx.items.push(meta); else idx.items[i] = meta;
+        await uploadJson(ports, fileNameOf(item.id), item);
+        try { await saveIndex(idx); }
+        catch (error) { throw partialError(error, { partial: true, detailWritten: true, itemId: item.id }); }
+        return item;
+    };
 
     const api = {
         ports,
@@ -49,13 +58,7 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
         estimateBytes: async () => (await readIndex()).items.reduce((sum, item) => sum + (Number(item.bytes) || 0), 0),
         formatBytes,
         checkSize: async () => { const bytes = await api.estimateBytes(); return { bytes, over: bytes > (Number(ports.settings()?.anchorSizeWarnBytes) || warnBytes), warnBytes }; },
-        addItem: item => serial(async () => {
-            await uploadJson(ports, fileNameOf(item.id), item);
-            const idx = cloneIndex(await readIndex()); const meta = toMeta(item); const i = idx.items.findIndex(x => x.id === meta.id);
-            if (i < 0) idx.items.push(meta); else idx.items[i] = meta;
-            try { await saveIndex(idx); } catch (error) { throw partialError(error, { partial: true, detailWritten: true, itemId: item.id }); }
-            return item;
-        }),
+        addItem: item => serial(() => addItemUnlocked(item)),
         deleteItem: id => serial(async () => {
             if (!id) return;
             const current = await readIndex(); const removed = current.items.find(item => item.id === id);
@@ -86,6 +89,16 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
         }),
         renameTag: (id, name) => serial(async () => { const idx = cloneIndex(await readIndex()); const tag = idx.tags.find(x => x.id === id); const nm = String(name || '').trim(); if (tag && nm && tag.name !== nm) { tag.name = nm; await saveIndex(idx); } }),
         recolorTag: (id, color) => serial(async () => { const idx = cloneIndex(await readIndex()); const tag = idx.tags.find(x => x.id === id); if (tag) { tag.color = String(color || ''); await saveIndex(idx); } }),
+        updateTag: (id, name, color) => serial(async () => {
+            const idx = cloneIndex(await readIndex()); const tag = idx.tags.find(item => item.id === id);
+            const nextName = String(name || '').trim();
+            if (!tag) return;
+            const resolvedName = nextName || tag.name;
+            const nextColor = String(color || '');
+            if (tag.name === resolvedName && tag.color === nextColor) return;
+            tag.name = resolvedName; tag.color = nextColor;
+            await saveIndex(idx);
+        }),
         setItemTags: (id, tags) => serial(async () => { const item = await api.getItem(id); if (!item) return; item.tags = Array.isArray(tags) ? [...tags] : []; await api._addItemUnlocked(item); }),
         findItemIdsByFloor: async (chatId, floor) => (await readIndex()).items.filter(item => String(item.chatId) === String(chatId) && (Number(item.messageId) === Number(floor) || Number(item.floorIndex) === Number(floor))).map(item => item.id),
         listByChat: async () => { const buckets = new Map(); for (const item of await api.getAllItems()) { const key = item.chatIdHash != null ? `h:${item.chatIdHash}` : `c:${item.chatId || '(unknown)'}`; const bucket = buckets.get(key) || { chatId: item.chatId, chatIdHash: item.chatIdHash ?? null, chatName: item.chatName || '(未命名聊天)', charName: item.charName || '', items: [], latestTs: 0 }; bucket.items.push(item); if ((item.ts || 0) >= bucket.latestTs) { bucket.latestTs = item.ts || 0; bucket.chatId = item.chatId ?? bucket.chatId; bucket.chatName = item.chatName || bucket.chatName; bucket.charName = item.charName || bucket.charName; } buckets.set(key, bucket); } return [...buckets.values()].map(bucket => ({ ...bucket, count: bucket.items.length, items: bucket.items.sort((a, b) => (Number(b.floorIndex) || 0) - (Number(a.floorIndex) || 0) || (Number(b.ts) || 0) - (Number(a.ts) || 0)) })).sort((a, b) => b.latestTs - a.latestTs); },
@@ -123,6 +136,6 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
         }),
     };
     // Internal form avoids nesting a second queue while a mutation is already running.
-    api._addItemUnlocked = async item => { await uploadJson(ports, fileNameOf(item.id), item); const idx = cloneIndex(await readIndex()); const meta = toMeta(item); const i = idx.items.findIndex(x => x.id === meta.id); if (i < 0) idx.items.push(meta); else idx.items[i] = meta; await saveIndex(idx); return item; };
+    api._addItemUnlocked = addItemUnlocked;
     return api;
 }

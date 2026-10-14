@@ -10,15 +10,19 @@ const outlineAnchorKind = value => {
     for (const kind of ['Beat', 'Scene', 'Subtext', 'Think']) if (new RegExp(`^${kind}\\s*[:：]`, 'i').test(text)) return kind.toLowerCase();
     return null;
 };
-const completeOutlineStructure = kinds => ['beat', 'scene', 'subtext', 'think'].every(kind => kinds.includes(kind));
+const completeOutlineStructure = kinds => kinds.includes('beat') && kinds.includes('scene');
 
 export function parseOutline(raw) {
     const source = String(raw || '');
     const widget = /<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i.exec(source);
     const content = stripRecordWrappers(widget ? widget[1] : source, outlineAnchorKind, completeOutlineStructure);
+    const lines = content.split('\n');
+    const firstField = lines.find(line => cleanOutlineLine(line));
+    const structured = Boolean(widget) || outlineAnchorKind(firstField) === 'beat' && lines.some(line => outlineAnchorKind(line) === 'scene');
     const beats = [];
     let current = null;
-    for (const rawLine of content.split('\n')) {
+    let field = '';
+    for (const rawLine of lines) {
         const text = cleanOutlineLine(rawLine);
         if (!text) continue;
         if (/^Beat\s*[:：]/i.test(text)) {
@@ -34,12 +38,18 @@ export function parseOutline(raw) {
                 subtext: '',
                 think: '',
             };
+            field = '';
         } else if (/^Scene\s*[:：]/i.test(text) && current) {
             current.scene = text.replace(/^Scene\s*[:：]\s*/i, '').trim();
+            field = 'scene';
         } else if (/^Subtext\s*[:：]/i.test(text) && current) {
             current.subtext = text.replace(/^Subtext\s*[:：]\s*/i, '').trim();
+            field = 'subtext';
         } else if (/^Think\s*[:：]/i.test(text) && current) {
             current.think = text.replace(/^Think\s*[:：]\s*/i, '').trim();
+            field = 'think';
+        } else if (structured && current && ['scene', 'subtext', 'think'].includes(field)) {
+            current[field] = [current[field], text].filter(Boolean).join('\n');
         }
     }
     if (current) beats.push(current);
@@ -47,7 +57,7 @@ export function parseOutline(raw) {
 }
 
 export function isCompleteOutlineBeat(beat) {
-    return !!beat && ['time', 'title', 'type', 'line', 'outcome', 'scene', 'subtext', 'think']
+    return !!beat && ['time', 'title', 'type', 'line', 'outcome', 'scene']
         .every(key => String(beat[key] || '').trim());
 }
 
@@ -141,6 +151,34 @@ export function sameOutlineBaseline(saved, baseline) {
 export function shouldAdvanceOutline(answer) {
     const text = String(answer || '').trim();
     return /推进/.test(text) && !/(未|没|不|无)\s*推进/.test(text);
+}
+
+const OUTLINE_ADVANCE_VALUES = new Set(['推进', '未推进', '没推进', '不推进', '无推进']);
+
+function normalizeOutlineAdvanceValue(value) {
+    const compact = String(value ?? '').replace(/\s+/gu, '').replace(/[。.!！?？、,，;；:：]+$/u, '');
+    return OUTLINE_ADVANCE_VALUES.has(compact) ? compact : null;
+}
+
+export function parseOutlineAdvanceDecision(answer) {
+    let text = String(answer ?? '').trim();
+    if (!text) return null;
+    const fences = [...text.matchAll(/```([^`]*)```/gs)];
+    if (fences.length) {
+        if (fences.length !== 1 || text.slice(0, fences[0].index).trim() || text.slice(fences[0].index + fences[0][0].length).trim()) return null;
+        text = fences[0][1].trim().replace(/^(?:json|text)\s*/i, '');
+    }
+    if (/^[{]/u.test(text)) {
+        try {
+            const object = JSON.parse(text);
+            if (!object || Array.isArray(object) || typeof object !== 'object') return null;
+            const keys = Object.keys(object).filter(key => ['decision', '结论'].includes(key.toLowerCase()));
+            if (keys.length !== 1 || typeof object[keys[0]] !== 'string') return null;
+            return normalizeOutlineAdvanceValue(object[keys[0]]);
+        } catch { return null; }
+    }
+    const field = /^(?:结论|decision)\s*[:：]\s*([\s\S]+)$/iu.exec(text);
+    return normalizeOutlineAdvanceValue(field ? field[1] : text);
 }
 
 export function parseOutlineRelocationAnswer(answer, beatCount) {

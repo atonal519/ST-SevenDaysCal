@@ -181,12 +181,14 @@ export function buildTravelPlanningContext({ outline = [], outlineCursor = 1, li
     const blocks = [];
     if (Array.isArray(outline) && outline.length) {
         const cursor = Number.isFinite(Number(outlineCursor)) ? Math.floor(Number(outlineCursor)) : 1;
-        blocks.push(`【剧情大纲规划】\n${outline.map((beat, index) => {
+        const nodes = outline.map((beat, index) => {
+            if (!beat) return '';
             const current = index + 1 === cursor ? '（当前节点）' : '';
             const head = `${index + 1}${current}. ${beat?.time ? `${beat.time} · ` : ''}${beat?.title || '未命名节点'}`;
             const details = [beat?.type, beat?.scene, beat?.outcome].filter(Boolean).join('；');
             return `${head}${details ? `\n   ${details}` : ''}`;
-        }).join('\n')}`);
+        }).filter(Boolean);
+        if (nodes.length) blocks.push(`【剧情大纲规划】\n${nodes.join('\n')}`);
     }
     if (Array.isArray(lines) && lines.length) {
         blocks.push(`【事件线参考】\n${lines.map((line, index) => {

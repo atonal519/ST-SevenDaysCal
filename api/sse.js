@@ -14,16 +14,8 @@ export function normalizeApiUrl(url) {
 // 兼容端点可能仍会在错误信息中提到 max_tokens；构画请求本身不指定输出长度。
 export const PROTECTED_BODY_KEYS = new Set(['chat_completion_source', 'reverse_proxy', 'proxy_password', 'model', 'messages']);
 
-// 把原始错误（HTTP 状态码 / 上游报文 / 网络异常）翻译成用户能照着做的提示。
-// status：HTTP 状态码（无则 0）；raw：上游返回的报文或错误 message。
 // 推理模型（GLM / o1 等）常把输出预算耗在思维链上，导致正文为空；
 // 代理层遇到空候选会回一个 `<none>` 之类的占位错误。统一给用户一句可诊断的说明。
-export function emptyContentMessage(finishReason = '') {
-    const tail = finishReason === 'length'
-        ? '（本次因达到输出上限被截断）'
-        : '';
-    return `模型没有返回正文${tail}。若使用 GLM 等推理模型，多是思维链占满了输出预算；可换非推理模型、或稍后重试。`;
-}
 
 function normalizedFinishReason(value) {
     return String(value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
@@ -77,7 +69,7 @@ export function isUpstreamTimeoutTemplate(value) {
     return lines.slice(2).join('\n') === UPSTREAM_TIMEOUT_TEMPLATE_TAIL;
 }
 
-// 从非流式响应里提取正文：优先 content，空则兜底 reasoning_content，仍空则抛可读错误。
+// 业务输入只取正式正文；思考字段不是回答，空正文沿统一诊断路径反馈。
 const reportFinish = (onFinish, finishReason) => {
     try { onFinish?.({ finishReason, truncated: isTruncationFinishReason(finishReason) }); } catch {}
 };
@@ -91,37 +83,12 @@ export function extractCompletion(data, { allowEmptyOutput = false, onFinish = n
     if (typeof content !== 'string') content = String(content ?? '');
     content = content.trim();
     if (content && !isPlaceholderContent(content)) { reportFinish(onFinish, finishReason); return content; }
-    // 正文为空：兜底取推理内容（至少有东西可渲染，而非白屏/报错）
-    const reasoning = msg?.reasoning_content ?? msg?.reasoning ?? '';
-    if (typeof reasoning === 'string' && reasoning.trim()) { reportFinish(onFinish, finishReason); return reasoning.trim(); }
     if (isTruncationFinishReason(finishReason)) {
         throw makeDiagnosticError('truncated', { phase: 'truncated' });
     }
     // 仅供明确声明“空正文具有业务语义”的机械链路使用；占位符 none 仍按异常处理。
     if (allowEmptyOutput && !content && !hasToolCall && isNormalEmptyFinishReason(finishReason)) { reportFinish(onFinish, finishReason); return ''; }
     throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
-}
-
-export function mapApiError(status, raw) {
-    const text = String(raw || '');
-    const low = text.toLowerCase();
-    // 代理回传的空候选占位（GLM 等推理模型正文为空时常见）：给可读说明而非甩个 <none>
-    if (low === '<none>' || low === 'none' || low.includes('<none>')) return diagnosticMessage({ diagnosticCode: 'empty-output' });
-    // socket hang up / 网络中断：bbs 作者确认多为超时或网络波动
-    if (low.includes('socket hang up') || low.includes('econnreset') || low.includes('network') || low.includes('fetch failed')) {
-        return diagnosticMessage({ diagnosticCode: 'network' });
-    }
-    // 400 且报文里出现被拒的参数名 → 引导去剔除框
-    if (status === 400) {
-        const m = text.match(/(frequency_penalty|presence_penalty|temperature|top_p|top_k|max_tokens|logit_bias|seed|n)\b/i);
-        const hint = m ? `参数「${m[1]}」不被该接口接受。` : '请求含该接口不支持的参数。';
-        return `${hint}请到「API 配置 → 剔除参数」把它填进去（如 frequency_penalty），再重试。`;
-    }
-    if (status === 401 || status === 403) return 'API Key 无效或无权限（401/403）。请检查 Key 是否填对、是否有该模型权限。';
-    if (status === 404) return '接口地址不对（404）。请检查 Base URL，或试试补/去掉结尾的 /v1。';
-    if (status === 429) return '触发限流（429）。请求太频繁或额度用尽，稍后再试。';
-    if (status >= 500) return `上游服务异常（${status}）。通常是中转站或模型服务临时故障，稍后重试。`;
-    return diagnosticMessage({ diagnosticCode: 'unknown' });
 }
 
 // 读取 SSE 流（text/event-stream），拼接 delta.content。
@@ -228,4 +195,4 @@ export function sleepAbortable(ms, signal) {
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 }
-import { makeDiagnosticError, diagnosticMessage } from './diagnostics.js';
+import { makeDiagnosticError } from './diagnostics.js';

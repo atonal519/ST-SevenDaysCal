@@ -2,7 +2,9 @@ export function createAxisActions(env = {}) {
     const itemIdentity = item => JSON.stringify(['id', 'name', 'type', 'month', 'day', 'days', 'displayDate', 'note', 'pin', 'source'].map(key => item?.[key] ?? null));
     const togglePin = id => {
         const list = env.load?.() || [], item = list.find(x => x.id === id); if (!item) return null;
-        item.pin = !item.pin; env.save?.(list); env.toast?.(item.pin ? '已锁定 · 生成时保留' : '已解锁');
+        item.pin = !item.pin;
+        if (env.save?.(list) === false) { item.pin = !item.pin; env.toast?.('日期轴保存失败，请重试', null, true); return null; }
+        env.toast?.(item.pin ? '已锁定 · 生成时保留' : '已解锁');
         return { id, pin: item.pin };
     };
     const remove = async id => {
@@ -12,7 +14,8 @@ export function createAxisActions(env = {}) {
         const latest = env.load?.() || [];
         const matches = latest.map((candidate, index) => candidate?.id === id && itemIdentity(candidate) === targetIdentity ? index : -1).filter(index => index >= 0);
         if (matches.length !== 1) return false;
-        env.save?.(latest.filter((_item, index) => index !== matches[0])); env.render?.(); env.sync?.(); return true;
+        if (env.save?.(latest.filter((_item, index) => index !== matches[0])) === false) { env.toast?.('日期轴保存失败，请重试', null, true); return false; }
+        env.render?.(); env.sync?.(); return true;
     };
     const clearHighlight = () => env.clear?.();
     const highlight = item => {

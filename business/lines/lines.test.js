@@ -14,7 +14,7 @@ import { createSwipeLinesStore } from './swipe-store.js';
 import { createLinesActions } from './actions.js';
 import { mergePinned, editLineDescription, editLineFields } from './mutations.js';
 import { activeLines, buildLinesInjection } from './strategy.js';
-import { adultInjectionGuidance, adultModeForCharacter, drawAdultSelections, allocateAdultPools } from './adult.js';
+import { adultInjectionGuidance, adultModeForCharacter, allocateAdultPools } from './adult.js';
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
 import { commitLineWidget } from './widget.js';
@@ -61,7 +61,7 @@ test('line edit keeps Next inside the selected Line block and handles empty fiel
     assert.match(cleared.raw, /Desc: B desc\nNext: B next/);
 });
 import { bindVectorTickets } from './vectors/bind.js';
-import { AUTO_LINE_CAPACITY, AUTO_LINE_SEED_CAPACITY } from './capacity.js';
+import { AUTO_LINE_SEED_CAPACITY } from './capacity.js';
 import { auditLineEvolution } from './evolution.js';
 import { buildLineInjectText, inlineState } from './inline.js';
 import { normalizeKnownFieldWrappers } from '../utils/record-wrappers.js';
@@ -340,6 +340,25 @@ test('space line edit follows its captured original after preceding deletions an
     const legacySafe = commitLineWidget(serializeLines([original[0], original[1]]), body, { editIndex: 1 });
     assert.equal(legacySafe.ok, true);
 });
+test('space line card reports a failed write without refreshing cache or marking the card applied', () => {
+    const initial = { raw: '', ts: 1 };
+    const failures = []; let writes = 0; let buttons = 0; let refreshes = 0;
+    const feature = createLinesFeature({
+        readRaw: () => initial.raw,
+        widgetEnv: {
+            key: () => 'lines-user', read: () => initial,
+            write: () => { writes++; return false; },
+            fail: message => { failures.push(message); return false; },
+            button: () => { buttons++; }, refresh: () => { refreshes++; },
+        },
+    });
+    const result = feature.widget.apply('Line: 新线|起线|近日|world|false|false\nDesc: 当前状态\nNext: 下一变化');
+    assert.equal(result, false);
+    assert.equal(writes, 1);
+    assert.match(failures[0], /保存失败/);
+    assert.equal(buttons, 0);
+    assert.equal(refreshes, 0);
+});
 test('space line locator uses Cue identity, allows ordinary content changes, and keeps identity-less duplicates ambiguous', () => {
     const cues = drawTickets(2, { seed: 'line-card-locators' }).map(serializeVectorCue);
     const original = [
@@ -347,14 +366,16 @@ test('space line locator uses Cue identity, allows ordinary content changes, and
         { name: '同名', stage: '起线', when: '今天', agency: 'world', desc: '相同', next: '相同', cue: cues[1] },
     ];
     const edit = 'Line: 同名|成形|下周|player|false|false\nDesc: 已修改\nNext: 新下一步';
-    const aLocator = { ...original[0], occurrence: 0 };
-    const bLocator = { ...original[1], occurrence: 1 };
+    const aLocator = { ...original[0], stall: false, occurrence: 0 };
+    const bLocator = { ...original[1], stall: false, occurrence: 1 };
     const afterDeleteA = serializeLines([original[1]]);
     assert.equal(commitLineWidget(afterDeleteA, edit, { editIndex: 1, locator: aLocator }).reason, 'line-target-not-found');
     assert.equal(parseLines(commitLineWidget(afterDeleteA, edit, { editIndex: 2, locator: bLocator }).raw)[0].cue, cues[1]);
 
     const changed = serializeLines([{ ...original[0], stage: '延展', when: '后天', desc: '同期改动' }]);
-    assert.equal(commitLineWidget(changed, edit, { editIndex: 1, locator: aLocator }).ok, true);
+    assert.equal(commitLineWidget(changed, edit, { editIndex: 1, locator: aLocator }).reason, 'line-target-changed');
+    const unrelatedChanged = serializeLines([{ ...original[0] }, { ...original[1], desc: '另一条线被人工修改' }]);
+    assert.equal(commitLineWidget(unrelatedChanged, edit, { editIndex: 1, locator: aLocator }).ok, true);
     const noIdentity = original.map(item => ({ ...item, cue: null }));
     assert.equal(commitLineWidget(serializeLines(noIdentity), edit, { editIndex: 1, locator: { ...noIdentity[0], occurrence: 0 } }).reason, 'line-target-ambiguous');
 });
@@ -509,12 +530,35 @@ test('advance prompt leaves line count to the story and does not require every o
     const prompt = buildLinesPrompt('用户', '角色', 'user', baseline, 'auto', { intent: 'advance' });
     assert.match(prompt, /本轮有 7 条未锁且未终态线/);
     assert.match(prompt, /数量按当前剧情证据决定（可为 0 或多条/);
+    assert.match(prompt, /以更新旧线为主/);
+    assert.match(prompt, /凡本轮新增，须同轮实际省略至少一条/);
+    assert.match(prompt, /只标收束\/淡出却仍输出不算减少/);
+    assert.match(prompt, /暂未提及本身不作退出理由/);
     assert.match(prompt, /失去独立价值或并线可淡出\/省略/);
     assert.doesNotMatch(prompt, /最多输出 8 条|旧活线超过 8 条|第 9 条起不校验/);
     const full = serializeLines(Array.from({ length: 8 }, (_, index) => ({ name: `满槽${index + 1}`, stage: '延展', when: '今天', agency: 'world', desc: '状态', next: '下一步' })));
     const fullPrompt = buildLinesPrompt('用户', '角色', 'user', full, 'auto', { intent: 'advance', freshTickets: [{ ticketId: 'TICKET-1', selections: [] }] });
     assert.match(fullPrompt, /数量按当前剧情证据决定（可为 0 或多条/);
     assert.doesNotMatch(fullPrompt, /最多输出 8 条|第 9 条起不校验/);
+});
+test('update-first and same-turn retirement rule applies only to advance with active unlocked old lines', () => {
+    const old = serializeLines([{ name: '旧线', stage: '延展', when: '今天', agency: 'world', desc: '状态', next: '下一步' }]);
+    const contexts = [
+        ['initial', old, { intent: 'initial' }, false],
+        ['reroll', old, { intent: 'reroll' }, false],
+        ['advance-empty', '', { intent: 'advance' }, false],
+        ['advance-locked-only', '', { intent: 'advance', pinnedBackground: [{ name: '锁线' }] }, false],
+        ['advance-with-old', old, { intent: 'advance' }, true],
+    ];
+    for (const [name, raw, context, applies] of contexts) {
+        const prompt = buildLinesPrompt('用户', '角色', 'user', raw, 'macro', context, 'off', 'positive', 'fast');
+        assert.equal(prompt.includes('以更新旧线为主'), applies, name);
+        assert.equal(prompt.includes('同轮实际省略至少一条'), applies, name);
+        assert.match(prompt, /温暖向好/);
+        assert.match(prompt, /剧情推进幅度/);
+    }
+    assert.match(buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial' }), /首次最多输出 8 条/);
+    assert.match(buildLinesPrompt('用户', '角色', 'user', old, 'auto', { intent: 'reroll' }), /刷新不要求延续旧自动线/);
 });
 test('release prompt allows evidence-based offscreen progress across intents and scales while preserving protocol boundaries', () => {
     const old = serializeLines([{ name: '旧活线', stage: '延展', when: '昨夜', agency: 'world', desc: '旧状态', next: '旧下一步' }]);
@@ -637,8 +681,7 @@ test('dominant true initial generation signs eight tickets with a temporary 2 SF
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultPool === 'nsfw').length, 6);
     assert.equal(captured.freshTickets.filter(ticket => ticket.adultSelection).length, 6);
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', captured, 'dominant');
-    assert.match(prompt, /先看核心目标及后续是否实质独立：旧线 Desc\/Next 已涵盖就续旧/);
-    assert.match(prompt, /互斥走向或换 Cue 不拆；真独立才匹配新票，无独立事件可不选/);
+    assert.doesNotMatch(prompt, /以更新旧线为主|同轮实际省略至少一条/);
     assert.match(prompt, /Desc 写草稿已到，Next 写团队补齐资料后由玩家决定签字与否/);
     assert.match(prompt, /1v1、1vN 或 NvN/);
     assert.match(prompt, /首次最多输出 8 条/);

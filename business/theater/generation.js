@@ -1,7 +1,8 @@
 import { theaterId } from './schema.js';
+import { extractTheaterHtmlResponse } from './html.js';
 
 import { createGenerationDiagnosticScope, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
-export function createTheaterGeneration({ write, beautify, buildWriteMessages, buildBeautifyMessages, sanitize, fallback, plainTextFallback, onDiagnostic, makeId = () => theaterId() } = {}) {
+export function createTheaterGeneration({ write, beautify, buildWriteMessages, buildBeautifyMessages, sanitize, plainTextFallback, onDiagnostic, makeId = () => theaterId() } = {}) {
     return async function generateTheater(input, { signal, onStage, templateSource, explicitTitle, userName, charName, storyContext, settings = {}, isCurrent = () => true, diagnosticScope = null } = {}) {
         const diagnostic = diagnosticScope || createGenerationDiagnosticScope('theater-generation');
         if (!String(input || '').trim()) throw new Error('请先填写小剧场需求');
@@ -18,8 +19,9 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
         const beautifyDiagnostic = createGenerationDiagnosticScope('theater-beautify');
         let beautifyAccepted = false;
         try {
-            htmlRaw = await beautify(buildBeautifyMessages(raw, settings), { signal, userName, charName, promptMode: 'mechanical', diagnosticModule: 'theater-beautify', diagnosticSink: beautifyDiagnostic.sink });
-            if (!String(htmlRaw || '').trim()) throw makeDiagnosticError('empty-output', { phase: 'empty-output' });
+            const response = await beautify(buildBeautifyMessages(raw, settings), { signal, userName, charName, promptMode: 'mechanical', diagnosticModule: 'theater-beautify', diagnosticSink: beautifyDiagnostic.sink });
+            htmlRaw = extractTheaterHtmlResponse(response);
+            if (!htmlRaw) throw makeDiagnosticError('invalid-structure', { phase: 'validation' });
             beautifyDiagnostic.accepted({ phase: 'validation', reasonCode: 'beautify-valid' });
             beautifyAccepted = true;
         } catch (error) {
@@ -30,32 +32,23 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
             onDiagnostic?.(safeDiagnosticLog('theater', 'recoverable-fallback', error));
         }
         if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
-        // 宿主回退可能触发额外格式化，只有美化空/失败时才调用，成功 HTML 不应被二次改写。
         const hasBeautifiedHtml = String(htmlRaw || '').trim();
         let html;
-        let fallbackRaw = raw;
-        let rendererFailed = false;
         let beautifyApplied = false;
         if (!hasBeautifiedHtml) {
-            try { fallbackRaw = fallback ? await fallback(raw) : raw; }
-            catch (error) { if (error?.name === 'AbortError') throw error; if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' }); diagnostic.fallback(error, { reasonCode: 'renderer-fallback' }); onDiagnostic?.(safeDiagnosticLog('theater', 'recoverable-fallback', error)); rendererFailed = true; }
-        }
-        if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
-        if (rendererFailed) {
-            // renderer 已失败，不能再把原文交回 sanitize；纯文本兜底负责完整转义。
             html = plainTextFallback ? plainTextFallback(raw) : raw;
         } else {
             try {
                 if (typeof sanitize !== 'function') throw new Error('sanitize unavailable');
-                html = sanitize(hasBeautifiedHtml ? htmlRaw : fallbackRaw);
+                html = sanitize(htmlRaw);
                 beautifyApplied = Boolean(hasBeautifiedHtml && String(html || '').trim());
             } catch (error) {
                 if (hasBeautifiedHtml) beautifyDiagnostic.fallback(error, { reasonCode: 'beautify-sanitize-fallback' });
-                html = plainTextFallback ? plainTextFallback(raw) : fallbackRaw;
+                html = plainTextFallback ? plainTextFallback(raw) : raw;
             }
             if (!String(html || '').trim()) {
                 if (hasBeautifiedHtml) beautifyDiagnostic.fallback(makeDiagnosticError('invalid-structure', { phase: 'validation' }), { reasonCode: 'beautify-empty-after-sanitize' });
-                html = plainTextFallback ? plainTextFallback(raw) : fallbackRaw;
+                html = plainTextFallback ? plainTextFallback(raw) : raw;
             }
         }
         if (beautifyAccepted && beautifyApplied) beautifyDiagnostic.committed({ reasonCode: 'beautify-applied' });

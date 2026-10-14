@@ -160,7 +160,7 @@ q::after {
     --sp-neon-color  : var(--sp-primary);
     --sp-neon-glow   : color-mix(in oklab, var(--sp-primary) 45%, transparent);
     --sp-sheet-bg    : var(--SmartThemeChatTintColor,    var(--sp-sheet-bg-legacy));
-    /* 消息气泡底色与正文色可以各自独立；共用表面沿插件 day/night 色板配对，避免浅底浅字。 */
+    /* 不支持下方相对颜色语法时保留现有 token 映射与 surface 底色。 */
     --sp-surface     : var(--sp-surface-legacy);
     --sp-surface-high: var(--sp-surface-high-legacy);
     --sp-divider     : color-mix(in oklab, var(--SmartThemeBodyColor, var(--sp-on-surface-legacy)) 12%, transparent);
@@ -168,10 +168,26 @@ q::after {
     --sp-chat-bg     : var(--SmartThemeChatTintColor, var(--sp-chat-bg-legacy));
 }
 
+/* Auto mode keeps the host chat tint, then makes shared panel surfaces opaque.
+   Missing host colors use the legacy palette; older engines retain the mapping above. */
+@supports (color: rgb(from white r g b / 1)) {
+    .sp-root:not(.sp-forced-day):not(.sp-forced-night),
+    .sp-fab-btn:not(.sp-forced-day):not(.sp-forced-night),
+    .sp-inline-box:not(.sp-forced-day):not(.sp-forced-night),
+    #sp-toast-wrap:not(.sp-forced-day):not(.sp-forced-night) {
+        --sp-sheet-bg    : rgb(from color-mix(in srgb, var(--SmartThemeChatTintColor, var(--sp-sheet-bg-legacy)) 90%, var(--sp-sheet-bg-legacy)) r g b / 1);
+        --sp-surface     : rgb(from color-mix(in srgb, var(--sp-sheet-bg) 94%, var(--sp-on-surface) 6%) r g b / 1);
+        --sp-surface-high: rgb(from color-mix(in srgb, var(--sp-sheet-bg) 88%, var(--sp-on-surface) 12%) r g b / 1);
+        --sp-chat-bg     : var(--sp-sheet-bg);
+    }
+}
+
 /* Forced theme override — bypass ST vars entirely, use only legacy palette.
    Applied when user picks day/night manually (fallback for transparent ST themes). */
 .sp-forced-day,
-.sp-forced-night {
+.sp-forced-night,
+#sp-toast-wrap.sp-forced-day,
+#sp-toast-wrap.sp-forced-night {
     --sp-on-surface  : var(--sp-on-surface-legacy);
     --sp-subtle      : var(--sp-subtle-legacy);
     --sp-primary     : var(--sp-primary-legacy);
@@ -488,9 +504,11 @@ q::after {
 @media (min-width: 641px) {
     .sp-module-intro-pop { right: auto; max-width: 380px; }
 }
-/* 小百科·图标图例（intro 气泡内）：lede 段 + 「图标 名称 说明」行 + 分节小标题。 */
+/* 模块介绍气泡：用途导语与普通说明分段，短标题用于主题分节，图标行说明具体操作。 */
 .sp-intro-lede { margin: 0 0 8px; }
 .sp-intro-lede + .sp-intro-key { margin-top: -2px; }
+.sp-intro-text { margin: 0 0 8px; color: var(--sp-subtle); }
+.sp-intro-text:last-child { margin-bottom: 0; }
 .sp-intro-sub {
     margin: 12px 0 6px;
     padding-top: 9px;
@@ -1303,7 +1321,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity   : 0.7;
 }
 
-/* 全局排除清单（B方案）：按书名整本拉黑，比按条目挑选（sp-wi-card）更朴素 */
+/* 全局排除按书名作用于整本世界书。 */
 /* 内联抽屉：书多时折起来，标题右侧带计数徽标 */
 .sp-wi-exclude-drawer {
     border       : 1px solid var(--sp-divider);
@@ -1870,13 +1888,6 @@ select.sp-input { appearance: none; cursor: pointer; }
     font-weight: 600;
 }
 
-/* ─── Panel toolbar / per-panel refresh ──────────────────────────────────────── */
-.sp-panel-toolbar {
-    display        : flex;
-    justify-content: flex-end;
-    padding        : 8px 14px 4px;
-    flex-shrink    : 0;
-}
 .sp-schedule-header .sp-panel-refresh { margin-left: auto; }
 .sp-panel-refresh {
     width          : 28px;
@@ -2145,6 +2156,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height: 1.4;
     overflow-wrap: anywhere;
 }
+.sp-root button { font-family: inherit; }
 .sp-daily-menu-dialog-close {
     display: inline-flex;
     flex: 0 0 32px;
@@ -2264,6 +2276,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-toast-error {
     border-left: 3px solid var(--sp-danger, #e05555);
 }
+.sp-toast-info {
+    border-left: 3px solid var(--sp-primary);
+}
 
 /* ─── FAB ────────────────────────────────────────────────────────────────────── */
 /* Use top+dvh to work around html{-webkit-transform:translateZ(0)} on ST,
@@ -2370,6 +2385,18 @@ select.sp-input { appearance: none; cursor: pointer; }
         width          : 100dvw;
         height         : 100dvh;
         pointer-events : none;
+    }
+
+    /* Independent document-level progress cards borrow root tokens without taking the mobile sheet layout. */
+    .sp-root.sp-progress-card {
+        position: relative;
+        top: auto;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        width: min(420px, calc(100vw - 32px));
+        height: auto;
+        pointer-events: auto;
     }
 
     .sp-backdrop { display: none; }
@@ -2918,33 +2945,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-outline-beats::-webkit-scrollbar       { width: 4px; }
 .sp-outline-beats::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: 2px; }
 
-/* ─── Outline chat (fixed bottom section) ────────────────────────────────────── */
-.sp-outline-divider {
-    flex-shrink    : 0;
-    height         : 18px;
-    display        : flex;
-    align-items    : center;
-    cursor         : ns-resize;
-    background     : var(--sp-chat-bg);
-    user-select    : none;
-    touch-action   : none;
-    opacity        : 0.65;
-    transition     : opacity 0.15s;
-}
-/* 抓手贯穿整宽：隐藏 FA 字形，用重复渐变画两条横线，读作一条完整的分割面 */
-.sp-outline-divider i {
-    flex       : 1;
-    height     : 6px;
-    font-size  : 0;
-    line-height: 0;
-    background : repeating-linear-gradient(
-                   to bottom,
-                   color-mix(in oklab, var(--sp-on-surface) 45%, transparent) 0 2px,
-                   transparent 2px 4px
-                 );
-}
-.sp-outline-divider:hover { opacity: 1; }
-
 /* 点/线卡片序号徽标——与「间」聊天"改第 N 条"编号一致 */
 .sp-seq-badge {
     font-size    : 11px;
@@ -2958,17 +2958,19 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-shrink  : 0;
 }
 
-.sp-outline-chat {
-    flex-shrink   : 0;
-    height        : 210px;
-    display       : flex;
-    flex-direction: column;
-    background    : var(--sp-chat-bg);
-}
-/* Chat area bg — cascade lives in the main .sp-root block (top of file).
-   Auto mode reads --SmartThemeChatTintColor with legacy fallback; forced day/
-   night override in the .sp-forced-* block (which is declared after .sp-root,
-   so specificity-tie declarations get the correct winner). */
+
+.sp-space-modules { flex: 0 0 auto; position: relative; padding: 3px 10px; border-bottom: 1px solid var(--sp-divider); color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-space-modules > summary { cursor: pointer; width: fit-content; }
+.sp-space-modules-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 0 3px; max-height: 22vh; overflow: auto; }
+.sp-space-modules-list button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--sp-divider); border-radius: 14px; color: var(--sp-on-surface); background: var(--sp-sheet-bg); font-size: inherit; }
+.sp-space-legacy { flex: 0 0 auto; padding: 3px 10px; border-bottom: 1px solid var(--sp-divider); color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-space-legacy > summary { cursor: pointer; width: fit-content; }
+#sp-legacy-outline-history { max-height: 24vh; overflow: auto; padding: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-space-legacy-msg { padding: 5px 7px; border-top: 1px solid var(--sp-divider); color: var(--sp-on-surface); }
+.sp-space-legacy-ai { color: var(--sp-subtle); }
+/* Chat area bg — cascade lives in the main shared-token block (top of file).
+   Auto mode uses the opaque host-tint mapping when supported, otherwise the existing host-tint cascade;
+   forced day/night override it in the .sp-forced-* block. */
 .sp-chat-msgs {
     flex           : 1;
     min-height     : 0;
@@ -3145,7 +3147,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-chat-msg-system { font-size: var(--sp-fs-72); color: var(--sp-subtle); font-style: italic; display: block; background: transparent; padding: 0; }
 /* Bare bubbles (no wrap) — used for transient "…" thinking indicator.
    Give them their own alignment so they still sit in the correct column. */
-#sp-chat-msgs   > .sp-chat-msg.sp-chat-msg-ai { align-self: flex-start; max-width: 90%; }
 #sp-space-msgs  > .sp-chat-msg.sp-chat-msg-ai { align-self: flex-start; max-width: 90%; }
 .sp-chat-thinking   { display: block; }
 /* Typing indicator — three dots pulsing while the AI drafts (replaces static "…") */
@@ -3165,59 +3166,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     30%           { transform: translateY(-4px); opacity: 0.9;  }
 }
 .sp-apply-row       { align-self: center; background: transparent !important; padding: 2px 0 !important; display: block; }
-.sp-outline-draft-card {
-    margin-top   : 7px;
-    padding      : 8px 9px;
-    border       : 1px solid var(--sp-divider);
-    border-radius: 8px;
-    background   : var(--sp-sheet-bg);
-    font-style   : normal;
-}
-.sp-outline-draft-summary,
-.sp-outline-draft-node-head,
-.sp-outline-draft-action {
-    display    : flex;
-    align-items: center;
-    gap        : 7px;
-}
-.sp-outline-draft-summary { justify-content: space-between; }
-.sp-outline-draft-summary span,
-.sp-outline-draft-stale,
-.sp-outline-draft-action span { color: var(--sp-subtle); font-size: var(--sp-fs-72); }
-.sp-outline-draft-preview { margin-top: 6px; }
-.sp-outline-draft-preview > summary { color: var(--sp-primary); cursor: pointer; user-select: none; }
-.sp-outline-draft-preview ol {
-    margin    : 7px 0 0;
-    padding   : 0 0 0 22px;
-    max-height: min(38vh, 260px);
-    overflow-y: auto;
-}
-.sp-outline-draft-node { padding: 6px 0; border-top: 1px solid var(--sp-divider); }
-.sp-outline-draft-node-head { flex-wrap: wrap; }
-.sp-outline-draft-node-head > span { color: var(--sp-primary); font-weight: 700; }
-.sp-outline-draft-node-head > em { margin-left: auto; color: var(--sp-subtle); font-size: var(--sp-fs-72); }
-.sp-outline-draft-field { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.sp-outline-draft-field > span { margin-right: 5px; color: var(--sp-subtle); font-size: var(--sp-fs-72); }
-.sp-outline-draft-action { margin-top: 8px; flex-wrap: wrap; }
-.sp-outline-draft-stale { margin-top: 7px; }
-
 @media (max-width: 640px) {
-    #sp-outline-chat {
-        flex-shrink: 1;
-        /* 120px 满高输入框 + 输入行 14px 上下内边距 + 1px 顶边。
-           极矮软键盘视口下 min-height 优先于 50% 上限，避免底边/按钮被裁。 */
-        min-height : 135px;
-        max-height : 50%;
-    }
-    /* 纵向留白放进滚动内容，避免消息区即使 min-height:0 仍被 padding 撑出 16px。 */
-    #sp-outline-chat > .sp-chat-msgs { padding-block: 0; }
-    #sp-outline-chat > .sp-chat-msgs > :first-child { margin-top: 8px; }
-    #sp-outline-chat > .sp-chat-msgs > :last-child { margin-bottom: 8px; }
     .sp-outline-wrap > .sp-outline-header {
         align-items: center;
         padding    : 3px 12px;
     }
-    .sp-outline-wrap > .sp-outline-divider { height: 8px; }
+
 }
 
 /* External actions (edit / delete) — sit below bubble, right-aligned relative
@@ -3305,19 +3259,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-chat-msg-edit-cancel:hover { color: var(--sp-on-surface); }
 
-.sp-apply-outline-btn {
-    padding      : 4px 14px;
-    background   : var(--sp-primary);
-    color        : var(--sp-on-primary);
-    border       : none;
-    border-radius: 99px;
-    cursor       : pointer;
-    font-size    : var(--sp-fs-78);
-    font-weight  : 500;
-    transition   : opacity 0.15s;
-}
-.sp-apply-outline-btn:hover    { opacity: 0.85; }
-.sp-apply-outline-btn:disabled { opacity: 0.45; cursor: default; }
+
 
 /* ─── Inject button ──────────────────────────────────────────────────────────── */
 .sp-inject-btn {
@@ -4276,6 +4218,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-top    : 4px;
 }
 .sp-space-widget-card-readonly { opacity: 0.88; }
+.sp-space-outline-preview { margin: 7px 12px; padding-left: 24px; max-height: min(38vh, 260px); overflow-y: auto; }
+.sp-space-outline-preview li { padding: 6px 0; border-top: 1px solid var(--sp-divider); }
+.sp-space-outline-preview li > span { float: right; color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-space-outline-preview li > p { margin: 4px 0 0; color: var(--sp-subtle); white-space: pre-wrap; }
 .sp-space-widget-readonly {
     display      : inline-flex;
     align-items  : center;
@@ -5399,16 +5345,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 主面板历史直接复用线卡的卡片、头部、编号和正文区，只保留必要的正文收口。 */
 .sp-lines-dashed-list { display: flex; flex-direction: column; }
 .sp-lines-dashed-item .sp-beat-scene { margin-bottom: 0; }
-.sp-lines-dashed-status,
-.sp-lines-dashed-error {
+.sp-lines-dashed-status {
     padding      : 9px 14px;
     border-bottom: 1px solid var(--sp-divider);
     color        : var(--sp-subtle);
     font-size    : var(--sp-fs-76);
     line-height  : 1.45;
 }
-.sp-lines-dashed-status i,
-.sp-lines-dashed-error i { margin-right: 4px; }
+.sp-lines-dashed-status i { margin-right: 4px; }
 .sp-lines-dashed-empty { min-height: 180px; }
 
 /* 楼内子块：折进 .sp-lines-inline 的 body（与线合并成一个楼内窗口）。虚线上边框呼应「虚线」语义，
@@ -5815,15 +5759,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-body-ledger { padding-top: 0; }
 .sp-alm-body > .sp-batch-bar:not(.sp-batch-active) { padding-top: 0; }
-.sp-ledger-auto {
-    display    : flex;
-    align-items: center;
-    gap        : 6px;
-    font-size  : var(--sp-fs-78);
-    color      : var(--sp-on-surface);
-    cursor     : pointer;
-}
-.sp-ledger-auto input[type="checkbox"] { cursor: pointer; }
 .sp-ledger-capture-now { flex-shrink: 0; }
 .sp-ledger-ctrl > .sp-batch-bar { padding: 0; flex-shrink: 0; }
 .sp-ledger-ctrl > .sp-batch-bar.sp-batch-active { margin-left: auto; }
@@ -6346,11 +6281,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-scell-wd { font-size: var(--sp-fs-60);  opacity: 0.6; white-space: nowrap; }
 .sp-alm-scell-md { font-size: var(--sp-fs-72); font-weight: 600; white-space: nowrap; }
-.sp-alm-scell-today {
-    background: color-mix(in oklab, var(--alm-primary) 15%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--alm-primary) 40%, transparent);
-}
-.sp-alm-scell-today .sp-alm-scell-wd { opacity: 0.95; font-weight: 700; color: var(--alm-primary); }
 .sp-alm-scell-has  { background: color-mix(in oklab, var(--alm-primary) 8%, rgba(128,128,128,0.06)); }
 .sp-alm-scell .sp-alm-dot { margin-top: 1px; }
 .sp-alm-scell-open {
@@ -6661,14 +6591,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-sch-drawer-item:hover .sp-sch-del-one { opacity: 1; }
 .sp-sch-del-one:hover { color: #d94545; background: rgba(217, 69, 69, 0.12); opacity: 1; }
-/* 点·删除钮进主面板（renderEvent 的 .sp-event）：仿 .sp-point-pin-toggle —— 平时藏、hover 点卡片才浮现；
-   楼内块抽屉里的 0.55 常显行为(.sp-sch-drawer-item)不受影响。 */
-/* 点/线面板 header 下方另起一行的「和间聊聊」引导；纯文字区（不自己画线，下方 tab-bar 已有分隔线），padding 上下对称、不与 header 下 padding 叠太厚 */
+/* 点/线/面面板 header 下方的间讨论提示；复用文字链接样式，不另画分隔线。 */
 .sp-jump-hint { padding: 2px 16px 8px; font-size: var(--sp-fs-75); color: var(--sp-subtle); flex-shrink: 0; }
 .sp-jump-link { border: 0; padding: 0; background: transparent; color: var(--sp-primary); cursor: pointer; font: inherit; }
 .sp-jump-link:hover { text-decoration: underline; }
 
-/* ── 楼内渲染框实验：剧情脚注 / 插拔式脉络线 ────────────────────────────────
+/* ── 楼内渲染框：剧情脚注 / 插拔式脉络线 ───────────────────────────────────
    每个实际存在的区块都是独立节点；不假定轴、点、线同时存在，也不依赖固定顺序。
    外壳不再模拟第二张卡片，而是作为正文下方的一段页边批注。 */
 .sp-inline-box.sp-dash {

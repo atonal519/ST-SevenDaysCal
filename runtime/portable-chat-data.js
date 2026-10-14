@@ -1,4 +1,5 @@
 import { decodeStoreEntry } from './store-codec.js';
+import { normalizeOutlineResponse } from '../business/outline/schema.js';
 
 export const PORTABLE_CHAT_FORMAT = 'st-sevendayscal-portable';
 export const PORTABLE_CHAT_VERSION = 1;
@@ -7,8 +8,8 @@ export const PORTABLE_CHAT_MAX_BYTES = 8 * 1024 * 1024;
 export const PORTABLE_MODULES = Object.freeze([
     Object.freeze({ id: 'points', label: '点（全部人物、固定/最近人物）' }),
     Object.freeze({ id: 'lines', label: '线（含虚线）' }),
-    Object.freeze({ id: 'outline', label: '面（含面讨论）' }),
-    Object.freeze({ id: 'space', label: '间' }),
+    Object.freeze({ id: 'outline', label: '面（含旧面讨论）' }),
+    Object.freeze({ id: 'space', label: '间（含面候选）' }),
     Object.freeze({ id: 'calendar', label: '日历／历法' }),
     Object.freeze({ id: 'theater', label: '已保存小剧场' }),
 ]);
@@ -16,7 +17,7 @@ export const PORTABLE_MODULES = Object.freeze([
 const MODULE_IDS = new Set(PORTABLE_MODULES.map(item => item.id));
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
-const SPACE_WIDGET_RX = /<(?:schedule_widget|line_widget|almanac_widget|era_widget)\b[\s\S]*?<\/(?:schedule_widget|line_widget|almanac_widget|era_widget)\s*>/i;
+const SPACE_WIDGET_RX = /<(?:schedule_widget|line_widget|almanac_widget|era_widget|outline_widget)\b[\s\S]*?<\/(?:schedule_widget|line_widget|almanac_widget|era_widget|outline_widget)\s*>/i;
 const PERSISTENT_ROOT_KEYS = Object.freeze(['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger']);
 
 const KEY_MATCHERS = Object.freeze({
@@ -169,7 +170,8 @@ export function parsePortableChatPackage(text, { maxBytes = PORTABLE_CHAT_MAX_BY
 export function markImportedSpaceHistory(value) {
     if (!Array.isArray(value)) return [];
     return clone(value).map(message => {
-        if (message?.role !== 'assistant' || !SPACE_WIDGET_RX.test(String(message.content || ''))) return message;
+        if (message?.role !== 'assistant' || (!SPACE_WIDGET_RX.test(String(message.content || ''))
+            && !(message.expectedWidgetKind === 'outline_widget' && normalizeOutlineResponse(message.content)))) return message;
         return { ...message, portableReadonly: true };
     });
 }

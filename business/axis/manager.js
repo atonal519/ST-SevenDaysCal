@@ -77,7 +77,7 @@ export function createCalendarManager(env = {}) {
         const cards = env.cards?.() || [], bindings = { ...(env.bindings?.() || {}) }, currentId = env.boundId?.(bindings, avatar, cards) || '';
         if (expectedTemplateId != null && currentId !== expectedTemplateId) return false;
         if (currentId === (nextTemplateId || '')) return true;
-        const chatId = env.chatId?.(), currentAvatar = env.currentAvatar?.();
+        const currentAvatar = env.currentAvatar?.();
         env.setBinding?.(bindings, avatar, nextTemplateId, cards); env.writeBindings?.(bindings); m.bindQuery = '';
         refreshManager({ scope: 'templates', reveal: { kind: 'template', id: m.bindTemplateId, selector: '.sp-alm-manager-bind-search' }, focusBindingId: m.bindTemplateId }); env.save?.();
         if (nextTemplateId && avatar === currentAvatar) {
@@ -168,7 +168,7 @@ export function createCalendarManager(env = {}) {
     };
     const focus = $target => { const element = $target?.get?.(0); if (!element || typeof element.focus !== 'function' || element.disabled) return; try { element.focus({ preventScroll: true }); } catch { element.focus(); } };
     const reveal = ($target, $scroller) => { const element = $target?.get?.(0), scroller = $scroller?.get?.(0); if (!element || !scroller) return; const a = element.getBoundingClientRect(), b = scroller.getBoundingClientRect(); if (a.top < b.top) scroller.scrollTop += a.top - b.top - 6; else if (a.bottom > b.bottom) scroller.scrollTop += a.bottom - b.bottom + 6; };
-    const renderManager = () => `<div class="sp-alm-editor-head"><button class="sp-icon-btn sp-alm-manager-back" title="返回" aria-label="返回"><i class="fa-solid fa-arrow-left"></i></button><span class="sp-alm-editor-title">历法管理</span></div><div class="sp-alm-manager-hint">不想自己填？<button type="button" class="sp-alm-manager-chat-link">和间聊聊吧 →</button></div><div class="sp-alm-body"><div class="sp-alm-editor-body">${renderBody()}</div></div>`;
+    const renderManager = () => `<div class="sp-alm-editor-head"><button class="sp-icon-btn sp-alm-manager-back" title="返回" aria-label="返回"><i class="fa-solid fa-arrow-left"></i></button><span class="sp-alm-editor-title">历法管理</span></div><div class="sp-alm-manager-hint">想先商量再生成完整历法？<button type="button" class="sp-alm-manager-chat-link">去间整理可应用方案 →</button></div><div class="sp-alm-body"><div class="sp-alm-editor-body">${renderBody()}</div></div>`;
     const refreshManager = (options = {}) => {
         const $wrap = env.root?.(), $scroller = $wrap?.find('.sp-alm-body').first(), $content = $scroller?.children('.sp-alm-editor-body').first();
         if (!$wrap?.find('.sp-alm-manager-hint').length || !$content?.length) return false;

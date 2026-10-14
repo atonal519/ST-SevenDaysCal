@@ -41,7 +41,7 @@ test('delayed chat UI callback runs against the live view without a boundary ref
     assert.equal(calls, 1);
 });
 
-test('exclusion restore refreshes the current view after await but still stops if the live character is excluded', async () => {
+test('exclusion restore stops if the live character is excluded', async () => {
     const region = productionFunctions('async function restoreCurrentCharacterAfterExclusion() {', 'function getLegacyWiFilter() {');
     const chain = { removeClass() { return this; }, addClass() { return this; }, show() { return this; }, hide() { return this; }, empty() { return this; }, text() { return this; } };
     const makeHarness = () => {
@@ -62,18 +62,8 @@ test('exclusion restore refreshes the current view after await but still stops i
             closeTaDrawer() {}, updateTaTriggerLabel() {}, setBody: body => calls.bodies.push(body),
             renderMemorySection() {}, renderStorageUsage() {}, renderCurrentChatStorageMode() {},
         };
-        return { calls, context, load, sandbox, setExcluded: value => { excluded = value; } };
+        return { calls, load, sandbox, setExcluded: value => { excluded = value; } };
     };
-
-    const switched = makeHarness();
-    const restore = evaluateFunctionRegion(region, 'restoreCurrentCharacterAfterExclusion', switched.sandbox);
-    const restoring = restore();
-    switched.context.chatId = 'current-after-await';
-    switched.context.chatMetadata = {};
-    switched.load.resolve();
-    assert.equal(await restoring, true);
-    assert.deepEqual(switched.calls.migration, ['current-after-await']);
-    assert.ok(switched.calls.bodies.some(body => body === 'cache:current-after-await'));
 
     const excluded = makeHarness();
     const restoreExcluded = evaluateFunctionRegion(region, 'restoreCurrentCharacterAfterExclusion', excluded.sandbox);

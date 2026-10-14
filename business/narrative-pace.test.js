@@ -13,7 +13,6 @@ import { buildLinesInjection } from './lines/strategy.js';
 import { buildOutlinePrompt } from './outline/prompts.js';
 import { buildSpaceChatSystemPrompt } from './space/prompts.js';
 import { createSpaceContext } from './space/context.js';
-import { buildCreativeChatSystemPrompt } from '../state.js';
 
 const labels = {
     free: '自由：按场景变速',
@@ -72,24 +71,29 @@ test('normal main reply slot updates on value changes, has no activity gate, and
     ]);
 });
 
-test('the selected global mode reaches line/outline creation and outline discussion once; point and latent preference contracts exclude it', () => {
+test('the selected global mode reaches line/outline creation and Space outline requests once; point and latent preference contracts exclude it', () => {
     for (const pace of NARRATIVE_PACE_VALUES) {
         const line = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'off', 'natural', pace);
         const outline = buildOutlinePrompt('用户', '角色', 'user', { narrativePace: pace });
-        const discussion = buildCreativeChatSystemPrompt({ userName: '用户', charName: '角色', preferences: { narrativePace: pace } });
+        const spaceOutline = buildSpaceChatSystemPrompt({
+            userName: '用户', charName: '角色', preferences: { narrativePace: pace },
+            requestedMaterials: { outline: true },
+            intent: { action: 'write', kind: 'outline_widget' },
+        });
         const spaceLine = buildSpaceChatSystemPrompt({
             userName: '用户', charName: '角色', preferences: { narrativePace: pace },
             intent: { action: 'write', kind: 'line_widget' },
         });
-        for (const prompt of [line, outline, discussion, spaceLine]) {
+        for (const prompt of [line, outline, spaceLine]) {
             assert.equal(countContract(prompt), 1);
             assert.match(prompt, new RegExp(labels[pace]));
         }
-        assert.match(line, /Line: 名称\|阶段\|时间锚点\|agency\|stall\|pin/);
+        assert.equal(countContract(spaceOutline), 0);
+        assert.match(line, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
         assert.match(outline, /Beat: 推演时间\|标题\|类型\|所属故事线\|结果/);
-        assert.match(outline, /Scene: 这一阶段发生什么/);
-        assert.match(outline, /Subtext: 文学化题记或引言/);
-        assert.match(outline, /Think: 节点成立原因/);
+        assert.match(outline, /Scene: 行动与局面变化/);
+        assert.match(outline, /Subtext: 文学化题记/);
+        assert.match(outline, /Think: 成立依据与叙事作用/);
         const point = buildSpaceChatSystemPrompt({
             userName: '用户', charName: '角色', preferences: { narrativePace: pace },
             intent: { action: 'write', kind: 'schedule_widget' },

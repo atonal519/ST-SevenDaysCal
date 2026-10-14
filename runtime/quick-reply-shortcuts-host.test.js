@@ -79,7 +79,7 @@ await createQuickReplyShortcutSync({ getApi: () => api, notify: error => syncErr
 if (persistenceCalls.length !== 2 || persistenceCalls[0].url !== '/api/quick-replies/save' || persistenceCalls[1].url !== '/api/quick-replies/delete' || persistenceCalls[0].body.qrList.length !== 0) throw new Error('native debounced final save did not complete before set deletion: ' + JSON.stringify({ persistenceCalls, syncErrors, qrList: storedSet.qrList }));
 `);
     try {
-        const result = await new Promise((resolve, reject) => {
+        const result = await new Promise(resolve => {
             const child = spawn(process.execPath, ['--no-warnings', '--experimental-loader', loader, runner], { stdio: ['ignore', 'pipe', 'pipe'] });
             let stdout = ''; let stderr = '';
             child.stdout.on('data', chunk => { stdout += chunk; });

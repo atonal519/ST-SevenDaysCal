@@ -155,7 +155,7 @@ export function createLinesGenerationController(env = {}) {
                 const error = diagnostic.rejected(makeDiagnosticError(code, { phase: parseRejected ? 'parse' : 'validation' }), { phase: parseRejected ? 'parse' : 'validation', reasonCode: checked.reason });
                 env.fail?.(error, { silent, owner, reasonCode: checked.reason }); return { status: 'failed', reason: checked.reason };
             }
-            const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets, intent });
+            const audit = auditLineEvolution({ previousLines: identityLines, generatedLines: checked.model, freshTickets: adultTickets });
             if (!audit.ok) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: audit.reason }); env.fail?.(error, { silent, owner, reasonCode: audit.reason }); return { status: 'failed', reason: audit.reason }; }
             const latest = env.readSaved() || {};
             const latestSnapshot = Object.freeze({ raw: String(latest.raw || ''), ts: Number(latest.ts) || null });

@@ -1,11 +1,11 @@
-import { createOutlineChat } from './chat.js';
 import { createOutlineGeneration } from './generation.js';
 import { createOutlineIdentity, sameOutlineIdentity } from './identity.js';
-import { createOutlineInjection } from './injection.js';
+import { createOutlineInjection, formatOutlinePlanningProjection, isOutlinePlanningEnabled, projectOutlineBeats } from './injection.js';
 import { createOutlineJudge } from './judge.js';
 import { createOutlineRenderer } from './render.js';
 import { createOutlineRepository } from './repository.js';
-import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline, editOutlineScene } from './schema.js';
+import { cursorAfterBeatDelete, deleteOutlineBeatFromRaw, parseOutline, editOutlineScene, normalizeOutlineResponse } from './schema.js';
+import { pointRawToken } from '../space/schema.js';
 import { createOutlineUi } from './ui.js';
 import { createPanelFailureStore } from '../ui/panel-failure.js';
 import { diagnosticMessage } from '../../api/diagnostics.js';
@@ -21,7 +21,6 @@ export function createOutlineFeature(env = {}) {
             chatId,
             chatRevision,
             outlineKey: env.keyDesc?.('outline', 'user', ''),
-            creativeChatKey: env.keyDesc?.('creative-chat', 'user', ''),
         });
     };
     const isCurrent = target => sameOutlineIdentity(target, captureIdentity());
@@ -43,7 +42,7 @@ export function createOutlineFeature(env = {}) {
     const clearFailureNote = (slot, key) => { if (visibleFailureSlot !== slot) return false; visibleFailureSlot = null; return failureNotes.clear('outline-last', key); };
     const failureAttempt = new Map();
     const runWithFailureNote = async (slot, label, run) => {
-        if ((slot === 'outline-generation' && generation?.busy) || (slot === 'outline-chat' && chat?.busy)) return run();
+        if (slot === 'outline-generation' && generation?.busy) return run();
         const target = repository.capture(); const targetKey = identityKey(target); const attempt = (failureAttempt.get(slot) || 0) + 1;
         failureAttempt.set(slot, attempt); clearFailureNote(slot, targetKey); renderFailureNotes();
         let result;
@@ -84,6 +83,7 @@ export function createOutlineFeature(env = {}) {
         context: env.context,
         settings: env.settings,
         pluginEnabled: env.pluginEnabled,
+        injectEnabled: env.injectEnabled,
         loadConfig: env.loadUtilityConfig,
         callApi: env.callApi,
         cleanText: env.cleanText,
@@ -126,19 +126,45 @@ export function createOutlineFeature(env = {}) {
         now: env.now,
         isEditing: () => editing,
     });
-    const chat = createOutlineChat({
-        repository,
-        loadConfig: env.loadConfig,
-        buildMessages: env.buildChatMessages,
-        postCompletion: env.postCompletion,
-        injection,
-        renderer,
-        ui,
-        openSettings: env.openSettings,
-        temperature: env.temperature,
-        now: env.now,
-    });
     const actions = Object.freeze({
+        async applyCandidate(raw, expectedRawToken) {
+            const normalized = normalizeOutlineResponse(raw);
+            if (!normalized) { ui.toast('这份面方案没有可用节点，请重新生成', true); return Object.freeze({ status: 'invalid' }); }
+            if (typeof expectedRawToken !== 'string') { ui.toast('无法确认面草稿基于哪版正式稿，请重新生成', true); return Object.freeze({ status: 'stale' }); }
+            const target = repository.capture();
+            if (pointRawToken(repository.readRaw(target)) !== expectedRawToken) {
+                ui.toast('面内容已修改，请重新生成方案', true);
+                return Object.freeze({ status: 'conflict' });
+            }
+            let saved;
+            try {
+                saved = await repository.commitOutlineConfirmed(target, { raw: normalized, ts: env.now?.() ?? Date.now(), cursor: 1 });
+            } catch (error) {
+                if (error?.saveResult?.commitState === 'unknown') {
+                    ui.toast('保存结果暂时无法确认，请刷新后查看面', true);
+                    return Object.freeze({ status: 'unknown', error });
+                }
+                ui.toast('应用失败，正式面未改变', true);
+                return Object.freeze({ status: 'failed', error });
+            }
+            if (saved === true || saved?.ok === true && ['local-applied', 'confirmed'].includes(saved.commitState)) {
+                try {
+                    injection.refresh(target);
+                    if (ui.isOutlineMode()) refreshPanel(target);
+                } catch (error) {
+                    ui.toast('面已保存，但显示未刷新；重新打开面查看', true);
+                    return Object.freeze({ status: 'applied', uiError: error });
+                }
+                ui.toast('已应用到面');
+                return Object.freeze({ status: 'applied' });
+            }
+            if (saved?.commitState === 'unknown') {
+                ui.toast('保存结果暂时无法确认，请刷新后查看面', true);
+                return Object.freeze({ status: 'unknown', result: saved });
+            }
+            ui.toast('应用失败，正式面未改变', true);
+            return Object.freeze({ status: 'failed', result: saved });
+        },
         async editScene(index) {
             if (editing || generation.busy || judge.busy) return false;
             const target = repository.capture(); const saved = repository.readOutline(target); const beat = parseOutline(saved?.raw || '')[Number(index)];
@@ -155,7 +181,7 @@ export function createOutlineFeature(env = {}) {
             if (value === null || value === undefined) return false;
             if (!repository.matches(target, baseline)) { ui.toast('面已变化，请重新打开编辑', true); return false; }
             const result = editOutlineScene(saved.raw, Number(index), value); if (!result.ok) return false;
-            if (!repository.commitOutline(target, { raw: result.raw, ts: env.now?.() ?? Date.now(), cursor: baseline.cursor }, baseline)) return false;
+            if (!repository.commitOutline(target, { raw: result.raw, ts: env.now?.() ?? Date.now(), cursor: baseline.cursor }, baseline)) { ui.toast('保存失败，面未修改', true); return false; }
             injection.refresh(target); if (ui.isOutlineMode()) refreshPanel(target); return true;
         },
         toggleCursor(cursor) {
@@ -165,7 +191,7 @@ export function createOutlineFeature(env = {}) {
             if (!saved?.raw) return false;
             const baseline = repository.baseline(target);
             const next = repository.cursor(target) === cursor ? 0 : cursor;
-            if (!repository.setCursor(target, next, baseline)) return false;
+            if (!repository.setCursor(target, next, baseline)) { ui.toast('保存失败，当前节点未修改', true); return false; }
             injection.refresh(target);
             refreshPanel(target);
             return true;
@@ -188,13 +214,13 @@ export function createOutlineFeature(env = {}) {
             if (raw == null) return false;
             const remaining = parseOutline(raw);
             if (!remaining.length) {
-                if (!repository.removeOutline(target, baseline)) return false;
+                if (!repository.removeOutline(target, baseline)) { ui.toast('保存失败，面未删除', true); return false; }
                 injection.refresh(target);
                 if (ui.isOutlineMode()) ui.setOutline(renderer.empty());
                 return true;
             }
             const cursor = cursorAfterBeatDelete(repository.cursor(target), index, remaining.length);
-            if (!repository.commitOutline(target, { raw, ts: env.now?.() ?? Date.now(), cursor }, baseline)) return false;
+            if (!repository.commitOutline(target, { raw, ts: env.now?.() ?? Date.now(), cursor }, baseline)) { ui.toast('保存失败，面未删除', true); return false; }
             injection.refresh(target);
             if (ui.isOutlineMode()) refreshPanel(target);
             return true;
@@ -206,18 +232,9 @@ export function createOutlineFeature(env = {}) {
         trigger: { value: (...args) => runWithFailureNote('outline-generation', '面生成', () => generation.trigger(...args)) },
         abort: { value: reason => { failureAttempt.set('outline-generation', (failureAttempt.get('outline-generation') || 0) + 1); clearFailureNote('outline-generation', currentFailureKey()); renderFailureNotes(); return generation.abort(reason); } },
     });
-    const chatUi = Object.create(chat);
-    Object.defineProperties(chatUi, {
-        busy: { get: () => chat.busy },
-        send: { value: message => runWithFailureNote('outline-chat', '面内讨论', () => chat.send(message)) },
-        resendFrom: { value: (index, message) => runWithFailureNote('outline-chat', '面内讨论', () => chat.resendFrom(index, message)) },
-        abort: { value: reason => { failureAttempt.set('outline-chat', (failureAttempt.get('outline-chat') || 0) + 1); clearFailureNote('outline-chat', currentFailureKey()); renderFailureNotes(); return chat.abort(reason); } },
-    });
-    ui.bindControllers({ generation: generationUi, chat: chatUi, actions });
+    ui.bindControllers({ generation: generationUi, actions });
 
     const open = () => {
-        ui.setPlaceholder(env.chatPlaceholder?.() || '和 AI 讨论剧情、面或设定…');
-        chat.load();
         if (generation.busy) ui.setLoading();
         else refreshPanel();
         renderFailureNotes();
@@ -226,40 +243,37 @@ export function createOutlineFeature(env = {}) {
         chatRevision += 1;
         editing = false;
         judge.onChatChanged({ lastSeen });
-        chat.onChatChanged();
         failureNotes.clearAll(); visibleFailureSlot = null; renderFailureNotes();
     };
     const abortAll = (reason = 'manual-abort') => {
         generation.abort(reason);
         judge.abort(reason);
-        chat.abort(reason);
         failureAttempt.set('outline-generation', (failureAttempt.get('outline-generation') || 0) + 1);
-        failureAttempt.set('outline-chat', (failureAttempt.get('outline-chat') || 0) + 1);
         failureNotes.clearAll(); visibleFailureSlot = null; renderFailureNotes();
     };
     const invalidateStoreKind = kind => {
         if (kind === 'outline') {
             generation.abort('store-clear');
             judge.abort('store-clear');
-        } else if (kind === 'creative-chat') {
-            chat.abort('store-clear');
         }
     };
     const refreshAfterStoreClear = kind => {
         if (kind === 'outline') {
             if (ui.isOutlineMode()) ui.setOutline(renderer.empty());
             injection.refresh();
-        } else if (kind === 'creative-chat') {
-            chat.load();
         }
     };
     const refreshFromStore = kind => {
         if (kind === 'outline') {
             if (ui.isOutlineMode()) refreshPanel();
             injection.refresh();
-        } else if (kind === 'creative-chat') {
-            chat.load();
         }
+    };
+    const readPlanningProjection = () => {
+        if (!isOutlinePlanningEnabled(env.injectEnabled, env.settings)) return Object.freeze({ beats: Object.freeze([]), cursor: 0 });
+        const target = repository.capture();
+        const saved = repository.readOutline(target);
+        return projectOutlineBeats(parseOutline(saved?.raw || ''), repository.cursor(target));
     };
     return Object.freeze({
         repository,
@@ -267,7 +281,6 @@ export function createOutlineFeature(env = {}) {
         injection,
         judge,
         generation: generationUi,
-        chat: chatUi,
         ui,
         actions,
         bindUi: ui.bind,
@@ -291,6 +304,8 @@ export function createOutlineFeature(env = {}) {
                 cursor: repository.cursor(target),
             });
         },
+        readPlanningProjection,
+        readPlanningText: () => formatOutlinePlanningProjection(readPlanningProjection(), env.cleanText),
         get chatRevision() { return chatRevision; },
     });
 }

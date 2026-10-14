@@ -37,7 +37,7 @@ const fixtures = new Map([
   ['SlashCommandParser.js', ${JSON.stringify(pathToFileURL(slashParser).href)}], ['SlashCommand.js', ${JSON.stringify(pathToFileURL(slashCommand).href)}],
 ]);
 export async function resolve(specifier, context, nextResolve) { const hit = [...fixtures].find(([name]) => specifier.endsWith('/' + name) || specifier === name); if (hit) return { url: hit[1], shortCircuit: true }; return nextResolve(specifier, context); }
-export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, openQuickReplyShortcut, openSidebarView, openSchedule, handleViewButtonClick, setCurrentViewForTest: value => { currentView = value; }, registerShortcutCommandForTest: () => registerQuickReplyShortcutCommand({ parser: SlashCommandParser, commandClass: SlashCommand, open: openQuickReplyShortcut, notify: (message, isError) => showToast(message, null, isError) }), setLastMainViewForTest: value => { _lastMainView = value; }, shortcutState: () => ({ outlineMode, linesMode, spaceMode, theaterMode, almanacMode: axisState.almanacMode, almanacSheet: axisState._almanacSheet, linesSheet: linesFeature.sheet, settingsOpen, currentView, lastMainView: _lastMainView }), setShortcutUiForTest: value => { _spShadow = value; }, prepareShortcutViewDependencies: () => { theaterFeature ??= { busy: false, leave() {}, open() {}, onPanelClosed() {}, onPluginDisabled() {} }; coordinateRuntime ??= { feature: { open() {}, close() {} } }; }, setSettingsOpenForTest: value => { settingsOpen = value; }, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } };\\n', shortCircuit: true }; }
+export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, openQuickReplyShortcut, openSidebarView, openSchedule, handleViewButtonClick, setCurrentViewForTest: value => { currentView = value; }, registerShortcutCommandForTest: () => registerQuickReplyShortcutCommand({ parser: SlashCommandParser, commandClass: SlashCommand, open: openQuickReplyShortcut, notify: (message, isError) => showToast(message, null, isError) }), setLastMainViewForTest: value => { _lastMainView = value; }, shortcutState: () => ({ outlineMode, linesMode, spaceMode, theaterMode, almanacMode: axisState.almanacMode, almanacSheet: axisState._almanacSheet, linesSheet: linesFeature.sheet, settingsOpen, currentView, lastMainView: _lastMainView }), setShortcutUiForTest: value => { _spShadow = value; }, prepareShortcutViewDependencies: () => { theaterFeature ??= { busy: false, leave() {}, open() {}, onPanelClosed() {}, onPluginDisabled() {} }; coordinateRuntime ??= { feature: { open() {}, close() {} } }; }, setSettingsOpenForTest: value => { settingsOpen = value; }, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } }; globalThis.__hostSaveSeam.showToast = showToast; globalThis.__hostSaveSeam.timeTravelDirectionLoadErrorText = timeTravelDirectionLoadErrorText; globalThis.__hostSaveSeam.memoryPreCheckConfirm = memoryPreCheckConfirm; globalThis.__hostSaveSeam.renderMemorySection = renderMemorySection; globalThis.__hostSaveSeam.bindLedgerBusyForTest = chat => bindLedgerEvents({ almanac: { on() { return this; }, off() { return this; } }, chat, $: globalThis.jQuery, settings: getSettings, saveSettings() {}, capture: { run: async () => ({ status: "unchanged" }), abort() {} }, judge: { run: async () => ({ status: "unchanged" }) }, captureState: () => ({ busy: true }), actions: {}, render() {}, refreshInline() {}, identity: () => null, isCurrentIdentity: () => true, editor: {}, archive: {}, batch: { scopes: [], scope() {}, selected() { return new Set(); }, reset() {}, ids() { return []; }, exec() {} }, toast: showToast });\\n', shortCircuit: true }; }
 `);
         await fs.writeFile(runner, `
 import { setContext } from ${JSON.stringify(pathToFileURL(harness).href)};
@@ -50,6 +50,18 @@ globalThis.document = { documentElement: { style: { setProperty() {} }, insertAd
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' }); globalThis.requestAnimationFrame = callback => setTimeout(callback, 0); globalThis.MutationObserver = class { observe() {} disconnect() {} }; globalThis.ResizeObserver = class { observe() {} disconnect() {} }; globalThis.IntersectionObserver = class { observe() {} disconnect() {} }; globalThis.toastr = null;
 await import(${JSON.stringify(indexUrl)} + '?local-applied-test=' + Date.now());
 const seam = globalThis.__hostSaveSeam;
+globalThis.__feedbackCapture = { toastMarkup: [], statusHtml: [], confirmMarkup: '', confirmOk: null, confirmCancel: null };
+const baseJQuery = globalThis.jQuery;
+const feedbackChain = { length: 1, 0: {}, append() { return this; }, addClass() { return this; }, removeClass() { return this; }, css() { return this; }, on() { return this; }, remove() { return this; }, show() { return this; }, hide() { return this; }, toggle() { return this; }, prop() { return this; }, val() { return this; }, text() { return this; }, html(value) { if (value !== undefined) globalThis.__feedbackCapture.statusHtml.push({ selector: this.__feedbackSelector, value }); return this; }, attr() { return this; }, trigger() { return this; }, off() { return this; } };
+globalThis.jQuery = globalThis.$ = Object.assign(input => {
+  if (input && typeof input === 'string' && input.startsWith('<div class="sp-toast')) { globalThis.__feedbackCapture.toastMarkup.push(input); return feedbackChain; }
+  if (input && typeof input === 'string' && input.includes('<div id="sp-confirm"')) {
+    globalThis.__feedbackCapture.confirmMarkup = input;
+    return { 0: {}, find(selector) { return { on(_event, handler) { if (selector === '.sp-confirm-ok') globalThis.__feedbackCapture.confirmOk = handler; if (selector === '.sp-confirm-cancel') globalThis.__feedbackCapture.confirmCancel = handler; return this; } }; }, on() { return this; }, addClass() { return this; }, remove() { return this; } };
+  }
+  if (input?.__feedbackSelector) return Object.assign(Object.create(feedbackChain), { __feedbackSelector: input.__feedbackSelector });
+  return baseJQuery(input);
+}, { ...baseJQuery, fn: baseJQuery.fn });
 seam.registerShortcutCommandForTest();
 if (!seam.storeKinds.includes('daily-menu')) throw new Error('daily menu is missing from store statistics/clear kinds');
 let saveCalls = 0; let settleSave; let fetchCalls = 0; const hostPayloadBytes = [];
@@ -492,6 +504,65 @@ const externalWriteResult = await seam.writeStoreConfirmed(seam.keyDesc('lines',
 if (externalWriteResult.commitState !== 'confirmed' || externalWrites.length !== 1) throw new Error('external confirmed CAS path changed');
 const externalSavedLine = externalWrites[0].data.roots['sp-store'].data['lines-user'];
 if (externalSavedLine.codec || JSON.stringify(externalSavedLine) !== JSON.stringify(externalReplacement)) throw new Error('external CAS write did not preserve its plain-value contract');
+const originalSetTimeout = globalThis.setTimeout; const toastDelays = [];
+globalThis.setTimeout = (_callback, delay) => { toastDelays.push(delay); return 1; };
+globalThis.toastr = null; delete globalThis.__zmerUniversalToastThemeCleanup;
+seam.showToast('状态提示', null, 'info'); seam.showToast('成功提示'); seam.showToast('失败提示', null, true); seam.showToast('旧 truthy 失败提示', null, 'legacy');
+const customToastMarkup = globalThis.__feedbackCapture.toastMarkup.slice(-4);
+if (!customToastMarkup[0].includes('sp-toast-info') || !customToastMarkup[0].includes('fa-circle-info')) throw new Error('custom info toast did not render the informational style/icon');
+if (customToastMarkup[1].includes('sp-toast-error') || customToastMarkup[1].includes('sp-toast-info') || !customToastMarkup[1].includes('fa-calendar-check')) throw new Error('custom success toast changed its existing success style');
+if (!customToastMarkup[2].includes('sp-toast-error') || !customToastMarkup[3].includes('sp-toast-error')) throw new Error('true and legacy truthy toast arguments must retain failure styling');
+const visibleToastDelays = toastDelays.filter(delay => delay === 4000 || delay === 10000);
+if (JSON.stringify(visibleToastDelays) !== JSON.stringify([4000, 4000, 10000, 10000])) throw new Error('custom toast duration changed the success/info/error contract');
+const toastrCalls = [];
+globalThis.toastr = Object.fromEntries(['info', 'success', 'error'].map(type => [type, (...args) => toastrCalls.push({ type, args })]));
+globalThis.__zmerUniversalToastThemeCleanup = () => {};
+seam.showToast('info', null, 'info'); seam.showToast('success'); seam.showToast('error', null, true); seam.showToast('legacy truthy', null, 'legacy');
+if (JSON.stringify(toastrCalls.map(call => call.type)) !== JSON.stringify(['info', 'success', 'error', 'error'])) throw new Error('toastr info/success/error routing changed');
+if (toastrCalls[0].args[2].timeOut !== 4000 || toastrCalls[1].args[2].timeOut !== undefined || toastrCalls[2].args[2].timeOut !== 10000 || toastrCalls[3].args[2].timeOut !== 10000) throw new Error('toastr toast timeout contract changed');
+delete globalThis.__zmerUniversalToastThemeCleanup; globalThis.toastr = null;
+const memorySettings = seam.getSettings(); memorySettings.useQianQianJie = false; memorySettings.useBaiBaiBook = false; memorySettings.useAnima = false; memorySettings.useDatabase = true; memorySettings.databaseWorldbookName = 'Feedback Test Book';
+setContext(context('feedback-test-chat', {}, { is_group: false, file_name: 'feedback-test-chat', char_name: 'Role', avatar_url: 'role.png' }));
+seam.setDialogShadow({ querySelector() { return null; }, appendChild() {} });
+async function checkDatabasePreflight(helper, title, decision = true) {
+  globalThis.TavernHelper = helper;
+  globalThis.__feedbackCapture.confirmMarkup = ''; globalThis.__feedbackCapture.confirmOk = null; globalThis.__feedbackCapture.confirmCancel = null;
+  const pending = seam.memoryPreCheckConfirm();
+  for (let index = 0; index < 12 && !globalThis.__feedbackCapture.confirmOk; index++) await Promise.resolve();
+  if (!globalThis.__feedbackCapture.confirmMarkup.includes('<div class="sp-confirm-head">' + title + '</div>')) throw new Error('production database preflight displayed the wrong title: ' + globalThis.__feedbackCapture.confirmMarkup);
+  const callback = decision ? globalThis.__feedbackCapture.confirmOk : globalThis.__feedbackCapture.confirmCancel;
+  if (!callback) throw new Error('production database preflight did not render the expected confirmation choice');
+  callback();
+  if (await pending !== decision) throw new Error('database preflight did not preserve its existing continue/cancel decision');
+}
+await checkDatabasePreflight({ getWorldbook: async () => [] }, '数据库记忆为空');
+await checkDatabasePreflight({}, '数据库记忆不可用');
+await checkDatabasePreflight({ getWorldbook: async () => { throw new Error('mock read failure'); } }, '数据库记忆读取失败', false);
+memorySettings.useDatabase = false; memorySettings.useBaiBaiBook = true;
+seam.setShortcutUiForTest({ querySelector(selector) { return selector.startsWith('#sp-mem-') ? { __feedbackSelector: selector } : null; }, querySelectorAll() { return []; } });
+globalThis.__feedbackCapture.statusHtml = [];
+globalThis.STBaiBaiBook = { getInjectedHistory() { throw new Error('mock coverage read failure'); } };
+seam.renderMemorySection();
+let bbbStatus = globalThis.__feedbackCapture.statusHtml.filter(item => item.selector === '#sp-mem-bbb-status').at(-1)?.value || '';
+if (!bbbStatus.includes('读取状态失败') || bbbStatus.includes('circle-check') || bbbStatus.includes('已就绪')) throw new Error('production BaiBaiBook status hid a read exception as success');
+globalThis.STBaiBaiBook = { getInjectedHistory() { return { coverage: { complete: true } }; } };
+seam.renderMemorySection();
+bbbStatus = globalThis.__feedbackCapture.statusHtml.filter(item => item.selector === '#sp-mem-bbb-status').at(-1)?.value || '';
+if (!bbbStatus.includes('柏宝书已就绪（覆盖完整）') || !bbbStatus.includes('circle-check')) throw new Error('production BaiBaiBook status changed the successful coverage path');
+globalThis.STBaiBaiBook = { getInjectedHistory() { return {}; } };
+seam.renderMemorySection();
+bbbStatus = globalThis.__feedbackCapture.statusHtml.filter(item => item.selector === '#sp-mem-bbb-status').at(-1)?.value || '';
+if (!bbbStatus.includes('柏宝书已就绪（覆盖完整）')) throw new Error('production BaiBaiBook status changed the existing missing-coverage contract');
+let inlineCaptureHandler = null;
+const fakeChat = { off() {}, on(_event, selector, handler) { if (selector === '.sp-inline-ledger-capture') inlineCaptureHandler = handler; return this; } };
+seam.bindLedgerBusyForTest(fakeChat);
+if (!inlineCaptureHandler) throw new Error('production ledger inline capture route was not bound');
+const busyResult = await inlineCaptureHandler.call({}, { stopPropagation() {} });
+if (busyResult?.status !== 'busy' || !globalThis.__feedbackCapture.toastMarkup.at(-1)?.includes('sp-toast-info')) throw new Error('inline ledger busy status did not use the production informational toast');
+if (seam.timeTravelDirectionLoadErrorText({ diagnosticCode: 'config-missing' }) !== '请先在设置中填写自定义 API 的 URL 和 Key；也可以返回后直接采用。') throw new Error('time-travel picker did not retain the actionable API configuration guidance');
+const safeDirectionError = seam.timeTravelDirectionLoadErrorText(Object.assign(new Error('raw upstream body with private data'), { status: 401 }));
+if (!safeDirectionError.includes('读取 AI 推演方向失败') || !safeDirectionError.includes('检查 Key') || safeDirectionError.includes('raw upstream body')) throw new Error('time-travel picker did not map auth failures to safe operation-specific guidance');
+globalThis.setTimeout = originalSetTimeout;
 document.createElement = originalCreateElement;
 `);
         const result = await new Promise(resolve => {

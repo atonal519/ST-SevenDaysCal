@@ -74,6 +74,7 @@ export function createSpaceFeature(env = {}) {
         ui.setPlaceholder(env.placeholder?.() || getSpaceChatPlaceholder());
         chat.load();
         ui.renderHistory(chat.history());
+        ui.renderLegacyOutlineHistory?.(env.readLegacyOutlineHistory?.() || []);
         renderFailure();
     };
     const onChatChanged = ({ enabled = true } = {}) => {

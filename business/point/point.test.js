@@ -228,33 +228,36 @@ test('mixed 与 dominant 都直接信任 NSFW Ticket，SFW 与 off 仍保持普�
     assert.doesNotMatch(off, /Adult: true/);
 });
 
-test('point prompt fixes 14 display slots and adult mode emits continuous Tickets', () => {
-    const pinned = [{ title: '锁定安排', time: '清晨' }];
+test('point prompt gives four format examples while keeping target counts and adult Ticket guidance', () => {
+    const pinned = [{ section: 'Day 3', type: 'hidden', title: '锁定安排', desc: '沿用既定方向', time: '清晨', location: '旧地点', npcAction: '同伴保持联络' }];
     const off = buildPrompt('用户', '角色', 'user', pinned, null, { mode: 'off', tickets: [] });
     const mixed = buildPrompt('用户', '角色', 'user', pinned, null, { mode: 'mixed', tickets: pointTicketPlan('mixed', 14) });
-    assert.equal((off.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 14);
-    assert.equal((mixed.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 14);
+    assert.equal((off.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 4);
+    assert.equal((mixed.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 4);
     assert.doesNotMatch(off, /POINT-TICKET/);
     for (let index = 1; index <= 14; index++) assert.match(mixed, new RegExp(`POINT-TICKET-${index}｜`));
-    assert.equal((mixed.match(/^Ticket: POINT-TICKET-N$/gm) || []).length, 14);
-    assert.equal((mixed.match(/^AdultProof: 按上方对应 Ticket 的 SFW／NSFW 合同填写$/gm) || []).length, 14);
+    assert.equal((mixed.match(/^Ticket: POINT-TICKET-N$/gm) || []).length, 4);
+    assert.equal((mixed.match(/^AdultProof: 按上方对应 Ticket 的 SFW／NSFW 合同填写$/gm) || []).length, 4);
     assert.doesNotMatch(mixed, /^Ticket: POINT-TICKET-\d+$/m);
     for (const prompt of [off, mixed]) {
-        assert.match(prompt, /目标总展示数量为 14 条[\s\S]*Day 1、Day 2、Day 3 各 3 条，Future 5 条/);
-        assert.match(prompt, /已锁定事件也占对应栏目的名额/);
-        assert.match(prompt, /每个 Event 建议独占一行并用竖线分隔字段/);
-        assert.match(prompt, /location 或线头动态为空时，仍须保留空字段位置/);
-        assert.match(prompt, /锁定事件不附 Ticket 或 AdultProof/);
+        assert.match(prompt, /目标数量为 3、3、3、5 条，锁点占原栏目名额/);
+        assert.match(prompt, /每条 Event 独占一行，保留六个字段，用竖线分隔/);
+        assert.match(prompt, /空字段仍保留分隔符/);
+        assert.match(prompt, /锁点不附 Ticket 或 AdultProof/);
+        assert.match(prompt, /Day 3：hidden\|锁定安排\|沿用既定方向\|清晨\|旧地点\|同伴保持联络/);
         assert.doesNotMatch(prompt, /StartDate|日程思考|重要 NPC|非主角人物/);
     }
+    assert.match(off, /每项写清该时段将推进的具体行动及可能改变/);
+    assert.match(off, /玩家尚未作出的关键选择保持开放/);
+    assert.match(off, /同一长期目标可跨日分阶段推进，但各日有不同动作或局面变化，不靠换标题重复/);
     assert.match(mixed, /K = 本轮新建事件数（不含锁定事件）/);
     assert.match(mixed, /新 Event 按最终输出顺序使用前 K 张 Ticket，从 1 连续编号/);
     assert.match(mixed, /未来规划不等于未兑现/);
     assert.match(mixed, /Day 2、Day 3、Future 不得因此写 NONE/);
     assert.match(mixed, /NSFW 票[\s\S]*紧邻完整「AdultProof: kind=sexual-contact/);
     assert.match(mixed, /SFW 票不得成人化，紧邻「AdultProof: NONE」/);
-    assert.match(mixed, /模板中的 Ticket／AdultProof 两行仅供新 Event 使用/);
-    assert.match(mixed, /具体票型与 proof 只服从上方本轮票据表/);
+    assert.match(mixed, /格式例，各栏目按上述目标填写/);
+    assert.match(mixed, /成人票不得跨越接触前、互动进行中、事后三个阶段/);
 });
 
 test('point prompt and validator keep new Tickets continuous when zero, one or several events are locked', () => {
@@ -268,8 +271,8 @@ test('point prompt and validator keep new Tickets continuous when zero, one or s
         const pinned = Array.from({ length: pinCount }, (_, index) => ({ title: `锁定安排${index + 1}`, time: '清晨' }));
         const tickets = pointTicketPlan('mixed', 14 - pinCount);
         const prompt = buildPrompt('用户', '角色', 'user', pinned, null, { mode: 'mixed', tickets });
-        assert.equal((prompt.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 14, `pin=${pinCount}`);
-        assert.equal((prompt.match(/^Ticket: POINT-TICKET-N$/gm) || []).length, 14, `pin=${pinCount}`);
+        assert.equal((prompt.match(/^Event: type\|title\|description\|time\|location\|线头动态$/gm) || []).length, 4, `pin=${pinCount}`);
+        assert.equal((prompt.match(/^Ticket: POINT-TICKET-N$/gm) || []).length, 4, `pin=${pinCount}`);
         assert.equal((prompt.match(/^POINT-TICKET-\d+｜/gm) || []).length, 14 - pinCount, `pin=${pinCount}`);
         assert.doesNotMatch(prompt, /^Ticket: POINT-TICKET-\d+$/m, `pin=${pinCount}`);
 
@@ -901,7 +904,7 @@ test('point controller maps generated field and structure failures while preserv
     assert.equal(fieldResult.error.diagnosticCode, 'invalid-fields');
     assert.equal(fieldResult.error.validation, fieldValidation);
     assert.equal(fieldResult.error.pointIncomplete, true);
-    assert.match(fieldCase.toasts[0], /字段未通过本地校验/);
+    assert.match(fieldCase.toasts[0], /有必需字段不符合要求/);
 
     const structureValidation = { ok: false, code: 'day-missing' };
     const structureCase = pointControllerTestEnv({ validation: structureValidation });
@@ -917,7 +920,16 @@ test('point controller manual generation exposes field diagnostic and restores c
     const controller = createPointController(testCase.env);
     await controller.runGenerate();
     assert.equal(testCase.state.cachedSchedule, 'OLD CACHE');
-    assert.match(testCase.toasts[0], /字段未通过本地校验/);
+    assert.match(testCase.toasts[0], /有必需字段不符合要求/);
+});
+
+test('point ticket validation reports the source-marker failure at the existing sync feedback entry', async () => {
+    const validation = { ok: false, code: 'invalid-point-tickets' };
+    const testCase = pointControllerTestEnv({ validation });
+    const controller = createPointController(testCase.env);
+    const result = await controller.syncPointToToday(false);
+    assert.equal(result.error.validation, validation);
+    assert.match(testCase.toasts[0], /新点的来源标记有误，本轮未更新/);
 });
 
 test('point combined edit updates desc and npcAction atomically', () => {
@@ -926,7 +938,7 @@ test('point combined edit updates desc and npcAction atomically', () => {
     assert.equal(result.ok, true); assert.match(result.raw, /Event: main\|标题\|新描述\|早晨\|地点\|新动态\|true/);
 });
 
-function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null, persistenceFailure = null, uiFailure = false } = {}) {
+function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024-08-20\n<calendar_widget>\nDay: 1\nEvent: main|旧点|描述|早|地点|动态\n</calendar_widget>', generateError = null, persistenceFailure = null, uiFailure = false, parse = () => ({ days: [], future: null }) } = {}) {
     const state = { isGenerating: false, scheduleAbortController: null, cachedSchedule: null };
     const records = new Map();
     const targetKey = (scope, name) => `schedule:${scope}:${name}`;
@@ -942,8 +954,8 @@ function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024
         key: targetKey, read: key => records.get(key), context: () => ({ name1: '用户', name2: '主角' }),
         config: () => ({ url: 'u', key: 'k' }), calendar: () => null, adultMode: () => 'off', editing: () => false,
         enabled: () => true, syncing: () => syncing, setSyncing: value => { syncing = value; }, abortAuto: () => {}, setAuto: controller => controller,
-        generate: async () => { apiCalls++; if (generateError) throw generateError; return generated; },
-        validate: () => ({ ok: true }), parse: () => ({ days: [], future: null }), bindAdult: value => value,
+        generate: async (...args) => { apiCalls++; harness.generatedArgs.push(args); if (generateError) throw generateError; return generated; },
+        validate: () => ({ ok: true }), parse, bindAdult: value => value,
         mergePinned: (_previous, fresh) => fresh, forceStart: value => value, today: () => ({ month: 8, day: 21 }),
         canCommit: () => true, render: value => value, write: (key, value) => { records.set(key, value); writes.push([key, value]); return true; },
         writeConfirmed: (key, value, options = {}) => {
@@ -958,8 +970,27 @@ function pointBoundaryHarness({ view = 'user', char = '', raw = 'StartDate: 2024
         evaluate: () => ({ canCleanup: true }),
         followupState: () => ({ canCleanup: true, canFollowup: false }), shouldFollowup: () => false,
     };
-    return { controller: createPointController(env), records, writes, failureNotes, apiCalls: () => apiCalls };
+    const harness = { controller: null, records, writes, failureNotes, generatedArgs: [], apiCalls: () => apiCalls };
+    harness.controller = createPointController(env);
+    return harness;
 }
+
+test('manual and date-sync controllers pass real locked Day/Future fields to planning without mutating parsed input', async () => {
+    const raw = '<calendar_widget>\nDay: 1|晴|12℃\nEvent: main|我锁定的 Day 1|第一段原描述|清晨|旧地点一|同伴一同步回应|true\nDay: 2|多云|13℃\nDay: 3|阴|14℃\nEvent: hidden|我锁定的 Day 3|第三段原描述|傍晚|旧地点三|同伴三同期动作|true\nFuture:\nEvent: bond|我锁定的 Future|未来原描述|未定|未来地点|未来回应|true\n</calendar_widget>';
+    for (const run of ['manual', 'sync']) {
+        const harness = pointBoundaryHarness({ raw, parse: parseCalendar });
+        const result = run === 'manual' ? await harness.controller.runGenerate() : await harness.controller.syncPointToToday(false);
+        assert.equal(result.status, 'updated', run);
+        const pinned = harness.generatedArgs[0][5];
+        assert.deepEqual(pinned.map(event => [event.section, event.title, event.desc, event.time, event.location, event.npcAction]), [
+            ['Day 1', '我锁定的 Day 1', '第一段原描述', '清晨', '旧地点一', '同伴一同步回应'],
+            ['Day 3', '我锁定的 Day 3', '第三段原描述', '傍晚', '旧地点三', '同伴三同期动作'],
+            ['Future', '我锁定的 Future', '未来原描述', '未定', '未来地点', '未来回应'],
+        ], run);
+        assert.match(buildPrompt('用户', '角色', 'user', pinned), /Day 3：hidden\|我锁定的 Day 3\|第三段原描述\|傍晚\|旧地点三\|同伴三同期动作/);
+        assert.equal(parseCalendar(raw).allDays[2].events[0].section, undefined, '投影不得改写 parsed 事件');
+    }
+});
 
 test('point date gate makes same month/day and never-generated user schedules zero-API no-ops', async () => {
     let apiCalls = 0;

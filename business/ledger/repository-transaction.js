@@ -6,7 +6,7 @@ const numericPlanSummary = summary => Object.freeze({
     pending: Number(summary?.pending) || 0, lockedMissing: Number(summary?.lockedMissing) || 0,
     kept: Number(summary?.kept) || 0, deleted: Number(summary?.deleted ?? summary?.cleaned) || 0,
 });
-function validateLedgerIdentity(entries, seq, beforeIds = null) {
+function validateLedgerIdentity(entries, seq) {
     const list = Array.isArray(entries) ? entries : [];
     const ids = list.map(entry => String(entry?.id || ''));
     if (ids.some(id => !/^L\d+$/.test(id)) || new Set(ids).size !== ids.length) return false;

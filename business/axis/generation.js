@@ -31,8 +31,8 @@ export function createAxisGenerationController(env = {}) {
             // 整历 reroll 必须与旧历隔离：既不把当前历作为 system 数据源再喂回模型，
             // 也让统一消息构建器剥掉记忆/历史里残留的旧 widget。补录仍需看现有历去重，保持旧调用不变。
             const apiOptions = supplement
-                ? { fullMemory: true, promptMode: 'creative', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink }
-                : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac', promptMode: 'creative', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink };
+                ? { fullMemory: true, promptMode: 'planning', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink }
+                : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac', promptMode: 'planning', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink };
             if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 3, apiOptions);
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };
@@ -41,8 +41,11 @@ export function createAxisGenerationController(env = {}) {
             const parsed = env.parse?.(raw) || [];
             if (!supplement && !parsed.length) throw diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'almanac-no-valid-date' });
             if (supplement) {
+                if (!parsed.length && env.isEmptyWidget?.(raw) !== true) throw diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'supplement-widget-invalid' });
+                const eligible = parsed.filter(item => item?.type === 'anniversary' || item?.type === 'custom');
+                const ignoredNonCommemorative = parsed.length > 0 && eligible.length === 0;
                 const base = env.loadItems?.() || [], seen = new Set(base.map(env.dedupKey)), added = [];
-                for (const item of parsed) { const key = env.dedupKey(item); if (seen.has(key)) continue; seen.add(key); added.push({ ...item, pin: true }); }
+                for (const item of eligible) { const key = env.dedupKey(item); if (seen.has(key)) continue; seen.add(key); added.push({ ...item, pin: true }); }
                 if (axisState.almanacAbortController !== ctrl) return cancelOwned();
                 diagnostic.accepted({ phase: 'validation', reasonCode: added.length ? 'supplement-valid' : 'supplement-empty' });
                 let stored = null;
@@ -55,7 +58,10 @@ export function createAxisGenerationController(env = {}) {
                 axisState.isGeneratingAlmanac = false; axisState.almanacAbortController = null;
                 if (added.length) runUi(() => env.sync?.(), 'axis-sync-failed');
                 runUi(() => env.render?.(), 'axis-render-failed');
-                runUi(() => env.notify?.(added.length ? `已补录 ${added.length} 条纪念日` : '通读全程后没有够格补录的新里程碑（这很正常）', added.length > 0), 'axis-notify-failed');
+                const message = added.length ? `已补录 ${added.length} 条纪念日`
+                    : ignoredNonCommemorative ? '补录结果只有节日或生日，没有新增纪念日'
+                        : '通读全程后没有够格补录的新里程碑（这很正常）';
+                runUi(() => env.notify?.(message, added.length > 0), 'axis-notify-failed');
                 if (!uiError) runUi(() => env.clearFailure?.(supplement, chatId), 'axis-clear-failure-failed');
                 if (uiError) { try { env.failure?.(UI_REFRESH_FAILURE_TEXT, supplement, chatId, participant); } catch {} try { env.toast?.(UI_REFRESH_FAILURE_TEXT, null, true); } catch {} }
                 else diagnostic.uiDisplayed({ reasonCode: 'axis-ui-applied' });

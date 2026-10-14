@@ -71,9 +71,7 @@ export function createLinesFeature(env = {}) {
                 || (owner.controller.signal.reason?.code === 'operation-timeout' && owners.isOwner(owner)));
     };
     const clearGenerationFailure = () => { lastGenerationFailure = null; };
-    const failureText = (error, reasonCode) => reasonCode === 'evolution-newborn-missing-ticket'
-        ? '上次生成失败：模型漏写了新线的来源编号。原有内容未改变，可以重新生成。'
-        : `上次生成失败：${diagnosticMessage(error, { phase: error?.phase || 'request' })}`;
+    const failureText = (error, reasonCode) => `上次生成失败：${linesGenerationFailureText(error, reasonCode)}`;
     const generation = env.generation || (env.generationEnv && createLinesGenerationController({
         ...env.generationEnv,
         timeLimits: env.timeLimits || env.generationEnv.timeLimits,
@@ -162,9 +160,9 @@ export function createLinesFeature(env = {}) {
             const saved = env.widgetEnv.read?.(key);
             const result = commitLineWidget(saved?.raw || '', body, { editIndex: editIdx == null ? null : Number(editIdx) - 1, pin: true, locator });
             if (!result.ok) return env.widgetEnv.fail?.(editIdx != null
-                ? result.reason === 'line-target-ambiguous' ? '存在多条无法区分的同名线，请先在「线」中整理后重新生成卡片' : '原线已不存在，请重新生成这张卡片'
+                ? result.reason === 'line-target-ambiguous' ? '存在多条无法区分的同名线，请先在「线」中整理后重新生成卡片' : result.reason === 'line-target-changed' ? '这条线在生成卡片后已被人工修改，未覆盖；请重新生成卡片' : '原线已不存在，请重新生成这张卡片'
                 : '卡片格式不完整，无法应用');
-            env.widgetEnv.write?.(key, manualLineStore(saved, result.raw).value);
+            if (env.widgetEnv.write?.(key, manualLineStore(saved, result.raw).value) === false) return env.widgetEnv.fail?.('线卡片保存失败，当前内容未更新');
             runtime.cache(result.raw);
             refreshPanel?.(true);
             syncInline?.();
@@ -181,7 +179,6 @@ export function createLinesFeature(env = {}) {
             const adult = l.adult === true;
             const color = colors[l.stage] || '#9aa6b2';
             const edgeColor = lineEdgeColor(l);
-            const next = l.next ? `<div class="sp-line-next ${l.stall ? 'sp-line-next-stall' : 'sp-line-next-go'}"><span class="sp-line-next-tag">${l.stall ? '⏸' : '→'}</span><span class="sp-line-next-text">${env.escapeHtml?.(env.cleanText?.(l.next) || l.next)}</span></div>` : '';
             const inject = env.makeInjectBtn?.(buildLineInjectText(l)) || ''; const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
             const actions = renderActionMenu('line', [
                 { action: 'line-edit', icon: 'fa-pen', label: '编辑', title: '编辑这条线' },
@@ -301,7 +298,7 @@ export function createLinesFeature(env = {}) {
         injection?.refresh?.();
         env.refreshInlineWindow?.(true);
     };
-    const commitGenerationResult = async (raw, { silent, owner, swipeCtx, travelContext, commitBaseline } = {}) => {
+    const commitGenerationResult = async (raw, { silent, owner, swipeCtx, commitBaseline } = {}) => {
         const chatId = env.chatId?.();
         const key = env.cacheKey?.();
         const baselineStore = snapshotLineStore(commitBaseline?.store ?? env.readSaved?.() ?? {});
@@ -446,7 +443,7 @@ export function createLinesFeature(env = {}) {
             linesBaseline: saved,
         });
     };
-    const onCharacterRendered = async ({ messageId, type, autoSuppressed = false } = {}) => {
+    const onCharacterRendered = async ({ messageId, autoSuppressed = false } = {}) => {
         if (!env.pluginEnabled?.() || env.getSettings?.().linesEnabled === false) return;
         const mid = Number(messageId);
         const signature = env.floorSignature?.(mid) || '';
@@ -577,7 +574,6 @@ export function createLinesFeature(env = {}) {
     };
     const reconcileHistoryStorage = () => {
         const chatId = env.chatId?.();
-        const boundaryEpoch = env.boundaryEpoch?.();
         const actual = snapshotLineStore(historyRead(pendingHistoryRestore?.storeKey));
         const restored = !!pendingHistoryRestore && lineStoreMatches(actual, pendingHistoryRestore.value);
         if (restored) swipeStore.clearAll(chatId);
@@ -744,4 +740,13 @@ export function createLinesFeature(env = {}) {
         refreshPanel,
         awaitAutoAdvances: async () => { while (autoAdvancePump) await autoAdvancePump; },
     };
+}
+
+export function linesGenerationFailureText(error, reasonCode) {
+    if (reasonCode === 'evolution-newborn-missing-ticket') return '模型漏写了新线的来源编号。原有内容未改变，可以重新生成。';
+    if (reasonCode === 'evolution-newborn-terminal') return '新线不能直接标为已结束，本轮未更新。';
+    if (reasonCode === 'evolution-empty-name') return '有一条线缺少名称，本轮未更新。';
+    if (reasonCode === 'evolution-duplicate-old-line' || reasonCode === 'evolution-duplicate-pinned-line') return '模型重复返回了同一条已有线，本轮未更新。';
+    if (reasonCode === 'evolution-old-line-ticket' || reasonCode === 'evolution-pinned-ticket' || reasonCode === 'evolution-unknown-ticket') return '线的来源编号与本轮可用来源不符，本轮未更新。';
+    return diagnosticMessage(error, { phase: error?.phase || 'request' });
 }

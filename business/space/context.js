@@ -4,6 +4,23 @@ import { compactLineBaselines, compactPointBaselines, latestSpaceWidget, stripWi
 export const LEDGER_READ_KEYWORDS = Object.freeze(['刻度', '暗历', '暗账', '状态', '伤', '病', '孕', '约定', '周期', '待办', '身心', '现在怎', '好了没', '没了结']);
 
 const includesAny = (message, words) => words.some(word => message.includes(word));
+const SPACE_MATERIAL_RX = Object.freeze({
+    outline: /(?:大纲|面规划|当前面|下一面|面节点|规划到哪)/,
+    points: /(?:日程|日历|待办|点卡片?|已有的点|当前点)/,
+    lines: /(?:事件线|剧情线|线索|伏笔线|线卡片?|当前线|已有线)/,
+    ledger: /(?:刻度|暗历|暗账|伤情|病情|怀孕|孕期|约定|周期|待办|身心状态|伤好了没|没了结)/,
+    date: /(?:故事日期|剧情日期|当前故事时间|今天几月|当前日期|几月几日|哪一天|节日|生日|纪念日|周年)/,
+    calendar: /(?:历法|纪年|年号|月名|每月几天|几个月|历法月份)/,
+    cold: /(?:冷知识|边角知识|已存知识|冷门知识)/,
+    menu: /(?:今日菜单|菜单|吃什么|菜品|上次的菜)/,
+    theater: /(?:棱|小剧场|棱作品|棱模板|已存作品|已保存作品|作品列表|模板列表)/,
+    coordinate: /(?:坐标|收藏夹|收藏楼|收藏的楼|已存坐标|坐标收藏|锚点收藏|展开第\s*\d+\s*楼坐标正文)/,
+});
+
+export function requestedSpaceMaterials(message) {
+    const text = String(message || '');
+    return Object.freeze(Object.fromEntries(Object.entries(SPACE_MATERIAL_RX).map(([key, rx]) => [key, rx.test(text)])));
+}
 const WRITE_RX = /(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做成|写成|做(?:一|一个|一条|个|条)|加(?:一|个|条)?|改(?:成|一下|为)?|修改|调整|设置|设(?:为|成)|重做|重写|换成|挪到|来一(?:张|个|条)|给我(?:做|来)?一(?:张|个|条))/;
 const VIEW_RX = /(?:查看|看看|看下|列出|列表|有哪些|哪几|有几(?:个|条)|多少(?:个|条)|当前|现有|已有|现在(?:有|的)|第\s*\d+\s*条)/;
 const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)/;
@@ -19,7 +36,7 @@ const OPERATION_HELP_RX = /(?:怎么|如何|怎样|在哪|能不能|可以吗|�
 const WHY_OPERATION_RX = /(?:为什么|为何|为啥).{0,16}(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭)|(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭).{0,16}(?:为什么|为何|为啥)/;
 const SETTINGS_HELP_RX = /(?:设置|开关|注入).{0,12}(?:怎么|如何|在哪|没反应|没生效|不生效|找不到)|(?:怎么|如何|在哪|没反应|没生效|不生效|找不到).{0,12}(?:设置|开关|注入)/;
 const CANONICAL_ITEM_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:这个|那个|当前|现有|已有)(?:的)?(?:点|线)|(?:当前|现有|已有).{0,8}(?:日程|日历|待办|事件线|剧情线|线索|伏笔))/;
-const NO_WRITE_RX = /(?:(?:别|不要|不用|无需|不必|不(?:需要|想|打算|要)|请勿|先别|暂(?:时)?不|取消|停止|禁止)[^，。？！；：,:;!?\n]{0,12}|不(?:再)?)(?:生成|新增|添加|新建|创建|记录|保存|落地|安排|做|写|出|生|插|弄|需要|加|改|修改|调整|设置|设|重做|重写|点|线|历法?|轴(?:历)?卡片?|卡片)|(?:只|先)(?:分析|讨论|聊聊|说说|解释)/;
+const APPLICATION_BUTTON_REQUEST_RX = /(?:给我|请|想要|需要)?(?:一个|一份|对应的)?应用按钮|(?:应用到哪|要应用什么|哪种应用卡)/;
 const CANONICAL_EDIT_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:当前|现有|已有)(?:的)?(?:点|线)).{0,12}(?:改|修改|调整|重做|重写|简短|详细|短些|长些)/;
 const LOOSE_POINT_RX = /(?:^|[^\p{L}\p{N}_])点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const LOOSE_LINE_RX = /(?:^|[^\p{L}\p{N}_])线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
@@ -28,16 +45,18 @@ const DIRECT_POINT_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整
 const DIRECT_LINE_REQUEST_RX = /(?:写|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|线(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
 const DIRECT_ALMANAC_REQUEST_RX = /(?:写|生|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|历(?:卡片)?(?:给我|帮我|替我|为我|安排|来|做)/u;
 const DIRECT_AXIS_CARD_REQUEST_RX = /(?:写|生|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:给我|帮我|替我|为我|请)(?:出|来)(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|轴(?:历)?卡片(?:给我|帮我|替我|为我|安排|来|做)/u;
+const OUTLINE_REQUEST_RX = /(?:生成|整理|梳理|写|做|改|修改|调整|重做|重写|更新|转换|产出|输出).{0,16}(?:完整)?(?:正式)?(?:剧情)?(?:大纲|面)(?:方案|草稿)?|(?:给我|帮我|替我|为我|请)(?:来|出)(?:一版|一份|一个|一条|一|个|条)(?:大纲|面)(?:方案|草稿)?(?=$|[\s，。？！、；：,:;!?）)」』】”’])|(?:大纲|面)(?:方案|草稿).{0,12}(?:生成|整理|修改|调整|重做|重写|更新|应用)|(?:把|将).{0,32}(?:整理成|做成|生成|改成|修改成).{0,24}(?:可应用到面|面方案|大纲)(?:的)?(?:完整)?(?:方案|草稿)?|可应用到面(?:的)?(?:完整)?(?:方案|草稿)?/;
 const DESIRED_POINT_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const DESIRED_LINE_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const DESIRED_ALMANAC_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?历(?!法)(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const DESIRED_AXIS_CARD_RX = /(?:我要|我想要|我可以要|想要|需要)(?:一|一个|一条|个|条|张)?轴(?:历)?卡片(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
-const NEGATED_DISCOURSE_THEN_CARD_RX = /(?:别|不要|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再)?(?:讨论|解释|分析|寒暄|评价|说明|聊聊|说说)(?:[，。？！；：,:;!?\s]*直接)*[，。？！；：,:;!?\s]*(?:给我|帮我|替我|为我|请)?(?:写|出|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?(?:点|线|历法?)(?:卡片)?/;
+const NEGATED_DISCOURSE_THEN_CARD_RX = /(?:别|不要|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再)?(?:讨论|解释|分析|寒暄|评价|说明|聊聊|说说)(?:[，。？！；：,:;!?\s]*直接)*[，。？！；：,:;!?\s]*(?:给我|帮我|替我|为我|请)?(?:写|出|生|插|做|弄|生成|创建|输出|整理|转换?)(?:成|为)?(?:一|一个|一条|个|条|张)?(?:点|线|历法?|面)(?:卡片)?/;
 const SEMANTIC_CARD_RX = /结构化卡片|(?:历|历法)卡片/;
 const PURE_DISCUSSION_RX = /(?:为什么|为何|为啥|是不是|是否|怎么看|如何理解|什么意思|意味着|象征|合理(?:吗|么)|成立(?:吗|么)|怎么样|怎么回事|[？?]|吗$|呢$)/;
 const PURE_EXPLANATION_RX = /^\s*(?:我)?(?:只是|只|单纯)?(?:想)?(?:问|了解|请教|听听解释)/;
 const EXPLICIT_EXPLANATION_RX = /^\s*(?:(?:请|麻烦|劳驾|帮我|给我)\s*)?(?:解释|说明|释义|解读|讲解|分析理解)(?:一下|下)?/;
 const REQUEST_LANGUAGE_RX = /(?:给我|帮我|请|我要|我想|想要|需要|替我|为我|生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|来|弄|输出|整理|转成|转换|改|修改|调整|设置|重做|重写)/;
+const NO_WRITE_RX = /(?:不要|别|不用|无需|不必|请勿|先别|暂(?:时)?不).{0,12}(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|弄|整理|转换|卡片)|我不(?:想|需要|要).{0,8}(?:点|线|历|面|卡片)/;
 const DELEGATED_REQUEST_RX = /(?:给我|帮我|替我|为我|我要|我想|想要|我可以要|能不能.{0,4}给我|可以.{0,4}给我)/;
 const QUOTED_CARD_MENTION_RX = /(?:例如|比如|例子|举例|引用)[^"“‘\n]{0,16}["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’]|["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’].{0,32}(?:这句话|这个词|例子|引用|说法|表达|意思|说明|句式|比喻|你觉得|怎么回答|不用执行|不要执行)/;
 const MENTION_ONLY_RX = /(?:只是|仅仅|仅是|不过是).{0,12}(?:提到|提及|说到|谈到|引用)|(?:这里|此处).{0,12}(?:比喻|词语|说法|含义)/;
@@ -64,6 +83,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         line_widget: modules.line_widget || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
         almanac_widget: modules.almanac_widget || LOOSE_ALMANAC_RX.test(message) || DIRECT_ALMANAC_REQUEST_RX.test(message) || DESIRED_ALMANAC_RX.test(message) || (!modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message))),
         era_widget: modules.era_widget,
+        outline_widget: OUTLINE_REQUEST_RX.test(message),
     });
     const semanticKinds = Object.keys(semanticModules).filter(kind => semanticModules[kind]);
     const latestWidget = latestSpaceWidget(historySnapshot);
@@ -76,12 +96,17 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const noWrite = NO_WRITE_RX.test(message) && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message);
     const delegatedCardRequest = !noWrite && semanticKinds.length > 0 && DELEGATED_REQUEST_RX.test(message);
     const faq = faqCandidate && !delegatedCardRequest;
+    if (!noWrite && APPLICATION_BUTTON_REQUEST_RX.test(message) && !semanticKinds.length) {
+        return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-widget-kind' });
+    }
     const helpQuestion = faq && operationalQuestion && !delegatedCardRequest;
     const hasWrite = WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
-    const writeKinds = !helpQuestion && !noWrite && hasWrite ? Object.keys(modules).filter(kind => modules[kind]) : [];
+    const writeKinds = !helpQuestion && !noWrite && hasWrite ? Object.keys(semanticModules).filter(kind => semanticModules[kind]) : [];
     const directAxisCardRequest = !noWrite && !modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message));
     const directAxisEraRequest = !helpQuestion && !noWrite && modules.era_widget && /轴(?:历)?卡片/.test(message) && REQUEST_LANGUAGE_RX.test(message);
-    const directSemanticRequest = DIRECT_POINT_REQUEST_RX.test(message)
+    const directOutlineRequest = !noWrite && OUTLINE_REQUEST_RX.test(message) && REQUEST_LANGUAGE_RX.test(message);
+    const directSemanticRequest = directOutlineRequest
+        || DIRECT_POINT_REQUEST_RX.test(message)
         || DIRECT_LINE_REQUEST_RX.test(message)
         || DIRECT_ALMANAC_REQUEST_RX.test(message)
         || directAxisCardRequest
@@ -92,6 +117,9 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const explicitStructuredLanding = directSemanticRequest || (hasWrite && semanticKinds.length > 0);
     if (writeKinds.length > 1 || (!helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
+    }
+    if (!helpQuestion && directOutlineRequest) {
+        return Object.freeze({ action: 'write', kind: 'outline_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
     }
     if (!helpQuestion && directAxisCardRequest) {
         return Object.freeze({ action: 'write', kind: 'almanac_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
@@ -171,15 +199,20 @@ export function createSpaceContext(env = {}) {
         const charName = ctx.name2 || '角色';
         const message = String(userMsg || '');
         const intent = classifySpaceIntent(message, historySnapshot);
-        const outlineRaw = env.readOutline?.(target) || '';
-        let pointScopes = env.readPointScopes?.(target);
+        const requested = requestedSpaceMaterials(message);
+        const outlineEdit = intent.kind === 'outline_widget' && ['write', 'revise-recent'].includes(intent.action);
+        const outlineRaw = outlineEdit
+            ? env.readOutlineDraftSnapshot?.(target)?.raw || ''
+            : requested.outline ? env.readOutline?.(target) || '' : '';
+        const outlineRawToken = outlineEdit ? (env.rawToken?.(outlineRaw) || null) : null;
+        let pointScopes = requested.points || intent.pointContext ? env.readPointScopes?.(target) : [];
         if (!Array.isArray(pointScopes)) {
             const legacyPointRaw = String(env.readPointRaw?.(target) || '');
             pointScopes = legacyPointRaw.trim() ? [{ view: 'user', charName: '', raw: legacyPointRaw, ts: null }] : [];
         }
         const pointList = numberedSpacePointGroups(pointScopes, env.numberedPoints, userName);
-        const lineRaw = intent.lineContext ? env.readLineRaw?.(target) || '' : '';
-        const lineList = intent.lineContext
+        const lineRaw = requested.lines || intent.lineContext ? env.readLineRaw?.(target) || '' : '';
+        const lineList = requested.lines || intent.lineContext
             ? numberedSpaceLineList(lineRaw, env.parseLines)
             : '';
         const lineBaselines = [...compactLineBaselines(lineRaw, env.parseLines)];
@@ -187,17 +220,31 @@ export function createSpaceContext(env = {}) {
             && Number.isInteger(intent.recentWidget.editIdx) && intent.recentWidget.lineLocator) {
             lineBaselines[intent.recentWidget.editIdx - 1] = intent.recentWidget.lineLocator;
         }
-        const ledgerList = ['write', 'revise-recent'].includes(intent.action)
-            ? ''
-            : (includesAny(message, LEDGER_READ_KEYWORDS) ? env.readLedgerText?.(target) || '' : '');
+        const ledgerList = requested.ledger || includesAny(message, LEDGER_READ_KEYWORDS) ? env.readLedgerText?.(target) || '' : '';
         const faqText = intent.faq ? buildSpaceHelpText(env.settings?.() || {}) : '';
-        const memText = await env.readMemory?.(ctx) || '';
+        const characterData = env.readCharacterData?.(ctx) || '';
+        const storyDate = requested.date ? env.readStoryDate?.(ctx) || '' : '';
+        const almanacText = requested.date ? env.readAlmanacText?.(target) || '' : '';
+        const calDescText = requested.calendar || requested.date ? env.readCalendarText?.(target) || '' : '';
+        const readMaterial = (enabled, label, reader) => {
+            if (!enabled) return '';
+            try { return Promise.resolve(reader?.()).catch(() => `【${label}读取失败】本轮暂时无法读取这项资料。`); }
+            catch { return `【${label}读取失败】本轮暂时无法读取这项资料。`; }
+        };
+        const materialReads = [
+            readMaterial(requested.cold, '冷知识', env.readColdKnowledge),
+            readMaterial(requested.menu, '今日菜单', env.readDailyMenu),
+            readMaterial(requested.theater, '棱作品与模板', () => env.readTheater?.(target, ctx, message)),
+            readMaterial(requested.coordinate, '坐标', () => env.readCoordinates?.(target, ctx, message)),
+        ];
+        const materialText = (await Promise.all(materialReads)).filter(Boolean).join('\n\n');
+        const memText = await env.readMemory?.(ctx, outlineEdit ? message : undefined) || '';
         const recentCtx = await env.readRecent?.(ctx) || '';
         const { personaDesc = '', authorNote = '' } = env.readCardExtras?.(ctx) || {};
-        const almanacText = env.readAlmanacText?.(target) || '';
-        const calDescText = env.readCalendarText?.(target) || '';
         const personaOverride = String(env.settings?.()?.spacePersona || '').trim();
         const historyMessages = stripWidgetsForApi(historySnapshot);
+        const lastHistory = historyMessages.at(-1);
+        if (lastHistory?.role === 'user' && String(lastHistory.content ?? '').trim() === message.trim()) historyMessages.pop();
         const titleSupplementText = [
             message,
             ...historyMessages.map(item => String(item?.content ?? '')),
@@ -214,9 +261,12 @@ export function createSpaceContext(env = {}) {
             memText,
             recentCtx,
             personaDesc,
+            characterData,
             authorNote,
             almanacText,
             calDescText,
+            storyDate,
+            materialText,
             personaOverride,
         ].filter(Boolean).join('\n\n');
         // 宿主仍只按本轮问题扫描关键词；人物标题补充只读本轮真正投喂的动态材料。
@@ -225,7 +275,9 @@ export function createSpaceContext(env = {}) {
             userName,
             charName,
             personaDesc,
+            characterData,
             authorNote,
+            storyDate,
             outlineRaw,
             wiContext,
             memText,
@@ -235,6 +287,8 @@ export function createSpaceContext(env = {}) {
             ledgerList,
             almanacText,
             calDescText,
+            materialText,
+            requestedMaterials: requested,
             faqText,
             personaOverride,
             preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' },
@@ -246,6 +300,7 @@ export function createSpaceContext(env = {}) {
         // 本地 transport 元数据，不发送给 API；冻结本轮唯一允许应用的卡型。
         const expectedWidgetKind = ['write', 'revise-recent'].includes(intent.action) ? intent.kind : null;
         if (expectedWidgetKind) Object.defineProperty(messages, 'expectedWidgetKind', { value: expectedWidgetKind, enumerable: false });
+        if (expectedWidgetKind === 'outline_widget' && outlineRawToken) Object.defineProperty(messages, 'outlineRawToken', { value: outlineRawToken, enumerable: false });
         return messages;
     };
     return Object.freeze({ buildMessages });

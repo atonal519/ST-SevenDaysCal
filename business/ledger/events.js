@@ -21,7 +21,7 @@ export function formatLedgerJudgeFeedback(result) {
         updated: `刻度刷新 ${(r.applied || []).length} 条${r.applied?.length ? `：${r.applied.join('、')}` : ''}${s.judgeable != null ? `；参与判定 ${s.judgeable} 条` : ''}${pendingText} · 请注意查看`,
         cancelled: '刻度更新已中止',
     }[r.status] || '刻度更新已结束';
-    return { message: `${text}${suffix}${r.status === 'updated' ? '' : pendingText}`, error: r.status === 'failed' || r.status === 'invalid' };
+    return { message: `${r.reason === 'source-state-invalid' ? '刻度来源无法确认，本轮未更新' : text}${suffix}${r.status === 'updated' ? '' : pendingText}`, error: r.status === 'failed' || r.status === 'invalid', info: r.status === 'busy' };
 }
 
 export function createLedgerDeletedHandler({ cancel, onDeleted, reconcile, toast, refreshInject, refreshInline, refreshPanel } = {}) {
@@ -51,7 +51,7 @@ export function formatLedgerCaptureFeedback(result) {
         'pending-commit': `${Number.isFinite(r.totalBatches) ? `${r.totalBatches} 批` : '全部批次'}刻度溯源已完成，结果已保留但尚未写入；聊天状态发生变化，请再次点「立即标注」安全提交，不会重跑 API。`,
         updated: `刻度标注已完成${Number.isFinite(r.added) || Number.isFinite(r.patched) ? `：新增 ${r.added || 0} 条、更新 ${r.patched || 0} 条` : ''} · 请注意查看`,
     }[r.status] || '刻度标注已结束';
-    return { message: `${text}${r.ignored > 0 ? `；另有 ${r.ignored} 行字段不完整或来源不可靠，已忽略` : ''}`, error: r.status === 'failed' };
+    return { message: `${text}${r.ignored > 0 ? `；另有 ${r.ignored} 行字段不完整或来源不可靠，已忽略` : ''}`, error: r.status === 'failed', info: r.status === 'busy' };
 }
 
 export function finalizeLedgerPanelFeedback(result, { formatFeedback, setFailure, clearFailure, render, toast, clearOnSuccess = false, formatFailure = feedback => feedback.message } = {}) {
@@ -90,13 +90,14 @@ export function finalizeLedgerEventUi(result, { refreshInline, render, toast } =
     return result;
 }
 
-export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, capture, judge, captureState, actions, render, refreshInline, identity, isCurrentIdentity, editor, archive, batch, toast, resetCapture } = {}) {
+export function bindLedgerEvents({ almanac, chat, $, capture, judge, captureState, actions, render, refreshInline, identity, isCurrentIdentity, editor, archive, batch, updateBatchSelection, toast } = {}) {
     const namespace = '.spLedger';
     const redraw = () => { render(); };
+    const syncBatchSelection = scope => typeof updateBatchSelection === 'function' ? updateBatchSelection(scope) : redraw();
     const current = owner => !owner || typeof isCurrentIdentity !== 'function' || isCurrentIdentity(owner) !== false;
     const staleResult = result => result?.stale === true || result?.reason === 'source-stale-chat' || result?.reason === 'superseded';
-    const captureFeedback = result => { const feedback = formatLedgerCaptureFeedback(result); toast?.(feedback.message, feedback.error ? null : undefined, feedback.error); };
-    const judgeFeedback = result => { const feedback = formatLedgerJudgeFeedback(result); toast?.(feedback.message, feedback.error ? null : undefined, feedback.error); };
+    const captureFeedback = result => { const feedback = formatLedgerCaptureFeedback(result); toast?.(feedback.message, feedback.error ? null : undefined, feedback.info ? 'info' : feedback.error); };
+    const judgeFeedback = result => { const feedback = formatLedgerJudgeFeedback(result); toast?.(feedback.message, feedback.error ? null : undefined, feedback.info ? 'info' : feedback.error); };
     const setCaptureBusy = (button, busy, inline) => {
         if (!button) return;
         const $button = $(button);
@@ -109,7 +110,7 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
     };
     const runManualCapture = async (button, { inline = false } = {}) => {
         if (captureState?.().busy) {
-            if (inline) { toast?.('正在标注中…'); return { status: 'busy' }; }
+            if (inline) { toast?.('正在标注中…', null, 'info'); return { status: 'busy' }; }
             capture.abort?.();
             const $button = $(button);
             $button.attr('aria-busy', 'true').addClass('sp-ledger-capture-busy').text('中止中…');
@@ -181,8 +182,8 @@ export function bindLedgerEvents({ almanac, chat, $, settings, saveSettings, cap
     almanac.on(`click${namespace}`, '.sp-led-adv-open', function () { const ed = editor.get(); if (ed) { ed.advanced = true; redraw(); } });
     almanac.on(`click${namespace}`, '.sp-batch-enter', function (e) { e.stopPropagation(); const scope = $(this).attr('data-scope'); if (!batch.scopes.includes(scope)) return; batch.setScope(scope); batch.selected().clear(); redraw(); });
     almanac.on(`click${namespace}`, '.sp-batch-exit', function (e) { e.stopPropagation(); batch.reset(); redraw(); });
-    almanac.on(`change${namespace}`, '.sp-batch-selall', function () { const scope = batch.scope(); if (!scope || !batch.scopes.includes(scope)) return; if (this.checked) batch.ids(scope).forEach(id => batch.selected().add(id)); else batch.selected().clear(); redraw(); });
-    almanac.on(`change${namespace}`, '.sp-batch-check', function () { const id = $(this).closest('[data-id]').attr('data-id'); if (id == null) return; if (this.checked) batch.selected().add(id); else batch.selected().delete(id); redraw(); });
+    almanac.on(`change${namespace}`, '.sp-batch-selall', function () { const scope = batch.scope(); if (!scope || !batch.scopes.includes(scope)) return; if (this.checked) batch.ids(scope).forEach(id => batch.selected().add(id)); else batch.selected().clear(); syncBatchSelection(scope); });
+    almanac.on(`change${namespace}`, '.sp-batch-check', function () { const id = $(this).closest('[data-id]').attr('data-id'); if (id == null) return; const scope = batch.scope(); if (this.checked) batch.selected().add(id); else batch.selected().delete(id); syncBatchSelection(scope); });
     almanac.on(`click${namespace}`, '.sp-batch-exec', async function (e) { e.stopPropagation(); const scope = batch.scope(); const ids = [...batch.selected()]; if (!scope || !batch.scopes.includes(scope) || !ids.length) return; await batch.exec(scope, ids); });
     if (chat) {
         if (chat !== almanac) chat.off?.(namespace);

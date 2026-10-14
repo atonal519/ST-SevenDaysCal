@@ -8,18 +8,17 @@ import { classifySpaceIntent, createSpaceContext } from './space/context.js';
 import { createOutlineInjection } from './outline/injection.js';
 import { createLinesInjectionController } from './lines/injection.js';
 import { createOutlineFeature } from './outline/feature.js';
-import { buildCreativeChatSystemPrompt } from '../state.js';
 
 const scales = ['auto', 'macro', 'meso', 'micro'];
 const preferences = scale => ({ scale, direction: 'tragic' });
 
-test('every narrative scale reaches point, line, outline, outline chat, and outline injection prompts', () => {
+test('every narrative scale reaches point, line, outline, Space outline, and outline injection prompts', () => {
     for (const scale of scales) {
         const prefs = preferences(scale);
         const point = buildPointPrompt('用户', '角色', 'user', null, null, null, prefs);
         const line = buildLinesPrompt('用户', '角色', 'user', '', scale, {}, 'off', 'tragic');
         const outline = buildOutlinePrompt('用户', '角色', 'user', prefs);
-        const chat = buildCreativeChatSystemPrompt({ userName: '用户', charName: '角色', preferences: prefs });
+        const chat = buildSpaceChatSystemPrompt({ userName: '用户', charName: '角色', preferences: prefs, requestedMaterials: { outline: true }, intent: { action: 'write', kind: 'outline_widget' } });
         const injection = buildOutlineInjectionText([{ title: '当前', scene: '现状' }, { title: '后续', scene: '方向' }], 1, undefined, prefs);
         for (const prompt of [point, line, outline, chat, injection]) {
             assert.match(prompt, new RegExp(`叙事尺度·观察焦点】.*${scale === 'auto' ? '自动' : scale === 'macro' ? '宏观' : scale === 'meso' ? '中观' : '微观'}`));
@@ -33,8 +32,8 @@ test('every narrative scale reaches point, line, outline, outline chat, and outl
 test('meso names organization and group level, while outline remains stage based', () => {
     const meso = buildOutlineCreationContract(preferences('meso'));
     assert.match(meso, /中观：观察已有组织、家族、职场、学派或群体/);
-    assert.match(meso, /长线阶段大纲/);
-    assert.match(meso, /不是凭空增加冲突、阴谋或灾难的理由/);
+    assert.match(meso, /节点是阶段而非逐日流水/);
+    assert.match(meso, /不得为了匹配尺度创造陌生人物、阴谋、灾难或转折/);
     assert.doesNotMatch(meso, /数周至数月/);
 });
 
@@ -89,13 +88,12 @@ test('semantic-route applies point/line preferences only if it chooses those car
     const ambiguous = '我想看线的未来可能性';
     assert.equal(classifySpaceIntent(ambiguous).action, 'semantic-route');
     const routed = (await build(ambiguous))[0].content;
-    assert.match(routed, /若你选择普通讨论或解释/);
-    assert.match(routed, /不要把偏好当作回答立场/);
-    assert.match(routed, /轴／历法卡片与刻度内容不套用这些偏好/);
-    assert.match(routed, /剧情推进幅度仅在本轮确实输出或修改线卡时适用；其他卡与普通讨论不套用此幅度/);
+    assert.match(routed, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
+    assert.match(routed, /普通讨论不套用卡片的剧情偏好/);
     assert.match(routed, /快：压缩无关键变化的过渡，让有据事件实质推进，过渡可自然跨日或数日/);
     assert.equal(routed.split('【剧情推进幅度】').length - 1, 1);
     for (const kind of ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget']) assert.match(routed, new RegExp(`<${kind}>`));
+    assert.doesNotMatch(routed, /【面草稿】|<outline_widget>/);
     assert.match(routed, /中观：观察已有组织/);
     assert.match(routed, /剧情倾向·优先级/);
 
@@ -110,11 +108,22 @@ test('semantic-route applies point/line preferences only if it chooses those car
         const explicit = (await build(request))[0].content;
         assert.match(explicit, /叙事尺度·观察焦点/);
         assert.match(explicit, /剧情倾向·优先级/);
-        assert.doesNotMatch(explicit, /若你选择普通讨论或解释/);
+        assert.doesNotMatch(explicit, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
     }
 
     const almanac = (await build('给我出个轴卡片'))[0].content;
     assert.doesNotMatch(almanac, /叙事尺度·观察焦点|剧情倾向·优先级/);
+
+    const semanticFace = buildSpaceChatSystemPrompt({
+        userName: '用户', charName: '角色', preferences: preferencesByCharacter.card,
+        intent: { action: 'semantic-route', kind: null }, requestedMaterials: { outline: true },
+    });
+    const semanticUnrelated = buildSpaceChatSystemPrompt({
+        userName: '用户', charName: '角色', preferences: preferencesByCharacter.card,
+        intent: { action: 'semantic-route', kind: null }, requestedMaterials: { outline: false },
+    });
+    assert.match(semanticFace, /<outline_widget>/);
+    assert.doesNotMatch(semanticUnrelated, /<outline_widget>|【面草稿】/);
 });
 
 test('outline hidden injection refreshes preferences only while both injection switches are enabled', () => {

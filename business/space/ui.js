@@ -1,4 +1,5 @@
-import { spaceMessagePlainText } from './schema.js';
+import { extractWidgets, spaceMessagePlainText } from './schema.js';
+import { normalizeOutlineResponse, parseOutline } from '../outline/schema.js';
 
 export function createSpaceUi(host = {}) {
     const query = host.query || (() => null);
@@ -20,6 +21,8 @@ export function createSpaceUi(host = {}) {
         widgets.set(wid, {
             kind: widget.kind,
             body: widget.body,
+            historyIndex: messageContext.historyIndex,
+            outlineRawToken: messageContext.outlineRawToken || null,
             editIdx: widget.editIdx,
             owner: widget.owner,
             pointBaselines: Array.isArray(messageContext.pointBaselines) ? messageContext.pointBaselines : null,
@@ -33,6 +36,7 @@ export function createSpaceUi(host = {}) {
         return wid;
     };
     const appendMessage = (role, content, historyIndex = null, messageContext = {}) => {
+        messageContext = { ...messageContext, currentOutlineRaw: host.currentOutlineRaw?.() || '' };
         const parts = controllers.renderer.message(role, content, historyIndex, registerWidget, messageContext);
         const $wrap = host.$?.('<div>').addClass(`sp-chat-msg-wrap ${parts.wrapClass}`);
         if (!$wrap) return;
@@ -48,17 +52,62 @@ export function createSpaceUi(host = {}) {
         const messages = element('#sp-space-msgs');
         if (messages) messages.scrollTop = messages.scrollHeight;
     };
-    const renderHistory = history => {
-        query('#sp-space-msgs')?.empty?.();
-        history.forEach((message, index) => appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
-            pointBaselines: message.pointBaselines,
-            lineBaselines: message.lineBaselines,
-            expectedWidgetKind: message.expectedWidgetKind,
-            legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
-            readOnly: message.portableReadonly === true,
-        }));
+    const latestOutlineCandidateIndex = history => {
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+            const message = history[index];
+            if (message?.role !== 'assistant' || message.portableReadonly === true) continue;
+            if (message.expectedWidgetKind === 'outline_widget'
+                && typeof message.outlineRawToken === 'string' && message.outlineRawToken
+                && normalizeOutlineResponse(message.content)) return index;
+        }
+        return -1;
     };
-    const emptyMessages = () => query('#sp-space-msgs')?.empty?.();
+    const renderHistory = history => {
+        widgets.clear();
+        query('#sp-space-msgs')?.empty?.();
+        const latestOutline = latestOutlineCandidateIndex(history);
+        history.forEach((message, index) => {
+            const hasOutlineCandidate = message.expectedWidgetKind === 'outline_widget'
+                || extractWidgets(message.content).widgets.some(widget => widget.kind === 'outline_widget');
+            appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
+                pointBaselines: message.pointBaselines,
+                lineBaselines: message.lineBaselines,
+                expectedWidgetKind: message.expectedWidgetKind,
+                outlineRawToken: message.outlineRawToken,
+                currentOutlineRaw: host.currentOutlineRaw?.() || '',
+                historyIndex: index,
+                readOnly: message.portableReadonly === true || (hasOutlineCandidate
+                    && (index !== latestOutline || typeof message.outlineRawToken !== 'string')),
+                legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
+            });
+        });
+    };
+    const renderLegacyOutlineHistory = history => {
+        const root = query('#sp-legacy-outline-history');
+        if (!root) return;
+        root.empty?.();
+        const rows = Array.isArray(history) ? history.filter(item => item?.role && item?.content) : [];
+        if (!rows.length) { root.text('暂无旧面讨论记录'); return; }
+        for (const row of rows) {
+            const $item = host.$?.('<div>').addClass(`sp-space-legacy-msg sp-space-legacy-${row.role === 'assistant' ? 'ai' : 'user'}`);
+            const content = String(row.content);
+            const parsed = extractWidgets(content);
+            const hasOutlineWidget = parsed.widgets.some(widget => widget.kind === 'outline_widget');
+            const normalized = row.role === 'assistant' ? normalizeOutlineResponse(content) : '';
+            const hasBareOutline = !!normalized && !hasOutlineWidget;
+            const outlineLike = hasOutlineWidget || hasBareOutline || /(?:<outline_widget\b|^\s*(?:Beat|Scene)\s*[:：])/im.test(content);
+            const prose = outlineLike && !normalized ? '' : hasOutlineWidget ? parsed.text : hasBareOutline ? '' : parsed.text;
+            const beats = normalized ? parseOutline(normalized) : [];
+            const lines = [`${row.role === 'assistant' ? 'AI' : '我'}：`];
+            if (prose) lines.push(prose);
+            if (beats.length) lines.push(...beats.map((beat, index) => `${index + 1}. ${beat.title || '未命名'}${beat.scene ? `：${beat.scene}` : ''}`));
+            else if (outlineLike) lines.push('旧面草稿格式无法识别，可从备份导出查看');
+            else if (!prose) lines.push(content);
+            $item?.text?.(lines.join('\n'));
+            $item?.appendTo?.(root);
+        }
+    };
+    const emptyMessages = () => { widgets.clear(); query('#sp-space-msgs')?.empty?.(); };
     const beginThinking = () => {
         const $dots = host.$?.('<div>')
             .addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking')
@@ -114,6 +163,13 @@ export function createSpaceUi(host = {}) {
             void controllers.chat.send(message);
         };
         $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
+        $root.on('click.spSpaceFeature', '[data-space-module-key]', function () {
+            const key = String(host.$(this).attr('data-space-module-key') || '');
+            if (!key) return;
+            host.openQuickReplyShortcut?.(key);
+            const details = this.closest?.('details');
+            if (details) details.open = false;
+        });
         if (!isMobileViewport()) {
             $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
                 const nativeEvent = event.originalEvent;
@@ -157,8 +213,15 @@ export function createSpaceUi(host = {}) {
                 return;
             }
             if (stored.readOnly) {
-                host.toast?.('这是导入的历史卡片，仅供查看', true);
+                host.toast?.('这份历史方案仅供查看', 'info');
                 return;
+            }
+            if (stored.kind === 'outline_widget') {
+                const history = controllers.chat.history();
+                if (latestOutlineCandidateIndex(history) !== stored.historyIndex) {
+                    host.toast?.('较早的面草稿仅供查看，请使用最新方案', true);
+                    return;
+                }
             }
             if (stored.identity && host.isCurrentIdentity?.(stored.identity) === false) {
                 host.toast?.('这张卡片属于之前的聊天，请在当前聊天重新生成', true);
@@ -174,6 +237,7 @@ export function createSpaceUi(host = {}) {
             else if (stored.kind === 'line_widget') actions.lines?.(stored.body, stored.editIdx, $button, stored.lineLocator);
             else if (stored.kind === 'almanac_widget') actions.almanac?.(stored.body, $button, $button.attr('data-idx'));
             else if (stored.kind === 'era_widget') actions.era?.(stored.body, $button);
+            else if (stored.kind === 'outline_widget') await actions.outline?.(stored.body, stored.outlineRawToken, $button);
         });
         $root.on('click.spSpaceFeature', '#sp-space-clear', async () => {
             if (controllers.chat.busy || !controllers.chat.history().length) return;
@@ -190,6 +254,7 @@ export function createSpaceUi(host = {}) {
         bindControllers: value => { controllers = value; },
         bind,
         renderHistory,
+        renderLegacyOutlineHistory,
         appendMessage,
         emptyMessages,
         beginThinking,
