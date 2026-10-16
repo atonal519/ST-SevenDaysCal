@@ -64,6 +64,84 @@ const EVALUATION_RX = /(?:写得|做得|设计得|设定得?).{0,10}(?:好|巧|�
 const EXPLICIT_GREETING_RX = /^\s*(?:你好|您好|嗨|哈(?:喽|啰|罗)|早上好|上午好|中午好|下午好|晚上好|晚安|在吗|谢谢|感谢|辛苦了)[呀啊哦哈嘛吗！!。,.，~～\s]*$/;
 const GENERAL_REQUEST_RX = /^\s*(?:请|麻烦|劳驾|帮|给|把|替|为|我要|我想|想要|需要|能否|可否|可以|生成|新增|添加|新建|创建|记录|记下|保存|安排|修改|调整|重做|重写|整理|梳理|归纳|总结|铺)/;
 
+const ROUTE_TARGETS = Object.freeze([
+    ['schedule_widget', /(?:日程|日历|待办|点(?:卡片?)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+    ['line_widget', /(?:事件线|剧情线|线索|伏笔|线(?:卡片?)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+    ['almanac_widget', /(?:重要日期|具体日期|节日|生日|纪念日|年历|轴(?:日期)?(?:卡片)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+    ['era_widget', /(?:历法|纪年|年号)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+    ['outline_widget', /(?:大纲|面(?:方案|规划|草稿)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+]);
+const ROUTE_ACTION_RX = /(?:整理(?:成|为)|梳理(?:成|为)|转换(?:成|为)|转(?:成|为)|变成|改(?:成|为)|修改(?:成|为)|调整(?:成|为)|输出(?:成|为)|生成|新建|创建|制作|做成|写成|产出|整理|梳理|转换|转|改|修改|调整|做|写|插|输出)/gu;
+const SOURCE_REFERENCE_RX = /(?:(?:把|将)\s*)?(?:刚才|方才|上一张|前一张|前一条|这张|那张|刚刚)([\s\S]{0,24}?)(?:改|修改|调整|转(?:成|为)?|转换(?:成|为)|变成|整理(?:成|为)|梳理(?:成|为)|生成|做成|写成)/u;
+
+const sourceReference = message => {
+    const match = SOURCE_REFERENCE_RX.exec(message);
+    if (!match) return { found: false, kind: null };
+    const source = match[1].trim().replace(/^(?:的|那|这)(?:(?:一)?(?:张|条|个))?/u, '');
+    for (const [kind, targetRx] of ROUTE_TARGETS) {
+        const target = targetRx.exec(source);
+        if (target && target.index === 0) return { found: true, kind };
+    }
+    return { found: true, kind: null };
+};
+
+const explicitTargetRoutes = message => {
+    if (EXPLICIT_EXPLANATION_RX.test(message) && !DELEGATED_REQUEST_RX.test(message)) return [];
+    const isQuoted = index => [['“', '”'], ['"', '"'], ['「', '」'], ['『', '』'], ['‘', '’']].some(([open, close]) => {
+        const start = message.lastIndexOf(open, index);
+        if (open === close) return start >= 0 && message.indexOf(close, start + 1) > index;
+        return start >= 0 && start > message.lastIndexOf(close, index) && message.indexOf(close, start + open.length) > index;
+    });
+    const matches = [];
+    for (const action of message.matchAll(ROUTE_ACTION_RX)) {
+        if (isQuoted(action.index)) continue;
+        const clauseStart = Math.max(...['，', ',', '。', '；', ';', '！', '!', '？', '?', '\n'].map(separator => message.lastIndexOf(separator, action.index - 1) + 1));
+        const clausePrefix = message.slice(clauseStart, action.index);
+        if (/(?:不要|别|不用|无需|不必|请勿|先别|暂(?:时)?不)(?:再|继续|去)?|我不(?:想|需要|要)|不\s*$/u.test(clausePrefix)) continue;
+        const isHelpQuestion = /(?:怎么|如何|怎样|在哪|能不能|可以吗|支持|没反应|没生效|不生效|找不到)\s*$/u.test(clausePrefix);
+        const actionEnd = action.index + action[0].length;
+        const tail = message.slice(actionEnd).match(/^\s*(?:(?:到|成|为)\s*)?(?:(?:一个|一条|一张|一|个|条|张)\s*)?/u)?.[0] || '';
+        const targetStart = actionEnd + tail.length;
+        const rest = message.slice(targetStart);
+        let found = false;
+        for (const [kind, targetRx] of ROUTE_TARGETS) {
+            const target = targetRx.exec(rest);
+            if (target && target.index === 0) {
+                matches.push({ kind, end: targetStart + target[0].length, help: isHelpQuestion });
+                found = true;
+                break;
+            }
+        }
+        if (!found) continue;
+        const after = message.slice(matches.at(-1).end);
+        const coordinated = after.match(/^\s*(?:和|及|与|、)\s*/u)?.[0];
+        if (coordinated) {
+            const coordinatedStart = matches.at(-1).end + coordinated.length;
+            const remainder = message.slice(coordinatedStart);
+            for (const [kind, targetRx] of ROUTE_TARGETS) {
+                const target = targetRx.exec(remainder);
+                if (target && target.index === 0) matches.push({ kind, end: coordinatedStart + target[0].length, help: isHelpQuestion });
+            }
+        }
+    }
+    return matches;
+};
+
+const makeWriteIntent = ({ kind, faq, message, latestWidget }) => {
+    const hasSourceReference = SOURCE_REFERENCE_RX.test(message);
+    const sourceWidget = hasSourceReference && latestWidget?.kind !== kind ? latestWidget : null;
+    const editExisting = CANONICAL_EDIT_RX.test(message) && !sourceWidget;
+    return Object.freeze({
+        action: 'write', kind, faq,
+        pointContext: kind === 'schedule_widget',
+        lineContext: kind === 'line_widget',
+        recentWidget: null,
+        ...(sourceWidget ? { sourceWidget } : {}),
+        ...(editExisting ? { editExisting: true } : {}),
+        reason: '',
+    });
+};
+
 const moduleMatches = message => {
     // “轴/轴历卡片”默认指具体日期 almanac_widget；只有明确出现历法、纪年或月份结构时才归入
     // era_widget。该优先级先于后续歧义判断，避免同一句被识别为两种轴卡。
@@ -77,7 +155,13 @@ const moduleMatches = message => {
 
 export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const message = String(userMsg || '').trim();
+    const routedTargets = explicitTargetRoutes(message);
+    let routedKinds = [...new Set(routedTargets.map(({ kind }) => kind))];
+    const routedHelpQuestion = routedTargets.length > 0 && routedTargets.every(({ help }) => help);
     const modules = moduleMatches(message);
+    if (modules.era_widget && /轴(?:历)?卡片/.test(message) && routedKinds.includes('almanac_widget')) {
+        routedKinds = routedKinds.map(kind => kind === 'almanac_widget' ? 'era_widget' : kind);
+    }
     const semanticModules = Object.freeze({
         schedule_widget: modules.schedule_widget || LOOSE_POINT_RX.test(message) || DIRECT_POINT_REQUEST_RX.test(message) || DESIRED_POINT_RX.test(message),
         line_widget: modules.line_widget || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
@@ -86,26 +170,35 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         outline_widget: OUTLINE_REQUEST_RX.test(message),
     });
     const semanticKinds = Object.keys(semanticModules).filter(kind => semanticModules[kind]);
-    const latestWidget = latestSpaceWidget(historySnapshot);
+    const source = sourceReference(message);
+    const latestWidget = latestSpaceWidget(historySnapshot, source.kind);
     const operationalQuestion = OPERATION_HELP_RX.test(message) || WHY_OPERATION_RX.test(message);
     const composedModuleHelp = BARE_HELP_MODULE_MENTION_RX.test(message) && HELP_ACTION_RX.test(message) && operationalQuestion;
     const faqCandidate = UNIQUE_HELP_RX.test(message)
         || SETTINGS_HELP_RX.test(message)
         || ((HELP_MODULE_RX.test(message) || BARE_HELP_MODULE_RX.test(message) || modules.schedule_widget || modules.line_widget) && operationalQuestion)
         || composedModuleHelp;
-    const noWrite = NO_WRITE_RX.test(message) && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message);
+    const noWrite = (NO_WRITE_RX.test(message)
+        || /(?:^|[，,。；;！!？?\s])不(?:要|再|继续)?(?:生成|新增|添加|新建|创建|出|插|写|做|整理|转换|改).{0,12}(?:点|线|历|面|卡片)/u.test(message))
+        && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message) && !routedKinds.length;
     const delegatedCardRequest = !noWrite && semanticKinds.length > 0 && DELEGATED_REQUEST_RX.test(message);
-    const faq = faqCandidate && !delegatedCardRequest;
+    const hasPositiveRoute = routedTargets.some(({ help }) => !help);
+    const faq = faqCandidate && !delegatedCardRequest && !hasPositiveRoute;
     if (!noWrite && APPLICATION_BUTTON_REQUEST_RX.test(message) && !semanticKinds.length) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-widget-kind' });
     }
-    const helpQuestion = faq && operationalQuestion && !delegatedCardRequest;
-    const hasWrite = WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
-    const writeKinds = !helpQuestion && !noWrite && hasWrite ? Object.keys(semanticModules).filter(kind => semanticModules[kind]) : [];
-    const directAxisCardRequest = !noWrite && !modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message));
-    const directAxisEraRequest = !helpQuestion && !noWrite && modules.era_widget && /轴(?:历)?卡片/.test(message) && REQUEST_LANGUAGE_RX.test(message);
-    const directOutlineRequest = !noWrite && OUTLINE_REQUEST_RX.test(message) && REQUEST_LANGUAGE_RX.test(message);
+    const helpQuestion = routedHelpQuestion || (faq && operationalQuestion && !delegatedCardRequest && !hasPositiveRoute);
+    const hasWrite = routedKinds.length > 0 || WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
+    const writeKinds = !helpQuestion && !noWrite && hasWrite
+        ? (routedKinds.length ? routedKinds : Object.keys(semanticModules).filter(kind => semanticModules[kind])) : [];
+    if (source.kind && !latestWidget && writeKinds.length) {
+        return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-source-widget' });
+    }
+    const directAxisCardRequest = !noWrite && (!routedKinds.length || routedKinds.includes('almanac_widget')) && !modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message));
+    const directAxisEraRequest = !helpQuestion && !noWrite && (!routedKinds.length || routedKinds.includes('era_widget')) && modules.era_widget && /轴(?:历)?卡片/.test(message) && REQUEST_LANGUAGE_RX.test(message);
+    const directOutlineRequest = !noWrite && (!routedKinds.length || routedKinds.includes('outline_widget')) && OUTLINE_REQUEST_RX.test(message) && REQUEST_LANGUAGE_RX.test(message);
     const directSemanticRequest = directOutlineRequest
+        || routedKinds.length > 0
         || DIRECT_POINT_REQUEST_RX.test(message)
         || DIRECT_LINE_REQUEST_RX.test(message)
         || DIRECT_ALMANAC_REQUEST_RX.test(message)
@@ -115,23 +208,24 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         || DESIRED_ALMANAC_RX.test(message)
         || (SEMANTIC_CARD_RX.test(message) && REQUEST_LANGUAGE_RX.test(message));
     const explicitStructuredLanding = directSemanticRequest || (hasWrite && semanticKinds.length > 0);
-    if (writeKinds.length > 1 || (!helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
+    if (writeKinds.length > 1 || (!routedKinds.length && !helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
     }
     if (!helpQuestion && directOutlineRequest) {
-        return Object.freeze({ action: 'write', kind: 'outline_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
+        return makeWriteIntent({ kind: 'outline_widget', faq, message, latestWidget });
     }
     if (!helpQuestion && directAxisCardRequest) {
-        return Object.freeze({ action: 'write', kind: 'almanac_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
+        return makeWriteIntent({ kind: 'almanac_widget', faq, message, latestWidget });
     }
     if (directAxisEraRequest) {
-        return Object.freeze({ action: 'write', kind: 'era_widget', faq, pointContext: false, lineContext: false, recentWidget: null, reason: '' });
+        return makeWriteIntent({ kind: 'era_widget', faq, message, latestWidget });
     }
     if (!helpQuestion && !noWrite && RECENT_EDIT_RX.test(message)) {
         const explicitKind = writeKinds[0] || null;
         const canReviseLatest = latestWidget && (!explicitKind || explicitKind === latestWidget.kind) && !CANONICAL_ITEM_RX.test(message);
         if (canReviseLatest) {
-            return Object.freeze({ action: 'revise-recent', kind: latestWidget.kind, faq, pointContext: latestWidget.kind === 'schedule_widget', lineContext: latestWidget.kind === 'line_widget', recentWidget: latestWidget, reason: '' });
+            const editExisting = ['schedule_widget', 'line_widget'].includes(latestWidget.kind) && latestWidget.editIdx != null;
+            return Object.freeze({ action: 'revise-recent', kind: latestWidget.kind, faq, pointContext: latestWidget.kind === 'schedule_widget', lineContext: latestWidget.kind === 'line_widget', recentWidget: latestWidget, ...(editExisting ? { editExisting: true } : {}), reason: '' });
         }
         if (!latestWidget && !explicitKind) {
             return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-recent-widget' });
@@ -139,7 +233,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     }
     if (writeKinds.length === 1) {
         const kind = writeKinds[0];
-        return Object.freeze({ action: 'write', kind, faq, pointContext: kind === 'schedule_widget', lineContext: kind === 'line_widget', recentWidget: null, reason: '' });
+        return makeWriteIntent({ kind, faq, message, latestWidget });
     }
     const pointContext = modules.schedule_widget && VIEW_RX.test(message);
     const lineContext = modules.line_widget && VIEW_RX.test(message);
@@ -249,6 +343,7 @@ export function createSpaceContext(env = {}) {
             message,
             ...historyMessages.map(item => String(item?.content ?? '')),
             intent.action === 'revise-recent' ? intent.recentWidget?.body : '',
+            intent.action === 'write' ? intent.sourceWidget?.body : '',
             intent.action === 'revise-recent'
                 && intent.recentWidget?.kind === 'schedule_widget'
                 && intent.recentWidget.editIdx != null

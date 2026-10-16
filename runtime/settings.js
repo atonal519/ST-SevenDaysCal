@@ -85,10 +85,10 @@ export const DEFAULT_SETTINGS = {
     useQianQianJie : false, // if true, read QQJ's formal projection through its versioned read-only bridge
     databaseWorldbookName: '', // empty follows the character primary worldbook; otherwise freeze this exact host book name
     animaRecallCount: 20,
-    // Tag sanitizer (used by memory.js:stripTags AND anywhere else that reads
-    // AI floor content). Both are comma-separated Unicode tag names; optional surrounding <> are normalized away.
+    // Tag sanitizer (used by memory.js:stripTags and all shared AI-floor readers).
+    // XML and legacy [[...]] rules rescue kept descendants; named bracket rules drop whole blocks.
     keepTags       : 'content',  // protect list — contents inside these tags survive stripping
-    extraTags      : '',         // extra strip list — forcibly delete these tags + their content
+    extraTags      : '',         // additional strip rules
     customPrompt   : '',         // 创作链自定义写作规范；机械链只使用统一基础处理层
     spacePersona   : '',         // 间·人格覆盖：空=用内置默认语气（ADVISOR_TONE_GUIDE）；非空=换间的语气/行文/人格（顾问身份恒保留、不可覆盖）
     // 棱（小剧场）

@@ -5,6 +5,7 @@
 export const TAG_NAME_SOURCE = String.raw`[\p{L}][\p{L}\p{M}\p{N}_-]*(?:~(?:[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*)?)?`;
 export const TAG_NAME_RE = new RegExp(`^${TAG_NAME_SOURCE}$`, 'u');
 export const LITERAL_DOUBLE_BRACKET_RULE = '[[...]]';
+const PAIRED_BRACKET_RULE_RE = new RegExp(`^\\[(${TAG_NAME_SOURCE})\\]\\.\\.\\.\\[\\/\\1\\]$`, 'iu');
 
 function unwrapTagName(value) {
     const trimmed = String(value).trim();
@@ -18,13 +19,16 @@ export function normalizeTagNames(csv) {
         .filter(value => TAG_NAME_RE.test(value));
 }
 
-// 包裹符设置沿用标签名的保守合同，只额外接受固定的双中括号规则。
-// `[[...]]` 中的三个点是配置占位语法，不代表只匹配三个点文本。
+// 包裹符设置沿用标签名的保守合同，只额外接受两种明确的成对占位语法。
+// 方括号名与双中括号中的三个点都是配置占位，不代表正文必须写三个点。
 export function normalizeTagRules(csv) {
     return String(csv || '').split(',')
         .map(value => String(value).trim())
-        .map(value => value === LITERAL_DOUBLE_BRACKET_RULE
-            ? value
-            : unwrapTagName(value).toLowerCase())
-        .filter(value => value === LITERAL_DOUBLE_BRACKET_RULE || TAG_NAME_RE.test(value));
+        .map(value => {
+            if (value === LITERAL_DOUBLE_BRACKET_RULE) return value;
+            const paired = PAIRED_BRACKET_RULE_RE.exec(value);
+            if (paired) return `[${paired[1].toLowerCase()}]...[/${paired[1].toLowerCase()}]`;
+            return unwrapTagName(value).toLowerCase();
+        })
+        .filter(value => value === LITERAL_DOUBLE_BRACKET_RULE || PAIRED_BRACKET_RULE_RE.test(value) || TAG_NAME_RE.test(value));
 }

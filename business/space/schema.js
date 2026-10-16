@@ -113,15 +113,22 @@ export function extractWidgets(raw) {
     return Object.freeze({ text: source.replace(rx, '').trim(), widgets });
 }
 
-export function latestSpaceWidget(history) {
+export function latestSpaceWidget(history, kind = null) {
     if (!Array.isArray(history)) return null;
     for (let index = history.length - 1; index >= 0; index -= 1) {
         const message = history[index];
         if (message?.role !== 'assistant') continue;
         if (message.portableReadonly === true) continue;
         const widgets = extractWidgets(message.content).widgets.filter(widget => widget.body);
-        if (!widgets.length) return null;
-        const widget = widgets.at(-1);
+        if (!widgets.length) {
+            if (kind) continue;
+            return null;
+        }
+        const widget = kind ? widgets.filter(item => item.kind === kind).at(-1) : widgets.at(-1);
+        if (!widget) {
+            if (kind) continue;
+            return null;
+        }
         const snapshot = {
             kind: widget.kind,
             body: widget.body,

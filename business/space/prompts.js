@@ -90,6 +90,9 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
         if (intent.reason === 'missing-widget-kind') {
             return `【本轮输出模式】用户希望看到应用按钮，但没有说明要应用到哪个模块。请简短询问目标是点、线、轴日期、历法还是面；在目标明确前不要生成卡片。`;
         }
+        if (intent.reason === 'missing-source-widget') {
+            return `【本轮输出模式】用户指定了要转换的原卡类型，但当前可用历史里没有该类型的卡片。请简短请用户提供那张卡的内容；不要改用其他类型的卡片，也不要猜测原内容。`;
+        }
         return `【本轮输出模式】本轮同时指向多种卡片，意图有歧义。请用自然语言简短追问用户这次只要哪一种；不要猜测，不要同时输出多种卡片。`;
     }
     if (intent.action === 'semantic-route') {
@@ -136,6 +139,16 @@ function recentWidgetBlock(intent = {}) {
     ].filter(Boolean).join('\n');
 }
 
+function sourceWidgetBlock(intent = {}) {
+    const widget = intent.action === 'write' ? intent.sourceWidget : null;
+    if (!widget) return '';
+    return [
+        `【旧${widgetLabel(widget.kind)}卡片正文·仅作本轮转换素材】`,
+        widget.body,
+        `只提取与本轮目标有关的内容，忽略旧卡类型、字段和编号；本轮只输出${widgetLabel(intent.kind)}卡片合同。`,
+    ].join('\n');
+}
+
 export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', characterData = '', authorNote = '', storyDate = '', materialText = '', requestedMaterials = {}, outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', preferences = {}, lineDirection = 'natural', intent = {} }) {
     const activePreferences = { ...preferences, direction: preferences.direction || lineDirection };
     // 人格覆盖只替换顾问的语气层；创作顾问身份、不推进剧情和不扮演角色的合同始终保留。
@@ -144,8 +157,8 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
     const toneBlock = ov
         ? `\n【人格语气】以下只调整表达方式，不改变创作顾问身份、输出模式或卡片要求：\n${ov}\n不要模仿正文里的状态栏、面板、属性框或分隔线。`
         : ADVISOR_TONE_GUIDE;
-    const pointEditMode = !!pointList && (intent.kind === 'schedule_widget' || intent.action === 'semantic-route');
-    const lineEditMode = !!lineList && (intent.kind === 'line_widget' || intent.action === 'semantic-route');
+    const pointEditMode = !!pointList && intent.kind === 'schedule_widget' && intent.editExisting === true;
+    const lineEditMode = !!lineList && intent.kind === 'line_widget' && intent.editExisting === true;
     const parts = [
         `你是 ${userName} 与 ${charName} 故事外的创作顾问；直接回答、先给结论、按需展开，不扮演角色或替故事推进。`,
         personaDesc ? `\n【${userName} 的人物设定】\n${personaDesc}` : '',
@@ -168,6 +181,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
             ? `【本轮输出模式】用户要求处理今日菜单，但菜单不属于可应用方案。请自然讨论菜单或给出建议，并提示用户可从下方模块入口打开菜单；不要因此强行生成任何点、线、轴日期、历法或面方案，也不要声称已保存。若用户明确要求把菜单事项做成点卡，则按点卡合同输出。`
             : outputModeBlock(intent, calDescText, activePreferences, requestedMaterials),
         recentWidgetBlock(intent),
+        sourceWidgetBlock(intent),
 
         (pointEditMode || lineEditMode) ? `\n【改现有条目】若用户要改的是上面当前列表里的某条已存在条目：` : '',
         pointEditMode ? `- 不要新增；点卡片必须同时写人物归属与组内序号：我的点用 <schedule_widget view="user" edit="3">…</schedule_widget>；TA 的点用该人物分组标题给出的 view / char，例如 <schedule_widget view="char" char="Alice" edit="3">…</schedule_widget>。` : '',
