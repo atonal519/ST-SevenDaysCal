@@ -125,6 +125,7 @@ import {
     calendarSummary,
     calendarConflicts,
     formatCalendarDate,
+    formatStoryClockMeta,
     formatStoryClockHeadParts,
 } from './business/axis/ui.js';
 // 轴锚点模块通过 bindAxisAnchor 注入 index.js 的跨域读取器，避免循环依赖。
@@ -507,7 +508,12 @@ const pointController = createPointController({
     clearFailure: owner => panelFailures.clear('point', owner ? pointPanelTarget(owner.view, owner.charName, owner.chatId, owner.chatRevision) : pointPanelTarget()),
     abortAuto: () => { _autoRegenSchedAbort?.abort('superseded-owner'); },
     context: getContext,
-    captureContext: captureGenerationContext,
+    // 点与线共用正式规划投影；只在任务快照建立时读取一次，门控由大纲功能处理。
+    captureContext: () => {
+        const snapshot = captureGenerationContext();
+        snapshot.outlinePlan = outlineFeature.readPlanningText();
+        return snapshot;
+    },
     captureParticipantIdentity,
     sameParticipantIdentity,
     key: (...args) => getCacheKey(...args),
@@ -1512,7 +1518,7 @@ const MODULE_INTROS = {
         _iText('普通讨论、目标不清或方案不完整时不会出现可用按钮；可继续补充要求或编辑问题重发。') +
         _iText('发送新问题时会清理较旧记录。一轮完整问答结束后，间内最多可能暂时显示 21 条消息。') +
         _iSub('消息操作') +
-        _iKey('fa-paper-plane',    '发送',       '把问题发给局外创作顾问') +
+        _iKey('fa-paper-plane',    '发送',       '发送消息') +
         _iKey('fa-pen',            '编辑并重发', '只在你的消息上出现；会从这里截断后续记录并重新提问') +
         _iKey('fa-copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
         _iKey('fa-trash',          '删除',       '删除单条间内消息') +
@@ -1791,7 +1797,7 @@ const linesFeature = createLinesFeature({
         },
         buildPrompt: (previousRaw, travelContext, vectorContext, identity) => appendTravelPromptContext(buildLinesPrompt(identity?.userName || '用户', identity?.charName || '角色', 'user', previousRaw, getScale(identity?.characterKey || charStableKey(getContext())), vectorContext, getAdultMode(identity?.characterKey || charStableKey(getContext())), getLineDirection(identity?.characterKey || charStableKey(getContext())), getNarrativePace()), travelContext),
         random: () => Math.random(),
-        callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, { ...options, includeOutlinePlan: true }),
+        callApi: (prompt, signal, options, identity, contextSnapshot) => callCustomApi(contextSnapshot || getContext(), prompt, loadCfg(), identity?.userName || '用户', identity?.charName || '角色', signal, options?.historyLimit ?? 3, { ...options, includeOutlinePlan: true, includeCurrentStoryTime: true }),
         missingApi: ({ silent }) => { if (!silent && !settingsOpen) toggleSettings(); },
         memoryFailure: error => { if (linesMode) linesFeature.renderBody(linesMemoryPreflightErrorHtml(diagnosticMessage(error))); },
         onStart: () => {},
@@ -3659,10 +3665,14 @@ function injectModal() {
                                         <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-storyclock-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-storyclock-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
                                     </details>
                                     <details id="sp-space-section" class="sp-settings-subsection sp-prompt-space"><summary>间 · 人格 / 说话风格</summary>
-                                        <p class="sp-cfg-hint">间 = 跳出扮演、和 AI 聊剧情/设定/关系的「局外」空间。这里可给它换一套<strong>说话语气与人格</strong>。</p>
-                                        <label class="sp-cfg-label">间的人格 / 说话风格</label>
-                                        <textarea id="sp-space-persona" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝内置默认（柔和客观、含蓄内敛的中性顾问）。填了就换成你写的人格，如：深耕 ACG、熟知网络用语、爱用半个括号吐槽的重度宅女…"></textarea>
-                                        <p class="sp-cfg-hint">只换<strong>语气 / 行文 / 人格色彩</strong>；「间仍是创作顾问、不推进剧情、不扮演故事角色」这条内核<strong>恒定保留</strong>（写得再放飞它也不会跑去演戏）。<b>只作用于「间」</b>，不影响面正式稿生成；间内面方案只保留其创作顾问身份。支持 <code>{{char}}</code> / <code>{{user}}</code>。</p>
+                                        <p class="sp-cfg-hint">「间」用于文字聊天，可在这里选择人格来源。</p>
+                                        <label class="sp-mode-opt"><input type="checkbox" id="sp-space-use-character-persona"><span>使用当前角色人设</span></label>
+                                        <p class="sp-cfg-hint">开启后以AI人物性格、说话习惯和思考方式作为聊天人格；只写直接回复，不插入动作、神态或场景旁白。多人卡按点名或话题选择口吻，可标名换人。关闭后使用默认顾问或下方自定义语气。</p>
+                                        <div id="sp-space-persona-editor">
+                                            <label class="sp-cfg-label">顾问人格 / 说话风格</label>
+                                            <textarea id="sp-space-persona" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝使用内置顾问语气；填写后替换顾问语气。支持 {{char}} / {{user}}。"></textarea>
+                                            <p class="sp-cfg-hint">只作用于「间」的顾问模式，不影响面正式稿生成。</p>
+                                        </div>
                                     </details>
                                     <details id="sp-theater-section" class="sp-settings-subsection sp-prompt-theater-write"><summary>棱 · 写作提示词</summary>
                                         <label class="sp-cfg-label">写作提示词（文风 + 范文）</label>
@@ -5467,8 +5477,8 @@ async function memoryPreCheckConfirm(request = {}) {
         if (!current()) return false;
         if (result.status === 'empty') {
             const confirmed = await spConfirm({
-                title: '千千结本轮没有可用召回',
-                body: '千千结本轮没有准备可用的召回材料。',
+                title: '千千结本轮没有可用记忆材料',
+                body: '千千结本轮没有准备可用的前情或召回材料。',
                 note: '确认后将改用当前聊天最近最多 6 条可见 AI 回复；不会注入千千结前情或召回文本。',
                 confirmText: '改用最近 6 楼',
                 cancelText: '取消',
@@ -5743,7 +5753,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     const characterKey = charStableKey(ctx);
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }, { scale: getScale(characterKey), direction: getLineDirection(characterKey) }), travelContext);
     // 点按剧情事实作未来规划，沿用 planning 保留 BASE 与用户规范，并省去通用正文创作强化词。
-    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'planning', diagnosticModule: 'point', diagnosticSink };
+    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'planning', includeCurrentStoryTime: true, includeOutlinePlan: true, diagnosticModule: 'point', diagnosticSink };
     apiOpts.pointView = perspective;
     if (memoryContext?.memorySnapshot) {
         apiOpts.memorySnapshot = memoryContext.memorySnapshot;
@@ -6958,6 +6968,16 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
     const reportPhase = phase => { if (!opts.signal?.aborted) { try { opts.onGenerationPhase?.(phase); } catch {} } };
     throwIfAborted();
     const char = ctx.characters?.[ctx.characterId] ?? {};
+    // SDC 正文会被近景清洗；在任何异步取材前固定规划时点，避免本轮输入各自漂移。
+    const currentStoryClock = opts.includeCurrentStoryTime ? latestStoryClockPure(ctx, ALM_CHAT_SCAN_LIMIT) : null;
+    const clockBoundary = currentStoryClock?.endMeta?.valid
+        ? { label: '最新正文结束时点', meta: currentStoryClock.endMeta }
+        : currentStoryClock?.startMeta?.valid
+            ? { label: '最新正文开始时点', meta: currentStoryClock.startMeta }
+            : null;
+    const currentStoryTimeBlock = clockBoundary
+        ? `【当前故事时点】${clockBoundary.label}：${formatStoryClockMeta(clockBoundary.meta, value => String(value ?? ''), loadCalDesc(), calMonthName)}`
+        : '';
     // 正文窗口及其清洗只在此处生成一次，世界书标题触发复用模型将收到的同一数组。
     const generationHistory = buildGenerationHistoryContext(ctx, historyLimit, opts);
     let history = generationHistory.history;
@@ -7021,12 +7041,12 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         && !memorySettings.useQianQianJie && !memorySettings.useAnima && !memorySettings.useDatabase && !memorySettings.useBaiBaiBook;
     const memBlock = memText
         ? opts.memorySnapshot?.source === 'qianqianjie'
-            ? `【千千结召回材料】请将以下内容作为相关回忆线索，结合当前聊天理解；缓存内容会明确标注为上次成功召回。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
+            ? `【千千结记忆材料】请将以下内容作为相关回忆线索，结合当前聊天理解；缓存内容会明确标注为上次成功召回。${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
             : `【故事记忆库】${builtInMemorySelected ? '以下包含已验证摘要与标注为“尚未摘要的近期正文”的内置 AI 原文，请按来源标签区分并保持连贯。' : '以下由当前选定的记忆源提供，请结合当前聊天理解并保持连贯。'}${memPerspective ? `点视角优先关注对${memPerspective}有意义的信息。` : '请按当前聊天主角色上下文理解，不继承点的 TA 视角。'}\n\n${memText}`
         : '';
 
     // 历（本世界观重要日期）：供构画生成与讨论上下文使用，不做主楼常驻注入。
-    const almanacText = resolveAlmanacContextText(opts, getAlmanacInjectText);
+    const almanacText = resolveAlmanacContextText(opts, () => getAlmanacInjectText(clockBoundary?.meta?.date || null));
     const almanacBlock = almanacText
         ? `【本世界观·重要日期（历）】以下是这个世界的既定节日、生日、纪念日等重要日子，已按「当前剧情日期」标注倒计时；每条冒号后的「说明」是该日子的既定设定（由来、涉及人物阵营、习俗活动、持续天数等），是背景事实。\n${almanacText}\n\n★ 推演点/线/大纲时：凡列在【近期将至】里的日子（未来数日内或进行中），应**主动**把它纳入近期剧情——依据其「说明」里的设定生成与之相关的铺垫、筹备、事件或人物动向，让故事顺着该世界的历法自然推进；【全年其他重要日子】作为背景，时间线接近时再纳入考量。\n★ 务必尊重每条「说明」里的既定设定，据此展开合理、可延续的剧情；说明里没写到的细节可以合理补完，但**不得编造与既定设定冲突的内容**。`
         : '';
@@ -7049,6 +7069,7 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         authorNote       ? `【作者注释（当前聊天）】\n${authorNote}` : '',
         wiContext,
         memBlock,
+        currentStoryTimeBlock,
         almanacBlock,
         calDescBlock,
         outlinePlan,
@@ -8340,6 +8361,8 @@ function renderMemorySection() {
     $in('#sp-custom-prompt').val(typeof s.customPrompt === 'string' ? s.customPrompt : '');
     $in('#sp-storyclock-prompt').val(buildStoryClockPrompt(s));
     $in('#sp-space-persona').val(typeof s.spacePersona === 'string' ? s.spacePersona : '');   // 间·人格覆盖：同为全局设置，须在按源 early-return 前回填
+    $in('#sp-space-use-character-persona').prop('checked', s.spaceUseCharacterPersona === true);
+    $in('#sp-space-persona-editor').toggle(s.spaceUseCharacterPersona !== true);
     if (currentCharacterExcluded()) {
         $in('#sp-mem-internal').show();
         $in('#sp-mem-qqj-status, #sp-mem-bbb-status, #sp-mem-anima-status, #sp-mem-database-status').hide();
@@ -8622,6 +8645,11 @@ function bindMemoryHandlers() {
     }).on('blur', function () {
         getSettings().spacePersona = this.value;
         stSaveSettings();
+    });
+    $in('#sp-space-use-character-persona').on('change', function () {
+        getSettings().spaceUseCharacterPersona = this.checked;
+        $in('#sp-space-persona-editor').toggle(!this.checked);
+        saveSettingsDebounced();
     });
     // 时间戳提示词沿用自定义提示词的持久化方式；保存后立即更新常驻注入。
     $in('#sp-storyclock-prompt').on('input', function () {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifySpaceIntent, createSpaceContext, requestedSpaceMaterials } from './context.js';
+import { buildSpaceHelpText } from './prompts.js';
 import { appendSpaceAssistant, pointRawToken } from './schema.js';
 import { createSpaceRenderer } from './render.js';
 import { markImportedSpaceHistory } from '../../runtime/portable-chat-data.js';
@@ -433,4 +434,73 @@ test('语义路由候选包含仅选中线卡时适用的人物自主与输出�
     assert.match(messages[0].content, /仅在线卡是本轮选定输出时适用/);
     assert.match(messages[0].content, /【人物自主与相互回应】/);
     assert.match(messages[0].content, /【输出前复核】/);
+});
+
+test('间角色卡人格模式限定普通文字聊天并保持顾问模式兼容', async () => {
+    const characterData = '群聊卡资料：用户操控的人物林澈；AI角色乔安沉稳，AI角色周言善于观察。';
+    const makeContext = (settings, counters = {}) => createSpaceContext({
+        context: () => ({ name1: '林澈', name2: '多人角色卡' }),
+        settings: () => settings,
+        readCharacterData: () => { counters.characterReads = (counters.characterReads || 0) + 1; return characterData; },
+        readMemory: async () => '', readRecent: async () => '',
+        readWorldInfo: async (_ctx, _message, _history, supplement) => { counters.titleSupplement = supplement; return ''; },
+    });
+
+    const defaultPrompt = await makeContext({ spacePersona: 'CUSTOM_ADVISOR_VOICE' })
+        .buildMessages({ target: {}, userMsg: '乔安，你怎么看这件事？', historySnapshot: [] });
+    assert.match(defaultPrompt[0].content, /故事外的创作顾问/);
+    assert.match(defaultPrompt[0].content, /CUSTOM_ADVISOR_VOICE/);
+    assert.doesNotMatch(defaultPrompt[0].content, /多人卡.*点名优先/);
+
+    const counters = {};
+    const activeSettings = { spacePersona: 'CUSTOM_ADVISOR_VOICE', spaceUseCharacterPersona: true };
+    const context = makeContext(activeSettings, counters);
+    const discussion = await context.buildMessages({ target: {}, userMsg: '乔安，你怎么看这件事？', historySnapshot: [] });
+    assert.equal(counters.characterReads, 1);
+    assert.equal(discussion[0].content.split(characterData).length - 1, 1);
+    assert.match(discussion[0].content, /角色卡人格模式】只借当前卡中AI人物的性格、说话习惯与思考方式作为聊天人格/);
+    assert.match(discussion[0].content, /直接用普通文字回答林澈（用户）/);
+    assert.match(discussion[0].content, /林澈是用户角色，不作为AI人格来源/);
+    assert.match(discussion[0].content, /多人卡按点名或话题选用AI人物口吻，可像普通群聊一样换人并以“人物名：”标明/);
+    assert.match(discussion[0].content, /普通聊天只写直接回复，不插入发言者的动作、神态描写或场景\/心理旁白/);
+    assert.match(discussion[0].content, /不演绎故事或身体互动/);
+    assert.match(discussion[0].content, /结构化卡片仍按本轮目标与原字段输出，不受上述聊天形式限制/);
+    assert.doesNotMatch(discussion[0].content, /你是当前角色卡中的AI角色/);
+    assert.doesNotMatch(discussion[0].content, /创作顾问|不扮演角色/);
+    assert.doesNotMatch(discussion[0].content, /CUSTOM_ADVISOR_VOICE/);
+    assert.doesNotMatch(counters.titleSupplement, /CUSTOM_ADVISOR_VOICE/);
+
+    for (const [userMsg, expectedKind, outputTag, field] of [
+        ['生成一个点卡', 'schedule_widget', '<schedule_widget>', /Event: type\|title\|description/],
+        ['生成一条线卡', 'line_widget', '<line_widget>', /Desc:.*Next:/s],
+        ['生成一个面方案', 'outline_widget', '<outline_widget>', /Scene: 场景描述/],
+    ]) {
+        const messages = await context.buildMessages({ target: {}, userMsg, historySnapshot: [] });
+        assert.equal(messages.expectedWidgetKind, expectedKind, userMsg);
+        assert.match(messages[0].content, new RegExp(outputTag.replace(/[<>]/g, '\\$&')), userMsg);
+        assert.match(messages[0].content, field, userMsg);
+        assert.match(messages[0].content, /结构化卡片仍按本轮目标与原字段输出，不受上述聊天形式限制/, userMsg);
+        assert.doesNotMatch(messages[0].content, /CUSTOM_ADVISOR_VOICE/, userMsg);
+    }
+    assert.equal(counters.characterReads, 4);
+
+    const semantic = await context.buildMessages({ target: {}, userMsg: '帮我处理一下这件事', historySnapshot: [] });
+    assert.equal(semantic.expectedWidgetKind, undefined);
+    assert.match(semantic[0].content, /本轮输出模式：语义路由/);
+    assert.match(semantic[0].content, /<schedule_widget>/);
+    assert.match(semantic[0].content, /<line_widget>/);
+    assert.match(semantic[0].content, /角色卡人格模式】只借当前卡中AI人物的性格、说话习惯与思考方式作为聊天人格/);
+    assert.doesNotMatch(semantic[0].content, /CUSTOM_ADVISOR_VOICE/);
+
+    activeSettings.spaceUseCharacterPersona = false;
+    const advisorAgain = await context.buildMessages({ target: {}, userMsg: '回到顾问方式', historySnapshot: [] });
+    assert.match(advisorAgain[0].content, /故事外的创作顾问/);
+    assert.match(advisorAgain[0].content, /CUSTOM_ADVISOR_VOICE/);
+    assert.match(counters.titleSupplement, /CUSTOM_ADVISOR_VOICE/);
+    assert.equal(counters.characterReads, 6);
+
+    const help = buildSpaceHelpText({});
+    assert.match(help, /提示词与标签.*间·人格 \/ 说话风格/);
+    assert.match(help, /默认使用顾问.*使用当前角色人设/);
+    assert.match(help, /自定义语气文本保留但暂停使用，关闭后恢复/);
 });

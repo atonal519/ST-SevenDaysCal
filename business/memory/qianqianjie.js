@@ -9,6 +9,8 @@ const clean = (value, maximum = 500) => String(value ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maximum);
+const promptSection = value => typeof value === 'string' ? value.trim() : '';
+const joinPromptSections = (...sections) => sections.filter(Boolean).join('\n\n');
 
 export function captureQianQianJieHostIdentity(context) {
     const characterId = context?.characterId;
@@ -58,24 +60,24 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
     const validCache = (value, identity) => value?.schemaVersion === QIANQIANJIE_RECALL_CACHE_VERSION
         && typeof value.recallText === 'string' && value.recallText.trim()
         && sameOwner(value.ownerIdentity, identity);
-    const cachedResult = (value, api, diagnostic) => Object.freeze({
+    const cachedResult = (value, api, diagnostic, prequelText = '') => Object.freeze({
         status: 'ready',
-        text: `【千千结上次成功召回】\n${value.recallText}`,
+        text: joinPromptSections(prequelText, `【千千结上次成功召回】\n${value.recallText}`),
         cached: true,
         cachePersisted: value.cachePersisted !== false,
         message: diagnostic || '本轮没有新的可用召回，正在使用上次成功召回',
         identity: value.sourceIdentity ?? null,
         reader: api,
     });
-    const cachedFor = (identity, api, diagnostic, sequence, sourceEpoch) => {
+    const cachedFor = (identity, api, diagnostic, sequence, sourceEpoch, prequelText = '') => {
         if (sequence < latestSuccessfulSequence || currentSourceEpoch() !== sourceEpoch) return null;
         if (!selected() || currentBridge() !== api || !sameRequest(identity, captureIdentity())) return null;
-        if (lastReady?.api === api && validCache(lastReady, identity)) return cachedResult(lastReady, api, diagnostic);
+        if (lastReady?.api === api && validCache(lastReady, identity)) return cachedResult(lastReady, api, diagnostic, prequelText);
         let persisted = null;
         try { persisted = readCache(); } catch { /* unreadable cache behaves as absent */ }
         if (!validCache(persisted, identity)) return null;
         lastReady = Object.freeze({ ...persisted, api });
-        return cachedResult(lastReady, api, diagnostic);
+        return cachedResult(lastReady, api, diagnostic, prequelText);
     };
 
     function status() {
@@ -145,7 +147,8 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
         }
         if (sequence < latestSuccessfulSequence) return emptyResult('stale', '已有更新的千千结召回结果');
 
-        const recallText = value?.status === 'ready' && typeof value.recall?.text === 'string' ? value.recall.text.trim() : '';
+        const prequelText = value?.status === 'ready' ? promptSection(value.prequel?.text) : '';
+        const recallText = value?.status === 'ready' ? promptSection(value.recall?.text) : '';
         if (value?.status === 'ready' && recallText) {
             latestSuccessfulSequence = sequence;
             const record = Object.freeze({
@@ -155,7 +158,7 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
                 recallText,
                 savedAt: Date.now(),
             });
-            // 正文材料只依赖本轮已读取的内容；缓存持久化排在旁路队列，不延长前台预检。
+            // 前情只用本轮快照，持久缓存只保存召回；写入排在旁路队列，不延长前台预检。
             const cacheDeadline = createDeadlineSignal({ signal, timeoutMs: cacheWriteTimeoutMs, reason: 'qqj-cache-save-timeout' });
             const cacheOwnerGuard = () => !cacheDeadline.signal.aborted && !signal?.aborted && selected() && currentBridge() === api
                 && currentSourceEpoch() === sourceEpoch && sameRequest(before, captureIdentity())
@@ -175,7 +178,7 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
                 if (cacheOwnerGuard()) lastReady = Object.freeze({ ...record, api, cachePersisted: false });
             });
             return Object.freeze({
-                status: 'ready', text: recallText, cached: false, cachePersisted: false,
+                status: 'ready', text: joinPromptSections(prequelText, recallText), cached: false, cachePersisted: false,
                 message: '本轮召回可用，缓存保存待确认',
                 identity: sourceIdentity ?? null, reader: api,
             });
@@ -184,13 +187,21 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
         if (['disabled', 'api-unavailable'].includes(value?.status)) {
             return emptyResult(value.status, value?.message || '千千结当前不可用', { identity: sourceIdentity ?? null, reader: api });
         }
+        if (value?.status === 'ready' && prequelText) {
+            const fallback = cachedFor(after, api, '本轮只有前情提要，正在使用上次成功召回', sequence, sourceEpoch, prequelText);
+            return fallback || Object.freeze({
+                status: 'ready', text: prequelText, cached: false, cachePersisted: false,
+                message: '本轮前情提要可用，当前没有新的召回',
+                identity: sourceIdentity ?? null, reader: api,
+            });
+        }
         const status = value?.status === 'ready' ? 'empty' : value?.status || 'empty';
         if (['empty', 'not-ready', 'unavailable', 'error', 'read-failed', 'timed-out'].includes(status)) {
             const diagnostic = value?.message || (value?.status === 'ready' ? '本轮没有新的可用召回' : '千千结当前尚未准备好召回');
             const fallback = cachedFor(after, api, `${diagnostic}；使用上次成功召回`, sequence, sourceEpoch);
             if (fallback) return fallback;
         }
-        return emptyResult(status, value?.message || '当前聊天暂无千千结可用召回', { identity: sourceIdentity ?? null, reader: api });
+        return emptyResult(status, value?.message || '当前聊天暂无千千结可用记忆材料', { identity: sourceIdentity ?? null, reader: api });
     }
 
     return Object.freeze({ status, result, reader: currentBridge, async text(options) { return (await result(options)).text; } });
@@ -198,12 +209,12 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
 
 export function qianQianJieMemoryDiagnostic(result) {
     switch (result?.status) {
-        case 'ready': return result?.cached ? result.message : '千千结本轮召回已就绪';
+        case 'ready': return result?.cached ? result.message : '千千结记忆材料已就绪';
         case 'api-unavailable': return '检测不到千千结轻量记忆接口：请确认千千结已启用且支持 getPromptSnapshot';
         case 'disabled': return '千千结当前已关闭';
         case 'not-ready': return result?.message || '千千结尚未准备好当前聊天';
         case 'empty':
-        case 'unavailable': return result?.message || '当前聊天暂无千千结可用召回';
+        case 'unavailable': return result?.message || '当前聊天暂无千千结可用记忆材料';
         case 'stale': return '当前聊天或记忆源已变化，请重新生成';
         case 'cancelled': return '本次千千结记忆读取已取消';
         case 'timed-out': return '等待千千结记忆超时';

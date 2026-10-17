@@ -5,6 +5,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
+import { createQianQianJieMemoryAccess, QIANQIANJIE_BRIDGE_KEY } from '../business/memory/qianqianjie.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -37,7 +38,7 @@ function precheckHarness(result, { confirmed = true } = {}) {
     return { ...funcs, titles };
 }
 
-function buildHarness({ getMemText }) {
+function buildHarness({ getMemText, settings = { useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false }, qianQianJieGenerationSnapshotCurrent = () => false }) {
     const historyBuilder = evaluate(indexHistory, 'buildGenerationHistoryContext', {
         getSettings: () => ({ keepTags: '', extraTags: '' }),
         selectVisibleChatHistory,
@@ -50,18 +51,66 @@ function buildHarness({ getMemText }) {
         buildGenerationHistoryContext: historyBuilder,
         buildWorldInfoContext: async () => '',
         readCardExtras: () => ({ personaDesc: '', authorNote: '' }),
-        getSettings: () => ({ useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false, keepTags: '', extraTags: '' }),
+        getSettings: () => ({ ...settings, keepTags: '', extraTags: '' }),
         getAlmanacInjectText: () => '', resolveAlmanacContextText: () => '', getCalDescInjectText: () => '',
         sanitizeGenerationContextText: value => String(value ?? ''),
         isConfirmedMemoryFallback: snapshot => snapshot?.status === 'fallback-confirmed'
             && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source),
         isMemoryReadSnapshot: snapshot => snapshot?.status === 'read-required'
             && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source),
-        qianQianJieGenerationSnapshotCurrent: () => false,
+        qianQianJieGenerationSnapshotCurrent,
         makeDiagnosticError: () => stale,
         getMemText,
     });
 }
+
+test('QQJ prequel and recall from the production snapshot reach the final shared message once without a second read', async () => {
+    const ctx = { chatId: 'chat-a', characters: [{ avatar: 'character-a.png' }], characterId: 0, userAvatar: 'persona-a.png', chat: [] };
+    const participant = { chatId: 'chat-a', characterId: 0, characterKey: 'character-a.png', personaKey: 'persona-a.png', userName: '用户', charName: '角色' };
+    const hostIdentity = { hostChatId: 'chat-a', characterLocator: 'character-a.png', personaLocator: 'persona-a.png' };
+    const promptParts = {
+        prequel: '【用户导入的过去经历资料】\n可信前情边界\n【前情片段 1】过去经历内容',
+        recall: '<qqj_recalled_context>\n当前召回内容\n</qqj_recalled_context>',
+    };
+    let snapshotReads = 0;
+    const bridge = {
+        schemaVersion: 1, kind: 'qqj-public-memory-bridge',
+        getPromptSnapshot() {
+            snapshotReads++;
+            return { status: 'ready', identity: hostIdentity, prequel: { text: promptParts.prequel }, recall: { text: promptParts.recall } };
+        },
+    };
+    const access = createQianQianJieMemoryAccess({
+        globalRef: { [QIANQIANJIE_BRIDGE_KEY]: bridge }, contextProvider: () => ctx,
+        participantIdentityProvider: () => participant, isSelected: () => true,
+        writeCache: () => ({ ok: true, commitState: 'confirmed' }),
+    });
+    const titles = [];
+    const productionPrecheck = evaluate(memorySetup, '({ memoryPreCheckConfirm, qianQianJieGenerationSnapshotCurrent })', {
+        QQJ_MEMORY_SNAPSHOT_VERSION: 1, memorySourceEpoch: 1,
+        getSettings: () => ({ useQianQianJie: true }), getContext: () => ctx,
+        captureParticipantIdentity: () => participant, sameParticipantIdentity: () => true,
+        captureQianQianJieHostIdentity: () => hostIdentity, sameQianQianJieHostIdentity: () => true,
+        qianQianJieMemoryAccess: access, qianQianJieMemoryDiagnostic: () => '记忆读取失败',
+        spConfirm: async options => { titles.push(options.title); return true; },
+    });
+    const operationToken = Symbol('generation');
+    const preflight = await productionPrecheck.memoryPreCheckConfirm({ operationToken, contextSnapshot: ctx, participantIdentity: participant });
+    assert.equal(preflight.proceed, true);
+    assert.deepEqual(titles, [], 'usable prequel/recall does not open the empty-material confirmation');
+    assert.equal(snapshotReads, 1);
+
+    const build = buildHarness({
+        getMemText: async () => { throw new Error('preflight snapshot must prevent a second memory read'); },
+        settings: { useQianQianJie: true },
+        qianQianJieGenerationSnapshotCurrent: productionPrecheck.qianQianJieGenerationSnapshotCurrent,
+    });
+    const messages = await build(ctx, '继续创作', '用户', '角色', 3, { memoryOperationToken: operationToken, memorySnapshot: preflight.memorySnapshot });
+    const finalInput = messages.map(message => message.content).join('\n');
+    assert.equal(finalInput.split(promptParts.prequel).length - 1, 1);
+    assert.equal(finalInput.split(promptParts.recall).length - 1, 1);
+    assert.equal(snapshotReads, 1, 'final input uses the already-read preflight snapshot');
+});
 
 test('database preflight distinguishes confirmed empty fallback from ready-then-read failure', async () => {
     const emptyRead = precheckHarness({ status: 'no-match', text: '' });

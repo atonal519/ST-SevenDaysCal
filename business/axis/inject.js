@@ -1,7 +1,6 @@
 // ─── 轴（axis）域 · 注入文本构造 ──────────────────────────────────────────────
 // getAlmanacInjectText：给 buildMessages 反哺点/线/大纲的历文本（历自己不进主楼）。
-// 纯函数——只依赖 data.js（历法/条目/标签工具）与 anchor.js（今天锚点/距今），无 index.js 内部依赖，
-// 故直接 import、无需 env 注入。
+// 读取轴域已有数据生成上下文；不依赖 index.js 内部接口。
 
 import {
     loadAlmanac, loadCalDesc, almDayOfYear, almClampInt, calYearLen, almItemCoversDoy,
@@ -10,13 +9,14 @@ import {
 import { almTodayAnchor, almDaysUntil } from './anchor.js';
 
 // 供 buildMessages 反哺点/线/大纲的文本（历自己不进主楼）。空则返回 ''。
+// 规划消息可传入本轮已读出的正文日期，让历日期与倒计时共用该锚；无参调用沿用原锚点。
 // 三段式：以「当前剧情日期」为锚 → 近期将至（未来 N 天内 + 进行中，带倒计时，给点/线明确抓手）→ 全年其他（背景）。
 // 同时提供“今天”和倒计时，保证消费者能区分临近日期与全年背景。
-export function getAlmanacInjectText() {
+export function getAlmanacInjectText(storyDate = null) {
     const items = loadAlmanac();
     if (!items.length) return '';
     const cal      = loadCalDesc();
-    const anchor   = almTodayAnchor();
+    const anchor   = storyDate || almTodayAnchor();
     const todayDoy = almDayOfYear(anchor.month, anchor.day, cal);
     const NEAR_DAYS = 7;   // 「近期」窗口：未来 7 天内算临近（与楼内七天条同尺度）
     // 逐条算「距今几天」；多日节日今天正落区间内记「进行中」(d=-1) 置顶。与 sortAlmanacUpcoming 同口径。

@@ -197,8 +197,9 @@ test('qianqianjie reports synchronous and asynchronous prompt failures without f
 });
 
 test('successful recall is returned before bounded cache persistence and timed-out late writes stay unconfirmed', async () => {
-    let resolveFirst; let writeCount = 0; let secondWriteStarted = false;
+    let resolveFirst; let writeCount = 0; let secondWriteStarted = false; let cachedRecord;
     const fixture = harness({ writeCache: (_record, options) => {
+        cachedRecord = _record;
         writeCount++;
         assert.equal(options.signal instanceof AbortSignal, true);
         assert.equal(options.safeSnapshotRefresh, true, 'cache saves use the abort-safe fixed-target refresh port');
@@ -208,7 +209,9 @@ test('successful recall is returned before bounded cache persistence and timed-o
     } });
     const first = await fixture.access.result({ cacheWriteTimeoutMs: 12 });
     assert.equal(first.status, 'ready');
-    assert.equal(first.text, '召回材料');
+    assert.equal(first.text, '前情材料\n\n召回材料');
+    assert.equal(cachedRecord.recallText, '召回材料', 'the cache stores recall only');
+    assert.equal(Object.hasOwn(cachedRecord, 'prequelText'), false, 'the cache never stores current prequel');
     assert.equal(first.cachePersisted, false, 'a pending write is never reported as confirmed');
     await new Promise(resolve => setTimeout(resolve, 20));
     const second = await fixture.access.result({ cacheWriteTimeoutMs: 100 });
@@ -218,4 +221,57 @@ test('successful recall is returned before bounded cache persistence and timed-o
     resolveFirst?.({ ok: true, commitState: 'confirmed' });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(writeCount, 2);
+});
+
+test('current prequel is combined with the last successful recall when this snapshot has no new recall', async () => {
+    const fixture = harness({
+        snapshot: promptSnapshot({ prequel: { text: '本轮前情' }, recall: { text: '' } }),
+        readCache: () => ({
+            schemaVersion: 2,
+            ownerIdentity: {
+                host: { hostChatId: 'chat-a', characterLocator: 'character-a.png', personaLocator: 'persona-a.png' },
+                participant: {},
+            },
+            sourceIdentity: null,
+            recallText: '上次召回',
+            cachePersisted: true,
+        }),
+    });
+    const result = await fixture.access.result();
+    assert.equal(result.status, 'ready');
+    assert.equal(result.cached, true);
+    assert.equal(result.text, '本轮前情\n\n【千千结上次成功召回】\n上次召回');
+    assert.equal(fixture.calls.prompt, 1);
+});
+
+test('current prequel alone is ready and does not create a recall cache', async () => {
+    let writes = 0;
+    const fixture = harness({
+        snapshot: promptSnapshot({ prequel: { text: '本轮前情' }, recall: { text: '' } }),
+        writeCache: () => { writes++; return { ok: true, commitState: 'confirmed' }; },
+    });
+    const result = await fixture.access.result();
+    assert.equal(result.status, 'ready');
+    assert.equal(result.cached, false);
+    assert.equal(result.text, '本轮前情');
+    assert.equal(writes, 0);
+});
+
+test('empty current sections may fall back to a previous recall without inventing prequel', async () => {
+    const fixture = harness({
+        snapshot: promptSnapshot({ prequel: { text: '' }, recall: { text: '' } }),
+        readCache: () => ({
+            schemaVersion: 2,
+            ownerIdentity: {
+                host: { hostChatId: 'chat-a', characterLocator: 'character-a.png', personaLocator: 'persona-a.png' },
+                participant: {},
+            },
+            sourceIdentity: null,
+            recallText: '上次召回',
+            cachePersisted: true,
+        }),
+    });
+    const result = await fixture.access.result();
+    assert.equal(result.status, 'ready');
+    assert.equal(result.text, '【千千结上次成功召回】\n上次召回');
 });

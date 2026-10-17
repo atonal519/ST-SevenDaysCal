@@ -82,5 +82,6 @@ export function adultInjectionGuidance(mode) {
 
 export function adultModeForCharacter(settings = {}, key = '') {
     const map = settings.adultMode;
-    return normalizeAdultMode(map && typeof map === 'object' ? map[key] : 'off');
+    const configured = map && typeof map === 'object' ? map[key] : undefined;
+    return configured === undefined ? 'mixed' : normalizeAdultMode(configured);
 }

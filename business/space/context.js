@@ -315,7 +315,9 @@ export function createSpaceContext(env = {}) {
             lineBaselines[intent.recentWidget.editIdx - 1] = intent.recentWidget.lineLocator;
         }
         const ledgerList = requested.ledger || includesAny(message, LEDGER_READ_KEYWORDS) ? env.readLedgerText?.(target) || '' : '';
-        const faqText = intent.faq ? buildSpaceHelpText(env.settings?.() || {}) : '';
+        const settings = env.settings?.() || {};
+        const useCharacterPersona = settings.spaceUseCharacterPersona === true;
+        const faqText = intent.faq ? buildSpaceHelpText(settings) : '';
         const characterData = env.readCharacterData?.(ctx) || '';
         const storyDate = requested.date ? env.readStoryDate?.(ctx) || '' : '';
         const almanacText = requested.date ? env.readAlmanacText?.(target) || '' : '';
@@ -335,7 +337,7 @@ export function createSpaceContext(env = {}) {
         const memText = await env.readMemory?.(ctx, outlineEdit ? message : undefined) || '';
         const recentCtx = await env.readRecent?.(ctx) || '';
         const { personaDesc = '', authorNote = '' } = env.readCardExtras?.(ctx) || {};
-        const personaOverride = String(env.settings?.()?.spacePersona || '').trim();
+        const personaOverride = useCharacterPersona ? '' : String(settings.spacePersona || '').trim();
         const historyMessages = stripWidgetsForApi(historySnapshot);
         const lastHistory = historyMessages.at(-1);
         if (lastHistory?.role === 'user' && String(lastHistory.content ?? '').trim() === message.trim()) historyMessages.pop();
@@ -386,6 +388,7 @@ export function createSpaceContext(env = {}) {
             requestedMaterials: requested,
             faqText,
             personaOverride,
+            useCharacterPersona,
             preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' },
             intent,
         });
