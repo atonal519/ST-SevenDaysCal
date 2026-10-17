@@ -401,3 +401,36 @@ test('当前点线列表只在明确编辑现有同类条目时附加禁止新�
     assert.match(editedLine[0].content, /不要新增/);
     assert.match(editedLine[0].content, /CURRENT_LINE/);
 });
+
+test('间内仅线卡提示复用关系自主校准，普通讨论与点面提示不受影响', async () => {
+    const context = createSpaceContext({
+        context: () => ({ name1: '我', name2: 'TA' }), settings: () => ({}),
+        readPointScopes: () => [], readLineRaw: () => '', numberedPoints: () => '',
+        readMemory: async () => '', readRecent: async () => '', readWorldInfo: async () => '',
+    });
+    const line = await context.buildMessages({ target: {}, userMsg: '生成一条线卡', historySnapshot: [] });
+    assert.match(line[0].content, /【人物自主与相互回应】/);
+    assert.match(line[0].content, /未发生的回应不写成事实/);
+    assert.match(line[0].content, /【输出前复核】/);
+    assert.match(line[0].content, /只输出约定结构，不展示复核过程/);
+
+    for (const userMsg of ['生成一个点卡', '生成一个面方案', '这段关系里两个人怎么理解彼此？']) {
+        const messages = await context.buildMessages({ target: {}, userMsg, historySnapshot: [] });
+        assert.doesNotMatch(messages[0].content, /【人物自主与相互回应】/, userMsg);
+        assert.doesNotMatch(messages[0].content, /【输出前复核】/, userMsg);
+    }
+});
+
+test('语义路由候选包含仅选中线卡时适用的人物自主与输出复核提示', async () => {
+    const userMsg = '帮我处理一下这件事';
+    assert.equal(classifySpaceIntent(userMsg, []).action, 'semantic-route');
+    const context = createSpaceContext({
+        context: () => ({ name1: '我', name2: 'TA' }), settings: () => ({}),
+        readPointScopes: () => [], readLineRaw: () => '', numberedPoints: () => '',
+        readMemory: async () => '', readRecent: async () => '', readWorldInfo: async () => '',
+    });
+    const messages = await context.buildMessages({ target: {}, userMsg, historySnapshot: [] });
+    assert.match(messages[0].content, /仅在线卡是本轮选定输出时适用/);
+    assert.match(messages[0].content, /【人物自主与相互回应】/);
+    assert.match(messages[0].content, /【输出前复核】/);
+});

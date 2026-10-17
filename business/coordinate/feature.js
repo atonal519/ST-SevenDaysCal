@@ -181,6 +181,19 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
             const sourceHtml = typeof raw === 'string' ? raw : raw?.html;
             const html = typeof raw === 'object' && raw?.html != null ? raw.html : sanitizeSnapshot(sourceHtml);
             const item = { id: globalThis.crypto?.randomUUID?.() || `a-${Date.now()}`, chatId: source.chatId, chatIdHash: ctx.chatMetadata?.chat_id_hash ?? null, chatName: host.chatName?.() || '', charName: mes.getAttribute('ch_name') || ctx.name2 || '角色', messageId: source.mid, floorIndex: Number.isFinite(+source.mid) ? +source.mid : null, textPreview: raw?.preview || makePreview(html), ts: Date.now(), tags: [] };
+            if (host.selectMany) {
+                const tags = await repository.getTags();
+                const customValue = '__new_tag__';
+                const result = await host.selectMany({ title: '给这条收藏加标签', body: '可多选已有标签；跳过标签仍会收藏。', choices: [...tags.map(tag => ({ value: tag.id, label: tag.name })), { value: customValue, label: '新建标签' }], initialValues: [], custom: { value: customValue, placeholder: '输入新标签名…', maxLength: 20, rows: 1 } });
+                if (result) {
+                    const selected = new Set((result.values || []).filter(id => id !== customValue));
+                    if (result.values?.includes(customValue) && result.customValue) {
+                        const tag = await repository.addTag(result.customValue, 'slate');
+                        if (tag?.id) selected.add(tag.id);
+                    }
+                    item.tags = [...selected];
+                }
+            }
             saved = await controller.save(item, { html, preview: item.textPreview }, expected);
         } catch (error) {
             recordFloorFailure('收藏此楼', error, source, expected);
@@ -195,7 +208,6 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
         if (!markerSaved) recordFloorFailure('楼层关联保存', new Error('收藏已保存，但回复关联保存失败'), source, expected);
         try { await repository.checkSize(); } catch (error) { host.warn?.('[SP anchor] 收藏空间检查失败', error); }
         host.toast?.(markerSaved ? '已收藏此楼' : '收藏已保存，但回复关联保存失败', null, !markerSaved);
-        if (saved && host.selectMany) { try { const tags = await repository.getTags(); const customValue = '__new_tag__'; const result = await host.selectMany({ title: '给这条收藏加标签', body: '可多选已有标签，也可以新建一个标签。', choices: [...tags.map(tag => ({ value: tag.id, label: tag.name })), { value: customValue, label: '新建标签' }], initialValues: saved.tags || [], custom: { value: customValue, placeholder: '输入新标签名…', maxLength: 20, rows: 1 } }); if (result) { const selected = new Set((result.values || []).filter(id => id !== customValue)); if (result.values?.includes(customValue) && result.customValue) { const tag = await repository.addTag(result.customValue, 'slate'); if (tag?.id) selected.add(tag.id); } await repository.setItemTags(saved.id, [...selected]); } } catch (error) { recordFloorFailure('收藏标签更新', error, source, expected); host.toast?.(`标签更新失败：${mutationErrorText(error)}`, null, true); } }
         finish();
     };
     const tagColor = color => ['rose', 'amber', 'olive', 'teal', 'indigo', 'plum', 'slate', 'clay'].includes(String(color)) ? String(color) : 'slate';

@@ -1,4 +1,5 @@
 import { narrativePaceContract, narrativePreferenceContract } from '../narrative-preferences.js';
+import { LINE_OUTPUT_REVIEW_GUIDE, LINE_RELATIONSHIP_AGENCY_GUIDE } from '../lines/prompt.js';
 import { normalizeLedgerInterval } from '../ledger/settings.js';
 
 export function getSpaceChatPlaceholder() {
@@ -54,8 +55,11 @@ function widgetContract(kind, calDescText, preferences = {}) {
         `- agency=player 仅当下一步必须等待 user 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 user 暂不参与也能自行推进。不得因为事件将来可能影响 user 就标 player。`,
         `- stall 只能是 true / false。stall=true 时 Next 写恢复条件；否则 Next 写有依据的下一变化。`,
         `- pin 是本地保留位，一律输出 false。`,
+        `- 以下人物自主与复核约束仅在线卡是本轮选定输出时适用。`,
+        LINE_RELATIONSHIP_AGENCY_GUIDE,
         narrativePreferenceContract(preferences),
         narrativePaceContract(preferences.narrativePace),
+        LINE_OUTPUT_REVIEW_GUIDE,
     ].join('\n');
     if (kind === 'almanac_widget') return [
         `【历卡片理想结构】轴（历）卡片就是记录具体日期／重要日期的卡片；一次多个日期可写多行 Item，不寒暄、不解释：`,
