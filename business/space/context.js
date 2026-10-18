@@ -24,6 +24,24 @@ export function requestedSpaceMaterials(message) {
 const WRITE_RX = /(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做成|写成|做(?:一|一个|一条|个|条)|加(?:一|个|条)?|改(?:成|一下|为)?|修改|调整|设置|设(?:为|成)|重做|重写|换成|挪到|来一(?:张|个|条)|给我(?:做|来)?一(?:张|个|条))/;
 const VIEW_RX = /(?:查看|看看|看下|列出|列表|有哪些|哪几|有几(?:个|条)|多少(?:个|条)|当前|现有|已有|现在(?:有|的)|第\s*\d+\s*条)/;
 const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)/;
+const FORMAT_CORRECTION_RX = /(?:卡片格式.{0,8}(?:不对|错误|不正确|不行|有问题)|(?:按|用).{0,10}(?:正确|标准)?卡片格式.{0,8}(?:重新|再)?(?:输出|生成|做|写)|(?:重新输出|按正确卡片格式)|(?:去看|看看).{0,10}(?:点和线|点|线).{0,10}(?:替换|格式).{0,8}(?:还)?不行)/;
+const FORMAT_TARGET_RX = /(点(?:卡片?)?|线(?:卡片?)?|(?:轴(?:日期)?|历法)(?:卡片?)?|面(?:方案|规划|草稿)?)(?=格式)/gu;
+const FORMAT_DESTINATION_RX = /(?:改成|改为|换成|换为|转成|转为|生成|新建|新增|创建|做成|写成|输出成|输出为|重新输出)(?:一|一个|一条|一张|个|条|张)?\s*(点(?:卡片?)?|线(?:卡片?)?|轴(?:日期)?(?:卡片?)?|历法(?:卡片?)?|面(?:方案|规划|草稿)?)/gu;
+const SPACE_WIDGET_KINDS = Object.freeze(['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
+const widgetKindFromLabel = target => {
+    if (target.startsWith('点')) return 'schedule_widget';
+    if (target.startsWith('线')) return 'line_widget';
+    if (target.startsWith('轴')) return 'almanac_widget';
+    if (target.startsWith('历法')) return 'era_widget';
+    if (target.startsWith('面')) return 'outline_widget';
+    return null;
+};
+const matchedWidgetKind = (message, rx, captureIndex = 0) => {
+    const matches = [...String(message).matchAll(new RegExp(rx.source, rx.flags))];
+    return widgetKindFromLabel(matches.at(-1)?.[captureIndex] || '');
+};
+const formatTargetKind = message => matchedWidgetKind(message, FORMAT_TARGET_RX);
+const formatDestinationKind = message => matchedWidgetKind(message, FORMAT_DESTINATION_RX, 1);
 const POINT_RX = /(?:日程|日历|待办|点卡片?|第\s*\d+\s*条\s*点|(?:当前|现有|已有|所有)(?:的)?点(?=$|[\s，。？！、；：]|要|里|再|改|修|调|重|简|详|短|长)|(?:有哪些|有几(?:个|条)|多少(?:个|条))点|(?:这个|那个)点(?=(?:$|[\s，。？！、；：]|要怎么|怎么|如何|显示|加|改|删|存|落地))|(?:往|向)点里|(?:做|新建|加|新增|添加|创建|生成|记录|保存|落地|安排|修改|查看|看看|列出|给我(?:做|来)?|来)(?:一|一个|一条|个|条)?点(?=$|[\s，。？！、；：]|然后|并|再|和))/;
 const LINE_RX = /(?:事件线|剧情线|线索|伏笔|线卡片?|第\s*\d+\s*条\s*线|(?:当前|现有|已有|所有)(?:的)?线(?=$|[\s，。？！、；：]|要|里|再|改|修|调|重|简|详|短|长)|(?:有哪些|有几(?:个|条)|多少(?:个|条))线|(?:这个|那个)线(?=(?:$|[\s，。？！、；：]|要怎么|怎么|如何|显示|加|改|删|存|落地))|(?:往|向)线里|(?:做|新建|加|新增|添加|创建|生成|记录|保存|落地|修改|查看|看看|列出|给我(?:做|来)?|来)(?:一|一个|一条|个|条)?线(?=$|[\s，。？！、；：]|然后|并|再|和))/;
 const ERA_RX = /(?:整套(?:的)?历|历法|纪年|年号|月名|月份结构|月份数量|月(?:份)?数|一年(?:有|几|多少|改成|设为|调整为)?[一二三四五六七八九十百\d]*个月|每(?:个)?月(?:都)?(?:天数|(?:有|几|多少)天|(?:(?:改|调整|设置|设)(?:为|成))?[零〇一二两三四五六七八九十百\d]+天)|历法卡片?)/;
@@ -153,6 +171,30 @@ const moduleMatches = message => {
     return Object.freeze({ schedule_widget: POINT_RX.test(message), line_widget: LINE_RX.test(message), almanac_widget: almanac, era_widget: era });
 };
 
+const previousFormatTarget = (history, latestWidget) => {
+    let kind = null;
+    for (let index = (Array.isArray(history) ? history.length : 0) - 1; index >= 0; index -= 1) {
+        const item = history[index];
+        if (item?.role === 'assistant') {
+            if (!SPACE_WIDGET_KINDS.includes(item.expectedWidgetKind)) {
+                if (kind) break;
+                continue;
+            }
+            if (kind && item.expectedWidgetKind !== kind) break;
+            kind ||= item.expectedWidgetKind;
+            continue;
+        }
+        if (item?.role !== 'user' || !kind) continue;
+        const request = String(item.content || '');
+        if (FORMAT_CORRECTION_RX.test(request)) continue;
+        const intent = classifySpaceIntent(request, []);
+        if (['write', 'revise-recent'].includes(intent.action) && intent.kind === kind) {
+            return { kind, originalRequest: request };
+        }
+    }
+    return kind ? { kind, originalRequest: '' } : latestWidget ? { kind: latestWidget.kind, originalRequest: '' } : null;
+};
+
 export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const message = String(userMsg || '').trim();
     const routedTargets = explicitTargetRoutes(message);
@@ -181,6 +223,33 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     const noWrite = (NO_WRITE_RX.test(message)
         || /(?:^|[，,。；;！!？?\s])不(?:要|再|继续)?(?:生成|新增|添加|新建|创建|出|插|写|做|整理|转换|改).{0,12}(?:点|线|历|面|卡片)/u.test(message))
         && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message) && !routedKinds.length;
+    const asksForExplanation = EXPLICIT_EXPLANATION_RX.test(message) || /^(?:为什么|为何|为啥)/u.test(message);
+    if (FORMAT_CORRECTION_RX.test(message) && !noWrite && !asksForExplanation) {
+        const priorExpected = previousFormatTarget(historySnapshot, latestWidget);
+        const destinationKind = formatDestinationKind(message);
+        if (!destinationKind && (semanticKinds.length > 1 || routedKinds.length > 1)) {
+            return Object.freeze({ action: 'clarify', kind: null, faq: false, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
+        }
+        const kind = destinationKind || (semanticKinds.length === 1 ? semanticKinds[0]
+            : routedKinds.length === 1 ? routedKinds[0]
+                : formatTargetKind(message) || priorExpected?.kind || null);
+        if (!kind || !SPACE_WIDGET_KINDS.includes(kind)) {
+            return Object.freeze({ action: 'clarify', kind: null, faq: false, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-format-widget-kind' });
+        }
+        const originalIntent = priorExpected?.kind === kind && priorExpected.originalRequest
+            ? classifySpaceIntent(priorExpected.originalRequest, [])
+            : null;
+        const explicitNewRequest = /(?:新建|新增|新生成|另建|再建|创建|生成(?:一|个|条|张|点|线|历|轴|面))/u.test(message);
+        const explicitTargetChange = Boolean(destinationKind && /(?:改成|改为|换成|换为|转成|转为)/u.test(message));
+        const editExisting = CANONICAL_ITEM_RX.test(message)
+            || (!explicitNewRequest && !explicitTargetChange && originalIntent?.kind === kind && originalIntent.editExisting === true);
+        return Object.freeze({
+            action: 'write', kind, faq: false,
+            pointContext: kind === 'schedule_widget', lineContext: kind === 'line_widget',
+            recentWidget: null, formatRepair: true,
+            ...(editExisting ? { editExisting: true } : {}), reason: '',
+        });
+    }
     const delegatedCardRequest = !noWrite && semanticKinds.length > 0 && DELEGATED_REQUEST_RX.test(message);
     const hasPositiveRoute = routedTargets.some(({ help }) => !help);
     const faq = faqCandidate && !delegatedCardRequest && !hasPositiveRoute;
@@ -320,8 +389,8 @@ export function createSpaceContext(env = {}) {
         const faqText = intent.faq ? buildSpaceHelpText(settings) : '';
         const characterData = env.readCharacterData?.(ctx) || '';
         const storyDate = requested.date ? env.readStoryDate?.(ctx) || '' : '';
-        const almanacText = requested.date ? env.readAlmanacText?.(target) || '' : '';
-        const calDescText = requested.calendar || requested.date ? env.readCalendarText?.(target) || '' : '';
+        const almanacText = requested.date || (intent.formatRepair && intent.kind === 'almanac_widget') ? env.readAlmanacText?.(target) || '' : '';
+        const calDescText = requested.calendar || requested.date || (intent.formatRepair && ['almanac_widget', 'era_widget'].includes(intent.kind)) ? env.readCalendarText?.(target) || '' : '';
         const readMaterial = (enabled, label, reader) => {
             if (!enabled) return '';
             try { return Promise.resolve(reader?.()).catch(() => `【${label}读取失败】本轮暂时无法读取这项资料。`); }

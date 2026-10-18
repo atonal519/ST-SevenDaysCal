@@ -153,6 +153,7 @@ import { createAxisWidgetActions } from './business/axis/widget.js';
 import { createAxisTransactionController } from './business/axis/transaction.js';
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
 import { createAxisDateContext } from './business/axis/date-context.js';
+import { createPhoneCalendarApi, createPhoneCalendarSource } from './business/axis/phone.js';
 import { resolveAlmanacContextText, sanitizeGenerationContextText } from './runtime/generation-context.js';
 import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, buildStoryClockPrompt, createStoryClockController, extensionStoryClockState } from './business/axis/story-clock.js';
 import { createWeekdayConsumerContext } from './business/axis/weekday-coordinator.js';
@@ -231,6 +232,7 @@ function refreshInlineWindow(immediate = false) { return inlineFeature?.refresh?
 function _clearAllInlineBoxes() { return inlineFeature?.clear?.(); }
 function syncLatestAlmanacBlock(expectedChatId = null) {
     if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
+    globalThis.dispatchEvent?.(new CustomEvent('st-sevendayscal:calendar-changed'));
     return refreshInlineWindow(true);
 }
 function syncLatestScheduleBlock(expectedChatId = null) {
@@ -1030,6 +1032,16 @@ const refreshStoryClockInjection = ({ announce = false } = {}) => {
 globalThis.addEventListener?.(STORY_CLOCK_COORDINATION_EVENT, event => { if (event?.detail?.owner !== 'sdc') refreshStoryClockInjection(); });
 const latestStoryClock = () => latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT);
 const storyClockDate = () => storyClockDatePure(getContext(), parseJudgedDatePure, ALM_CHAT_SCAN_LIMIT);
+globalThis.STSevenDaysCal = createPhoneCalendarApi({
+    read: createPhoneCalendarSource({
+        enabled: pluginEnabled, context: getContext, calendar: loadCalDesc,
+        items: () => readStore(getAlmanacKey())?.items,
+        anchor: () => getDateAnchor(charStableKey(getContext())),
+        calibration: () => getStoryCalibration(charStableKey(getContext())),
+        parseClock: parseStoryClockPure,
+    }),
+    formatDate: (date, calendar, part) => formatCalendarDate(date, calendar, calMonthName, part),
+});
 const dateDetectionController = createDateDetectionController({
     context: () => captureGenerationContext(),
     charKey: ctx => charStableKey(ctx),

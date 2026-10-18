@@ -94,6 +94,9 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
         if (intent.reason === 'missing-widget-kind') {
             return `【本轮输出模式】用户希望看到应用按钮，但没有说明要应用到哪个模块。请简短询问目标是点、线、轴日期、历法还是面；在目标明确前不要生成卡片。`;
         }
+        if (intent.reason === 'missing-format-widget-kind') {
+            return `【本轮输出模式】用户在纠正卡片格式，但当前历史没有可确认的目标卡型。请只简短询问要重发点、线、轴日期、历法还是面；不要要求用户提供内部模板，也不要猜类型或输出卡片。`;
+        }
         if (intent.reason === 'missing-source-widget') {
             return `【本轮输出模式】用户指定了要转换的原卡类型，但当前可用历史里没有该类型的卡片。请简短请用户提供那张卡的内容；不要改用其他类型的卡片，也不要猜测原内容。`;
         }
@@ -116,7 +119,7 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
     if (!intent.kind) {
         return `【本轮输出模式】这是普通讨论或只读查询。只用自然语言回答，不生成结构化卡片，不输出无关标签。`;
     }
-    return `【本轮输出模式】用户要求生成或修改${widgetLabel(intent.kind)}卡片。只输出下面这一种完整候选，不输出其他种类、无关标签、前言或解释；候选尚未应用，等待用户选择应用。用户明确要多条候选时，可逐张输出同一种卡片。\n${widgetContract(intent.kind, calDescText, preferences)}`;
+    return `【本轮输出模式】用户要求${intent.formatRepair ? '按正确格式重新输出' : '生成或修改'}${widgetLabel(intent.kind)}卡片。只输出下面这一种完整候选，不输出其他种类、无关标签、前言或解释；候选尚未应用，等待用户选择应用。用户明确要多条候选时，可逐张输出同一种卡片。${intent.formatRepair ? '不要沿用历史里的错误格式，也不要要求用户提供内部模板。' : ''}\n${widgetContract(intent.kind, calDescText, preferences)}`;
 }
 
 function recentWidgetBlock(intent = {}) {

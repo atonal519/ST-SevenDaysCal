@@ -436,6 +436,113 @@ test('语义路由候选包含仅选中线卡时适用的人物自主与输出�
     assert.match(messages[0].content, /【输出前复核】/);
 });
 
+test('间格式纠错沿用可信预期卡型和原请求，并为明确第 N 条线重发提供当前编辑合同', async () => {
+    const kinds = [
+        ['schedule_widget', '生成一张点卡', '<schedule_widget>', 'CURRENT_POINT'],
+        ['line_widget', '生成一条线卡', '<line_widget>', 'CURRENT_LINE'],
+        ['almanac_widget', '生成一个历卡', '<almanac_widget>', 'CURRENT_ALMANAC'],
+        ['era_widget', '生成一张历法卡', '<era_widget>', 'CURRENT_CALENDAR'],
+        ['outline_widget', '生成一份面方案', '<outline_widget>', 'CURRENT_OUTLINE'],
+    ];
+    const context = createSpaceContext({
+        context: () => ({ name1: '我', name2: 'TA' }), settings: () => ({}),
+        readPointScopes: () => [{ view: 'user', raw: 'CURRENT_POINT' }],
+        numberedPoints: raw => `#1 ${raw}`,
+        readLineRaw: () => 'CURRENT_LINE', parseLines: () => Array.from({ length: 9 }, (_, index) => ({ name: index === 8 ? 'CURRENT_LINE' : `旧线${index + 1}`, stage: '延展', desc: '当前线' })),
+        readAlmanacText: () => 'CURRENT_ALMANAC', readCalendarText: () => 'CURRENT_CALENDAR',
+        readOutlineDraftSnapshot: () => ({ raw: 'CURRENT_OUTLINE' }),
+        readMemory: async () => '', readRecent: async () => '', readWorldInfo: async () => '',
+    });
+    for (const [kind, originalRequest, tag, current] of kinds) {
+        let history = [{ role: 'user', content: originalRequest }];
+        history = appendSpaceAssistant(history, '{"operation":"upsert_character_state"}', { expectedWidgetKind: kind });
+        history.push(
+            { role: 'user', content: '卡片格式还是不对' },
+            { role: 'assistant', content: '请把模板发给我。' },
+        );
+        const messages = await context.buildMessages({
+            target: {}, userMsg: '你直接去看点和线的替换还不行吗', historySnapshot: history,
+        });
+        assert.equal(messages.expectedWidgetKind, kind, originalRequest);
+        assert.match(messages[0].content, new RegExp(tag.replace(/[<>]/g, '\\$&')), originalRequest);
+        assert.match(messages[0].content, new RegExp(current), originalRequest);
+        assert.match(messages[0].content, /不要要求用户提供内部模板/, originalRequest);
+        assert.doesNotMatch(messages[0].content, /不要新增/, originalRequest);
+        if (kind === 'almanac_widget') assert.match(messages[0].content, /CURRENT_CALENDAR/);
+    }
+
+    const lineHistory = [{ role: 'assistant', content: '当前有九条线。' }];
+    const line = await context.buildMessages({
+        target: {}, userMsg: '把第9条线按正确卡片格式重新输出', historySnapshot: lineHistory,
+    });
+    assert.equal(classifySpaceIntent('把第9条线按正确卡片格式重新输出', lineHistory).action, 'write');
+    assert.equal(line.expectedWidgetKind, 'line_widget');
+    assert.match(line[0].content, /#9 CURRENT_LINE/);
+    assert.match(line[0].content, /不要新增/);
+    assert.match(line[0].content, /序号取对应列表里 #N 的数字 N/);
+
+    const editedHistory = [{ role: 'user', content: '把第2条线改成周五' }];
+    editedHistory.splice(1, 0, ...appendSpaceAssistant(editedHistory, '{"bad":true}', { expectedWidgetKind: 'line_widget' }).slice(1));
+    const correctedEdit = await context.buildMessages({
+        target: {}, userMsg: '卡片格式还是不对', historySnapshot: editedHistory,
+    });
+    assert.match(correctedEdit[0].content, /不要新增/);
+    assert.match(correctedEdit[0].content, /#9 CURRENT_LINE/);
+
+    const explicitSwitch = classifySpaceIntent('把上一张点卡改成线卡格式重新输出', [
+        { role: 'assistant', content: '{"bad":true}', expectedWidgetKind: 'schedule_widget' },
+    ]);
+    assert.deepEqual([explicitSwitch.action, explicitSwitch.kind], ['write', 'line_widget']);
+    assert.equal(classifySpaceIntent('卡片格式还是不对', []).action, 'clarify');
+    assert.equal(classifySpaceIntent('这段关系为什么会这样？', [
+        { role: 'assistant', content: '{"bad":true}', expectedWidgetKind: 'line_widget' },
+    ]).action, 'discuss');
+});
+
+test('间连续格式纠错保留最初编辑性质，且本轮新建、解释和换型请求优先', () => {
+    const originalRequest = '把第2条线改成周五';
+    let history = [{ role: 'user', content: originalRequest }];
+    const originalIntent = classifySpaceIntent(originalRequest, history);
+    assert.equal(originalIntent.editExisting, true);
+    history = appendSpaceAssistant(history, '{"operation":"upsert_character_state"}', {
+        expectedWidgetKind: originalIntent.kind,
+    });
+
+    const firstCorrection = classifySpaceIntent('卡片格式还是不对', history);
+    assert.equal(firstCorrection.editExisting, true);
+    history = appendSpaceAssistant(history, '请把模板发给我。', {
+        expectedWidgetKind: firstCorrection.kind,
+    });
+    const secondCorrection = classifySpaceIntent('你直接去看点和线的替换还不行吗', history);
+    assert.equal(secondCorrection.kind, 'line_widget');
+    assert.equal(secondCorrection.editExisting, true);
+
+    const explicitNew = classifySpaceIntent('新建一条线按正确卡片格式重新输出', history);
+    assert.equal(explicitNew.kind, 'line_widget');
+    assert.equal(explicitNew.editExisting, undefined);
+
+    const explanation = classifySpaceIntent('解释一下为什么卡片格式不对', history);
+    assert.equal(explanation.action, 'discuss');
+
+    const changedTarget = classifySpaceIntent('点卡格式不对，改成线卡重新输出', history);
+    assert.equal(changedTarget.kind, 'line_widget');
+    assert.equal(changedTarget.editExisting, undefined);
+
+    const ambiguousTarget = classifySpaceIntent('把点卡和线卡按正确格式重新输出', [
+        { role: 'assistant', content: '{"bad":true}', expectedWidgetKind: 'schedule_widget' },
+    ]);
+    assert.deepEqual([ambiguousTarget.action, ambiguousTarget.reason], ['clarify', 'ambiguous-widget-kind']);
+});
+
+test('间历史裁掉原用户消息后仍复用assistant保存的预期卡型', () => {
+    const intent = classifySpaceIntent('卡片格式还是不对', [
+        { role: 'assistant', content: '{"bad":true}', expectedWidgetKind: 'line_widget' },
+    ]);
+    assert.equal(intent.action, 'write');
+    assert.equal(intent.kind, 'line_widget');
+    assert.equal(intent.editExisting, undefined);
+});
+
 test('间角色卡人格模式限定普通文字聊天并保持顾问模式兼容', async () => {
     const characterData = '群聊卡资料：用户操控的人物林澈；AI角色乔安沉稳，AI角色周言善于观察。';
     const makeContext = (settings, counters = {}) => createSpaceContext({
