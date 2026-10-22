@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { classifyGenerationError, createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, safeDiagnosticLog } from '../../api/diagnostics.js';
 import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { pointPinsFromParsed } from './prompt.js';
@@ -167,7 +168,7 @@ export function createPointController(env) {
             const restored = restoreManualOwner(owner);
             env.recordFailure?.(owner, '点生成', error);
             if (restored && owner.previousCachedSchedule) env.toast(`点生成失败：${pointFailureText(error)}；已保留原存档`, null, true);
-            else { const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button>'; const html = `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${env.escape(pointFailureText(error))}</p>${retry}</div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast(`点生成失败：${pointFailureText(error)}`, null, true); }
+            else { const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button>'; const html = `<div class="sp-error">${icon("alert-circle")}<p>${env.escape(pointFailureText(error))}</p>${retry}</div>`; if (env.panelVisible() && env.view() === view) env.setBody(html); else env.toast(`点生成失败：${pointFailureText(error)}`, null, true); }
         } finally { cleanupManualOwner(owner); }
     }
     async function syncPointToToday(auto = false, travelContext = null) {

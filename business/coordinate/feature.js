@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { createCoordinateController } from './controller.js';
 import { createCoordinateUI } from './ui.js';
 import { captureMesText, sanitizeSnapshot, makePreview } from './capture.js';
@@ -123,7 +124,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                     active.type = 'button';
                     active.className = entry === 'menu' ? 'sp-anchor-menu-btn sp-anchor-btn' : 'sp-anchor-inline-btn sp-anchor-btn';
                     active.setAttribute('data-sp-anchor-entry', entry);
-                    active.innerHTML = host.svg?.('sp-anchor-btn-svg') || '⌖';
+                    active.innerHTML = host.svg?.('sp-anchor-btn-svg') || icon('map-pin', 'sp-anchor-btn-svg');
                     active.addEventListener('click', event => {
                         event.preventDefault();
                         event.stopPropagation();

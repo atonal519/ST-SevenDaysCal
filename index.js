@@ -1,3 +1,4 @@
+import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
@@ -499,7 +500,7 @@ const pointController = createPointController({
     showPanel,
     setBody,
     loading: loadingHtml,
-    showPrecheckError: message => setBody(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单"><i class="fa-solid fa-utensils"></i></button></div>`),
+    showPrecheckError: message => setBody(`<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>`),
     recordFailure: (owner, operation, error) => {
         const target = pointPanelTarget(owner?.view, owner?.charName, owner?.chatId, owner?.chatRevision);
         const message = typeof error === 'string' ? error : diagnosticMessage(error);
@@ -1443,17 +1444,10 @@ function appendTravelPromptContext(prompt, travelContext = null) {
     return [prompt, travelContext.promptAddon, targetText].filter(Boolean).join('\n\n');
 }
 
-// 扩展目录绝对路径（引自身 style.css 进 shadow）；ST 站点根（引 fontawesome.min.css，
-// 与 ST 共用浏览器缓存）。import.meta.url = …/scripts/extensions/third-party/ST-SevenDaysCal/index.js
-const EXT_BASE = new URL('.', import.meta.url).href;                 // …/ST-SevenDaysCal/
-const ST_BASE  = new URL('../../../../../', import.meta.url).href;   // ST 站点根（public/ 即 /）
-
-// 悬浮球图标（Solar「pen-new-round-outline」，MIT 免费素材；源 assets/pen.svg）。
-// 内联而非 <img>：单 path 用 fill=currentColor，直接继承按钮字色——主题日/夜换色、
-// 生成态霓虹变色（.sp-btn-generating 改 color）全都自动跟随，无需另写。宽高 1em 跟字号缩放，
-// 仅悬浮球使用该 SVG；魔杖菜单入口继续使用字体图标（见 injectExtButton）。
+// 样式在每个插件 Shadow Root 内独立加载；图标由本地 Tabler Outline 路径内联显示。
+const EXT_BASE = new URL('.', import.meta.url).href;
+// 品牌保留原有 Solar pen-new-round-outline（MIT）圆环笔；功能图标使用 Tabler Outline。
 const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M1.25 12C1.25 6.063 6.063 1.25 12 1.25a.75.75 0 0 1 0 1.5A9.25 9.25 0 1 0 21.25 12a.75.75 0 0 1 1.5 0c0 5.937-4.813 10.75-10.75 10.75S1.25 17.937 1.25 12m15.52-9.724a3.503 3.503 0 0 1 4.954 4.953l-6.648 6.649c-.371.37-.604.604-.863.806a5.3 5.3 0 0 1-.987.61c-.297.141-.61.245-1.107.411l-2.905.968a1.492 1.492 0 0 1-1.887-1.887l.968-2.905c.166-.498.27-.81.411-1.107q.252-.526.61-.987c.202-.26.435-.492.806-.863zm3.893 1.06a2.003 2.003 0 0 0-2.832 0l-.376.377q.032.145.098.338c.143.413.415.957.927 1.469a3.9 3.9 0 0 0 1.807 1.025l.376-.376a2.003 2.003 0 0 0 0-2.832m-1.558 4.391a5.4 5.4 0 0 1-1.686-1.146a5.4 5.4 0 0 1-1.146-1.686L11.218 9.95c-.417.417-.58.582-.72.76a4 4 0 0 0-.437.71c-.098.203-.172.423-.359.982l-.431 1.295l1.032 1.033l1.295-.432c.56-.187.779-.261.983-.358q.378-.18.71-.439c.177-.139.342-.302.759-.718z" clip-rule="evenodd"/></svg>';
-
 
 // 模块介绍：内容标题旁「?」点开的小气泡文案。键对应侧栏 data-view，面向使用者讲清用途与真实操作。
 // 想改文字直接改这里即可（纯展示，不入库、不注入 AI）。
@@ -1461,9 +1455,9 @@ const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" h
 const _iLede = t => `<p class="sp-intro-lede">${t}</p>`;
 const _iText = t => `<p class="sp-intro-text">${t}</p>`;
 const _iSub  = t => `<div class="sp-intro-sub">${t}</div>`;
-const _iKey  = (icon, name, desc) => `<div class="sp-intro-key"><i class="fa-solid ${icon}"></i><b>${name}</b><span>${desc}</span></div>`;
+const _iKey  = (iconName, name, desc) => `<div class="sp-intro-key">${icon(iconName)}<b>${name}</b><span>${desc}</span></div>`;
 const _iSvgKey = (svg, name, desc) => `<div class="sp-intro-key">${svg}<b>${name}</b><span>${desc}</span></div>`;
-const _coordinateIntroSvg = '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/></svg>';
+const _coordinateIntroSvg = icon('map-pin');
 
 const MODULE_INTROS = {
     schedule:
@@ -1471,36 +1465,36 @@ const MODULE_INTROS = {
         _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示，不会自行生成；缺失或不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。模型给出的日期和时间仍可能与剧情不符。') +
         _iSub('更新方式') +
         _iText('默认不会随日期变化自动重排，也不会潜伏注入主楼 AI。需要更新时可手动刷新；若要“今天”变化后后台重排，可在设置 → 推进设置 → 日期与点开启“点：后台自动跟随「今天」”，这会额外调用 API。') +
-        _iKey('fa-rotate-right', '生成／刷新', '按最新剧情重做未锁事项；新结果会覆盖旧的未锁数据') +
-        _iKey('fa-thumbtack',    '固定 TA',    '只把当前 TA 留在 TA▾ 抽屉，方便下次查看；不是锁定事项') +
-        _iKey('fa-ellipsis-vertical', '⋮ 菜单', '每条点的操作都收在这里') +
-        _iKey('fa-pen',          '编辑',       '手动修改这条事项') +
-        _iKey('fa-lock',         '锁定',       '刷新时保住同名事项不被删除；时间、说明等仍可能随新剧情推进') +
-        _iKey('fa-arrow-right-to-bracket', '注入', '把这条点写进输入框，供你确认或修改后发送；不是后台注入') +
-        _iKey('fa-trash',        '删除',       '移除这条事项') +
+        _iKey('refresh', '生成／刷新', '按最新剧情重做未锁事项；新结果会覆盖旧的未锁数据') +
+        _iKey('pin',    '固定 TA',    '只把当前 TA 留在 TA▾ 抽屉，方便下次查看；不是锁定事项') +
+        _iKey('dots-vertical', '⋮ 菜单', '每条点的操作都收在这里') +
+        _iKey('pencil',          '编辑',       '手动修改这条事项') +
+        _iKey('lock',         '锁定',       '刷新时保住同名事项不被删除；时间、说明等仍可能随新剧情推进') +
+        _iKey('login-2', '注入', '把这条点写进输入框，供你确认或修改后发送；不是后台注入') +
+        _iKey('trash',        '删除',       '移除这条事项') +
         _iSub('去间讨论') +
         _iText('想先讨论再新增或修改点，可去「间」说清人物与目标，例如“把下周的约定整理成可应用到点的方案”。有效回复出现按钮后，点击才写入；新增时还要选择人物。'),
     almanac:
         _iLede('「轴」有“即将到来”“日历”“刻度”三页：前两页管理节日、生日、纪念日与故事历法；刻度页跟踪伤情、约定、周期等会随时间变化的账。') +
         _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示；主楼未输出或格式不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。') +
         _iSub('节日 · 历法') +
-        _iKey('fa-plus',          '添加',       '手动录入节日／生日／纪念日；手动项生成时会保留') +
-        _iKey('fa-wand-magic-sparkles', '生成节日', '按世界观重做一整年：保留手动项和锁定项，替换未锁的旧 AI 日期') +
-        _iKey('fa-heart-circle-plus', '补录纪念日', '只追加剧情中新出现的重大里程碑，可能没有结果；新增项自动锁定') +
-        _iKey('fa-calendar-days', '历法管理',   '查看、编辑月份／天数／纪年和历法模板；换历法遇到无效日期时会先让你选择取消、删除或自动修正') +
-        _iKey('fa-lock',          '锁定',       '以后生成节日时保留这条') +
-        _iKey('fa-pen',           '编辑',       '修改名称、日期、说明等') +
-        _iKey('fa-trash',         '删除',       '移除这条日期') +
+        _iKey('plus',          '添加',       '手动录入节日／生日／纪念日；手动项生成时会保留') +
+        _iKey('wand', '生成节日', '按世界观重做一整年：保留手动项和锁定项，替换未锁的旧 AI 日期') +
+        _iKey('heart-plus', '补录纪念日', '只追加剧情中新出现的重大里程碑，可能没有结果；新增项自动锁定') +
+        _iKey('calendar-week', '历法管理',   '查看、编辑月份／天数／纪年和历法模板；换历法遇到无效日期时会先让你选择取消、删除或自动修正') +
+        _iKey('lock',          '锁定',       '以后生成节日时保留这条') +
+        _iKey('pencil',           '编辑',       '修改名称、日期、说明等') +
+        _iKey('trash',         '删除',       '移除这条日期') +
         _iSub('刻度 · 时间账') +
         _iText('刻度分持续状态、约定待办和周期三类。自动标注默认关闭；在设置 → 推进设置 → 刻度中，标注或更新间隔设为 0 可分别关闭对应任务，两个都设为 0 时完全手动，仍可手动标注和更新。') +
         _iText('在刻度页或楼内“标注池”点［标注］捞取新条，点［更新］按时间刷新现状。') +
         _iText('潜伏注入默认关闭；必须同时开启“允许潜伏注入主楼 AI（线 / 面 / 刻度）”总开关和刻度自己的“潜伏注入主楼 AI”才生效。') +
-        _iKey('fa-pen',         '编辑',     '手动改字段；保存后自动成为用户锁') +
-        _iKey('fa-lock',        '锁定',     'AI 更新不再改这条；与是否注入主楼是两回事') +
-        _iKey('fa-bell',        '暂停埋入', '暂不注入主楼，但仍留在活跃账上继续跟进；再点恢复') +
-        _iKey('fa-check',       '了结',     '从活跃区移到归档，之后仍可捞回') +
-        _iKey('fa-rotate-left', '捞回',     '归档区：让已了结条目回到活跃区') +
-        _iKey('fa-trash',       '彻底删除', '归档区：不可恢复地删除') +
+        _iKey('pencil',         '编辑',     '手动改字段；保存后自动成为用户锁') +
+        _iKey('lock',        '锁定',     'AI 更新不再改这条；与是否注入主楼是两回事') +
+        _iKey('bell',        '暂停埋入', '暂不注入主楼，但仍留在活跃账上继续跟进；再点恢复') +
+        _iKey('check',       '了结',     '从活跃区移到归档，之后仍可捞回') +
+        _iKey('rotate-2', '捞回',     '归档区：让已了结条目回到活跃区') +
+        _iKey('trash',       '彻底删除', '归档区：不可恢复地删除') +
         _iSub('去间讨论') +
         _iText('想先讨论日期或整套历法，可去「间」请 AI 整理成可应用的轴日期或历法方案，例如“把这天定为可应用到轴的纪念日”；有可用方案时点回复下方的应用按钮。刻度账在刻度页或楼内标注池操作，不使用间的应用卡片。'),
     lines:
@@ -1509,15 +1503,15 @@ const MODULE_INTROS = {
         _iSub('推进与注入') +
         _iText('线可按回合数自动推进、在故事日期变化时推进，或只接受手动推进；策略在设置 → 推进设置 → 线。') +
         _iText('潜伏注入必须同时开启总开关和线自己的“潜伏注入主楼 AI”。') +
-        _iKey('fa-clock-rotate-left', '历史版本', '入口：线主页“重新生成”左侧的回退入口。保留最近 10 份旧版，当前版另计；按真实生成时间从新到旧排列，旧数据时间未知时会如实标明。<br>预览与恢复：选择版本可先预览，再确认恢复；恢复后会成为当前线，供后台潜伏注入、“当前内容”手动注入和后续更新使用。恢复前的当前版也会保留，可再次选回。<br>积累：历史从功能启用后的内容更新开始积累，暂无版本时会提示。') +
-        _iKey('fa-rotate-right', '重新生成', '重做未锁定的线；锁定线保留') +
-        _iKey('fa-forward',      '推进',     '更新已有线，并可能新增少量真正独立的事件') +
-        _iKey('fa-plus',         '新增冷知识', '冷知识开关控制随线自动生成和楼内显示；手动面板始终可用') +
-        _iKey('fa-ellipsis-vertical', '⋮ 菜单', '每条平行事件的操作都收在这里') +
-        _iKey('fa-pen',          '编辑',     '手动修改这条线') +
-        _iKey('fa-lock',         '锁定',     '重新生成时保留这条线；AI 不能替你创建用户锁') +
-        _iKey('fa-arrow-right-to-bracket', '注入', '把单条线写进输入框，供你确认后发送') +
-        _iKey('fa-trash',        '删除',     '移除这条线') +
+        _iKey('history', '历史版本', '入口：线主页“重新生成”左侧的回退入口。保留最近 10 份旧版，当前版另计；按真实生成时间从新到旧排列，旧数据时间未知时会如实标明。<br>预览与恢复：选择版本可先预览，再确认恢复；恢复后会成为当前线，供后台潜伏注入、“当前内容”手动注入和后续更新使用。恢复前的当前版也会保留，可再次选回。<br>积累：历史从功能启用后的内容更新开始积累，暂无版本时会提示。') +
+        _iKey('refresh', '重新生成', '重做未锁定的线；锁定线保留') +
+        _iKey('player-track-next',      '推进',     '更新已有线，并可能新增少量真正独立的事件') +
+        _iKey('plus',         '新增冷知识', '冷知识开关控制随线自动生成和楼内显示；手动面板始终可用') +
+        _iKey('dots-vertical', '⋮ 菜单', '每条平行事件的操作都收在这里') +
+        _iKey('pencil',          '编辑',     '手动修改这条线') +
+        _iKey('lock',         '锁定',     '重新生成时保留这条线；AI 不能替你创建用户锁') +
+        _iKey('login-2', '注入', '把单条线写进输入框，供你确认后发送') +
+        _iKey('trash',        '删除',     '移除这条线') +
         _iSub('间内讨论') +
         _iText('想新增或调整事件线，可去「间」说清目标，例如“把这个伏笔整理成可应用到线的方案”；看到可用方案的按钮后点击才写入。冷知识仍在本页操作。'),
     outline:
@@ -1526,14 +1520,14 @@ const MODULE_INTROS = {
         _iSub('自动判断与注入') +
         _iText('自动判断会按设置的间隔识别故事演到哪，只会向后推进，不会自动倒退。') +
         _iText('大纲潜伏注入必须同时开启总开关、面自己的“大纲自动注入”，并且已经设有当前节点。') +
-        _iKey('fa-rotate-right',        '重新生成',   '按最新剧情重做并覆盖整份面') +
-        _iKey('fa-comments',            '去间讨论',   '打开「间」并预填当前面讨论开头；只会导航和填字，不会自动发送') +
-        _iKey('fa-ellipsis-vertical',   '⋮ 菜单',     '每个节点的操作都收在这里') +
-        _iKey('fa-pen',                 '编辑',       '手动修改这个节点') +
-        _iKey('fa-location-crosshairs', '设为当前',   '把这个节点标成正在进行；已是当前时显示“取消当前”') +
-        _iKey('fa-arrow-right-to-bracket', '注入',    '把单个节点写进输入框，供你确认后发送') +
-        _iKey('fa-copy',                '复制',       '复制这个节点的文字') +
-        _iKey('fa-trash',               '删除',       '只删除这个节点'),
+        _iKey('refresh',        '重新生成',   '按最新剧情重做并覆盖整份面') +
+        _iKey('box',            '去间讨论',   '打开「间」并预填当前面讨论开头；只会导航和填字，不会自动发送') +
+        _iKey('dots-vertical',   '⋮ 菜单',     '每个节点的操作都收在这里') +
+        _iKey('pencil',                 '编辑',       '手动修改这个节点') +
+        _iKey('focus-2', '设为当前',   '把这个节点标成正在进行；已是当前时显示“取消当前”') +
+        _iKey('login-2', '注入',    '把单个节点写进输入框，供你确认后发送') +
+        _iKey('copy',                '复制',       '复制这个节点的文字') +
+        _iKey('trash',               '删除',       '只删除这个节点'),
     space:
         _iLede('「间」用于讨论剧情想法和模块内容，不会写入正式角色扮演楼层，也不会直接推进剧情。') +
         _iSub('索要可用方案') +
@@ -1541,19 +1535,19 @@ const MODULE_INTROS = {
         _iText('普通讨论、目标不清或方案不完整时不会出现可用按钮；可继续补充要求或编辑问题重发。') +
         _iText('发送新问题时会清理较旧记录。一轮完整问答结束后，间内最多可能暂时显示 21 条消息。') +
         _iSub('消息操作') +
-        _iKey('fa-paper-plane',    '发送',       '发送消息') +
-        _iKey('fa-pen',            '编辑并重发', '只在你的消息上出现；会从这里截断后续记录并重新提问') +
-        _iKey('fa-copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
-        _iKey('fa-trash',          '删除',       '删除单条间内消息') +
-        _iKey('fa-broom',          '清空',       '清掉当前聊天的全部间内记录') +
+        _iKey('send',    '发送',       '发送消息') +
+        _iKey('pencil',            '编辑并重发', '只在你的消息上出现；会从这里截断后续记录并重新提问') +
+        _iKey('copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
+        _iKey('trash',          '删除',       '删除单条间内消息') +
+        _iKey('clear-all',          '清空',       '清掉当前聊天的全部间内记录') +
         _iSub('其他模块') +
         _iText('模块入口只会打开对应页面，不会自动生成。刻度、冷知识、菜单、小剧场、坐标和记忆没有应用卡片，请在对应模块操作；今日菜单从点页餐具入口进入，设置项在构画设置页更改。旧面讨论可在此查看，只读。'),
     theater:
         _iLede('「棱」是按当前故事背景写独立短篇或番外的地方，结果不进入正式角色扮演楼层。') +
         _iText('可直接填写要求，也可从模板起草；模板库在设置 → 数据设置 → 小剧场模板库。') +
-        _iKey('fa-shuffle', '随机',     '只从模板库随机填入一份模板；确认或修改输入后，还要点“生成小剧场”') +
-        _iKey('fa-file-lines', '模板内容', '查看这次生成实际使用的模板文字') +
-        _iKey('fa-expand',  '全屏浏览', '铺满视口阅读；再次点击或按 Esc 退出') +
+        _iKey('arrows-shuffle', '随机',     '只从模板库随机填入一份模板；确认或修改输入后，还要点“生成小剧场”') +
+        _iKey('file-text', '模板内容', '查看这次生成实际使用的模板文字') +
+        _iKey('arrows-maximize',  '全屏浏览', '铺满视口阅读；再次点击或按 Esc 退出') +
         _iSub('重新生成、保存与删除') +
         _iText('［重新生成］沿用当前小剧场的主题／模板再生成一版。') +
         _iText('可先改标题，再点［永久保存］存到本对话；草稿最多 10 条，新稿会挤掉最旧草稿。') +
@@ -1750,7 +1744,7 @@ let charViewName       = null;    // confirmed char name; preserved when switchi
 let outlineMode         = false;
 let linesMode           = false;
 const manualEditing = { point: false, lines: false, outline: false };
-const linesMemoryPreflightErrorHtml = message => `<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-lines-now">重新生成线</button></div>`;
+const linesMemoryPreflightErrorHtml = message => `<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-lines-now">重新生成线</button></div>`;
 // 线·swipe 重算：楼层单调递增闸（区分真·新楼层 vs swipe/历史重渲染），及"待重算 swipe"标记。
 const linesFeature = createLinesFeature({
     jumpHint: () => SP_JUMP_HINT_LINES,
@@ -1792,7 +1786,7 @@ const linesFeature = createLinesFeature({
     widgetEnv: {
         key: () => getLinesCacheKey(), read: key => readStore(key), write: (key, value) => writeStore(key, value),
         fail: message => showToast(message, null, true), refresh: () => {},
-        button: ($btn, editIdx) => { if ($btn) $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到线'}`); showToast(editIdx != null ? `已替换线·第 ${editIdx} 条` : '已加到线'); },
+        button: ($btn, editIdx) => { if ($btn) $btn.prop('disabled', true).html(`${icon("check")} ${editIdx != null ? `已改第 ${editIdx} 条` : '已加到线'}`); showToast(editIdx != null ? `已替换线·第 ${editIdx} 条` : '已加到线'); },
     },
     readRaw: () => readStore(getLinesCacheKey())?.raw || '',
     empty: () => renderEmptyLinesState(),
@@ -2084,9 +2078,9 @@ const isMobile = () => window.innerWidth <= 640;
 // 通用操作菜单只描述动作；具体页面决定何时显示、如何处理动作。
 const ACTION_MENU_CONFIGS = Object.freeze({
     almanac: Object.freeze([
-        Object.freeze({ action: 'generate-almanac', icon: 'fa-wand-magic-sparkles', label: '生成节日', title: 'AI 按世界观逐月考虑，按素材生成' }),
-        Object.freeze({ action: 'supplement-anniversary', icon: 'fa-heart-circle-plus', label: '补录纪念日', title: '只增补新里程碑，不重铺、不动现有日历' }),
-        Object.freeze({ action: 'manage-calendar', icon: 'fa-calendar-days', label: '历法管理', title: '查看、编辑和管理历法模板' }),
+        Object.freeze({ action: 'generate-almanac', icon: 'wand', label: '生成节日', title: 'AI 按世界观逐月考虑，按素材生成' }),
+        Object.freeze({ action: 'supplement-anniversary', icon: 'heart-plus', label: '补录纪念日', title: '只增补新里程碑，不重铺、不动现有日历' }),
+        Object.freeze({ action: 'manage-calendar', icon: 'calendar-week', label: '历法管理', title: '查看、编辑和管理历法模板' }),
     ]),
 });
 
@@ -2255,7 +2249,7 @@ jQuery(async () => {
             warn: (message, error) => console.warn(message, error),
             confirm: message => spConfirm({ title: String(message).includes('收藏') ? '删除收藏' : '删除标签', body: message }),
             selectMany: options => customDialog.selectMany(options),
-            svg: cls => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/></svg>`,
+            svg: cls => icon('map-pin', cls),
         },
     });
     coordinateRuntime.feature.init({ chatId: getContext()?.chatId ?? null });
@@ -3091,7 +3085,7 @@ function injectExtButton() {
     // 侧栏入口由魔杖或悬浮按钮打开。
     const wandHtml = `
         <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
-            <div class="fa-solid fa-calendar-days extensionsMenuExtensionButton" title="打开构画"></div>
+            <div class="extensionsMenuExtensionButton sp-menu-icon" title="打开构画">${PEN_ICON_SVG}</div>
             <span>构画</span>
         </div>`;
 
@@ -3263,7 +3257,6 @@ function injectModal() {
     _spDialogShadow = dialogHost.attachShadow({ mode: 'open' });
     _spDialogShadow.innerHTML = `
         <link rel="stylesheet" href="${EXT_BASE}style.css">
-        <link rel="stylesheet" href="${ST_BASE}css/fontawesome.min.css">
         <div id="sp-dialog-overlay-host"></div>`;
     bindDailyMenuDialogEvents();
     document.documentElement.appendChild(dialogHost);
@@ -3273,38 +3266,38 @@ function injectModal() {
                 <aside class="sp-sidebar">
                     <nav class="sp-sidebar-tabs" aria-label="主视图">
                         <button class="sp-side-tab sp-view-btn sp-view-active" data-view="schedule">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('point', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">点</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="almanac">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="4" x2="8" y2="20"/><line x1="8" y1="8" x2="15" y2="8"/><line x1="8" y1="12" x2="15" y2="12"/><line x1="8" y1="16" x2="15" y2="16"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('axis-x', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">轴</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="lines">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4" x2="12" y2="20"/><circle cx="12" cy="4" r="2.2" fill="currentColor" stroke="none"/><circle cx="12" cy="20" r="2.2" fill="currentColor" stroke="none"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('line', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">线</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="outline">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L16.5 12 L12 21 L7.5 12 Z"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('polygon', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">面</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="space">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="4" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('box', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">间</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="theater">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5 L13 12 L9 19 L5 12 Z"/><path d="M15 5 L19 12 L15 19 L11 12 Z" stroke-dasharray="2.5 2.5"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('prism', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">棱</span>
                         </button>
                         <button class="sp-side-tab sp-view-btn" data-view="anchor">
-                            <span class="sp-tab-glyph" aria-hidden="true"><svg class="sp-tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5 L6 18 L20.5 18"/><circle cx="14" cy="9.4" r="1.9" fill="currentColor" stroke="none"/></svg></span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('map-pin', 'sp-tab-svg')}</span>
                             <span class="sp-tab-label">坐标</span>
                         </button>
                     </nav>
                     <div class="sp-sidebar-spacer"></div>
                     <nav class="sp-sidebar-tabs sp-sidebar-util" aria-label="工具">
                         <button class="sp-side-tab sp-settings-btn" aria-label="设置">
-                            <span class="sp-tab-glyph" aria-hidden="true">⚙</span>
+                            <span class="sp-tab-glyph" aria-hidden="true">${icon('settings')}</span>
                         </button>
                     </nav>
                 </aside>
@@ -3312,18 +3305,18 @@ function injectModal() {
                 <div class="sp-content-col">
                     <header class="sp-content-head">
                         <h1 class="sp-content-title" id="sp-content-title">点</h1>
-                        <button class="sp-module-intro-btn" id="sp-module-intro-btn" title="这个模块是干嘛的？" aria-label="模块介绍"><i class="fa-regular fa-circle-question"></i></button>
+                        <button class="sp-module-intro-btn" id="sp-module-intro-btn" title="这个模块是干嘛的？" aria-label="模块介绍">${icon("help-circle")}</button>
                         <div class="sp-sub-toggle-wrap" id="sp-sub-toggle-wrap">
                             <div class="sp-sub-toggle" id="sp-sub-toggle">
                                 <button class="sp-view-btn sp-sub-btn sp-view-active" data-view="user">我</button>
-                                <button class="sp-view-btn sp-sub-btn sp-ta-trigger" data-view="char" id="sp-ta-trigger"><span class="sp-ta-label">TA</span><i class="fa-solid fa-caret-down sp-ta-caret"></i></button>
+                                <button class="sp-view-btn sp-sub-btn sp-ta-trigger" data-view="char" id="sp-ta-trigger"><span class="sp-ta-label">TA</span>${icon("chevron-down", "sp-ta-caret")}</button>
                             </div>
                             <div class="sp-ta-drawer" id="sp-ta-drawer" style="display:none"></div>
                         </div>
                         <div class="sp-head-tools">
-                            <button class="sp-icon-btn sp-theme-toggle-btn" title="${themeToggleTitle()}"><i class="fa-solid ${themeToggleIcon()}"></i></button>
-                            <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮"><i class="fa-regular fa-circle-dot"></i></button>
-                            <button class="sp-icon-btn sp-close-btn"    title="关闭"><i class="fa-solid fa-xmark" style="font-size:var(--sp-fs-100)"></i></button>
+                            <button class="sp-icon-btn sp-theme-toggle-btn" title="${themeToggleTitle()}">${icon(themeToggleIcon())}</button>
+                            <button class="sp-icon-btn sp-fab-toggle-btn${fabEnabled() ? ' sp-btn-active' : ''}" title="悬浮按钮">${icon("circle-dot")}</button>
+                            <button class="sp-icon-btn sp-close-btn"    title="关闭">${icon("x", "", "style=\"font-size:var(--sp-fs-100)\"")}</button>
                         </div>
                         <div class="sp-module-intro-pop" id="sp-module-intro-pop" style="display:none"></div>
                     </header>
@@ -3331,8 +3324,8 @@ function injectModal() {
                     <!-- Settings overlay: covers content-col only, sidebar stays visible -->
                     <div id="sp-settings-overlay" class="sp-settings-overlay" style="display:none">
                         <div class="sp-settings-header">
-                            <span class="sp-settings-title"><i class="fa-solid fa-gear"></i> 设置</span>
-                            <button class="sp-icon-btn sp-settings-close-btn" title="关闭设置"><i class="fa-solid fa-xmark"></i></button>
+                            <span class="sp-settings-title">${icon("settings")} 设置</span>
+                            <button class="sp-icon-btn sp-settings-close-btn" title="关闭设置">${icon("x")}</button>
                         </div>
                         <div class="sp-settings-body">
 
@@ -3363,7 +3356,7 @@ function injectModal() {
                                 <summary class="sp-settings-section-title">API</summary>
                                 <div class="sp-settings-section-body">
                                     <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
-                                        <i class="fa-solid ${hasCustomApi ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i>
+                                        ${icon(hasCustomApi ? 'circle-check' : 'alert-triangle')}
                                         ${hasCustomApi
                                             ? '已配置独立 API，后台生成不影响聊天'
                                             : '未配置独立 API：构画生成暂不可用，请填写 Base URL 与 API Key'}
@@ -3374,10 +3367,10 @@ function injectModal() {
                                     <div class="sp-preset-row">
                                         <button type="button" id="sp-preset-box" class="sp-preset-box" title="选择 API 预设">
                                             <span id="sp-preset-label" class="sp-preset-label">选择预设…</span>
-                                            <i class="fa-solid fa-chevron-down sp-preset-caret"></i>
+                                            ${icon("chevron-down", "sp-preset-caret")}
                                         </button>
-                                        <button id="sp-preset-save" class="sp-fetch-btn" title="把当前这套 API 设置存为新预设"><i class="fa-solid fa-plus"></i></button>
-                                        <button id="sp-preset-del" class="sp-fetch-btn" title="删除当前选中的预设"><i class="fa-solid fa-trash"></i></button>
+                                        <button id="sp-preset-save" class="sp-fetch-btn" title="把当前这套 API 设置存为新预设">${icon("plus")}</button>
+                                        <button id="sp-preset-del" class="sp-fetch-btn" title="删除当前选中的预设">${icon("trash")}</button>
                                     </div>
                                     <div id="sp-preset-list" class="sp-preset-list" style="display:none"></div>
                                     <p id="sp-preset-hint" class="sp-cfg-hint sp-preset-hint" style="display:none"></p>
@@ -3387,19 +3380,19 @@ function injectModal() {
                                     <div class="sp-key-row">
                                         <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
                                                placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
-                                        <button id="sp-key-toggle" class="sp-eye-btn"><i class="fa-solid fa-eye"></i></button>
+                                        <button id="sp-key-toggle" class="sp-eye-btn" title="显示密钥" aria-label="显示密钥">${icon("eye")}</button>
                                     </div>
                                     <div class="sp-model-row">
                                         <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
                                                placeholder="模型名称，如 gpt-4o-mini"
                                                value="${escapeAttr(cfg.model || '')}">
                                         <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
-                                            <i class="fa-solid fa-list"></i>
+                                            ${icon("list")}
                                         </button>
                                     </div>
                                     <details id="sp-model-list-section" class="sp-model-list-section" style="display:none">
                                         <summary class="sp-model-list-summary">
-                                            <i class="fa-solid fa-chevron-right sp-model-list-chevron"></i>
+                                            ${icon("chevron-right", "sp-model-list-chevron")}
                                             <span id="sp-model-list-count">已加载 0 个模型</span>
                                         </summary>
                                         <div class="sp-model-list-body">
@@ -3445,7 +3438,7 @@ function injectModal() {
                                         <div class="sp-preset-row">
                                             <button type="button" id="sp-util-preset-box" class="sp-preset-box" title="选择机械任务预设">
                                                 <span id="sp-util-preset-label" class="sp-preset-label">跟随主 API（不分流）</span>
-                                                <i class="fa-solid fa-chevron-down sp-preset-caret"></i>
+                                                ${icon("chevron-down", "sp-preset-caret")}
                                             </button>
                                         </div>
                                         <div id="sp-util-preset-list" class="sp-preset-list" style="display:none"></div>
@@ -3569,7 +3562,7 @@ function injectModal() {
                                     <div id="sp-mem-progress" class="sp-mem-progress" style="display:none">
                                         <div class="sp-mem-progress-label">正在处理: <span id="sp-mem-progress-count">0/0</span></div>
                                         <div class="sp-mem-progress-bar"><div id="sp-mem-progress-fill" class="sp-mem-progress-fill"></div></div>
-                                        <button id="sp-mem-progress-abort" class="sp-abort-btn"><i class="fa-solid fa-circle-stop"></i>中止</button>
+                                        <button id="sp-mem-progress-abort" class="sp-abort-btn">${icon("player-stop")}中止</button>
                                     </div>
 
                                     <div class="sp-mem-actions">
@@ -3666,8 +3659,8 @@ function injectModal() {
                                            placeholder="字体 CSS URL，如 https://fontsapi.zeoseven.com/xxx/main/result.css"
                                            value="${escapeAttr(getSettings().uiFontUrl ?? '')}">
                                     <div class="sp-mode-opt" style="margin-top:8px; gap:8px">
-                                        <button type="button" id="sp-font-apply" class="sp-fetch-btn"><i class="fa-solid fa-check"></i> 应用</button>
-                                        <button type="button" id="sp-font-reset" class="sp-fetch-btn" title="恢复成构画自带的默认字体"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>
+                                        <button type="button" id="sp-font-apply" class="sp-fetch-btn">${icon("check")} 应用</button>
+                                        <button type="button" id="sp-font-reset" class="sp-fetch-btn" title="恢复成构画自带的默认字体">${icon("rotate-2")} 恢复默认</button>
                                     </div>
 
                                     <hr class="sp-mem-divider sp-settings-display-divider">
@@ -3873,8 +3866,8 @@ function injectModal() {
                                                 <div class="sp-storage-group-head">当前聊天 · 按模块备份与迁入</div>
                                                 <p class="sp-cfg-hint">只处理你勾选的点、线、面、间、日历／历法或已保存小剧场。不会带走正文、记忆、刻度、设置、密钥、坐标收藏与本机草稿。</p>
                                                 <div class="sp-mem-actions">
-                                                    <button id="sp-storage-portable-export" class="sp-save-btn" type="button"><i class="fa-solid fa-file-export"></i> 导出数据</button>
-                                                    <button id="sp-storage-portable-import" class="sp-mem-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入数据</button>
+                                                    <button id="sp-storage-portable-export" class="sp-save-btn" type="button">${icon("file-export")} 导出数据</button>
+                                                    <button id="sp-storage-portable-import" class="sp-mem-btn" type="button">${icon("file-import")} 导入数据</button>
                                                     <input id="sp-storage-portable-file" type="file" accept=".json,application/json" hidden>
                                                 </div>
                                             </div>
@@ -3892,7 +3885,7 @@ function injectModal() {
                                                     <summary class="sp-diagnostics-preview-title">查看最近 AI 输入</summary>
                                                     <pre class="sp-diagnostics-pre" id="sp-diagnostics-ai-input-pre" aria-live="polite">（尚未发送请求）</pre>
                                                     <div class="sp-diagnostics-actions" id="sp-diagnostics-ai-input-actions" hidden>
-                                                        <button class="sp-diagnostics-copy-btn" id="sp-diagnostics-ai-input-copy" type="button" disabled><i class="fa-regular fa-copy"></i> 复制 AI 输入</button>
+                                                        <button class="sp-diagnostics-copy-btn" id="sp-diagnostics-ai-input-copy" type="button" disabled>${icon("copy")} 复制 AI 输入</button>
                                                     </div>
                                                 </details>
                                             </div>
@@ -3900,12 +3893,12 @@ function injectModal() {
                                             <div class="sp-diagnostics-block">
                                                 <label class="sp-cfg-group">请求诊断</label>
                                                 <p class="sp-cfg-hint"><strong>适合发给开发者。</strong>复制最近 30 条安全诊断日志；不含正文、提示词、API Key 或 URL。</p>
-                                                <button id="sp-diagnostic-export" class="sp-save-btn" type="button"><i class="fa-regular fa-copy"></i> 复制最近诊断日志</button>
+                                                <button id="sp-diagnostic-export" class="sp-save-btn" type="button">${icon("copy")} 复制最近诊断日志</button>
                                             </div>
                                             <div class="sp-diagnostics-block">
                                                 <div class="sp-diagnostics-label">当前聊天诊断包</div>
                                                 <p class="sp-cfg-hint">包含两楼 AI 输入与原始回复，可能含剧情。它不是完整可导入备份，也不会包含 API 密钥、地址或请求头。</p>
-                                                <button id="sp-current-diagnostic-export" class="sp-save-btn" type="button"><i class="fa-solid fa-file-export"></i> 导出当前聊天诊断包</button>
+                                                <button id="sp-current-diagnostic-export" class="sp-save-btn" type="button">${icon("file-export")} 导出当前聊天诊断包</button>
                                             </div>
                                         </div>
                                     </details>
@@ -3914,33 +3907,33 @@ function injectModal() {
 
                         </div><!-- /sp-settings-body -->
                         <div class="sp-settings-footer">
-                            <button id="sp-cfg-save" class="sp-save-btn"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+                            <button id="sp-cfg-save" class="sp-save-btn">${icon("device-floppy")} 保存</button>
                             <span id="sp-cfg-msg" class="sp-cfg-msg"></span>
                         </div>
                     </div><!-- /sp-settings-overlay -->
 
                     <div class="sp-main">
                         <div class="sp-body" id="sp-body">
-                            <div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单"><i class="fa-solid fa-utensils"></i></button></div>
+                            <div class="sp-empty">${icon("calendar")}<p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>
                         </div>
 
                         <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
                             <div class="sp-schedule-header sp-outline-header">
                                 <span class="sp-outline-title">故事面</span>
                                 <span class="sp-schedule-label" id="sp-outline-node-count">0 个节点</span>
-                                <button class="sp-panel-refresh sp-refresh-outline" title="重新生成面" aria-label="重新生成面"><i class="fa-solid fa-rotate-right"></i></button>
+                                <button class="sp-panel-refresh sp-refresh-outline" title="重新生成面" aria-label="重新生成面">${icon("refresh")}</button>
                             </div>
                             <div class="sp-jump-hint">想先讨论或调整面？去「间」说说想法：<button type="button" class="sp-jump-link" id="sp-open-space-discussion">去间讨论草稿 →</button></div>
                             <div class="sp-outline-failure-slot" id="sp-outline-failure-slot"></div>
                             <div class="sp-outline-beats" id="sp-outline-beats">
-                                <div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
+                                <div class="sp-empty">${icon("polygon")}<p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>
                             </div>
                         </div>
 
                         <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
                             <div class="sp-lines-toolbar" id="sp-lines-toolbar"></div>
                             <div class="sp-lines-list" id="sp-lines-list">
-                                <div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>
+                                <div class="sp-empty">${icon("line")}<p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>
                             </div>
                         </div>
 
@@ -3950,9 +3943,9 @@ function injectModal() {
                             <div class="sp-space-failure-slot" id="sp-space-failure-slot"></div>
                             <div class="sp-chat-msgs" id="sp-space-msgs"></div>
                             <div class="sp-chat-input-row">
-                                <button id="sp-space-clear" class="sp-icon-btn" title="清空对话"><i class="fa-solid fa-broom"></i></button>
+                                <button id="sp-space-clear" class="sp-icon-btn" title="清空对话">${icon("clear-all")}</button>
                                 <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊剧情设定，或请我生成可应用的点／线／轴日期／历法／面方案…"></textarea>
-                                <button id="sp-space-send" class="sp-icon-btn" title="发送"><i class="fa-solid fa-paper-plane"></i></button>
+                                <button id="sp-space-send" class="sp-icon-btn" title="发送">${icon("send")}</button>
                             </div>
                         </div>
 
@@ -3971,13 +3964,13 @@ function injectModal() {
                 </div><!-- /sp-content-col -->
 
                 <div class="sp-resize-handle" id="sp-resize-handle">
-                    <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+                    ${icon("arrows-maximize")}
                 </div>
             </div>`;
     // id/类留在 light DOM 的 host 上，供开关、主题与可见性判断操作；窗口内容放入 shadow root，
     // openSchedule/closePanel 的 show/hide、applyTheme 的类切换、各 is(':visible')
     // 判断的操作对象不变；窗口内容整体进 shadow root，ST 全局 button/input/滚动条/
-    // 文字阴影等规则在边界处切断。style.css 与 fontawesome 经 <link> 只作用于本 shadow；
+    // 文字阴影等规则在边界处切断。style.css 经 <link> 只作用于本 shadow；
     // :root 的 --sp-* 令牌与 --SmartTheme* 变量穿透 shadow 边界照常继承，主题色板/缩放零改动。
     const host = document.createElement('div');
     host.id = MODAL_ID;
@@ -4001,7 +3994,6 @@ function injectModal() {
     // 仍由 .sp-sheet 承担；host 无 transform/filter，内部 position:fixed 相对视口不变。
     root.innerHTML = `
         <link rel="stylesheet" href="${EXT_BASE}style.css">
-        <link rel="stylesheet" href="${ST_BASE}css/fontawesome.min.css">
         <div class="sp-root sp-${currentTheme}" style="display:contents">${html}</div>`;
     document.documentElement.appendChild(host);
 
@@ -4888,7 +4880,7 @@ function switchToCharView() {
            </div>`
         : '';
     setBody(`<div class="sp-char-picker">
-        <p class="sp-char-picker-hint"><i class="fa-solid fa-user-pen"></i> 输入要查看点的角色名</p>
+        <p class="sp-char-picker-hint">${icon("user-edit")} 输入要查看点的角色名</p>
         <div class="sp-char-picker-row">
             <input id="sp-char-name-input" class="sp-input" type="text"
                    placeholder="角色 / NPC / 反派皆可" value="${escapeAttr(guessed)}">
@@ -4939,9 +4931,9 @@ function renderTaDrawerHtml() {
     const slots = pins.map(n => `
         <div class="sp-ta-slot${currentView === 'char' && charViewName === n ? ' sp-ta-slot-active' : ''}" data-name="${escapeAttr(n)}">
             <span class="sp-ta-slot-name">${escapeHtml(n)}</span>
-            <button type="button" class="sp-ta-slot-del" data-name="${escapeAttr(n)}" title="移除固定"><i class="fa-solid fa-xmark"></i></button>
+            <button type="button" class="sp-ta-slot-del" data-name="${escapeAttr(n)}" title="移除固定">${icon("x")}</button>
         </div>`).join('');
-    return `${slots}<button type="button" class="sp-ta-add"><i class="fa-solid fa-user-plus"></i> 添加 / 查看角色</button>`;
+    return `${slots}<button type="button" class="sp-ta-add">${icon("user-plus")} 添加 / 查看角色</button>`;
 }
 
 function openTaDrawer() {
@@ -5237,7 +5229,7 @@ function openSchedule(targetView = null) {
         }
     }
     if (pointState.isGenerating) {
-        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate"><i class="fa-solid fa-circle-stop"></i>中止生成</button></div>`);
+        setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate">${icon("player-stop")}中止生成</button></div>`);
     } else if (pointState.cachedSchedule) {
         setBody(pointState.cachedSchedule);
     } else {
@@ -5299,15 +5291,15 @@ function openQuickReplyShortcut(key) {
 
 function showEmptyGenerate() {
     setBody(`<div class="sp-empty">
-        <i class="fa-regular fa-calendar"></i>
+        ${icon("calendar")}
         <button class="sp-gen-btn" id="sp-gen-now">生成点</button>
-        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单"><i class="fa-solid fa-utensils"></i></button>
+        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button>
     </div>`);
     $in('#sp-gen-now').on('click', triggerGenerate);
 }
 
 function pointScheduleEmptyHtml() {
-    return `<div class="sp-empty"><i class="fa-regular fa-calendar"></i><p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单"><i class="fa-solid fa-utensils"></i></button></div>`;
+    return `<div class="sp-empty">${icon("calendar")}<p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>`;
 }
 
 function showPanel() {
@@ -5376,7 +5368,7 @@ function openDailyMenuDialog() {
     overlay.innerHTML = `<section class="sp-dialog-sheet sp-daily-menu-sheet">
         <header class="sp-daily-menu-dialog-head">
             <h2 id="sp-daily-menu-dialog-title">今日菜单</h2>
-            <button class="sp-daily-menu-dialog-close" type="button" data-daily-menu-close aria-label="关闭今日菜单" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+            <button class="sp-daily-menu-dialog-close" type="button" data-daily-menu-close aria-label="关闭今日菜单" title="关闭">${icon("x")}</button>
         </header>
         <div id="sp-daily-menu-content" class="sp-daily-menu-content"></div>
     </section>`;
@@ -5774,7 +5766,7 @@ function loadingHtml(baseText, abortId) {
     return `<div class="sp-loading">
         <div class="sp-spinner"></div>
         <p class="sp-loading-text">${escapeHtml(text)}</p>
-        <button class="sp-abort-btn" id="${abortId}"><i class="fa-solid fa-circle-stop"></i>中止生成</button>
+        <button class="sp-abort-btn" id="${abortId}">${icon("player-stop")}中止生成</button>
     </div>`;
 }
 
@@ -7144,7 +7136,7 @@ function makeInjectBtn(text) {
         _injectTexts[id] = text;
         if (typeof text === 'string') _injectIdsByText.set(text, id);
     }
-    return `<button class="sp-inject-btn" data-iid="${id}" title="注入到输入框"><i class="fa-solid fa-arrow-right-to-bracket"></i></button>`;
+    return `<button class="sp-inject-btn" data-iid="${id}" title="注入到输入框">${icon("login-2")}</button>`;
 }
 
 function injectToST(text) {
@@ -7229,7 +7221,7 @@ const axisWidgetActions = createAxisWidgetActions({
     saveItems: saveAlmanacItems,
     render: () => { if (axisState.almanacMode) renderAlmanacPanel(); },
     sync: syncLatestAlmanacBlock,
-    done: ($btn, label) => $btn.prop('disabled', true).html(`<i class="fa-solid fa-check"></i> ${label}`),
+    done: ($btn, label) => $btn.prop('disabled', true).html(`${icon("check")} ${label}`),
     error: message => { showToast(message, null, true); return { ok: false }; },
     notify: message => showToast(message),
     commitCalendar: commitCalendarDesc,
@@ -8087,7 +8079,7 @@ function bindStorageHandlers() {
 
 
 function renderEmptyLinesState() {
-    return `<div class="sp-empty"><i class="fa-solid fa-diagram-project"></i><p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>`;
+    return `<div class="sp-empty">${icon("line")}<p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>`;
 }
 
 async function triggerGenerateLines() {
@@ -8249,8 +8241,8 @@ function toggleAlmanacPin(id) {
         const $rows = $in(`#sp-almanac-wrap .sp-alm-item[data-id="${id}"]`);
         $rows.toggleClass('sp-alm-pinned', result.pin);
         $rows.find('.sp-alm-pin')
-            .attr('title', result.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留')
-            .find('i').attr('class', `fa-solid ${result.pin ? 'fa-lock' : 'fa-lock-open'}`);
+            .attr('title', result.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留');
+        $rows.find('.sp-alm-pin').each((_, button) => setIcon(button, result.pin ? 'lock' : 'lock-open'));
     }
 }
 // 日历详情↔网格联动：把某条目在当前月覆盖到的日子高亮到上方网格（直接改 class，不重渲）。
@@ -8293,7 +8285,7 @@ async function fetchModels() {
     const ctx = getContext();
 
     const $btn = $in('#sp-fetch-models');
-    $btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i>');
+    $btn.prop('disabled', true).html(`${icon("loader-2", "sp-icon-spin")}`);
     try {
         // Same proxy strategy as generation: go through ST's /status endpoint
         // which supports listing OpenAI-compatible models via a POST body.
@@ -8332,7 +8324,7 @@ async function fetchModels() {
                     : '模型列表读取失败，请稍后重试。';
         showToast(message, null, true);
     } finally {
-        $btn.prop('disabled', false).html('<i class="fa-solid fa-list"></i>');
+        $btn.prop('disabled', false).html(`${icon("list")}`);
     }
 }
 
@@ -8436,8 +8428,8 @@ function renderMemorySection() {
         const result = qianQianJieMemoryAccess.status();
         const ok = result.status === 'ready';
         $in('#sp-mem-qqj-status').show().html(ok
-            ? '<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> 千千结只读接口已就绪（生成时读取当前聊天的正式记忆）'
-            : `<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> ${escapeHtml(qianQianJieMemoryDiagnostic(result))}`);
+            ? `${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} 千千结只读接口已就绪（生成时读取当前聊天的正式记忆）`
+            : `${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(qianQianJieMemoryDiagnostic(result))}`);
         return;
     }
     $in('#sp-mem-qqj-status').hide();
@@ -8452,15 +8444,15 @@ function renderMemorySection() {
             try {
                 cov = api.getInjectedHistory()?.coverage;
             } catch {
-                $in('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 柏宝书读取状态失败，无法确认覆盖情况');
+                $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 柏宝书读取状态失败，无法确认覆盖情况`);
                 return;
             }
             let coverageMsg = '柏宝书已就绪';
             if (cov?.complete === false) coverageMsg += `（缺 ${cov.missingAiFloors?.length ?? '?'} 楼摘要）`;
             else coverageMsg += '（覆盖完整）';
-            $in('#sp-mem-bbb-status').html(`<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> ${escapeHtml(coverageMsg)}`);
+            $in('#sp-mem-bbb-status').html(`${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} ${escapeHtml(coverageMsg)}`);
         } else {
-            $in('#sp-mem-bbb-status').html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 检测不到柏宝书 API：请确认已安装并把柏宝书更新到最新版（旧版无读取接口）；点 / 线 / 面 / 间 生成时不会注入历史记忆');
+            $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 检测不到柏宝书 API：请确认已安装并把柏宝书更新到最新版（旧版无读取接口）；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
         }
         return;
     }
@@ -8478,17 +8470,17 @@ function renderMemorySection() {
         void renderDatabaseWorldbookSelector(identity, databaseUiRevision, ctx);
         $in('#sp-mem-internal').hide();
         $in('#sp-mem-bbb-status, #sp-mem-anima-status').hide();
-        $in('#sp-mem-database-status').show().html('<i class="fa-solid fa-circle-info"></i> 正在读取数据库纪要…');
+        $in('#sp-mem-database-status').show().html(`${icon("info-circle")} 正在读取数据库纪要…`);
         databaseMemoryAccess.result().then(result => {
             if (!databaseMemoryUiRequestIsCurrent(identity, databaseUiRevision)) return;
             const ok = result.status === 'ready';
             $in('#sp-mem-database-status').html(ok
-                ? `<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> ${escapeHtml(databaseMemoryDiagnostic(result))}`
-                : `<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> ${escapeHtml(databaseMemoryDiagnostic(result))}`);
+                ? `${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`
+                : `${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`);
         }).catch(error => {
             if (!databaseMemoryUiRequestIsCurrent(identity, databaseUiRevision)) return;
             const bookName = identity.selectedName || getDatabasePrimaryWorldbookName(ctx);
-            $in('#sp-mem-database-status').html(`<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> ${escapeHtml(databaseMemoryDiagnostic({ status: 'processing-failed', bookName, targetMode: identity.selectedName ? 'explicit' : 'primary', error }))}`);
+            $in('#sp-mem-database-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(databaseMemoryDiagnostic({ status: 'processing-failed', bookName, targetMode: identity.selectedName ? 'explicit' : 'primary', error }))}`);
         });
         return;
     }
@@ -8511,18 +8503,18 @@ async function renderAnimaStatus() {
     if (currentCharacterExcluded()) return;
     const th = globalThis.TavernHelper;
     if (!th || typeof th.getChatWorldbookName !== 'function' || typeof th.getWorldbook !== 'function') {
-        $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 检测不到酒馆助手(TavernHelper)：请确认已安装并启用「酒馆助手」与「Anima 记忆系统」；点 / 线 / 面 / 间 生成时不会注入历史记忆');
+        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 检测不到酒馆助手(TavernHelper)：请确认已安装并启用「酒馆助手」与「Anima 记忆系统」；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
         return;
     }
-    $st.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在读取 Anima 摘要…');
+    $st.html(`${icon("loader-2", "sp-icon-spin")} 正在读取 Anima 摘要…`);
     let wbName = null;
     try { wbName = await th.getChatWorldbookName('current'); } catch {
-        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> Anima 世界书读取失败，请重试。');
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} Anima 世界书读取失败，请重试。`);
         return;
     }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;   // await 期间用户切走了源或排除了当前卡
     if (!wbName) {
-        $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 当前聊天没有绑定世界书，读不到 Anima 摘要');
+        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 当前聊天没有绑定世界书，读不到 Anima 摘要`);
         return;
     }
     let count = 0;
@@ -8533,14 +8525,14 @@ async function renderAnimaStatus() {
             if (e?.extra?.createdBy === 'anima_summary' && Array.isArray(e.extra.history)) count += e.extra.history.length;
         }
     } catch {
-        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html('<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> Anima 世界书读取失败，请重试。');
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} Anima 世界书读取失败，请重试。`);
         return;
     }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;
     if (count > 0) {
-        $st.html(`<i class="fa-solid fa-circle-check" style="color:var(--cardhub-accent,#7c9)"></i> Anima 已就绪（世界书「${escapeHtml(wbName)}」读到 ${count} 段摘要）`);
+        $st.html(`${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} Anima 已就绪（世界书「${escapeHtml(wbName)}」读到 ${count} 段摘要）`);
     } else {
-        $st.html(`<i class="fa-solid fa-triangle-exclamation" style="color:#e0a54e"></i> 世界书「${escapeHtml(wbName)}」里没有 Anima 摘要（anima_summary）——请先让 Anima 跑出摘要`);
+        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 世界书「${escapeHtml(wbName)}」里没有 Anima 摘要（anima_summary）——请先让 Anima 跑出摘要`);
     }
 }
 
@@ -8569,11 +8561,11 @@ function refreshMemoryStatus(healthReport = null) {
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">标签致空</span><span class="sp-mem-stat-v sp-mem-warn">${r.strippedEmpty}</span></div>`);
     if (r.shortGroups > 0) rows.splice(5, 0,
         `<div class="sp-mem-stat"><span class="sp-mem-stat-k">楼层过短</span><span class="sp-mem-stat-v sp-mem-warn">${r.shortGroups}</span></div>`);
-    if (r.strippedEmpty > 0) rows.push(`<div class="sp-mem-alert">⚠ 有 ${r.strippedEmpty} 组净化后正文几乎为空，请重查「保留标签」设置（非模型问题，无需换模型）。</div>`);
-    if (r.legacyNeedsRebuild) rows.push('<div class="sp-mem-alert">⚠ 旧记忆章节可能遗漏隐藏楼，且旧章节范围无法核实；旧内容会继续注入，需手动确认后重构。</div>');
-    if (r.shortGroups > 0) rows.push(`<div class="sp-mem-alert">⚠ 有 ${r.shortGroups} 组楼层都短于摘要长度设置，未调用模型，也未计为已完成。</div>`);
-    if (r.paused) rows.push(`<div class="sp-mem-alert">⚠ 记忆系统已暂停：${escapeHtml(r.lastError || '连续失败')}。点补齐或重构以恢复。</div>`);
-    if (r.busy)   rows.push(`<div class="sp-mem-alert sp-mem-alert-info">🔄 记忆系统正在后台工作</div>`);
+    if (r.strippedEmpty > 0) rows.push(`<div class="sp-mem-alert">${icon('alert-triangle')} 有 ${r.strippedEmpty} 组净化后正文几乎为空，请重查「保留标签」设置（非模型问题，无需换模型）。</div>`);
+    if (r.legacyNeedsRebuild) rows.push(`<div class="sp-mem-alert">${icon('alert-triangle')} 旧记忆章节可能遗漏隐藏楼，且旧章节范围无法核实；旧内容会继续注入，需手动确认后重构。</div>`);
+    if (r.shortGroups > 0) rows.push(`<div class="sp-mem-alert">${icon('alert-triangle')} 有 ${r.shortGroups} 组楼层都短于摘要长度设置，未调用模型，也未计为已完成。</div>`);
+    if (r.paused) rows.push(`<div class="sp-mem-alert">${icon('alert-triangle')} 记忆系统已暂停：${escapeHtml(r.lastError || '连续失败')}。点补齐或重构以恢复。</div>`);
+    if (r.busy)   rows.push(`<div class="sp-mem-alert sp-mem-alert-info">${icon('refresh', 'sp-icon-spin')} 记忆系统正在后台工作</div>`);
     $in('#sp-mem-status').html(rows.join(''));
 }
 
@@ -8986,7 +8978,7 @@ async function renderWiList() {
                     </div>
                     <div class="sp-wi-card-body">
                         <div class="sp-wi-preview">${e.preview ? escapeHtml(e.preview) + '…' : '<span class="sp-wi-empty">（无内容）</span>'}</div>
-                        <button class="sp-wi-view-btn" type="button" title="查看全文" data-key="${escapeAttr(e.key)}"><i class="fa-regular fa-eye"></i></button>
+                        <button class="sp-wi-view-btn" type="button" title="查看全文" data-key="${escapeAttr(e.key)}">${icon("eye")}</button>
                     </div>
                 </div>`);
             }
@@ -9222,7 +9214,7 @@ function showWiEntryFull(entry) {
                     <div class="sp-wi-fullview-source">${escapeHtml(entry.source)}</div>
                     <div class="sp-wi-fullview-label">${escapeHtml(entry.label)}</div>
                 </div>
-                <button class="sp-icon-btn sp-wi-fullview-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                <button class="sp-icon-btn sp-wi-fullview-close" title="关闭">${icon("x")}</button>
             </div>
             <div class="sp-wi-fullview-body">${escapeHtml(entry.content || '').replace(/\n/g, '<br>')}</div>
         </div>
@@ -9235,14 +9227,16 @@ function showWiEntryFull(entry) {
 }
 
 function toggleKeyVisibility() {
-    const $el = $in('#sp-cfg-key'), $icon = $in('#sp-key-toggle i');
+    const $el = $in('#sp-cfg-key'), button = inEl('#sp-key-toggle');
     if ($el.attr('type') === 'password') {
         $el.attr('type', 'text').val($el.data('real') || $el.val());
-        $icon.removeClass('fa-eye').addClass('fa-eye-slash');
+        setIcon(button, 'eye-off');
     } else {
         const r = $el.val(); $el.data('real', r).attr('type', 'password').val(maskKey(r));
-        $icon.removeClass('fa-eye-slash').addClass('fa-eye');
+        setIcon(button, 'eye');
     }
+    const label = $el.attr('type') === 'password' ? '显示密钥' : '隐藏密钥';
+    $(button).attr({ title: label, 'aria-label': label });
 }
 
 // ─── API 存储快切：UI 事件 + 下拉渲染 ────────────────────────────────────────
@@ -9326,7 +9320,7 @@ function renderApiPresetList() {
     const list = loadApiPresets();
     const activeId = getSettings().apiPresetActiveId || '';
     $list.html(list.length
-        ? list.map(p => `<div class="sp-preset-item-row" data-id="${escapeAttr(p.id)}"><button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button><button type="button" class="sp-preset-rename" data-id="${escapeAttr(p.id)}" title="仅修改这条预设的名称"><i class="fa-solid fa-pen"></i></button></div>`).join('')
+        ? list.map(p => `<div class="sp-preset-item-row" data-id="${escapeAttr(p.id)}"><button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button><button type="button" class="sp-preset-rename" data-id="${escapeAttr(p.id)}" title="仅修改这条预设的名称">${icon("pencil")}</button></div>`).join('')
         : `<div class="sp-preset-empty">暂无预设，填好 API 后点右侧＋存一个</div>`);
     $in('#sp-preset-del').prop('disabled', !activeId);
     syncPresetLabel();
@@ -9434,7 +9428,7 @@ function bindApiPresetEvents() {
         const $row = $(this).closest('.sp-preset-item-row');
         $row.addClass('sp-preset-item-row-edit').html(
             `<input type="text" class="sp-input sp-preset-rename-input" value="${escapeAttr(p.name)}" maxlength="40" spellcheck="false">` +
-            `<button type="button" class="sp-preset-rename-ok" title="保存预设名称"><i class="fa-solid fa-check"></i></button>`
+            `<button type="button" class="sp-preset-rename-ok" title="保存预设名称">${icon("check")}</button>`
         );
         $row.find('.sp-preset-rename-input').trigger('focus').trigger('select');
         showPresetHint(`编辑「${p.name}」名称；当前 API 输入不会改变`);
@@ -9473,20 +9467,20 @@ function bindApiPresetEvents() {
     $in('#sp-preset-del').on('click', function () {
         const id = getSettings().apiPresetActiveId;
         if (!id) return;
-        const $btn = $(this), $i = $btn.find('i');
+        const $btn = $(this);
         if (!delArmed) {
             delArmed = true;
-            $i.attr('class', 'fa-solid fa-check');
+            setIcon(this, 'check');
             $btn.css('color', '#e06c6c').attr('title', '再点一次确认删除');
             showPresetHint('再点一次垃圾桶确认删除');
             delTimer = setTimeout(() => {
-                delArmed = false; $i.attr('class', 'fa-solid fa-trash');
+                delArmed = false; setIcon(this, 'trash');
                 $btn.css('color', '').attr('title', '删除当前选中的预设');
             }, 3000);
             return;
         }
         clearTimeout(delTimer); delArmed = false;
-        $i.attr('class', 'fa-solid fa-trash'); $btn.css('color', '').attr('title', '删除当前选中的预设');
+        setIcon(this, 'trash'); $btn.css('color', '').attr('title', '删除当前选中的预设');
         const p = loadApiPresets().find(x => x.id === id);
         if (getSettings().utilityPresetId === id) getSettings().utilityPresetId = '';   // 删掉的正是机械预设 → 退回不分流
         deleteApiPreset(id);
@@ -9575,9 +9569,9 @@ function applyTheme(theme) {
 // ST themes still get a readable panel.
 function themeToggleIcon() {
     const mode = getSettings().themeMode || 'auto';
-    if (mode === 'day')   return 'fa-sun';
-    if (mode === 'night') return 'fa-moon';
-    return 'fa-circle-half-stroke';   // auto
+    if (mode === 'day')   return 'sun';
+    if (mode === 'night') return 'moon';
+    return 'circle-half-2';   // auto
 }
 
 function themeToggleTitle() {
@@ -9596,7 +9590,7 @@ function cycleThemeMode() {
     // Update this button's icon + tooltip in place
     const $btn = $in('.sp-theme-toggle-btn');
     $btn.attr('title', themeToggleTitle());
-    $btn.find('i').attr('class', `fa-solid ${themeToggleIcon()}`);
+    setIcon($btn[0], themeToggleIcon());
 }
 
 // ─── Drag (desktop only) ──────────────────────────────────────────────────────
@@ -9883,7 +9877,7 @@ function showToast(msg, onClick, isError = false) {
         return;
     }
     const $t = $(`<div class="sp-toast${isFailure ? ' sp-toast-error' : isInfo ? ' sp-toast-info' : ''}">
-        <i class="fa-solid ${isFailure ? 'fa-circle-exclamation' : isInfo ? 'fa-circle-info' : 'fa-calendar-check'}"></i>
+        ${icon(isFailure ? 'alert-circle' : isInfo ? 'info-circle' : 'calendar-check')}
         <span>${escapeHtml(msg)}</span>
     </div>`);
     $('#sp-toast-wrap').append($t);

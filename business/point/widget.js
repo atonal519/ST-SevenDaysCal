@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 // 间→点 widget 应用：按人物 scope 保持 canonical raw，并沿用 Future 追加/就地替换规则。
 import { isCompletePointEvent } from './parse.js';
 
@@ -79,7 +80,7 @@ export function createPointWidgetActions(env) {
             if (env.shouldShowPanel()) env.setBody(html);
         }
         if (owner.view === 'user') env.syncLatestScheduleBlock();
-        button?.prop?.('disabled', true).html(`<i class="fa-solid fa-check"></i> ${editIndex != null ? `已改 ${ownerLabel(owner)} · 第 ${editIndex} 条` : `已加入 ${ownerLabel(owner)} · 未来`}`);
+        button?.prop?.('disabled', true).html(`${icon("check")} ${editIndex != null ? `已改 ${ownerLabel(owner)} · 第 ${editIndex} 条` : `已加入 ${ownerLabel(owner)} · 未来`}`);
         env.showToast(editIndex != null
             ? `已替换${ownerLabel(owner)}的第 ${editIndex} 条点`
             : `已加到${ownerLabel(owner)}的点·未来列`);

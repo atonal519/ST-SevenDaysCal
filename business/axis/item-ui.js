@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 export function createAxisItemUi(env = {}) {
     const rowHtml = (it, ctx) => {
         const meta = env.typeMeta(it.type);
@@ -13,13 +14,13 @@ export function createAxisItemUi(env = {}) {
         const checkbox = batchOn ? `<input type="checkbox" class="sp-batch-check" ${checked ? 'checked' : ''} aria-label="选择此条">` : '';
         return `<div class="sp-alm-item sp-alm-type-${meta.cls}${it.pin ? ' sp-alm-pinned' : ''}${batchOn ? ' sp-batch-row' : ''}${checked ? ' sp-batch-checked' : ''}" data-id="${it.id}">
         <div class="sp-alm-top">
-            ${checkbox}<i class="fa-solid ${meta.icon} sp-alm-date-icon"></i>
+            ${checkbox}${icon(meta.icon, "sp-alm-date-icon")}
             <span class="sp-alm-date-txt">${env.escapeHtml(env.dateLabel(it, ctx?.cal))}</span>
             <span class="sp-alm-wd">${wd}</span>${spanTag}
             ${batchOn ? '' : `<span class="sp-alm-acts">
-                <button class="sp-icon-btn sp-alm-pin" data-id="${it.id}" title="${it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留'}"><i class="fa-solid ${it.pin ? 'fa-lock' : 'fa-lock-open'}"></i></button>
-                <button class="sp-icon-btn sp-alm-edit" data-id="${it.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
-                <button class="sp-icon-btn sp-alm-del" data-id="${it.id}" title="删除"><i class="fa-solid fa-trash"></i></button>
+                <button class="sp-icon-btn sp-alm-pin" data-id="${it.id}" title="${it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留'}">${icon(it.pin ? 'lock' : 'lock-open')}</button>
+                <button class="sp-icon-btn sp-alm-edit" data-id="${it.id}" title="编辑">${icon("pencil")}</button>
+                <button class="sp-icon-btn sp-alm-del" data-id="${it.id}" title="删除">${icon("trash")}</button>
             </span>`}
         </div>
         <div class="sp-alm-meta"><span class="sp-alm-name">${env.escapeHtml(it.name)}</span><span class="sp-alm-type-tag">${meta.label}</span>${srcTag}${activeTag}</div>
@@ -27,7 +28,7 @@ export function createAxisItemUi(env = {}) {
     </div>`;
     };
     const emptyHtml = () => `<div class="sp-empty sp-alm-empty">
-        <span class="sp-alm-empty-glyph"><i class="fa-regular fa-calendar"></i></span>
+        <span class="sp-alm-empty-glyph">${icon("calendar")}</span>
         <p>还没有历法数据</p>
         <p class="sp-alm-empty-hint">点「生成节日」让 AI 按当前世界观逐月考虑并生成有依据的日期，或「添加」手动录入生日、纪念日等</p>
         <div class="sp-alm-empty-actions"><button class="sp-gen-btn sp-alm-gen">生成节日</button><button class="sp-alm-add-link sp-alm-add">手动添加</button></div>

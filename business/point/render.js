@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 // ─── 点（日程）域 · 渲染层 ────────────────────────────────────────────────────
 // 日期锚、星期与共享注入按钮由 bindPointRender(env) 提供，避免渲染层反向依赖 index.js。
 import { parseCalendar, buildPointInjectText } from './parse.js';
@@ -16,11 +17,11 @@ const adultBlurEnabled = () => env?.settings?.().adultBlurEnabled !== false;
 const adultToggle = adult => adult ? '<span class="sp-point-adult-badge">18+</span>' : '';
 const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
 
-// 点类型元数据（icon 只用 FA 免费版实心/半透明图标；label 中文；cls 对应样式）
+// 点类型元数据：icon 使用共享 Tabler Outline 图名，cls 保留业务类型配色。
 export const TYPE_META = {
-    main  : { icon: 'fa-bolt',      label: '明线', cls: 'sp-type-world'     },
-    hidden: { icon: 'fa-eye-slash', label: '暗线', cls: 'sp-type-major'     },
-    bond  : { icon: 'fa-heart',     label: '红线', cls: 'sp-type-character' },
+    main  : { icon: 'bolt',      label: '明线', cls: 'sp-type-world'     },
+    hidden: { icon: 'eye-off', label: '暗线', cls: 'sp-type-major'     },
+    bond  : { icon: 'heart',     label: '红线', cls: 'sp-type-character' },
 };
 
 export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想新增或调整点？去「间」说明人物与目标，例如“把下周的约定整理成可应用到点的方案”：<button type="button" class="sp-jump-link">去间提出要求 →</button></div>`;
@@ -57,22 +58,22 @@ function renderEvent(ev, dayKey = null, evIdx = null, weather = '', temp = '', d
     const inject = env.makeInjectBtn(buildPointInjectText(ev, weather, temp, dateLabel, owner));
     const iid = inject.match(/data-iid="([^"]+)"/)?.[1] || '';
     const actions = dayKey !== null ? renderActionMenu('point', [
-        { action: 'point-edit', icon: 'fa-pen', label: '编辑', title: '编辑这个点' },
-        { action: 'point-pin', icon: ev.pin ? 'fa-lock-open' : 'fa-lock', label: ev.pin ? '解锁' : '锁定', title: ev.pin ? '解锁这个点' : '锁定这个点' },
-        { action: 'point-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
-        { action: 'point-delete', icon: 'fa-trash', label: '删除', title: '删除这个点' },
+        { action: 'point-edit', icon: 'pencil', label: '编辑', title: '编辑这个点' },
+        { action: 'point-pin', icon: ev.pin ? 'lock-open' : 'lock', label: ev.pin ? '解锁' : '锁定', title: ev.pin ? '解锁这个点' : '锁定这个点' },
+        { action: 'point-inject', icon: 'login-2', label: '注入', title: '注入到输入框' },
+        { action: 'point-delete', icon: 'trash', label: '删除', title: '删除这个点' },
     ], escapeHtml, escapeAttr).replace('data-menu-id="point"', 'data-menu-id="point" data-day="' + escapeAttr(String(dayKey)) + '" data-ev="' + evIdx + '" data-iid="' + iid + '"') : inject;
     return `<div class="sp-event ${meta.cls}${ev.pin ? ' sp-event-pinned' : ''}">
         <div class="sp-event-head">
-            <span class="sp-type-badge"><i class="fa-solid ${meta.icon}"></i>${escapeHtml(meta.label)}</span>${adultToggle(adult)}
-            ${ev.time ? `<span class="sp-event-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(ev.time)}</span>` : ''}
+            <span class="sp-type-badge">${icon(meta.icon)}${escapeHtml(meta.label)}</span>${adultToggle(adult)}
+            ${ev.time ? `<span class="sp-event-time">${icon("clock")} ${escapeHtml(ev.time)}</span>` : ''}
         <span class="sp-beat-actions">${actions}</span>
         </div>
         ${sensitive(`<div class="sp-event-title">${escapeHtml(ev.title)}</div>`, adult)}
         ${ev.desc ? sensitive(`<p class="sp-event-desc">${escapeHtml(ev.desc)}</p>`, adult) : ''}
         <div class="sp-event-meta">
-            ${ev.location  ? `<span class="sp-event-loc"><i class="fa-solid fa-location-dot"></i>${escapeHtml(ev.location)}</span>` : ''}
-            ${ev.npcAction ? sensitive(`<span class="sp-event-npc"><i class="fa-solid fa-link"></i>${escapeHtml(ev.npcAction)}</span>`, adult) : ''}
+            ${ev.location  ? `<span class="sp-event-loc">${icon("map-pin")}${escapeHtml(ev.location)}</span>` : ''}
+            ${ev.npcAction ? sensitive(`<span class="sp-event-npc">${icon("link")}${escapeHtml(ev.npcAction)}</span>`, adult) : ''}
         </div>
     </div>`;
 }
@@ -89,16 +90,16 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
     const refreshBusy = axisState._almSyncingPoint ? ' sp-refresh-busy' : '';
     // char 视角头部多一个 📌：把当前 char 固定/取消固定到 TA▾ 抽屉（查看与固定解耦，此为唯一固定动作）。
     const isPinned = perspective === 'char' && store.isPinnedChar(String(userName || '').trim());
-    // 固定态只用颜色区分；免费版 Font Awesome 没有可用的 regular thumbtack，图标恒用 solid。
+    // 固定态保留同一图钉形状，以颜色区分。
     const pinBtn = perspective === 'char'
-        ? `<button class="sp-panel-refresh sp-point-pin-char${isPinned ? ' sp-pinned' : ''}" data-name="${escapeAttr(String(userName || '').trim())}" title="${isPinned ? '已固定·点击取消固定' : '固定 TA 到 TA▾ 抽屉'}"><i class="fa-solid fa-thumbtack"></i></button>`
+        ? `<button class="sp-panel-refresh sp-point-pin-char${isPinned ? ' sp-pinned' : ''}" data-name="${escapeAttr(String(userName || '').trim())}" title="${isPinned ? '已固定·点击取消固定' : '固定 TA 到 TA▾ 抽屉'}">${icon("pin")}</button>`
         : '';
     const header = `<div class="sp-schedule-header">
         <span class="${chipCls}">${escapeHtml(userName)}</span>
         <span class="sp-schedule-label">的点</span>
         ${pinBtn}
-        <button class="sp-panel-refresh sp-refresh-schedule${refreshBusy}" title="${axisState._almSyncingPoint ? '点正在同步中，稍候…' : '重新生成点'}"><i class="fa-solid fa-rotate-right"></i></button>
-        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单"><i class="fa-solid fa-utensils"></i></button>
+        <button class="sp-panel-refresh sp-refresh-schedule${refreshBusy}" title="${axisState._almSyncingPoint ? '点正在同步中，稍候…' : '重新生成点'}">${icon("refresh")}</button>
+        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button>
     </div>` + SP_JUMP_HINT_POINT;
 
     // Parse failed (AI leaked prompt / malformed output) — still render header
@@ -144,7 +145,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
     );
 
     const debug = days.length < 3 ? `
-        <details class="sp-debug"><summary>⚠ 仅解析到 ${days.length} 天</summary>
+        <details class="sp-debug"><summary>${icon('alert-triangle')} 仅解析到 ${days.length} 天</summary>
         <pre class="sp-debug-raw">${escapeHtml(raw)}</pre></details>` : '';
 
     return `${header}<div class="sp-tab-bar" data-total="${totalTabs}">${tabs.join('')}</div>

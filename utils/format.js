@@ -1,4 +1,5 @@
 // utils/format.js — 格式化、图标与脱敏纯函数。
+import { icon } from './icons.js';
 import { escapeHtml } from './dom.js';
 
 
@@ -7,16 +8,16 @@ export function maskKey(k) { return k.length <= 8 ? '•'.repeat(k.length) : '�
 export function weatherGlyph(weather) {
     const w = String(weather || '');
     if (!w) return '';
-    if (/雷/.test(w))                       return '⛈️';
-    if (/雨夹雪/.test(w))                    return '🌨️';
-    if (/雪/.test(w))                        return '❄️';
-    if (/雨/.test(w))                        return '🌧️';
-    if (/雾|霾|沙尘/.test(w))                return '🌫️';
-    if (/阴/.test(w))                        return '☁️';
-    if (/多云|少云/.test(w))                 return '⛅';
-    if (/晴/.test(w))                        return '☀️';
-    if (/风/.test(w))                        return '💨';
-    return '🌤️';
+    if (/雷/.test(w))                       return icon('cloud-storm');
+    if (/雨夹雪/.test(w))                    return icon('cloud-snow');
+    if (/雪/.test(w))                        return icon('snowflake');
+    if (/雨/.test(w))                        return icon('cloud-rain');
+    if (/雾|霾|沙尘/.test(w))                return icon('mist');
+    if (/阴/.test(w))                        return icon('cloud');
+    if (/多云|少云/.test(w))                 return icon('cloud');
+    if (/晴/.test(w))                        return icon('sun');
+    if (/风/.test(w))                        return icon('wind');
+    return icon('sun-low');
 }
 
 export function weatherChipHtml(weather, temp) {
@@ -24,7 +25,7 @@ export function weatherChipHtml(weather, temp) {
     const tp = String(temp || '').trim();
     if (!w && !tp) return '';
     return `<div class="sp-day-weather">`
-        + `<span class="sp-day-weather-icon">${weatherGlyph(w) || '🌤️'}</span>`
+        + `<span class="sp-day-weather-icon">${weatherGlyph(w) || icon('sun-low')}</span>`
         + (w  ? `<span class="sp-day-weather-txt">${escapeHtml(w)}</span>`   : '')
         + (tp ? `<span class="sp-day-weather-temp">${escapeHtml(tp)}</span>` : '')
         + `</div>`;

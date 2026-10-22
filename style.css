@@ -1,3 +1,8 @@
+/* Tabler Outline keeps one stroke family in Shadow roots and host integration slots. */
+.sp-icon { display: inline-block; width: 1em; height: 1em; flex-shrink: 0; vertical-align: -0.125em; }
+.sp-icon-spin { animation: sp-icon-spin 1s linear infinite; }
+@keyframes sp-icon-spin { to { transform: rotate(360deg); } }
+
 /*
  * 本文件同时被 light DOM（楼内块 .sp-inline-box 系列）与 shadow DOM（主窗口）加载：
  * 全局注入一份给楼内块，injectModal() 又经 <link rel="stylesheet"> 引一份进 shadow
@@ -524,7 +529,7 @@ q::after {
     padding: 2px 0;
     line-height: 1.5;
 }
-.sp-intro-key > i {
+.sp-intro-key > .sp-icon {
     flex: 0 0 1.4em;
     margin-top: 0.18em;
     text-align: center;
@@ -934,7 +939,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color     : #ffb74d;
     border    : 1px solid rgba(255,183,77,0.25);
 }
-.sp-api-notice i { margin-top: 1px; flex-shrink: 0; }
+.sp-api-notice .sp-icon { margin-top: 1px; flex-shrink: 0; }
 
 /* ─── Settings overlay (全覆盖设置页) ──────────────────────────────────────── */
 .sp-settings-overlay {
@@ -969,7 +974,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items: center;
     gap       : 7px;
 }
-.sp-settings-title i { color: var(--sp-subtle); font-size: var(--sp-fs-85); }
+.sp-settings-title .sp-icon { color: var(--sp-subtle); font-size: var(--sp-fs-85); }
 
 .sp-settings-body {
     flex           : 1;
@@ -1021,7 +1026,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-settings-section-title::-webkit-details-marker { display: none; }
 .sp-settings-section-title::before {
-    content    : '▶';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     font-size  : var(--sp-fs-58);
     line-height: 1;
     color      : var(--sp-subtle);
@@ -1101,7 +1110,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-settings-layer-title::-webkit-details-marker { display: none; }
 .sp-settings-layer-title::before {
-    content    : '▶';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     font-size  : var(--sp-fs-58);
     line-height: 1;
     color      : var(--sp-subtle);
@@ -1246,7 +1259,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 #sp-prompts-section .sp-settings-subsection > summary::-webkit-details-marker { display: none; }
 #sp-prompts-section .sp-settings-subsection > summary::before {
-    content: '▶';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     flex: 0 0 var(--sp-settings-disclosure-width);
     width: var(--sp-settings-disclosure-width);
     height: var(--sp-settings-disclosure-width);
@@ -1365,7 +1382,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-wi-exclude-drawer-head::-webkit-details-marker { display: none; }
 .sp-wi-exclude-drawer-head::before {
-    content    : '›';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     font-size  : var(--sp-fs-90);
     color      : var(--sp-subtle);
     transition : transform 0.15s;
@@ -1470,7 +1491,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-wi-source-label::-webkit-details-marker { display: none; }
 /* Chevron affordance — flipped 90° when open */
 .sp-wi-source-label::before {
-    content    : '›';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     display    : inline-block;
     font-size  : var(--sp-fs-90);
     color      : var(--sp-subtle);
@@ -2115,9 +2140,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-align     : center;
     flex           : 1;
 }
-.sp-error i { font-size: var(--sp-fs-180); opacity: 0.8; }
-.sp-empty .sp-open-daily-menu i,
-.sp-error .sp-open-daily-menu i { font-size: var(--sp-fs-80); opacity: 1; }
+.sp-error .sp-icon { font-size: var(--sp-fs-180); opacity: 0.8; }
+.sp-empty .sp-open-daily-menu .sp-icon,
+.sp-error .sp-open-daily-menu .sp-icon { font-size: var(--sp-fs-80); opacity: 1; }
 
 .sp-empty {
     display        : flex;
@@ -2129,7 +2154,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color          : var(--sp-subtle);
     flex           : 1;
 }
-.sp-empty i { font-size: var(--sp-fs-200); opacity: 0.35; }
+.sp-empty .sp-icon { font-size: var(--sp-fs-200); opacity: 0.35; }
 .sp-empty p { font-size: var(--sp-fs-85); margin: 0; }
 
 .sp-daily-menu-card {
@@ -2349,10 +2374,9 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-fab-btn.sp-btn-generating,
 .sp-fab-btn.sp-fab-busy,
 .sp-fab-btn.sp-btn-done { opacity: 1; }
-/* 内联笔图标：跟按钮字色走（fill=currentColor），随字号缩放。 */
+/* 内联图标继承按钮字色，随现有字号缩放；所有挂载层共用。 */
 .sp-pen-icon { width: 1em; height: 1em; display: block; }
-/* 魔杖菜单入口保持字体图标（fa-calendar-days）：菜单行是 flex + align-items:baseline
-   （ST style.css:1268），换成内联 SVG 会因基线=盒底被顶歪、且行盒上下留白不等。 */
+#sp_open_wand .sp-menu-icon { display: inline-flex; align-items: center; justify-content: center; align-self: center; }
 
 /* ─── Generating state — neon bar animation ──────────────────────────────────── */
 @keyframes sp-neon-bar {
@@ -2465,7 +2489,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items: center;
     gap       : 7px;
 }
-.sp-char-picker-hint i { color: var(--sp-primary); }
+.sp-char-picker-hint .sp-icon { color: var(--sp-primary); }
 .sp-char-picker-row {
     display: flex;
     gap    : 8px;
@@ -3342,7 +3366,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-diagnostics-preview-title::-webkit-details-marker { display: none; }
 .sp-diagnostics-preview-title::before {
-    content        : '▶';
+    content: '';
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     font-size      : var(--sp-fs-60);
     transition     : transform 0.15s;
     display        : inline-block;
@@ -3884,7 +3912,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-dialog-input:focus { border-color: var(--sp-primary); }
 .sp-dialog-input-error { min-height: 1em; color: var(--sp-on-surface); font-size: var(--sp-fs-72); line-height: 1.4; }
-.sp-dialog-input-error i { color: var(--sp-subtle); margin-right: 3px; }
+.sp-dialog-input-error .sp-icon { color: var(--sp-subtle); margin-right: 3px; }
 .sp-dialog-multi-list {
     display              : grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3972,10 +4000,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     text-align   : left;
     cursor       : pointer;
 }
-.sp-dialog-async-list .sp-dialog-single-option i { flex: 0 0 auto; margin-top: 3px; color: var(--sp-subtle); }
+.sp-dialog-async-list .sp-dialog-single-option .sp-icon { flex: 0 0 auto; margin-top: 3px; color: var(--sp-subtle); }
 .sp-dialog-async-list .sp-dialog-single-option span { min-width: 0; overflow-wrap: anywhere; }
 .sp-dialog-async-list .sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
-.sp-dialog-async-list .sp-dialog-single-selected i { color: var(--sp-primary); }
+.sp-dialog-async-list .sp-dialog-single-selected .sp-icon { color: var(--sp-primary); }
 .sp-dialog-async-loading,
 .sp-dialog-async-empty { color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.5; }
 @media (max-width: 420px) {
@@ -4231,7 +4259,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color     : var(--sp-subtle);
     margin-top: 2px;
 }
-.sp-space-widget-meta i { margin-right: 3px; }
+.sp-space-widget-meta .sp-icon { margin-right: 3px; }
 .sp-space-widget-dynamic {
     font-size  : var(--sp-fs-74);
     color      : var(--sp-subtle);
@@ -5385,7 +5413,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font-size    : var(--sp-fs-76);
     line-height  : 1.45;
 }
-.sp-lines-dashed-status i { margin-right: 4px; }
+.sp-lines-dashed-status .sp-icon { margin-right: 4px; }
 .sp-lines-dashed-empty { min-height: 180px; }
 
 /* 楼内子块：折进 .sp-lines-inline 的 body（与线合并成一个楼内窗口）。虚线上边框呼应「虚线」语义，
@@ -5440,7 +5468,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font-style: italic;
     opacity   : 0.75;
 }
-.sp-dashed-inline-empty i { margin-right: 4px; }
+.sp-dashed-inline-empty .sp-icon { margin-right: 4px; }
 
 /* ═══ 历（日历）════════════════════════════════════════════════════════════════
    四类日期各一色（固定 hex，与 .sp-type-* 同思路，切主题不需重渲）。--alm-c 由类型类
@@ -5534,9 +5562,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     white-space  : nowrap;
     cursor       : pointer;
 }
-.sp-action-menu-item i { width: 16px; flex: 0 0 16px; text-align: center; color: var(--sp-subtle); }
+.sp-action-menu-item .sp-icon { width: 16px; flex: 0 0 16px; text-align: center; color: var(--sp-subtle); }
 .sp-action-menu-item:hover { background: var(--sp-hover-bg); color: var(--sp-primary); }
-.sp-action-menu-item:hover i { color: var(--sp-primary); }
+.sp-action-menu-item:hover .sp-icon { color: var(--sp-primary); }
 
 @container sp-almanac (max-width: 380px) {
     .sp-alm-wide-tools { display: none; }
@@ -5914,7 +5942,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     transition : color 0.12s;
 }
 .sp-ledger-archive-head:hover { color: var(--sp-on-surface); }
-.sp-ledger-archive-head i { font-size: var(--sp-fs-68); width: 10px; text-align: center; }
+.sp-ledger-archive-head .sp-icon { font-size: var(--sp-fs-68); width: 10px; text-align: center; }
 .sp-ledger-archive-list { margin-top: 6px; }
 /* 归档条整体压暗，一眼区分于活跃条。 */
 .sp-ledger-archived { opacity: 0.62; }
@@ -5986,7 +6014,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
 /* ── 空态 ── */
 .sp-alm-empty { gap: 8px; padding: 30px 20px; }
-.sp-alm-empty-glyph i { font-size: var(--sp-fs-200); opacity: 0.35; }
+.sp-alm-empty-glyph .sp-icon { font-size: var(--sp-fs-200); opacity: 0.35; }
 .sp-alm-empty-hint    { font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: 1.6; max-width: 260px; }
 .sp-alm-empty-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .sp-alm-add-link {
@@ -6195,11 +6223,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-manager-month-actions { display: inline-flex; flex: 0 0 auto; align-items: center; align-self: flex-end; min-height: 32px; margin-left: auto; gap: 0; }
 .sp-alm-manager-month-actions .sp-icon-btn { width: 23px; height: 23px; font-size: var(--sp-fs-70); }
 .sp-alm-manager-error { color: var(--sp-on-surface); font-size: var(--sp-fs-72); line-height: 1.4; }
-.sp-alm-manager-error i { color: var(--sp-subtle); margin-right: 3px; }
+.sp-alm-manager-error .sp-icon { color: var(--sp-subtle); margin-right: 3px; }
 .sp-alm-manager-template-head { width: 100%; border: 0; background: transparent; color: var(--sp-on-surface); cursor: pointer; text-align: left; }
 .sp-alm-manager-template-head:hover { background: var(--sp-hover-bg); }
 .sp-alm-manager-template-head span { flex: 1; font-size: var(--sp-fs-80); font-weight: 600; }
-.sp-alm-manager-template-head > i { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; }
+.sp-alm-manager-template-head > .sp-icon { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; }
 .sp-alm-manager-template-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--sp-divider); }
 .sp-alm-manager-template-save-current, .sp-alm-manager-add-month {
     width        : 100%;
@@ -6217,8 +6245,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     cursor       : pointer;
 }
 .sp-alm-manager-template-save-current:hover, .sp-alm-manager-add-month:hover { border-color: var(--sp-primary); background: var(--sp-hover-bg); color: var(--sp-primary); }
-.sp-alm-manager-template-save-current i, .sp-alm-manager-add-month i { width: 16px; text-align: center; color: var(--sp-subtle); }
-.sp-alm-manager-template-save-current:hover i, .sp-alm-manager-add-month:hover i { color: var(--sp-primary); }
+.sp-alm-manager-template-save-current .sp-icon, .sp-alm-manager-add-month .sp-icon { width: 16px; text-align: center; color: var(--sp-subtle); }
+.sp-alm-manager-template-save-current:hover .sp-icon, .sp-alm-manager-add-month:hover .sp-icon { color: var(--sp-primary); }
 .sp-alm-manager-template-list { display: flex; flex-direction: column; gap: 6px; }
 .sp-alm-manager-template-entry { overflow: hidden; border: 1px solid var(--sp-divider); border-radius: 8px; background: var(--sp-sheet-bg); }
 .sp-alm-manager-template-entry.sp-alm-manager-template-current { border-color: var(--sp-primary); background: var(--sp-hover-bg); }
@@ -6246,7 +6274,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-manager-bind-chip-remove:hover, .sp-alm-manager-bind-chip-current { border-color: var(--sp-primary); }
 .sp-alm-manager-bind-chip-remove span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.sp-alm-manager-bind-chip-remove i { flex-shrink: 0; color: var(--sp-subtle); }
+.sp-alm-manager-bind-chip-remove .sp-icon { flex-shrink: 0; color: var(--sp-subtle); }
 .sp-alm-manager-bind-search { width: 100%; box-sizing: border-box; font-size: var(--sp-fs-82); }
 .sp-alm-manager-bind-results { display: flex; flex-direction: column; gap: 3px; max-height: 260px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .sp-alm-manager-bind-results::-webkit-scrollbar { width: 4px; }
@@ -6267,11 +6295,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     cursor       : pointer;
 }
 .sp-alm-manager-bind-option:hover { border-color: var(--sp-primary); background: var(--sp-hover-bg); }
-.sp-alm-manager-bind-option i { width: 16px; flex: 0 0 16px; text-align: center; color: var(--sp-subtle); }
+.sp-alm-manager-bind-option .sp-icon { width: 16px; flex: 0 0 16px; text-align: center; color: var(--sp-subtle); }
 .sp-alm-manager-bind-option-label { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 4px; }
 .sp-alm-manager-bind-option-name { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .sp-alm-manager-bind-option-hint { flex: 0 0 auto; color: var(--sp-subtle); font-size: var(--sp-fs-68); font-weight: 400; white-space: nowrap; }
-.sp-alm-manager-bind-option-current > i, .sp-alm-manager-bind-option-current .sp-alm-manager-bind-option-name { color: var(--sp-primary); }
+.sp-alm-manager-bind-option-current > .sp-icon, .sp-alm-manager-bind-option-current .sp-alm-manager-bind-option-name { color: var(--sp-primary); }
 .sp-alm-manager-bind-option:disabled, .sp-alm-manager-bind-chip-remove:disabled { cursor: default; opacity: 0.55; }
 .sp-alm-manager-bind-empty { color: var(--sp-subtle); font-size: var(--sp-fs-74); padding: 5px 2px; }
 .sp-alm-manager-empty-templates { padding: 6px 2px; color: var(--sp-subtle); font-size: var(--sp-fs-72); font-style: italic; }
@@ -6600,7 +6628,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-sch-drawer-desc { font-size: var(--sp-fs-72); opacity: 0.82; line-height: 1.5; overflow-wrap: anywhere; }
 .sp-sch-drawer-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: var(--sp-fs-66); opacity: 0.7; }
 .sp-sch-drawer-loc, .sp-sch-drawer-npc { display: inline-flex; align-items: center; gap: 3px; overflow-wrap: anywhere; }
-.sp-sch-drawer-loc i, .sp-sch-drawer-npc i { opacity: 0.7; }
+.sp-sch-drawer-loc .sp-icon, .sp-sch-drawer-npc .sp-icon { opacity: 0.7; }
 /* 楼内注入/删除按钮：移动端无 hover，默认淡显（对齐线块 0.55 逻辑）；删除 hover 转红 */
 .sp-sch-drawer-item .sp-inject-btn { opacity: 0.55; color: inherit; margin-left: 0; }
 .sp-sch-drawer-item:hover .sp-inject-btn,

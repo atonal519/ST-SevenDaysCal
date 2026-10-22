@@ -49,10 +49,10 @@ function saveAlmanacItemsConfirmed(items, options = {}) { return writeStoreConfi
 
 function almTypeMeta(type) {
     switch (type) {
-        case 'festival':    return { label: '节日',   cls: 'festival',    icon: 'fa-champagne-glasses' };
-        case 'birthday':    return { label: '生日',   cls: 'birthday',    icon: 'fa-cake-candles' };
-        case 'anniversary': return { label: '纪念日', cls: 'anniversary', icon: 'fa-heart' };
-        default:            return { label: '自定义', cls: 'custom',      icon: 'fa-star' };
+        case 'festival':    return { label: '节日',   cls: 'festival',    icon: 'glass' };
+        case 'birthday':    return { label: '生日',   cls: 'birthday',    icon: 'cake' };
+        case 'anniversary': return { label: '纪念日', cls: 'anniversary', icon: 'heart' };
+        default:            return { label: '自定义', cls: 'custom',      icon: 'star' };
     }
 }
 

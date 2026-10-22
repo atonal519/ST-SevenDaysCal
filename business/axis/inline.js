@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 // 轴楼内只读渲染：不读取宿主 DOM/store，所有当前/历史数据与历法均由宿主注入。
 export function createAxisInlineRenderer(env = {}) {
     const buildAlmanacBlock = (itemsArg = null, anchorArg = null, calendarOverride = undefined, weekdayRefOverride = undefined) => {
@@ -43,7 +44,7 @@ export function createAxisInlineRenderer(env = {}) {
         const src = Array.isArray(itemsArg) ? itemsArg : env.loadItems?.() || [];
         const day = src.filter(it => env.itemCoversDoy(it, doy, cal)).sort((a, b) => a.month - b.month || a.day - b.day);
         if (!day.length) return `${head}<div class="sp-alm-sday-empty">这天没有安排</div>`;
-        const rows = day.map(it => { const meta = env.typeMeta(it.type); const days = env.clamp(it.days, 1, env.yearLength(cal), 1); const span = days > 1 ? `<span class="sp-alm-drawer-span">共${days}天</span>` : ''; return `<div class="sp-alm-drawer-item"><i class="fa-solid ${meta.icon} sp-alm-drawer-icon sp-alm-type-${meta.cls}"></i><span class="sp-alm-drawer-name">${env.escapeHtml(it.name)}</span><span class="sp-alm-drawer-type">${meta.label}</span>${span}${it.note ? `<span class="sp-alm-drawer-note">${env.escapeHtml(env.cleanText(it.note))}</span>` : ''}</div>`; }).join('');
+        const rows = day.map(it => { const meta = env.typeMeta(it.type); const days = env.clamp(it.days, 1, env.yearLength(cal), 1); const span = days > 1 ? `<span class="sp-alm-drawer-span">共${days}天</span>` : ''; return `<div class="sp-alm-drawer-item">${icon(meta.icon, `sp-alm-drawer-icon sp-alm-type-${meta.cls}`)}<span class="sp-alm-drawer-name">${env.escapeHtml(it.name)}</span><span class="sp-alm-drawer-type">${meta.label}</span>${span}${it.note ? `<span class="sp-alm-drawer-note">${env.escapeHtml(env.cleanText(it.note))}</span>` : ''}</div>`; }).join('');
         return `${head}<div class="sp-alm-sday-list">${rows}</div>`;
     };
     return { buildAlmanacBlock, buildAlmanacDay };

@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { classifyGenerationError, diagnosticMessage } from '../../api/diagnostics.js';
 
 export function createOutlineUi(host = {}) {
@@ -16,9 +17,9 @@ export function createOutlineUi(host = {}) {
     const toast = (message, error = false) => host.toast?.(message, error);
     const showGenerationError = error => {
         const retry = classifyGenerationError(error) === 'config-missing' ? '' : '<button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">重新生成面</button>';
-        setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>生成失败：${fallbackEscape(diagnosticMessage(error))}</p>${retry}</div>`);
+        setOutline(`<div class="sp-error">${icon("alert-circle")}<p>生成失败：${fallbackEscape(diagnosticMessage(error))}</p>${retry}</div>`);
     };
-    const showPreflightError = message => setOutline(`<div class="sp-error"><i class="fa-solid fa-circle-exclamation"></i><p>${fallbackEscape(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">重新生成面</button></div>`);
+    const showPreflightError = message => setOutline(`<div class="sp-error">${icon("alert-circle")}<p>${fallbackEscape(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">重新生成面</button></div>`);
     const bind = () => {
         if (bound) return;
         const $root = query('#sp-outline-wrap');

@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { extractWidgets, spaceMessagePlainText } from './schema.js';
 import { normalizeOutlineResponse, parseOutline } from '../outline/schema.js';
 
@@ -192,10 +193,10 @@ export function createSpaceUi(host = {}) {
             const oldTimer = $button.data('sp-copy-reset');
             if (oldTimer) clearTimeout(oldTimer);
             const copied = await host.copyText?.(spaceMessagePlainText(controllers.chat.history()[index]));
-            $button.html(copied ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-xmark"></i>')
+            $button.html(copied ? `${icon("check")}` : `${icon("x")}`)
                 .attr('title', copied ? '已复制' : '复制失败');
             const timer = setTimeout(() => {
-                $button.html('<i class="fa-solid fa-copy"></i>').attr('title', '复制').removeData('sp-copy-reset');
+                $button.html(`${icon("copy")}`).attr('title', '复制').removeData('sp-copy-reset');
             }, 1200);
             $button.data('sp-copy-reset', timer);
         });

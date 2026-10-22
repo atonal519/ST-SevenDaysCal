@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import {
     loadCalDesc, loadAlmanac, almClampInt, calYearLen, almDayOfYear,
     almMonthDayFromDoy, calMonthDays, calMonthName, almItemCoversDoy,
@@ -61,5 +62,5 @@ export function renderAxisCalendar(env) {
         detailHead = '<div class="sp-alm-cal-detail-head"><span>本月日期</span></div>';
     }
     const rows = detailItems.length ? `<div class="sp-alm-list">${detailItems.map(it => env.almRowHtml(it, ctx)).join('')}</div>` : `<div class="sp-alm-cal-empty">${selected != null ? '这天没有日期' : '本月暂无日期'}</div>`;
-    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月"><i class="fa-solid fa-chevron-left"></i></button><span class="sp-alm-cal-title">${escapeHtml(calMonthName(cal, month1))}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月"><i class="fa-solid fa-chevron-right"></i></button></div>${head}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${rows}</div></div>`;
+    return `<div class="sp-alm-cal"><div class="sp-alm-cal-head"><button class="sp-icon-btn sp-alm-cal-prev" title="上个月">${icon("chevron-left")}</button><span class="sp-alm-cal-title">${escapeHtml(calMonthName(cal, month1))}</span><button class="sp-icon-btn sp-alm-cal-next" title="下个月">${icon("chevron-right")}</button></div>${head}<div class="sp-alm-grid">${leadCells}${cells.join('')}</div><div class="sp-alm-cal-detail">${detailHead}${rows}</div></div>`;
 }

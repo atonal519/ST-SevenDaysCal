@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { parseOutline } from './schema.js';
 import { renderActionMenu } from '../utils/action-menu.js';
 
@@ -6,7 +7,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
     const clean = value => cleanText?.(value) ?? String(value ?? '');
     const empty = () => {
         beginRender?.();
-        return `<div class="sp-empty"><i class="fa-solid fa-scroll"></i><p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>`;
+        return `<div class="sp-empty">${icon("polygon")}<p>当前还没有面。可点［生成面］直接生成正式稿；也可去「间」讨论并生成草稿，满意后点［应用到面］。</p><button class="sp-gen-btn sp-outline-gen-btn" id="sp-gen-outline-now">生成面</button></div>`;
     };
     const render = (raw, cursor = 0) => {
         beginRender?.();
@@ -33,11 +34,11 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
                 ? `<span class="sp-beat-badge sp-beat-badge-cur">进行中</span>`
                 : next ? `<span class="sp-beat-badge sp-beat-badge-next">预计下一步</span>` : '';
             const actions = renderActionMenu('outline', [
-                { action: 'outline-edit', icon: 'fa-pen', label: '编辑', title: '编辑这个面' },
-                { action: 'outline-current', icon: current ? 'fa-location-dot' : 'fa-location-crosshairs', label: current ? '取消当前' : '设为当前', title: current ? '取消当前剧情点' : '设为当前剧情点' },
-                { action: 'outline-inject', icon: 'fa-arrow-right-to-bracket', label: '注入', title: '注入到输入框' },
-                { action: 'outline-copy', icon: 'fa-copy', label: '复制', title: '复制这一步' },
-                { action: 'outline-delete', icon: 'fa-trash', label: '删除', title: '删除这个面' },
+                { action: 'outline-edit', icon: 'pencil', label: '编辑', title: '编辑这个面' },
+                { action: 'outline-current', icon: current ? 'map-pin' : 'focus-2', label: current ? '取消当前' : '设为当前', title: current ? '取消当前剧情点' : '设为当前剧情点' },
+                { action: 'outline-inject', icon: 'login-2', label: '注入', title: '注入到输入框' },
+                { action: 'outline-copy', icon: 'copy', label: '复制', title: '复制这一步' },
+                { action: 'outline-delete', icon: 'trash', label: '删除', title: '删除这个面' },
             ], escapeHtml, value => String(value ?? '')).replace('data-menu-id="outline"', `data-menu-id="outline" data-idx="${index + 1}" data-iid="${injectId}" data-cid="${copyId}"`);
             return `
         <div class="sp-beat${highlight}">
@@ -59,7 +60,7 @@ export function createOutlineRenderer({ escapeHtml, cleanText, makeInjectButton,
         </div>`;
         }).join('');
         const rawDebug = beats.length < 3
-            ? `<details class="sp-debug"><summary>⚠ 仅解析到 ${beats.length} 个节点</summary><pre class="sp-debug-raw">${esc(raw)}</pre></details>`
+            ? `<details class="sp-debug"><summary>${icon('alert-triangle')} 仅解析到 ${beats.length} 个节点</summary><pre class="sp-debug-raw">${esc(raw)}</pre></details>`
             : '';
         return cards + rawDebug;
     };

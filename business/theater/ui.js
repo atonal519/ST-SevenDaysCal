@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 import { renderTheaterPieceHtml } from './render.js';
 import { classifyGenerationError } from '../../api/diagnostics.js';
 
@@ -21,7 +22,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         host.setManagerHtml?.(`
             <details class="sp-theater-tpl-library"${open ? ' open' : ''}>
                 <summary class="sp-theater-tpl-library-head">
-                    <i class="fa-solid fa-chevron-right sp-theater-tpl-library-chevron"></i>
+                    ${icon("chevron-right", "sp-theater-tpl-library-chevron")}
                     <span>模板库</span>
                     <span class="sp-theater-tpl-library-count">${count}</span>
                 </summary>
@@ -29,7 +30,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
                     <div class="sp-theater-tpl-add-row">
                         <input type="text" id="sp-theater-tpl-new-title" class="sp-input" placeholder="新模板标题">
                         <textarea id="sp-theater-tpl-new-text" class="sp-input" placeholder="新模板内容"></textarea>
-                        <button class="sp-btn sp-btn-primary" id="sp-theater-tpl-add">+ 新增模板</button>
+                        <button class="sp-btn sp-btn-primary" id="sp-theater-tpl-add">${icon('plus')} 新增模板</button>
                     </div>
                     <div class="sp-theater-tpl-import-row">
                         <input type="file" id="sp-theater-tpl-import-file" accept=".txt,text/plain" hidden>
@@ -48,11 +49,11 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         state.selection = piece ? { layer: selected ? state.selection.layer : drafts.includes(piece) ? 'draft' : 'saved', id: piece.id } : null;
         state.current = piece;
         const safeHtml = piece ? renderTheaterPieceHtml(piece, host.htmlOptions?.() || {}) : '';
-        const result = piece ? `<div class="sp-theater-result-inner">${safeHtml}</div>` : '<div class="sp-empty sp-theater-result-empty"><i class="fa-solid fa-masks-theater"></i><p>填写场景与要求，生成一段小剧场</p></div>';
-        const source = piece?.templateSource?.input ? `<div class="sp-theater-source-wrap"><button type="button" class="sp-theater-source-toggle" aria-expanded="false" title="查看本次实际使用内容"><i class="fa-solid fa-file-lines"></i><span>模板 · ${esc(piece.templateSource.title || '(无标题)')}</span><i class="fa-solid fa-chevron-down sp-theater-source-chevron"></i></button><div id="sp-theater-source-detail" class="sp-theater-source-detail" style="display:none"><div class="sp-theater-source-caption">本次实际使用内容</div><pre>${esc(piece.templateSource.input)}</pre></div></div>` : '';
+        const result = piece ? `<div class="sp-theater-result-inner">${safeHtml}</div>` : `<div class="sp-empty sp-theater-result-empty">${icon("prism")}<p>填写场景与要求，生成一段小剧场</p></div>`;
+        const source = piece?.templateSource?.input ? `<div class="sp-theater-source-wrap"><button type="button" class="sp-theater-source-toggle" aria-expanded="false" title="查看本次实际使用内容">${icon("file-text")}<span>模板 · ${esc(piece.templateSource.title || '(无标题)')}</span>${icon("chevron-down", "sp-theater-source-chevron")}</button><div id="sp-theater-source-detail" class="sp-theater-source-detail" style="display:none"><div class="sp-theater-source-caption">本次实际使用内容</div><pre>${esc(piece.templateSource.input)}</pre></div></div>` : '';
         const op = piece ? `<div class="sp-theater-opbar"><button class="sp-btn sp-theater-regen">重新生成</button><input type="text" id="sp-theater-title" class="sp-input" placeholder="标题（可选）" value="${attr(piece.title || '')}"><button class="sp-btn sp-btn-primary sp-theater-save">永久保存</button></div>` : '';
-        const resultBlock = piece ? `<div class="sp-theater-result-wrap"><button class="sp-theater-fullscreen-btn" type="button" title="全屏浏览小剧场"><i class="fa-solid fa-expand"></i></button><button class="sp-theater-fold-toggle" type="button" style="display:none"><i class="fa-solid fa-chevron-down"></i><span class="sp-theater-fold-label">展开全文</span></button><div class="sp-theater-result sp-theater-result-collapsible" id="sp-theater-result">${result}</div></div>` : `<div class="sp-theater-result" id="sp-theater-result">${result}</div>`;
-        body(`<div class="sp-theater-input-area"><details class="sp-theater-tpl-picker" id="sp-theater-tpl-picker"><summary class="sp-theater-tpl-picker-summary"><i class="fa-solid fa-chevron-right sp-theater-tpl-picker-chevron"></i><span>选择模板起草（可选）</span></summary><div class="sp-theater-tpl-picker-body" id="sp-theater-tpl-picker-list">${renderTemplateButtons(state.templates)}</div></details><textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…">${esc(piece?.request || piece?.templateSource?.input || '')}</textarea><div class="sp-theater-btn-row"><button class="sp-btn sp-theater-random" title="从模板库随机填入一个模板，确认后再生成"><i class="fa-solid fa-shuffle"></i> 随机</button><button class="sp-btn sp-btn-primary sp-theater-generate">生成小剧场</button></div></div><hr class="sp-theater-divider">${resultBlock}${source}${op}<hr class="sp-theater-divider"><div class="sp-theater-lists"><details class="sp-theater-list-group" open><summary>草稿（最多 ${draftCap} 条，新挤旧）</summary><div class="sp-theater-list">${drafts.length ? drafts.map(p => renderCard(p, 'draft')).join('') : '<div class="sp-theater-list-empty">暂无草稿</div>'}</div></details><details class="sp-theater-list-group"${saved.length ? ' open' : ''}><summary>已永久保存（本对话）</summary><div class="sp-theater-list">${saved.length ? saved.map(p => renderCard(p, 'saved')).join('') : '<div class="sp-theater-list-empty">暂无永久保存</div>'}</div></details></div>`);
+        const resultBlock = piece ? `<div class="sp-theater-result-wrap"><button class="sp-theater-fullscreen-btn" type="button" title="全屏浏览小剧场">${icon("arrows-maximize")}</button><button class="sp-theater-fold-toggle" type="button" style="display:none">${icon("chevron-down")}<span class="sp-theater-fold-label">展开全文</span></button><div class="sp-theater-result sp-theater-result-collapsible" id="sp-theater-result">${result}</div></div>` : `<div class="sp-theater-result" id="sp-theater-result">${result}</div>`;
+        body(`<div class="sp-theater-input-area"><details class="sp-theater-tpl-picker" id="sp-theater-tpl-picker"><summary class="sp-theater-tpl-picker-summary">${icon("chevron-right", "sp-theater-tpl-picker-chevron")}<span>选择模板起草（可选）</span></summary><div class="sp-theater-tpl-picker-body" id="sp-theater-tpl-picker-list">${renderTemplateButtons(state.templates)}</div></details><textarea id="sp-theater-input" class="sp-input sp-theater-textarea" placeholder="描述这段小剧场：场景、人物状态、想看的走向、字数等…">${esc(piece?.request || piece?.templateSource?.input || '')}</textarea><div class="sp-theater-btn-row"><button class="sp-btn sp-theater-random" title="从模板库随机填入一个模板，确认后再生成">${icon("arrows-shuffle")} 随机</button><button class="sp-btn sp-btn-primary sp-theater-generate">生成小剧场</button></div></div><hr class="sp-theater-divider">${resultBlock}${source}${op}<hr class="sp-theater-divider"><div class="sp-theater-lists"><details class="sp-theater-list-group" open><summary>草稿（最多 ${draftCap} 条，新挤旧）</summary><div class="sp-theater-list">${drafts.length ? drafts.map(p => renderCard(p, 'draft')).join('') : '<div class="sp-theater-list-empty">暂无草稿</div>'}</div></details><details class="sp-theater-list-group"${saved.length ? ' open' : ''}><summary>已永久保存（本对话）</summary><div class="sp-theater-list">${saved.length ? saved.map(p => renderCard(p, 'saved')).join('') : '<div class="sp-theater-list-empty">暂无永久保存</div>'}</div></details></div>`);
         measureFold();
     };
     const refreshTemplates = async ({ strict = false } = {}) => {
@@ -171,11 +172,11 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         const open = !host.isSourceOpen?.();
         host.setSourceVisible?.(open);
         host.setSourceExpanded?.(open);
-        host.setSourceChevron?.(open ? 'fa-solid fa-chevron-up sp-theater-source-chevron' : 'fa-solid fa-chevron-down sp-theater-source-chevron');
+        host.setSourceChevron?.(open ? 'chevron-up' : 'chevron-down');
     };
     const setFoldControl = collapsed => host.setFoldControl?.(
         collapsed ? '展开全文' : '收起',
-        collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up',
+        collapsed ? 'chevron-down' : 'chevron-up',
     );
     const measureFold = () => {
         if (!host.isResultFoldable?.()) { host.setFoldVisible?.(false); return; }
@@ -204,7 +205,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         host.setFullscreen?.(false);
         host.setSheetFlat?.(false);
         host.setBodyFullscreenLock?.(false);
-        host.setFullscreenControl?.('fa-solid fa-expand', '全屏浏览小剧场');
+        host.setFullscreenControl?.('arrows-maximize', '全屏浏览小剧场');
         removeFullscreenEsc();
         measureFold();
     };
@@ -214,7 +215,7 @@ export function createTheaterUi({ repository, templates, resolveRegen, draftCap 
         host.setSheetFlat?.(true);
         host.setResultCollapsed?.(false);
         host.setBodyFullscreenLock?.(true);
-        host.setFullscreenControl?.('fa-solid fa-compress', '退出全屏');
+        host.setFullscreenControl?.('arrows-minimize', '退出全屏');
         if (!state.fsEsc) {
             // Esc 的 listener 跟随当前 UI owner；每条退出路径都必须移除，避免重开后累积幽灵监听。
             state.fsEsc = event => {

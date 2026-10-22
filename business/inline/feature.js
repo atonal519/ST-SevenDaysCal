@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 // 楼内统一渲染窗口：宿主只注入内容 builder、快照与运行时依赖。
 // 这里不保存业务数据；DOM 生命周期与观察器由本 feature 独占。
 
@@ -355,7 +356,7 @@ export function createInlineFeature(env = {}) {
         const inner = `${head}${chipsHtml}`;
         // 只有日期没有任何区 → 纯日期条：<div> 包、无箭头、不可折叠（点了也没东西展开）。
         if (flat) return `<div class="sp-dash-summary sp-dash-summary-flat">${inner}</div>`;
-        return `<summary class="sp-dash-summary">${inner}<i class="fa-solid fa-chevron-down sp-dash-sum-caret"></i></summary>`;
+        return `<summary class="sp-dash-summary">${inner}${icon("chevron-down", "sp-dash-sum-caret")}</summary>`;
     }
 
     // 组合轴、标注池、点、线内容；只有日期或内容均为空时才不挂楼内块。
@@ -380,7 +381,7 @@ export function createInlineFeature(env = {}) {
         // 展开面板仅在轴或点区域存在时显示日期大头。
         const hasDateRegion = !!alm || !!schInner;
 
-        const collapseControl = label => `<button type="button" class="sp-inline-region-collapse" aria-label="收起${label}" title="收起${label}"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i><span>收起</span></button>`;
+        const collapseControl = label => `<button type="button" class="sp-inline-region-collapse" aria-label="收起${label}" title="收起${label}">${icon("chevron-up")}<span>收起</span></button>`;
         const region = (cls, seg, label, inner) => inner
             ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}${collapseControl(label)}</details>`
             : '';

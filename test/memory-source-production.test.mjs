@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
+import { icon } from '../utils/icons.js';
 import { fileURLToPath } from 'node:url';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
 import { getSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
@@ -287,6 +288,7 @@ test('世界书设置列表在全失败或部分失败时提示异常，并保�
         list.on = () => list;
         let reads = 0;
         const render = evaluate(renderRegion, 'renderWiList', {
+            icon,
             getContext: () => ({}), $in: () => list, _wiListRevision: 0, _wiListIdentity: () => 'same',
             _wiScrollParent: () => null, getCharBookEntries: async () => { reads++; return entries; },
             ensureCurrentWiSelection: () => ({}), worldInfoSelectionAllows: () => true,

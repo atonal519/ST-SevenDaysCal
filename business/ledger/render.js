@@ -1,3 +1,4 @@
+import { icon } from '../../utils/icons.js';
 // ─── 刻度（ledger）域 · 渲染 / 编辑 / 批量交互 ────────────────────────────────
 // ledger 数据层位于同域 repository.js。axis 面板调用本模块渲染列表与编辑器；本模块通过 env
 // 请求外层面板重绘，避免与 axis/panel 形成 ESM 循环 import。
@@ -60,14 +61,14 @@ export function ledgerRowHtml(e, cal, archived = false) {
     // 行操作钮组（照点/面紧凑范式，靠右）。归档条走「捞回 / 彻底删」；活跃条走「编辑 / 锁解锁 / 暂停埋入 / 了结」。
     const acts = archived
         ? `<span class="sp-ledger-actions">`
-            + `<button class="sp-ledger-reopen" title="捞回 · 回到活跃、判定车重新跟进"><i class="fa-solid fa-rotate-left"></i></button>`
-            + `<button class="sp-ledger-remove" title="彻底删除 · 不可恢复"><i class="fa-solid fa-trash"></i></button>`
+            + `<button class="sp-ledger-reopen" title="捞回 · 回到活跃、判定车重新跟进">${icon("rotate-2")}</button>`
+            + `<button class="sp-ledger-remove" title="彻底删除 · 不可恢复">${icon("trash")}</button>`
             + `</span>`
         : `<span class="sp-ledger-actions">`
-            + `<button class="sp-ledger-edit" title="编辑"><i class="fa-solid fa-pen"></i></button>`
-            + `<button class="sp-ledger-lock-toggle" title="${locked ? '已锁定 · AI 判定不动（点击解锁）' : '锁定 · 锁后 AI 判定不动'}"><i class="fa-solid ${locked ? 'fa-lock' : 'fa-lock-open'}"></i></button>`
-            + `<button class="sp-ledger-mute-toggle" title="${paused ? '已暂停埋入 · 不再注入主楼（点击恢复）' : '暂停埋入 · 暂不注入主楼、但仍保留跟进'}"><i class="fa-solid ${paused ? 'fa-bell-slash' : 'fa-bell'}"></i></button>`
-            + `<button class="sp-ledger-close" title="了结 · 从活跃移除（可在归档捞回）"><i class="fa-solid fa-check"></i></button>`
+            + `<button class="sp-ledger-edit" title="编辑">${icon("pencil")}</button>`
+            + `<button class="sp-ledger-lock-toggle" title="${locked ? '已锁定 · AI 判定不动（点击解锁）' : '锁定 · 锁后 AI 判定不动'}">${icon(locked ? 'lock' : 'lock-open')}</button>`
+            + `<button class="sp-ledger-mute-toggle" title="${paused ? '已暂停埋入 · 不再注入主楼（点击恢复）' : '暂停埋入 · 暂不注入主楼、但仍保留跟进'}">${icon(paused ? 'bell-off' : 'bell')}</button>`
+            + `<button class="sp-ledger-close" title="了结 · 从活跃移除（可在归档捞回）">${icon("check")}</button>`
             + `</span>`;
     // 起/周期/终固定独占一行：这仨凑一起（尤其古风长日期「大梁二十九年十一月廿六未时」）放进事由那行会挤爆，
     // 无条件挪到第二行、换行标准统一（不再靠 flex-wrap 超出才折）。三者全空则整行不渲染。
@@ -125,7 +126,7 @@ export function renderLedgerEditor() {
            </div>`
         : `<div class="sp-led-adv-row"><span class="sp-led-adv-label">起始：${escapeHtml(fmtLedgerAnchorDate(e.起始锚?.历日期, cal) || '未记')}</span><button class="sp-led-adv-open" type="button">改起始锚</button></div>`;
     return `<div class="sp-alm-editor-head">
-        <button class="sp-icon-btn sp-led-editor-back" title="返回"><i class="fa-solid fa-arrow-left"></i></button>
+        <button class="sp-icon-btn sp-led-editor-back" title="返回">${icon("arrow-left")}</button>
         <span class="sp-alm-editor-title">编辑刻度条目</span>
     </div>
     <div class="sp-alm-body">
@@ -198,7 +199,7 @@ export function saveLedgerEditor() {
 export function batchBarHtml(scope, total, actionLabel, danger) {
     if (total <= 0) return '';
     if (_batchScope !== scope) {
-        return `<div class="sp-batch-bar"><button class="sp-mini-btn sp-batch-enter" data-scope="${escapeAttr(scope)}"><i class="fa-solid fa-list-check"></i> 批量</button></div>`;
+        return `<div class="sp-batch-bar"><button class="sp-mini-btn sp-batch-enter" data-scope="${escapeAttr(scope)}">${icon("list-check")} 批量</button></div>`;
     }
     const n = _batchSelected.size;
     const allChecked = n > 0 && n >= total;
@@ -313,7 +314,7 @@ export function renderLedgerSheet({ includeControls = true } = {}) {
     const archive = closed.length
         ? `<div class="sp-ledger-archive">
                 <button class="sp-ledger-archive-head" title="${_ledgerArchiveOpen ? '收起归档' : '展开已了结条目'}">
-                    <i class="fa-solid fa-chevron-${_ledgerArchiveOpen ? 'down' : 'right'}"></i>
+                    ${icon(`chevron-${_ledgerArchiveOpen ? 'down' : 'right'}`)}
                     <span>已了结 ${closed.length} 条</span>
                 </button>
                 ${_ledgerArchiveOpen ? batchBarHtml('ledger-archive', closed.length, '批量删除', true) + `<div class="sp-ledger-list sp-ledger-archive-list">${closed.map(e => ledgerRowHtml(e, cal, true)).join('')}</div>` : ''}
