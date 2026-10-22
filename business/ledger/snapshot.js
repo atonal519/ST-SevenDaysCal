@@ -9,6 +9,10 @@ export function createLedgerSnapshotBridge(options = {}) {
         try { pool = (options.entries?.() || []).map(e => ({ id: e.id, 事由: e.事由, 类型: e.类型, 起始锚: cloneAnchor(e.起始锚), 周期长度: e.周期长度, 到期锚: cloneAnchor(e.到期锚), 标签: Array.isArray(e.标签) ? e.标签.slice() : [], 锁: e.锁, 静音: e.静音 })); } catch {}
         const weekdayRef = options.weekdayRef?.();
         const out = { point, line, almanac, anchor, pool, calendar: options.cloneCalendar?.(options.calendar?.()) };
+        try {
+            const cold = options.readCold?.();
+            if (Array.isArray(cold)) out.cold = cold.slice(0, 2).filter(text => typeof text === 'string' && text.trim());
+        } catch {}
         if (weekdayRef && Number.isInteger(weekdayRef.refDoy) && Number.isInteger(weekdayRef.refWd)) out.weekdayRef = { refDoy: weekdayRef.refDoy, refWd: weekdayRef.refWd };
         return out;
     };
@@ -21,7 +25,12 @@ export function createLedgerSnapshotBridge(options = {}) {
                 const snap = captureRecall();
                 if (!snap.recall.length) return;
                 options.write?.(Number(mesId), snap);
-            } else options.write?.(Number(mesId), capture());
+                return snap;
+            } else {
+                const snap = capture();
+                options.write?.(Number(mesId), snap);
+                return snap;
+            }
         } catch {}
     };
     return { capture, captureRecall, freeze };

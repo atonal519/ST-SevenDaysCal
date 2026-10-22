@@ -8,6 +8,7 @@ import { normalizeTagRules } from '../utils/tag-names.js';
 import { stripTags } from '../memory.js';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
 import { sanitizeGenerationContextText } from '../runtime/generation-context.js';
+import { getSharedBodyWrappers, updateSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexSource = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -23,7 +24,7 @@ test('paired named wrappers normalize into canonical rules', () => {
     assert.deepEqual(normalizeTagRules(' [DRAFT]...[/DRAFT], [状态]...[/状态], think, [[...]]'), [
         '[draft]...[/draft]', '[状态]...[/状态]', 'think', '[[...]]',
     ]);
-    assert.deepEqual(normalizeTagRules('[draft]..[/draft], [draft]... [ /draft], [a.b]...[/a.b]'), []);
+    assert.deepEqual(normalizeTagRules('[draft]..[/draft], [draft]... [ /draft], [a.b]...[/a.b]'), ['[draft]... [ /draft]', '[a.b]...[/a.b]']);
 });
 
 test('configured paired wrappers remove complete multiline blocks including kept content', () => {
@@ -59,26 +60,31 @@ test('unclosed bracket wrappers inside stripped XML follow rescue-only rendering
     }), '保留正文');
 });
 
-test('paired wrapper rule keeps legacy XML rescue and double bracket contracts', () => {
+test('paired literal cleaning keeps XML rescue separate and drops whole draft ranges', () => {
     assert.equal(stripTags('<thinking><content>旧正文</content></thinking>', { extraTags: 'thinking' }), '旧正文');
     assert.equal(stripTags('前[[旧正文]]后', { keepTags: '[[...]]' }), '前旧正文后');
     assert.equal(stripTags('前[[隐藏]]后', { extraTags: '[[...]]' }), '前后');
     assert.equal(stripTags('前[[噪音<content>救回</content>]]后', {
         keepTags: 'content', extraTags: '[[...]]',
-    }), '前救回后');
+    }), '前后');
+    assert.equal(stripTags('前<!--draft-->草稿<content>不可救回</content><!--/draft-->后', {
+        extraTags: '<!--draft-->...<!--/draft-->',
+    }), '前后');
 });
 
 test('settings input and change persist normalized wrapper syntax and refill the field', () => {
     const region = productionRegion('function sanitizeTagList(raw) {', "$in('#sp-custom-prompt')");
     const handlers = {};
-    const settings = { extraTags: '' };
+    const extensionSettings = { 'schedule-planner': { extraTags: '' } };
+    const settings = getSharedBodyWrappers(extensionSettings);
     let saves = 0;
     const input = {
         on: (event, handler) => { handlers[`#sp-mem-extratags:${event}`] = handler; return input; },
     };
     const bind = vm.runInNewContext(`${region}\nbindTagField`, {
         $in: () => input,
-        getSettings: () => settings,
+        updateWrapperSettings: patch => updateSharedBodyWrappers(extensionSettings, patch),
+        refreshWrapperInputs() {},
         normalizeTagRules,
         saveSettingsDebounced: () => { saves++; },
         stSaveSettings() {},
@@ -87,24 +93,28 @@ test('settings input and change persist normalized wrapper syntax and refill the
     const field = { value: ' [DRAFT]...[/DRAFT], think ' };
     handlers['#sp-mem-extratags:input'].call(field);
     assert.equal(settings.extraTags, '[draft]...[/draft],think');
+    settings.keepTags = '正文';
     handlers['#sp-mem-extratags:change'].call(field);
     assert.equal(field.value, '[draft]...[/draft],think');
     assert.equal(settings.extraTags, field.value);
+    assert.equal(settings.keepTags, '正文', '只保存编辑字段，不覆盖另一个面板的改动');
     assert.equal(saves, 2);
 
-    const readback = productionRegion("$in('#sp-mem-keeptags').val(typeof s.keepTags", "$in('#sp-custom-prompt')");
-    const rendered = {};
-    vm.runInNewContext(`const s = getSettings();\n${readback}`, {
-        getSettings: () => settings,
-        $in: selector => ({ val: value => { rendered[selector] = value; } }),
+    const readback = productionRegion('function refreshWrapperInputs() {', 'function bindMemoryHandlers() {');
+    const rendered = { '#sp-mem-keeptags': { value: '', matches: () => true }, '#sp-mem-extratags': { value: '', matches: () => false } };
+    vm.runInNewContext(`${readback}\nrefreshWrapperInputs();`, {
+        getWrapperSettings: () => settings,
+        $in: selector => [rendered[selector]],
     });
-    assert.equal(rendered['#sp-mem-extratags'], '[draft]...[/draft],think');
+    assert.equal(rendered['#sp-mem-extratags'].value, '[draft]...[/draft],think');
+    assert.equal(rendered['#sp-mem-keeptags'].value, '', '保持正在输入的焦点字段');
 });
 
 test('production recent generation history excludes configured draft blocks from AI material', () => {
     const region = productionRegion('function buildRecentGenerationHistory(ctx, historyLimit, opts = {}) {', 'function outlineWorldInfoTriggerText(history) {');
     const build = vm.runInNewContext(`${region}\nbuildGenerationHistoryContext`, {
-        getSettings: () => ({ keepTags: 'content', extraTags: '[draft]...[/draft]' }),
+        getSettings: () => ({}),
+        getWrapperSettings: () => ({ keepTags: 'content', extraTags: '[draft]...[/draft]' }),
         selectVisibleChatHistory,
         substituteParams: value => String(value ?? ''),
         sanitizeGenerationContextText,

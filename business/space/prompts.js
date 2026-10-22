@@ -1,5 +1,5 @@
 import { narrativePaceContract, narrativePreferenceContract } from '../narrative-preferences.js';
-import { LINE_OUTPUT_REVIEW_GUIDE, LINE_RELATIONSHIP_AGENCY_GUIDE } from '../lines/prompt.js';
+import { LINE_FACT_PROGRESS_GUIDE, LINE_OUTPUT_REVIEW_GUIDE, LINE_RELATIONSHIP_AGENCY_GUIDE } from '../lines/prompt.js';
 import { normalizeLedgerInterval } from '../ledger/settings.js';
 
 export function getSpaceChatPlaceholder() {
@@ -17,6 +17,8 @@ const widgetLabel = kind => ({
     era_widget: '历法',
     outline_widget: '面',
 }[kind] || '卡片');
+
+const SPACE_CAPABILITY_GUIDE = `【间内可应用方案】点可新增或替换明确条目；线可新增或替换明确旧线；轴日期可去重追加，旧日期的编辑与删除请在轴操作；历法是整套候选并沿现有确认流程应用；面必须返回整份候选，节点增删调整都反映在整稿中，点击后才替换正式稿。刻度、菜单、冷知识、棱、坐标和记忆可讨论或取材，但没有间内应用卡；要求直接保存或应用到这些模块时，说明应在对应模块入口处理，不要追问无关卡型；只有用户明确要转换素材为某种支持卡时，才按其目标输出。模型只返回内容，不编按钮、内部路径、操作 JSON 或已保存结果。`;
 
 function widgetContract(kind, calDescText, preferences = {}) {
     if (kind === 'outline_widget') return [
@@ -55,7 +57,8 @@ function widgetContract(kind, calDescText, preferences = {}) {
         `- agency=player 仅当下一步必须等待 user 的选择或行动；agency=world 表示其他人物、势力、机构或环境即使 user 暂不参与也能自行推进。不得因为事件将来可能影响 user 就标 player。`,
         `- stall 只能是 true / false。stall=true 时 Next 写恢复条件；否则 Next 写有依据的下一变化。`,
         `- pin 是本地保留位，一律输出 false。`,
-        `- 以下人物自主与复核约束仅在线卡是本轮选定输出时适用。`,
+        `- 以下线卡事实、人物自主与复核约束仅在线卡是本轮选定输出时适用。`,
+        LINE_FACT_PROGRESS_GUIDE,
         LINE_RELATIONSHIP_AGENCY_GUIDE,
         narrativePreferenceContract(preferences),
         narrativePaceContract(preferences.narrativePace),
@@ -103,14 +106,13 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
         return `【本轮输出模式】本轮同时指向多种卡片，意图有歧义。请用自然语言简短追问用户这次只要哪一种；不要猜测，不要同时输出多种卡片。`;
     }
     if (intent.action === 'semantic-route') {
-        const kinds = ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget'];
-        if (requestedMaterials.outline) kinds.push('outline_widget');
+        const kinds = Array.isArray(intent.allowedWidgetKinds) ? intent.allowedWidgetKinds : [];
         const contracts = kinds
             .map(kind => widgetContract(kind, calDescText, preferences))
             .join('\n\n');
         return [
             `【本轮输出模式：语义路由】按完整语义判断是讨论还是生成结构化卡片；不要仅因措辞口语而拒绝明确请求。`,
-            `- 直接委托生成、整理或转换为点、线、历、历法或面方案时，选择对应唯一合同；“出一条线”“给我生个线”“把这句话结构化输出成点”均属明确请求。`,
+            kinds.length ? `- 本轮只允许选择以下唯一卡型：${kinds.map(widgetLabel).join('、')}；直接委托生成、整理或转换为其中一类时，使用其合同。` : `- 当前没有可信的卡片目标；若用户要求直接保存或应用到间不支持的模块，说明该操作需在对应模块入口处理，不输出别类卡片；只有目标本身不清楚时才简短询问用户要处理什么，不默认追问卡型。`,
             `- 提问、评价、引用、讨论或否定/暂缓生成时用自然语言回答；不要输出卡片。`,
             `- 多种卡片意图不清时先追问；用户要同类多份时可逐张给候选。普通讨论不套用卡片的剧情偏好；偏好只在输出对应点/线卡时生效。`,
             contracts ? `- 选定卡型后只输出完整卡片；以下是本轮相关类型的字段合同：\n${contracts}` : '',
@@ -124,7 +126,7 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
 
 function recentWidgetBlock(intent = {}) {
     const widget = intent.recentWidget;
-    if (intent.action !== 'revise-recent' || !widget) return '';
+    if ((intent.action !== 'revise-recent' && !intent.formatRepair) || !widget) return '';
     const edit = widget.editIdx == null ? '无（候选新卡）' : String(widget.editIdx);
     const ownerChar = String(widget.owner?.charName || '')
         .replace(/&/g, '&amp;')
@@ -184,6 +186,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         calDescText ? `\n【本世界观·现行历法（纪年）】${calDescText}${intent.kind === 'era_widget' ? '\n本轮修改以此为基准做增量修改：没提到的月份、天数、顺序、样式和纪年名逐一保留原值，并输出完整新版本。' : ''}` : '',
         materialText,
         faqText,
+        SPACE_CAPABILITY_GUIDE,
         toneBlock,
         requestedMaterials.menu && intent.action === 'semantic-route'
             ? `【本轮输出模式】用户要求处理今日菜单，但菜单不属于可应用方案。请自然讨论菜单或给出建议，并提示用户可从下方模块入口打开菜单；不要因此强行生成任何点、线、轴日期、历法或面方案，也不要声称已保存。若用户明确要求把菜单事项做成点卡，则按点卡合同输出。`

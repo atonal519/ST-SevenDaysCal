@@ -1,14 +1,10 @@
 import { extractWidgets } from './schema.js';
-import { normalizeLine, parseLineRow } from '../lines/schema.js';
+import { parseLineCard } from '../lines/schema.js';
+import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord } from '../point/parse.js';
 import { normalizeOutlineResponse, parseOutline } from '../outline/schema.js';
 
 export function createSpaceRenderer(env = {}) {
     const escape = value => env.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
-    const rows = body => String(body || '').split('\n').map(line => {
-        let text = line.trim();
-        if (/^[|｜].*[|｜]$/.test(text)) text = text.slice(1, -1).trim();
-        return text.replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '').trim();
-    }).filter(Boolean);
     const widgetName = kind => ({
         schedule_widget: '点卡片', line_widget: '线卡片', almanac_widget: '轴（历）卡片', era_widget: '历法卡片', outline_widget: '面方案',
     }[kind] || '结构化卡片');
@@ -19,13 +15,26 @@ export function createSpaceRenderer(env = {}) {
             ${String(body || '').trim() ? `<details class="sp-raw"><summary>查看原始回复</summary><pre>${escape(body)}</pre></details>` : ''}
         </div>
     </div>`;
+    const noWidgetCard = () => `<div class="sp-space-widget-card sp-space-widget-card-status" data-kind="status">
+        <div class="sp-space-widget-desc">本次回复没有可应用卡片</div>
+    </div>`;
     const parseAlmanacBody = body => {
         try { return env.parseAlmanac?.(body) || []; } catch { return []; }
     };
     const parseEraBody = body => {
         try { return env.parseEra?.(body) || null; } catch { return null; }
     };
+    const parsePointBody = body => {
+        const first = firstPointEventBlock(body);
+        const event = first ? parsePointEventRecord(first) : null;
+        return isCompletePointEvent(event) ? event : null;
+    };
+    const parseLineWidgetBody = body => {
+        try { return parseLineCard(body); } catch { return null; }
+    };
     const widgetBodyValid = widget => {
+        if (widget.kind === 'schedule_widget') return !!parsePointBody(widget.body);
+        if (widget.kind === 'line_widget') return !!parseLineWidgetBody(widget.body);
         if (widget.kind === 'almanac_widget') return parseAlmanacBody(widget.body).length > 0;
         if (widget.kind === 'era_widget') return !!parseEraBody(widget.body);
         if (widget.kind === 'outline_widget') return !!normalizeOutlineResponse(widget.body);
@@ -36,9 +45,8 @@ export function createSpaceRenderer(env = {}) {
             ? '<div class="sp-space-widget-readonly"><i class="fa-solid fa-lock"></i> 这份历史方案仅供查看</div>'
             : null;
         if (kind === 'schedule_widget') {
-            const line = rows(body).find(item => /^Event\s*[:：]/i.test(item)) || '';
-            const [type, title, desc, time, location, ...dynamicParts] = line.replace(/^Event\s*[:：]\s*/i, '').split(/[|｜]/).map(item => item.trim());
-            const dynamic = dynamicParts.join('｜');
+            const event = parsePointBody(body) || {};
+            const { type, title, desc, time, location, npcAction: dynamic } = event;
             const types = { main: { label: '明线', color: '#d6b85a' }, hidden: { label: '暗线', color: '#a06fd6' }, bond: { label: '红线', color: '#d67f6f' } };
             const meta = types[type] || { label: type || '?', color: '#9aa6b2' };
             const userName = String(env.getUserName?.() || '我').trim() || '我';
@@ -71,13 +79,7 @@ export function createSpaceRenderer(env = {}) {
         </div>`;
         }
         if (kind === 'line_widget') {
-            const bodyRows = rows(body);
-            const lineRow = bodyRows.find(item => /^Line\s*[:：]/i.test(item)) || '';
-            const descRow = bodyRows.find(item => /^Desc\s*[:：]/i.test(item)) || '';
-            const nextRow = bodyRows.find(item => /^Next\s*[:：]/i.test(item)) || '';
-            const { name, type: lineType, stage, when, agency, stall } = normalizeLine(parseLineRow(lineRow));
-            const desc = descRow.replace(/^Desc\s*[:：]\s*/i, '').trim();
-            const next = nextRow.replace(/^Next\s*[:：]\s*/i, '').trim();
+            const { name, type: lineType, stage, when, agency, stall, desc, next } = parseLineWidgetBody(body) || {};
             const stalled = stall === true;
             return `<div class="sp-space-widget-card${readOnly ? ' sp-space-widget-card-readonly' : ''}" data-wid="${wid}" data-kind="line">
             <div class="sp-space-widget-head">
@@ -164,6 +166,20 @@ export function createSpaceRenderer(env = {}) {
         return '';
     };
 
+    const renderWidget = (widget, registerWidget, messageContext) => {
+        if (widget.kind === 'almanac_widget') {
+            return parseAlmanacBody(widget.body).map(item => {
+                const itemBody = `<almanac_widget>Item: ${item.name}|${item.type}|${item.month}|${item.day}|${item.days}|${item.displayDate || ''}|${item.note || ''}</almanac_widget>`;
+                const itemWidget = { ...widget, body: itemBody };
+                if (!widgetBodyValid(itemWidget)) return invalidWidgetCard(widget.kind, itemBody);
+                const wid = registerWidget?.(itemWidget, messageContext);
+                return widgetCard(widget.kind, itemBody, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true, messageContext);
+            }).join('');
+        }
+        const wid = registerWidget?.(widget, messageContext);
+        return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true, messageContext);
+    };
+
     const message = (role, content, historyIndex, registerWidget, messageContext = {}) => {
         const cls = role === 'user' ? 'sp-chat-msg-user' : role === 'ai' ? 'sp-chat-msg-ai' : 'sp-chat-msg-system';
         const wrapClass = role === 'user' ? 'sp-chat-msg-wrap-user' : role === 'ai' ? 'sp-chat-msg-wrap-ai' : 'sp-chat-msg-wrap-system';
@@ -173,40 +189,48 @@ export function createSpaceRenderer(env = {}) {
         if (role === 'ai') {
             const parsed = extractWidgets(content);
             contentHtml = parsed.text ? env.formatAi?.(parsed.text) ?? escape(parsed.text).replace(/\n/g, '<br>') : '';
-            // 预期卡型是本轮应用白名单。原回复文字始终保留；错类、额外类或无效卡只显示错误，
-            // 不注册应用动作。旧历史没有该字段时继续按原有宽松渲染。
             const expected = messageContext.expectedWidgetKind;
-            if (expected) {
-                let matching = parsed.widgets.filter(widget => widget.kind === expected);
-                if (expected === 'outline_widget' && !matching.length) {
+            const hasPolicy = Array.isArray(messageContext.allowedWidgetKinds);
+            const allowed = hasPolicy ? messageContext.allowedWidgetKinds : null;
+            if (hasPolicy && allowed.length === 0 && parsed.widgets.length) {
+                widgetCards = parsed.widgets.map(widget => invalidWidgetCard(widget.kind, widget.body, `本轮没有要求生成可应用卡片；${widgetName(widget.kind)}未开放应用。`)).join('');
+            } else if (expected || (hasPolicy && allowed.length)) {
+                let matching = parsed.widgets.filter(widget => hasPolicy
+                    ? allowed.includes(widget.kind) && (!expected || widget.kind === expected)
+                    : widget.kind === expected);
+                if ((expected === 'outline_widget' || allowed?.includes?.('outline_widget')) && !matching.length) {
                     const normalized = normalizeOutlineResponse(content);
-                    if (normalized) matching = [{ kind: expected, body: normalized, editIdx: null, owner: null }];
+                    if (normalized && (!hasPolicy || allowed.includes('outline_widget')) && (!expected || expected === 'outline_widget')) {
+                        matching = [{ kind: 'outline_widget', body: normalized, editIdx: null, owner: null }];
+                    }
                 }
-                const wrong = parsed.widgets.find(widget => widget.kind !== expected);
+                const wrong = parsed.widgets.filter(widget => !matching.includes(widget));
                 if (!matching.length) {
-                    widgetCards = wrong
-                        ? invalidWidgetCard(expected, wrong.body, `本轮需要${widgetName(expected)}，AI 却返回了${widgetName(wrong.kind)}；该卡片未开放应用。请编辑原问题后重发。`)
-                        : invalidWidgetCard(expected, '', '这次方案内容不完整，无法应用；可补充要求或编辑问题重发。');
+                    widgetCards = wrong.length
+                        ? wrong
+                        .map(widget => invalidWidgetCard(expected || widget.kind, widget.body, `本轮没有开放${widgetName(widget.kind)}；该卡片未开放应用。`))
+                        .join('')
+                        : parsed.widgets.length
+                            ? invalidWidgetCard(expected || allowed[0], '', `本轮没有可用的${widgetName(expected || allowed[0])}卡片；可编辑原问题后重发。`)
+                            : noWidgetCard();
                 } else {
-                    const applicable = matching.filter(widgetBodyValid).map(widget => {
+                    const validMatching = matching.filter(widgetBodyValid);
+                    const applicable = validMatching.map(widget => {
                         if (widget.kind !== 'outline_widget') return widget;
                         return { ...widget, body: normalizeOutlineResponse(widget.body) };
                     });
-                    widgetCards = applicable.map(widget => {
-                        const wid = registerWidget?.(widget, messageContext);
-                        return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true, messageContext);
-                    }).join('');
-                    const invalid = matching.find(widget => !widgetBodyValid(widget));
-                    if (invalid) {
-                        widgetCards += invalidWidgetCard(expected, invalid.body);
-                    } else if (wrong) {
-                        widgetCards += invalidWidgetCard(expected, wrong.body, `本轮需要${widgetName(expected)}，AI 还返回了额外的${widgetName(wrong.kind)}；额外卡片未开放应用。请编辑原问题后重发。`);
-                    }
+                    widgetCards = applicable.map(widget => renderWidget(widget, registerWidget, messageContext)).join('');
+                    widgetCards += matching.filter(widget => !validMatching.includes(widget))
+                        .map(widget => invalidWidgetCard(expected || widget.kind, widget.body)).join('');
+                    widgetCards += wrong.map(widget => invalidWidgetCard(expected || widget.kind, widget.body, expected
+                        ? `本轮需要${widgetName(expected)}，AI 还返回了额外的${widgetName(widget.kind)}；额外卡片未开放应用。请编辑原问题后重发。`
+                        : `本轮没有开放${widgetName(widget.kind)}；该卡片未开放应用。`)).join('');
                 }
-            } else {
+            } else if (!hasPolicy) {
+                // 旧历史没有本轮白名单，继续兼容其原有卡型展示；仍用正式解析器校验。
                 widgetCards = parsed.widgets.map(widget => {
-                    const wid = registerWidget?.(widget, messageContext);
-                    return widgetCard(widget.kind, widget.body, wid, widget.editIdx, widget.owner, messageContext.legacyPointOwner === true, messageContext.readOnly === true, messageContext);
+                    if (!widgetBodyValid(widget)) return invalidWidgetCard(widget.kind, widget.body);
+                    return renderWidget(widget, registerWidget, messageContext);
                 }).join('');
             }
         } else {

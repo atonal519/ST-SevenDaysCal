@@ -1,6 +1,6 @@
 import { parseLines, TERMINAL_LINE_STAGES } from './schema.js';
 import { adultInjectionGuidance } from './adult.js';
-import { LINE_RELATIONSHIP_AGENCY_GUIDE } from './prompt.js';
+import { LINE_FACT_PROGRESS_GUIDE, LINE_RELATIONSHIP_AGENCY_GUIDE } from './prompt.js';
 import { narrativePreferenceContract } from '../narrative-preferences.js';
 
 export const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
@@ -50,8 +50,9 @@ export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅�
     const adultGuidance = adultInjectionGuidance(adultMode);
     return [
         prefix,
-        '以下是这个故事水面之下正在发展的伏笔。请在接下来的叙事中自然、含蓄地呈现线索：不要生硬提及、不要让角色直接谈论、更不要一次抖开。',
+        '以下是当前跟踪的事件线，仅供把握后续方向；在故事有依据时自然、含蓄地呈现线索，不要生硬提及、让角色直接谈论或一次抖开。',
         narrativePreferenceContract({ scale, direction }),
+        LINE_FACT_PROGRESS_GUIDE,
         LINE_RELATIONSHIP_AGENCY_GUIDE,
         adultGuidance,
         ...items,

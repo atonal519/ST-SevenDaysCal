@@ -4,6 +4,13 @@ import { compactLineBaselines, compactPointBaselines, latestSpaceWidget, stripWi
 export const LEDGER_READ_KEYWORDS = Object.freeze(['刻度', '暗历', '暗账', '状态', '伤', '病', '孕', '约定', '周期', '待办', '身心', '现在怎', '好了没', '没了结']);
 
 const includesAny = (message, words) => words.some(word => message.includes(word));
+const EDIT_ACTION_SOURCE = '(?:改|修改|调整|重做|重写|插入|新增|增加|删除|移除|重排|调换|对调|移动|挪|丰富|扩写|补充|细化)';
+const EDIT_ACTION_RX = new RegExp(EDIT_ACTION_SOURCE, 'u');
+const NODE_MENTION_RX = /节点/u;
+const OUTLINE_NODE_MENTION_RX = /(?:面|大纲|剧情).{0,16}节点|节点.{0,16}(?:面|大纲|剧情)/u;
+const CURRENT_OUTLINE_SOURCE_RX = /(?:当前|现在|现有|正式)(?:的)?(?:剧情大纲|大纲|剧情|面)|面(?:里|中)(?:的)?节点/u;
+const PREVIOUS_DRAFT_REFERENCE_RX = /(?:刚才|方才|上一张|前一张|前一条|这张|那张|刚刚|草稿|候选)/u;
+const EDIT_DIRECTIVE_RX = new RegExp(`节点.{0,24}${EDIT_ACTION_SOURCE}(?:一下|下|吧|一个|一(?:个|条)?|到|为|成|掉|进去|出来)|${EDIT_ACTION_SOURCE}.{0,16}节点(?:一下|下|吧)?`, 'u');
 const SPACE_MATERIAL_RX = Object.freeze({
     outline: /(?:大纲|面规划|当前面|下一面|面节点|规划到哪)/,
     points: /(?:日程|日历|待办|点卡片?|已有的点|当前点)/,
@@ -21,10 +28,27 @@ export function requestedSpaceMaterials(message) {
     const text = String(message || '');
     return Object.freeze(Object.fromEntries(Object.entries(SPACE_MATERIAL_RX).map(([key, rx]) => [key, rx.test(text)])));
 }
-const WRITE_RX = /(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做成|写成|做(?:一|一个|一条|个|条)|加(?:一|个|条)?|改(?:成|一下|为)?|修改|调整|设置|设(?:为|成)|重做|重写|换成|挪到|来一(?:张|个|条)|给我(?:做|来)?一(?:张|个|条))/;
+const WRITE_RX = /(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做成|写成|做(?:一|一个|一条|个|条)|加(?:一|个|条)?|改(?:成|一下|为)?|修改|调整|设置|设(?:为|成)|重做|重写|换成|挪到|插入|移除|删除|重排|调换|对调|来一(?:张|个|条)|给我(?:做|来)?一(?:张|个|条))/;
 const VIEW_RX = /(?:查看|看看|看下|列出|列表|有哪些|哪几|有几(?:个|条)|多少(?:个|条)|当前|现有|已有|现在(?:有|的)|第\s*\d+\s*条)/;
-const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)/;
-const FORMAT_CORRECTION_RX = /(?:卡片格式.{0,8}(?:不对|错误|不正确|不行|有问题)|(?:按|用).{0,10}(?:正确|标准)?卡片格式.{0,8}(?:重新|再)?(?:输出|生成|做|写)|(?:重新输出|按正确卡片格式)|(?:去看|看看).{0,10}(?:点和线|点|线).{0,10}(?:替换|格式).{0,8}(?:还)?不行)/;
+const RECENT_EDIT_RX = /(?:刚才|方才|上一张|这张|那张|卡片).*(?:改|换|挪|调整|重做|重写|简短|详细|短些|长些)|^(?:把)?(?:时间|地点|标题|描述|类型|阶段|日期|纪年|年号|月份|天数|备注|持续时间).{0,8}(?:改成|换成|挪到|调整为|设为|变成)|^(?:再)?(?:改成|换成|挪到|调整|重做|重写|简短|详细)|节点.{0,16}(?:新增|插入|增加|删除|移除|重排|调换|对调|移动|挪)|(?:新增|插入|增加|删除|移除|重排|调换|对调|移动|挪).{0,16}节点/;
+const FORMAT_CORRECTION_RX = /(?:卡片格式.{0,8}(?:不对|错误|不正确|不行|有问题)|(?:按|用).{0,10}(?:正确|标准)?卡片格式.{0,8}(?:重新|再)?(?:输出|生成|做|写)|重新输出|按正确卡片格式|(?:去看|看看).{0,10}(?:点和线|点|线).{0,10}(?:替换|格式).{0,8}(?:还)?不行)/;
+const APPLICATION_FAILURE_RXS = Object.freeze([
+    /(?:应用按钮|输出按钮|应用卡片).{0,10}(?:点不了|没出(?:来|现|输出)?|没有|不显示|没显示|是不是.{0,6}(?:格式|有问题))/,
+    /没(?:有)?(?:输出|出现|显示).{0,10}(?:应用按钮|输出按钮|按钮)/,
+    /(?:点不了|没出(?:来|现|输出)?|没有|不显示|没显示).{0,10}(?:应用按钮|输出按钮|应用卡片)/,
+    /(?:方案|卡片|按钮).{0,10}(?:无法应用|应用失败|内容不完整|不完整|点不了)/,
+    /(?:无法应用|应用失败|内容不完整).{0,10}(?:方案|卡片|按钮)/,
+]);
+const isFormatCorrection = message => FORMAT_CORRECTION_RX.test(message) || APPLICATION_FAILURE_RXS.some(rx => rx.test(message));
+const isNodeEditRequest = message => NODE_MENTION_RX.test(message) && EDIT_ACTION_RX.test(message)
+    && EDIT_DIRECTIVE_RX.test(message)
+    && !NO_WRITE_RX.test(message)
+    && !PURE_DISCUSSION_RX.test(message)
+    && !EXPLICIT_EXPLANATION_RX.test(message);
+const isOutlineNodeEditRequest = message => isNodeEditRequest(message) && OUTLINE_NODE_MENTION_RX.test(message);
+const isRecentEditRequest = message => RECENT_EDIT_RX.test(message)
+    || (PREVIOUS_DRAFT_REFERENCE_RX.test(message) && EDIT_ACTION_RX.test(message))
+    || isNodeEditRequest(message);
 const FORMAT_TARGET_RX = /(点(?:卡片?)?|线(?:卡片?)?|(?:轴(?:日期)?|历法)(?:卡片?)?|面(?:方案|规划|草稿)?)(?=格式)/gu;
 const FORMAT_DESTINATION_RX = /(?:改成|改为|换成|换为|转成|转为|生成|新建|新增|创建|做成|写成|输出成|输出为|重新输出)(?:一|一个|一条|一张|个|条|张)?\s*(点(?:卡片?)?|线(?:卡片?)?|轴(?:日期)?(?:卡片?)?|历法(?:卡片?)?|面(?:方案|规划|草稿)?)/gu;
 const SPACE_WIDGET_KINDS = Object.freeze(['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
@@ -54,8 +78,17 @@ const OPERATION_HELP_RX = /(?:怎么|如何|怎样|在哪|能不能|可以吗|�
 const WHY_OPERATION_RX = /(?:为什么|为何|为啥).{0,16}(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭)|(?:显示|出现|生效|找到|添加|新增|生成|使用|打开|关闭).{0,16}(?:为什么|为何|为啥)/;
 const SETTINGS_HELP_RX = /(?:设置|开关|注入).{0,12}(?:怎么|如何|在哪|没反应|没生效|不生效|找不到)|(?:怎么|如何|在哪|没反应|没生效|不生效|找不到).{0,12}(?:设置|开关|注入)/;
 const CANONICAL_ITEM_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:这个|那个|当前|现有|已有)(?:的)?(?:点|线)|(?:当前|现有|已有).{0,8}(?:日程|日历|待办|事件线|剧情线|线索|伏笔))/;
+const CURRENT_POINT_ITEM_RX = /(?:第\s*\d+\s*条\s*点|(?:这个|那个|当前|现有|已有)(?:的)?点)/u;
+const CURRENT_LINE_ITEM_RX = /(?:第\s*\d+\s*条\s*线|(?:这个|那个|当前|现有|已有)(?:的)?线)/u;
 const APPLICATION_BUTTON_REQUEST_RX = /(?:给我|请|想要|需要)?(?:一个|一份|对应的)?应用按钮|(?:应用到哪|要应用什么|哪种应用卡)/;
-const CANONICAL_EDIT_RX = /(?:第\s*\d+\s*条\s*(?:点|线)|(?:当前|现有|已有)(?:的)?(?:点|线)).{0,12}(?:改|修改|调整|重做|重写|简短|详细|短些|长些)/;
+const CANONICAL_ITEM_REFERENCE_SOURCE = '(?:(?:当前|现有|已有)(?:的)?(?:点|线)(?:第\\s*\\d+\\s*条)?|第\\s*\\d+\\s*条\\s*(?:点|线))';
+const CANONICAL_EDIT_RX = new RegExp(`(?:${CANONICAL_ITEM_REFERENCE_SOURCE}).{0,12}(?:${EDIT_ACTION_SOURCE}|简短|详细|短些|长些)(?!了|好|完)(?:一下|下|些|点)?|^(?:把|将|请|帮我|给我)?${EDIT_ACTION_SOURCE}.{0,16}(?:${CANONICAL_ITEM_REFERENCE_SOURCE})`, 'u');
+const isCanonicalEditRequest = message => CANONICAL_EDIT_RX.test(message)
+    && !NO_WRITE_RX.test(message)
+    && !PURE_DISCUSSION_RX.test(message)
+    && !EXPLICIT_EXPLANATION_RX.test(message);
+const canonicalItemKind = message => CURRENT_POINT_ITEM_RX.test(message) ? 'schedule_widget'
+    : CURRENT_LINE_ITEM_RX.test(message) ? 'line_widget' : null;
 const LOOSE_POINT_RX = /(?:^|[^\p{L}\p{N}_])点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)点(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const LOOSE_LINE_RX = /(?:^|[^\p{L}\p{N}_])线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)线(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
 const LOOSE_ALMANAC_RX = /(?:^|[^\p{L}\p{N}_])历(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])|(?:一|一个|一条|个|条|张)历(?:卡片)?(?=$|[吗呢吧呀啊嘛呗]|[^\p{L}\p{N}_])/u;
@@ -74,7 +107,7 @@ const PURE_DISCUSSION_RX = /(?:为什么|为何|为啥|是不是|是否|怎么�
 const PURE_EXPLANATION_RX = /^\s*(?:我)?(?:只是|只|单纯)?(?:想)?(?:问|了解|请教|听听解释)/;
 const EXPLICIT_EXPLANATION_RX = /^\s*(?:(?:请|麻烦|劳驾|帮我|给我)\s*)?(?:解释|说明|释义|解读|讲解|分析理解)(?:一下|下)?/;
 const REQUEST_LANGUAGE_RX = /(?:给我|帮我|请|我要|我想|想要|需要|替我|为我|生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|来|弄|输出|整理|转成|转换|改|修改|调整|设置|重做|重写)/;
-const NO_WRITE_RX = /(?:不要|别|不用|无需|不必|请勿|先别|暂(?:时)?不).{0,12}(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|弄|整理|转换|卡片)|我不(?:想|需要|要).{0,8}(?:点|线|历|面|卡片)/;
+const NO_WRITE_RX = /(?:不要|别|不用|无需|不必|请勿|先别|暂(?:时)?不).{0,12}(?:生成|新增|添加|新建|创建|记录|记下|保存|落地|安排|做|写|出|生|插|弄|整理|转换|改|修改|调整|重做|重写|插入|删除|移除|重排|调换|对调|移动|挪|丰富|扩写|补充|细化|卡片)|我不(?:想|需要|要).{0,8}(?:点|线|历|面|卡片)/;
 const DELEGATED_REQUEST_RX = /(?:给我|帮我|替我|为我|我要|我想|想要|我可以要|能不能.{0,4}给我|可以.{0,4}给我)/;
 const QUOTED_CARD_MENTION_RX = /(?:例如|比如|例子|举例|引用)[^"“‘\n]{0,16}["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’]|["“‘][^"”’\n]{0,80}(?:点|线|历|卡片)[^"”’\n]{0,80}["”’].{0,32}(?:这句话|这个词|例子|引用|说法|表达|意思|说明|句式|比喻|你觉得|怎么回答|不用执行|不要执行)/;
 const MENTION_ONLY_RX = /(?:只是|仅仅|仅是|不过是).{0,12}(?:提到|提及|说到|谈到|引用)|(?:这里|此处).{0,12}(?:比喻|词语|说法|含义)/;
@@ -87,10 +120,10 @@ const ROUTE_TARGETS = Object.freeze([
     ['line_widget', /(?:事件线|剧情线|线索|伏笔|线(?:卡片?)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
     ['almanac_widget', /(?:重要日期|具体日期|节日|生日|纪念日|年历|轴(?:日期)?(?:卡片)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
     ['era_widget', /(?:历法|纪年|年号)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
-    ['outline_widget', /(?:大纲|面(?:方案|规划|草稿)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成)/u],
+    ['outline_widget', /(?:大纲|面(?:方案|规划|草稿)?)(?=$|[\s，。？！、；：,:;!?）)\]」』”’"']|和|及|与|然后|并|改|修改|调整|转|转换|变成|整理|梳理|生成|做成|写成|丰富|扩写|补充|细化)/u],
 ]);
 const ROUTE_ACTION_RX = /(?:整理(?:成|为)|梳理(?:成|为)|转换(?:成|为)|转(?:成|为)|变成|改(?:成|为)|修改(?:成|为)|调整(?:成|为)|输出(?:成|为)|生成|新建|创建|制作|做成|写成|产出|整理|梳理|转换|转|改|修改|调整|做|写|插|输出)/gu;
-const SOURCE_REFERENCE_RX = /(?:(?:把|将)\s*)?(?:刚才|方才|上一张|前一张|前一条|这张|那张|刚刚)([\s\S]{0,24}?)(?:改|修改|调整|转(?:成|为)?|转换(?:成|为)|变成|整理(?:成|为)|梳理(?:成|为)|生成|做成|写成)/u;
+const SOURCE_REFERENCE_RX = /(?:(?:把|将)\s*)?(?:刚才|方才|上一张|前一张|前一条|这张|那张|刚刚)([\s\S]{0,24}?)(?:改|修改|调整|转(?:成|为)?|转换(?:成|为)|变成|整理(?:成|为)|梳理(?:成|为)|生成|做成|写成|丰富|扩写|补充|细化)/u;
 
 const sourceReference = message => {
     const match = SOURCE_REFERENCE_RX.exec(message);
@@ -148,7 +181,8 @@ const explicitTargetRoutes = message => {
 const makeWriteIntent = ({ kind, faq, message, latestWidget }) => {
     const hasSourceReference = SOURCE_REFERENCE_RX.test(message);
     const sourceWidget = hasSourceReference && latestWidget?.kind !== kind ? latestWidget : null;
-    const editExisting = CANONICAL_EDIT_RX.test(message) && !sourceWidget;
+    const editExisting = isCanonicalEditRequest(message) && !sourceWidget
+        && (!canonicalItemKind(message) || canonicalItemKind(message) === kind);
     return Object.freeze({
         action: 'write', kind, faq,
         pointContext: kind === 'schedule_widget',
@@ -171,7 +205,7 @@ const moduleMatches = message => {
     return Object.freeze({ schedule_widget: POINT_RX.test(message), line_widget: LINE_RX.test(message), almanac_widget: almanac, era_widget: era });
 };
 
-const previousFormatTarget = (history, latestWidget) => {
+const previousFormatTarget = (history, latestWidget, widgetParsers) => {
     let kind = null;
     for (let index = (Array.isArray(history) ? history.length : 0) - 1; index >= 0; index -= 1) {
         const item = history[index];
@@ -186,17 +220,19 @@ const previousFormatTarget = (history, latestWidget) => {
         }
         if (item?.role !== 'user' || !kind) continue;
         const request = String(item.content || '');
-        if (FORMAT_CORRECTION_RX.test(request)) continue;
-        const intent = classifySpaceIntent(request, []);
+        if (isFormatCorrection(request)) continue;
+        const intent = classifySpaceIntent(request, [], widgetParsers);
         if (['write', 'revise-recent'].includes(intent.action) && intent.kind === kind) {
-            return { kind, originalRequest: request };
+            return { kind, originalRequest: request, recentWidget: latestSpaceWidget(history, kind, widgetParsers) };
         }
     }
-    return kind ? { kind, originalRequest: '' } : latestWidget ? { kind: latestWidget.kind, originalRequest: '' } : null;
+    return kind ? { kind, originalRequest: '', recentWidget: latestSpaceWidget(history, kind, widgetParsers) }
+        : latestWidget ? { kind: latestWidget.kind, originalRequest: '', recentWidget: latestWidget } : null;
 };
 
-export function classifySpaceIntent(userMsg, historySnapshot = []) {
+export function classifySpaceIntent(userMsg, historySnapshot = [], widgetParsers = {}) {
     const message = String(userMsg || '').trim();
+    const requestedMaterials = requestedSpaceMaterials(message);
     const routedTargets = explicitTargetRoutes(message);
     let routedKinds = [...new Set(routedTargets.map(({ kind }) => kind))];
     const routedHelpQuestion = routedTargets.length > 0 && routedTargets.every(({ help }) => help);
@@ -205,15 +241,15 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         routedKinds = routedKinds.map(kind => kind === 'almanac_widget' ? 'era_widget' : kind);
     }
     const semanticModules = Object.freeze({
-        schedule_widget: modules.schedule_widget || LOOSE_POINT_RX.test(message) || DIRECT_POINT_REQUEST_RX.test(message) || DESIRED_POINT_RX.test(message),
-        line_widget: modules.line_widget || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
+        schedule_widget: modules.schedule_widget || (isCanonicalEditRequest(message) && CURRENT_POINT_ITEM_RX.test(message)) || LOOSE_POINT_RX.test(message) || DIRECT_POINT_REQUEST_RX.test(message) || DESIRED_POINT_RX.test(message),
+        line_widget: modules.line_widget || (isCanonicalEditRequest(message) && CURRENT_LINE_ITEM_RX.test(message)) || LOOSE_LINE_RX.test(message) || DIRECT_LINE_REQUEST_RX.test(message) || DESIRED_LINE_RX.test(message),
         almanac_widget: modules.almanac_widget || LOOSE_ALMANAC_RX.test(message) || DIRECT_ALMANAC_REQUEST_RX.test(message) || DESIRED_ALMANAC_RX.test(message) || (!modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message))),
         era_widget: modules.era_widget,
-        outline_widget: OUTLINE_REQUEST_RX.test(message),
+        outline_widget: OUTLINE_REQUEST_RX.test(message) || isOutlineNodeEditRequest(message),
     });
     const semanticKinds = Object.keys(semanticModules).filter(kind => semanticModules[kind]);
     const source = sourceReference(message);
-    const latestWidget = latestSpaceWidget(historySnapshot, source.kind);
+    const latestWidget = latestSpaceWidget(historySnapshot, source.kind, widgetParsers);
     const operationalQuestion = OPERATION_HELP_RX.test(message) || WHY_OPERATION_RX.test(message);
     const composedModuleHelp = BARE_HELP_MODULE_MENTION_RX.test(message) && HELP_ACTION_RX.test(message) && operationalQuestion;
     const faqCandidate = UNIQUE_HELP_RX.test(message)
@@ -224,8 +260,8 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         || /(?:^|[，,。；;！!？?\s])不(?:要|再|继续)?(?:生成|新增|添加|新建|创建|出|插|写|做|整理|转换|改).{0,12}(?:点|线|历|面|卡片)/u.test(message))
         && !NEGATED_DISCOURSE_THEN_CARD_RX.test(message) && !routedKinds.length;
     const asksForExplanation = EXPLICIT_EXPLANATION_RX.test(message) || /^(?:为什么|为何|为啥)/u.test(message);
-    if (FORMAT_CORRECTION_RX.test(message) && !noWrite && !asksForExplanation) {
-        const priorExpected = previousFormatTarget(historySnapshot, latestWidget);
+    if (isFormatCorrection(message) && !noWrite && !asksForExplanation) {
+        const priorExpected = previousFormatTarget(historySnapshot, latestWidget, widgetParsers);
         const destinationKind = formatDestinationKind(message);
         if (!destinationKind && (semanticKinds.length > 1 || routedKinds.length > 1)) {
             return Object.freeze({ action: 'clarify', kind: null, faq: false, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
@@ -246,7 +282,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         return Object.freeze({
             action: 'write', kind, faq: false,
             pointContext: kind === 'schedule_widget', lineContext: kind === 'line_widget',
-            recentWidget: null, formatRepair: true,
+            recentWidget: priorExpected?.recentWidget || (latestWidget?.kind === kind ? latestWidget : null), formatRepair: true,
             ...(editExisting ? { editExisting: true } : {}), reason: '',
         });
     }
@@ -257,7 +293,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'missing-widget-kind' });
     }
     const helpQuestion = routedHelpQuestion || (faq && operationalQuestion && !delegatedCardRequest && !hasPositiveRoute);
-    const hasWrite = routedKinds.length > 0 || WRITE_RX.test(message) || CANONICAL_EDIT_RX.test(message);
+    const hasWrite = routedKinds.length > 0 || WRITE_RX.test(message) || isCanonicalEditRequest(message);
     const writeKinds = !helpQuestion && !noWrite && hasWrite
         ? (routedKinds.length ? routedKinds : Object.keys(semanticModules).filter(kind => semanticModules[kind])) : [];
     if (source.kind && !latestWidget && writeKinds.length) {
@@ -265,7 +301,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     }
     const directAxisCardRequest = !noWrite && (!routedKinds.length || routedKinds.includes('almanac_widget')) && !modules.era_widget && (DIRECT_AXIS_CARD_REQUEST_RX.test(message) || DESIRED_AXIS_CARD_RX.test(message));
     const directAxisEraRequest = !helpQuestion && !noWrite && (!routedKinds.length || routedKinds.includes('era_widget')) && modules.era_widget && /轴(?:历)?卡片/.test(message) && REQUEST_LANGUAGE_RX.test(message);
-    const directOutlineRequest = !noWrite && (!routedKinds.length || routedKinds.includes('outline_widget')) && OUTLINE_REQUEST_RX.test(message) && REQUEST_LANGUAGE_RX.test(message);
+    const directOutlineRequest = !noWrite && !asksForExplanation && (!routedKinds.length || routedKinds.includes('outline_widget')) && OUTLINE_REQUEST_RX.test(message) && REQUEST_LANGUAGE_RX.test(message);
     const directSemanticRequest = directOutlineRequest
         || routedKinds.length > 0
         || DIRECT_POINT_REQUEST_RX.test(message)
@@ -280,7 +316,18 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     if (writeKinds.length > 1 || (!routedKinds.length && !helpQuestion && !noWrite && (hasWrite || directSemanticRequest || delegatedCardRequest) && semanticKinds.length > 1)) {
         return Object.freeze({ action: 'clarify', kind: null, faq, pointContext: false, lineContext: false, recentWidget: null, reason: 'ambiguous-widget-kind' });
     }
+    // 明确引用当前正式面时，以正式稿作为本轮修改来源；旧候选和已完成的删改叙述只作历史上下文。
+    if (!helpQuestion && !noWrite && (!routedKinds.length || (routedKinds.length === 1 && routedKinds[0] === 'outline_widget'))
+        && CURRENT_OUTLINE_SOURCE_RX.test(message) && isNodeEditRequest(message)) {
+        return makeWriteIntent({ kind: 'outline_widget', faq, message, latestWidget });
+    }
     if (!helpQuestion && directOutlineRequest) {
+        return makeWriteIntent({ kind: 'outline_widget', faq, message, latestWidget });
+    }
+    if (!helpQuestion && !noWrite && (!routedKinds.length || (routedKinds.length === 1 && routedKinds[0] === 'outline_widget')) && isOutlineNodeEditRequest(message)) {
+        if (latestWidget?.kind === 'outline_widget') {
+            return Object.freeze({ action: 'revise-recent', kind: 'outline_widget', faq, pointContext: false, lineContext: false, recentWidget: latestWidget, reason: '' });
+        }
         return makeWriteIntent({ kind: 'outline_widget', faq, message, latestWidget });
     }
     if (!helpQuestion && directAxisCardRequest) {
@@ -289,7 +336,7 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
     if (directAxisEraRequest) {
         return makeWriteIntent({ kind: 'era_widget', faq, message, latestWidget });
     }
-    if (!helpQuestion && !noWrite && RECENT_EDIT_RX.test(message)) {
+    if (!helpQuestion && !noWrite && isRecentEditRequest(message)) {
         const explicitKind = writeKinds[0] || null;
         const canReviseLatest = latestWidget && (!explicitKind || explicitKind === latestWidget.kind) && !CANONICAL_ITEM_RX.test(message);
         if (canReviseLatest) {
@@ -327,6 +374,10 @@ export function classifySpaceIntent(userMsg, historySnapshot = []) {
         pointContext: false,
         lineContext: false,
         recentWidget: null,
+        allowedWidgetKinds: uncertainRequest && !reliableDiscussion
+            ? semanticKinds.length === 1 ? semanticKinds
+                : semanticKinds.length === 0 && requestedMaterials.outline ? ['outline_widget'] : []
+            : [],
         reason: '',
     });
 }
@@ -361,13 +412,17 @@ export function createSpaceContext(env = {}) {
         const userName = ctx.name1 || '用户';
         const charName = ctx.name2 || '角色';
         const message = String(userMsg || '');
-        const intent = classifySpaceIntent(message, historySnapshot);
+        const intent = classifySpaceIntent(message, historySnapshot, {
+            parseAlmanac: env.parseAlmanac,
+            parseEra: env.parseEra,
+        });
         const requested = requestedSpaceMaterials(message);
         const outlineEdit = intent.kind === 'outline_widget' && ['write', 'revise-recent'].includes(intent.action);
-        const outlineRaw = outlineEdit
+        const outlineCandidateAllowed = outlineEdit || (intent.action === 'semantic-route' && requested.outline);
+        const outlineRaw = outlineCandidateAllowed
             ? env.readOutlineDraftSnapshot?.(target)?.raw || ''
             : requested.outline ? env.readOutline?.(target) || '' : '';
-        const outlineRawToken = outlineEdit ? (env.rawToken?.(outlineRaw) || null) : null;
+        const outlineRawToken = outlineCandidateAllowed ? (env.rawToken?.(outlineRaw) || null) : null;
         let pointScopes = requested.points || intent.pointContext ? env.readPointScopes?.(target) : [];
         if (!Array.isArray(pointScopes)) {
             const legacyPointRaw = String(env.readPointRaw?.(target) || '');
@@ -389,8 +444,11 @@ export function createSpaceContext(env = {}) {
         const faqText = intent.faq ? buildSpaceHelpText(settings) : '';
         const characterData = env.readCharacterData?.(ctx) || '';
         const storyDate = requested.date ? env.readStoryDate?.(ctx) || '' : '';
-        const almanacText = requested.date || (intent.formatRepair && intent.kind === 'almanac_widget') ? env.readAlmanacText?.(target) || '' : '';
-        const calDescText = requested.calendar || requested.date || (intent.formatRepair && ['almanac_widget', 'era_widget'].includes(intent.kind)) ? env.readCalendarText?.(target) || '' : '';
+        const needsAlmanac = requested.date || (intent.kind === 'almanac_widget' && ['write', 'revise-recent'].includes(intent.action));
+        const needsCalendar = requested.calendar || requested.date
+            || (['write', 'revise-recent'].includes(intent.action) && ['almanac_widget', 'era_widget'].includes(intent.kind));
+        const almanacText = needsAlmanac ? env.readAlmanacText?.(target) || '' : '';
+        const calDescText = needsCalendar ? env.readCalendarText?.(target) || '' : '';
         const readMaterial = (enabled, label, reader) => {
             if (!enabled) return '';
             try { return Promise.resolve(reader?.()).catch(() => `【${label}读取失败】本轮暂时无法读取这项资料。`); }
@@ -413,6 +471,7 @@ export function createSpaceContext(env = {}) {
         const titleSupplementText = [
             message,
             ...historyMessages.map(item => String(item?.content ?? '')),
+            intent.formatRepair ? intent.recentWidget?.body : '',
             intent.action === 'revise-recent' ? intent.recentWidget?.body : '',
             intent.action === 'write' ? intent.sourceWidget?.body : '',
             intent.action === 'revise-recent'
@@ -467,7 +526,10 @@ export function createSpaceContext(env = {}) {
         // 本地 transport 元数据，不发送给 API；冻结本轮唯一允许应用的卡型。
         const expectedWidgetKind = ['write', 'revise-recent'].includes(intent.action) ? intent.kind : null;
         if (expectedWidgetKind) Object.defineProperty(messages, 'expectedWidgetKind', { value: expectedWidgetKind, enumerable: false });
-        if (expectedWidgetKind === 'outline_widget' && outlineRawToken) Object.defineProperty(messages, 'outlineRawToken', { value: outlineRawToken, enumerable: false });
+        const allowedWidgetKinds = expectedWidgetKind ? [expectedWidgetKind]
+            : intent.action === 'semantic-route' ? [...(intent.allowedWidgetKinds || [])] : [];
+        Object.defineProperty(messages, 'allowedWidgetKinds', { value: Object.freeze(allowedWidgetKinds), enumerable: false });
+        if (allowedWidgetKinds.includes('outline_widget') && outlineRawToken) Object.defineProperty(messages, 'outlineRawToken', { value: outlineRawToken, enumerable: false });
         return messages;
     };
     return Object.freeze({ buildMessages });

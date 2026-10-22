@@ -359,7 +359,7 @@ export function createInlineFeature(env = {}) {
     }
 
     // 组合轴、标注池、点、线内容；只有日期或内容均为空时才不挂楼内块。
-    function composeInlineBox(snap, isLatest, floorClock = null, floor = null) {
+    function composeInlineBox(snap, isLatest, floorClock = null, floor = null, coldItems = null) {
         const readOnly = !isLatest;
         const fallbackRecord = readStore(keyDesc('caldesc-fallback', 'user', ''));
         const resolvedResult = isLatest ? { resolved: true, calendar: loadCalDesc() } : snapshot.resolveSnapshotCalendar(snap, { fallback: fallbackRecord, marker: !!fallbackRecord, current: loadCalDesc() });
@@ -369,7 +369,7 @@ export function createInlineFeature(env = {}) {
         const localWeekdayRef = isLatest ? undefined : createWeekdayConsumerContext({ snapshotRef: snap?.weekdayRef, floor, resolveLocal: f => storyWeekdayRefPure(getContext(), resolvedCalendar, ALM_CHAT_SCAN_LIMIT, f) }).weekdayRef;
         const alm        = _buildAlmanacBlockHtml(snap ? (snap.almanac || []) : null, snap ? snap.anchor : null, resolvedCalendar, localWeekdayRef);
         const schInner   = _buildScheduleBlockHtml(snap ? (snap.point || '') : null, readOnly, resolvedCalendar, localWeekdayRef);
-        const linesInner = linesFeature.inlineHtml(snap ? (snap.line || '') : null, readOnly);
+        const linesInner = linesFeature.inlineHtml(snap ? (snap.line || '') : null, readOnly, coldItems ?? snap?.cold);
         // 标注池：AI 楼实际打捞到的暗历条目（快照 pool 字段驱动；最新楼读活账，空则不出块）。
         const ledgerInner = _buildLedgerBlockHtml(snap ? (snap.pool || []) : null, readOnly, resolvedCalendar);
 
@@ -534,8 +534,11 @@ export function createInlineFeature(env = {}) {
         const isUser = el.getAttribute('is_user') === 'true';
         const mid = el.getAttribute('mesid');
         const renderKey = renderedBoxKey(el);
-        let snap = null;
-        if (isLatest) env.freezeSnapshot?.(mid);
+        let snap = null, coldItems = null;
+        if (isLatest) {
+            const frozen = env.freezeSnapshot?.(mid);
+            if (!isUser && Array.isArray(frozen?.cold)) coldItems = frozen.cold;
+        }
         else {
             snap = mid != null ? env.readSnapshot?.(Number(mid)) : null;
             if (!snap) { unmount(el); return; }
@@ -546,7 +549,7 @@ export function createInlineFeature(env = {}) {
         const floorClock = !isLatest && !isUser ? env.parseStoryClock?.(env.chatMessage?.(floor) || '', floorCalendar) : null;
         const html = isUser
             ? (recall && !recall.calendar ? '<div class="sp-inline-box sp-dash sp-inline-box-ro"><div class="sp-dash-summary sp-dash-summary-flat">历法未知 / 日期未知</div></div>' : env.buildUserRecall?.(snap, isLatest, recall?.calendar))
-            : composeInlineBox(snap, isLatest, floorClock, floor);
+            : composeInlineBox(snap, isLatest, floorClock, floor, coldItems);
         const boxes = directBoxes(msg);
         const rendered = renderedBoxes.get(renderKey);
         syncRenderedOpen(rendered);

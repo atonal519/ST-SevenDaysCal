@@ -121,15 +121,18 @@ function normalizeExplicitLineTuple(fields) {
     if (fields.length === 9 && tupleKey(fields[3], 'agency') && isAgencyField(fields[4])
         && tupleKey(fields[5], 'stall') && isBoolField(fields[6])
         && tupleKey(fields[7], 'pin') && isBoolField(fields[8])) {
-        return [fields[0], fields[1], fields[2], fields[4], fields[6], fields[8]];
+        return [fields[0], tupleValue(fields[1], 'stage') ?? fields[1], tupleValue(fields[2], 'when') ?? fields[2], fields[4], fields[6], fields[8]];
     }
     if (fields.length === 6) {
+        const stage = tupleValue(fields[1], 'stage');
+        const when = tupleValue(fields[2], 'when');
         const agency = tupleValue(fields[3], 'agency');
         const stall = tupleValue(fields[4], 'stall');
         const pin = tupleValue(fields[5], 'pin');
         if (agency !== null && isAgencyField(agency) && stall !== null && isBoolField(stall) && pin !== null && isBoolField(pin)) {
-            return [fields[0], fields[1], fields[2], agency, stall, pin];
+            return [fields[0], stage ?? fields[1], when ?? fields[2], agency, stall, pin];
         }
+        if (stage !== null || when !== null) return [fields[0], stage ?? fields[1], when ?? fields[2], fields[3], fields[4], fields[5]];
     }
     return fields;
 }

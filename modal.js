@@ -139,6 +139,51 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
         });
     }
 
+    function custom({ title = '', content, confirmText = '确定', cancelText = '取消', submit, onClose } = {}) {
+        if (!content || typeof submit !== 'function') throw new TypeError('自定义弹窗内容无效');
+        return new Promise(resolve => {
+            prepareDialog();
+            let previousFocus = globalThis.document?.activeElement;
+            while (previousFocus?.shadowRoot?.activeElement) previousFocus = previousFocus.shadowRoot.activeElement;
+            const cancelButton = cancelText === '' || cancelText === null ? '' : `<button class="sp-dialog-button sp-dialog-button-secondary sp-dialog-cancel" type="button">${escapeHtml(cancelText)}</button>`;
+            const $overlay = $(`<div id="${OVERLAY_ID}" class="sp-dialog-overlay">
+                <div class="sp-dialog-sheet sp-dialog-sheet-custom" role="dialog" aria-modal="true" aria-labelledby="sp-dialog-title">
+                    <div id="sp-dialog-title" class="sp-dialog-head">${escapeHtml(title)}</div>
+                    <div class="sp-dialog-custom"></div>
+                    <div class="sp-dialog-input-error" aria-live="polite"></div>
+                    <div class="sp-dialog-actions">
+                        ${cancelButton}
+                        <button class="sp-dialog-button sp-dialog-button-primary sp-dialog-submit" type="button">${escapeHtml(confirmText)}</button>
+                    </div>
+                </div>
+            </div>`);
+            $overlay.find('.sp-dialog-custom')[0]?.appendChild?.(content);
+            const session = mountDialog($overlay, resolve, { onClose: () => { try { onClose?.(); } finally { if (previousFocus?.isConnected) previousFocus.focus(); } } });
+            let submitting = false;
+            const runSubmit = async () => {
+                if (submitting || session.isDone()) return;
+                submitting = true; $overlay.find('.sp-dialog-input-error').empty();
+                try { const value = await submit(); session.finish(value ?? true); }
+                catch (error) {
+                    submitting = false;
+                    $overlay.find('.sp-dialog-input-error').html(`<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escapeHtml('操作失败，请重试。')}`);
+                }
+            };
+            $overlay.find('.sp-dialog-submit').on('click', runSubmit);
+            $overlay.find('.sp-dialog-cancel').on('click', session.close);
+            if (String(content.tagName ?? content.tag ?? '').toLowerCase() === 'form') {
+                content.addEventListener?.('submit', event => { event.preventDefault(); runSubmit(); });
+                content.addEventListener?.('keydown', event => {
+                    const target = event.target;
+                    const type = String(target?.type ?? target?.getAttribute?.('type') ?? 'text').toLowerCase();
+                    if (String(target?.tagName ?? target?.tag ?? '').toLowerCase() !== 'input' || !['text', 'search', 'url', 'tel', 'email', 'password', 'number', 'date', 'datetime-local', 'month', 'time', 'week'].includes(type) || event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+                    event.preventDefault(); runSubmit();
+                });
+            }
+            setTimeout(() => $overlay.find('.sp-dialog-submit').trigger('focus'), 0);
+        });
+    }
+
     // 通用多选表单：只负责选项互斥、自定义文本与生命周期，具体选项和业务校验由调用方提供。
     function selectMany({ title = '', body = '', choices = [], initialValues = [], custom = null, confirmText = '确定', cancelText = '取消', validate } = {}) {
         if (!Array.isArray(choices) || !choices.length) return Promise.resolve(null);
@@ -405,5 +450,5 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
         });
     }
 
-    return Object.freeze({ confirm, choose, prompt, promptTextarea, promptFields, selectMany, selectOne, selectOneAsync, cancelActive });
+    return Object.freeze({ confirm, choose, prompt, promptTextarea, promptFields, selectMany, selectOne, selectOneAsync, custom, cancelActive });
 }

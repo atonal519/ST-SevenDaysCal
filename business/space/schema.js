@@ -1,4 +1,6 @@
 import { normalizeOutlineResponse } from '../outline/schema.js';
+import { parseLineCard } from '../lines/schema.js';
+import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord } from '../point/parse.js';
 
 export const SPACE_HISTORY_CAP = 20;
 
@@ -14,7 +16,7 @@ export function appendSpaceUser(history, content, cap = SPACE_HISTORY_CAP) {
 
 export function appendSpaceAssistant(history, content, context = null) {
     let savedContent = content;
-    if (context?.expectedWidgetKind === 'outline_widget') {
+    if (context?.expectedWidgetKind === 'outline_widget' || context?.allowedWidgetKinds?.includes?.('outline_widget')) {
         const normalized = normalizeOutlineResponse(content);
         if (normalized) savedContent = normalized;
     }
@@ -25,7 +27,8 @@ export function appendSpaceAssistant(history, content, context = null) {
     if (['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'].includes(context?.expectedWidgetKind)) {
         message.expectedWidgetKind = context.expectedWidgetKind;
     }
-    if (context?.expectedWidgetKind === 'outline_widget' && typeof context.outlineRawToken === 'string') {
+    if (Array.isArray(context?.allowedWidgetKinds)) message.allowedWidgetKinds = [...new Set(context.allowedWidgetKinds.filter(kind => ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'].includes(kind)))];
+    if ((context?.expectedWidgetKind === 'outline_widget' || context?.allowedWidgetKinds?.includes?.('outline_widget')) && typeof context.outlineRawToken === 'string') {
         message.outlineRawToken = context.outlineRawToken;
     }
     return [...history, message];
@@ -113,13 +116,30 @@ export function extractWidgets(raw) {
     return Object.freeze({ text: source.replace(rx, '').trim(), widgets });
 }
 
-export function latestSpaceWidget(history, kind = null) {
+export function latestSpaceWidget(history, kind = null, parsers = {}) {
     if (!Array.isArray(history)) return null;
     for (let index = history.length - 1; index >= 0; index -= 1) {
         const message = history[index];
         if (message?.role !== 'assistant') continue;
         if (message.portableReadonly === true) continue;
-        const widgets = extractWidgets(message.content).widgets.filter(widget => widget.body);
+        let widgets = extractWidgets(message.content).widgets.filter(widget => widget.body);
+        if (!widgets.length && (message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget'))) {
+            const normalized = normalizeOutlineResponse(message.content);
+            if (normalized) widgets = [Object.freeze({ kind: 'outline_widget', body: normalized, editIdx: null, owner: null })];
+        }
+        if (Array.isArray(message.allowedWidgetKinds)) widgets = widgets.filter(widget => message.allowedWidgetKinds.includes(widget.kind));
+        if (message.expectedWidgetKind) widgets = widgets.filter(widget => widget.kind === message.expectedWidgetKind);
+        widgets = widgets.filter(widget => {
+            if (widget.kind === 'schedule_widget') {
+                const block = firstPointEventBlock(`<schedule_widget>${widget.body}</schedule_widget>`);
+                return isCompletePointEvent(block ? parsePointEventRecord(block) : null);
+            }
+            if (widget.kind === 'line_widget') return !!parseLineCard(widget.body);
+            if (widget.kind === 'almanac_widget') return typeof parsers.parseAlmanac === 'function' && parsers.parseAlmanac(widget.body).length > 0;
+            if (widget.kind === 'era_widget') return typeof parsers.parseEra === 'function' && !!parsers.parseEra(widget.body);
+            if (widget.kind === 'outline_widget') return !!normalizeOutlineResponse(widget.body);
+            return true;
+        });
         if (!widgets.length) {
             if (kind) continue;
             return null;
@@ -154,20 +174,21 @@ export function stripWidgetsForApi(history) {
         let cleaned = String(message.content || '');
         if (message.role === 'assistant') {
             cleaned = cleaned
-                .replace(/<schedule_widget[^>]*>[\s\S]*?<\/schedule_widget\s*>/gi, '【已输出一张点卡片（内容以当前面板为准）】')
-                .replace(/<line_widget[^>]*>[\s\S]*?<\/line_widget\s*>/gi, '【已输出一张线卡片（内容以当前面板为准）】')
-                .replace(/<almanac_widget[^>]*>[\s\S]*?<\/almanac_widget\s*>/gi, '【已输出一张历卡片（内容以当前面板为准）】')
-                .replace(/<era_widget[^>]*>[\s\S]*?<\/era_widget\s*>/gi, '【已输出一张历法卡片（内容以当前面板为准）】')
-                .replace(/<outline_widget[^>]*>[\s\S]*?<\/outline_widget\s*>/gi, '【已输出一张面草稿（内容以当前面板为准）】');
-            if (message.expectedWidgetKind === 'outline_widget' && !/<outline_widget\b/i.test(String(message.content || ''))
+                .replace(/<schedule_widget[^>]*>[\s\S]*?<\/schedule_widget\s*>/gi, '【此前回复含点卡片候选（不代表已应用）】')
+                .replace(/<line_widget[^>]*>[\s\S]*?<\/line_widget\s*>/gi, '【此前回复含线卡片候选（不代表已应用）】')
+                .replace(/<almanac_widget[^>]*>[\s\S]*?<\/almanac_widget\s*>/gi, '【此前回复含轴日期候选（不代表已应用）】')
+                .replace(/<era_widget[^>]*>[\s\S]*?<\/era_widget\s*>/gi, '【此前回复含完整历法候选（不代表已应用）】')
+                .replace(/<outline_widget[^>]*>[\s\S]*?<\/outline_widget\s*>/gi, '【此前回复含面草稿候选（不代表已应用）】');
+            if ((message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget')) && !/<outline_widget\b/i.test(String(message.content || ''))
                 && normalizeOutlineResponse(message.content)) {
-                cleaned = '【已输出一张面草稿（内容以当前面板为准）】';
+                cleaned = '【此前回复含面草稿候选（不代表已应用）】';
             }
         }
         const apiMessage = { ...message, content: cleaned };
         delete apiMessage.pointBaselines;
         delete apiMessage.lineBaselines;
         delete apiMessage.expectedWidgetKind;
+        delete apiMessage.allowedWidgetKinds;
         delete apiMessage.outlineRawToken;
         delete apiMessage.portableReadonly;
         return apiMessage;

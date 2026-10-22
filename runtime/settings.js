@@ -1,3 +1,4 @@
+import { getSharedBodyWrappers, updateSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
 // runtime/settings.js — 设置数据读写、功能开关与 API 预设。
 import { extension_settings } from '../../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../../script.js';
@@ -106,7 +107,11 @@ export const DEFAULT_SETTINGS = {
     quickReplyShortcutKeys: [],
 };
 
+export const getWrapperSettings = () => getSharedBodyWrappers(extension_settings);
+export const updateWrapperSettings = patch => updateSharedBodyWrappers(extension_settings, patch);
+
 export function getSettings() {
+    getWrapperSettings();
     const s = extension_settings[PLUGIN_ID] ??= { ...DEFAULT_SETTINGS };
     // 老用户的设置段可能缺后加字段（如 customPrompt）：逐一补默认值，只补缺失、不覆盖已有值。
     for (const k in DEFAULT_SETTINGS) if (!(k in s)) s[k] = DEFAULT_SETTINGS[k];

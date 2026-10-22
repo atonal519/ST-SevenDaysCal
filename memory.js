@@ -5,7 +5,8 @@
 
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
-import { LITERAL_DOUBLE_BRACKET_RULE, normalizeTagRules, TAG_NAME_SOURCE } from './utils/tag-names.js';
+import { normalizeTagRules } from './utils/tag-names.js';
+import { sanitizeStoryBody } from './utils/shared-body-wrappers.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
 import { getChatRoot, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from './runtime/external-chat-storage.js';
 import { ledgerHistoricalNarrativeMessage } from './business/ledger/capture.js';
@@ -190,149 +191,8 @@ function restoreMemoryRoot(root, snapshot) {
 // plus HTML/XML comments. Applied at getAiFloors() so every downstream
 // consumer (grouping, hashing, prompt building) sees the same clean text.
 //
-// Two user-configurable rule lists override the default behavior:
-//   keepTags  → PROTECT list. Contents inside these tags survive stripping;
-//               the tags themselves are removed but their inner text is kept.
-//               Default 'content' preserves narrative wrapped in that tag.
-//   extraTags → EXTRA strip list. XML and legacy [[...]] wrappers still rescue
-//               explicitly kept descendants; [name]...[/name] drops its whole block.
-export function normalizeTagList(csv) {
-    return normalizeTagRules(csv);
-}
-const parseTagList = normalizeTagList;
-
-function parseSanitizerTree(text, keepSet, extraSet) {
-    const root = { kind: 'root', children: [] };
-    const stack = [root];
-    const tokenRx = new RegExp(`<\\/?${TAG_NAME_SOURCE}(?:\\s[^>]*)?\\/?>|\\[\\[([\\s\\S]*?)\\]\\]|\\[\\/?${TAG_NAME_SOURCE}\\]`, 'gu');
-    const pairedCloseRx = new RegExp(`^<\\/${TAG_NAME_SOURCE}\\s*>$`, 'u');
-    const pairedBracketRules = new Set([...keepSet, ...extraSet].filter(rule => /^\[[^\]]+\]\.\.\.\[\/[^\]]+\]$/u.test(rule)));
-    const pairedBracketTokenRx = new RegExp(`^\\[(\\/)?(${TAG_NAME_SOURCE})\\]$`, 'u');
-    let cursor = 0;
-    let match;
-    while ((match = tokenRx.exec(text))) {
-        const parent = stack[stack.length - 1];
-        if (match.index > cursor) parent.children.push(text.slice(cursor, match.index));
-        const token = match[0];
-        if (token.startsWith('[[')) {
-            parent.children.push({
-                kind: 'bracket',
-                name: LITERAL_DOUBLE_BRACKET_RULE,
-                closed: true,
-                children: parseSanitizerTree(match[1], keepSet, extraSet).children,
-            });
-        } else if (token.startsWith('[')) {
-            const bracket = pairedBracketTokenRx.exec(token);
-            if (!bracket) {
-                parent.children.push(token);
-            } else {
-                const closing = Boolean(bracket[1]);
-                const name = bracket[2];
-                const normalized = name.toLowerCase();
-                const rule = `[${normalized}]...[/` + normalized + ']';
-                if (!pairedBracketRules.has(rule)) {
-                    parent.children.push(token);
-                } else if (!closing) {
-                    const node = { kind: 'named-bracket', name, normalized, rule, openToken: token, closeToken: null, closed: false, children: [] };
-                    parent.children.push(node);
-                    stack.push(node);
-                } else {
-                    let found = false;
-                    for (let i = stack.length - 1; i > 0; i--) {
-                        const node = stack[i];
-                        if (node.kind === 'named-bracket' && node.normalized === normalized) {
-                            node.closed = true;
-                            node.closeToken = token;
-                            stack.length = i;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) parent.children.push(token);
-                }
-            }
-        } else {
-            const closing = token.startsWith('</');
-            const name = new RegExp(`^<\\/?(${TAG_NAME_SOURCE})`, 'u').exec(token)?.[1] || '';
-            if (!closing && !/\/\s*>$/u.test(token)) {
-                const node = { kind: 'xml', name, normalized: name.toLowerCase(), closed: false, children: [] };
-                parent.children.push(node);
-                stack.push(node);
-            } else if (closing && pairedCloseRx.test(token) && stack.length > 1) {
-                const normalized = name.toLowerCase();
-                for (let i = stack.length - 1; i > 0; i--) {
-                    const node = stack[i];
-                    if (node.kind !== 'xml') continue;
-                    const caseInsensitive = keepSet.has(node.normalized) || extraSet.has(node.normalized);
-                    if ((caseInsensitive && node.normalized === normalized) || (!caseInsensitive && node.name === name)) {
-                        node.closed = true;
-                        stack.length = i;
-                        break;
-                    }
-                }
-            }
-        }
-        cursor = tokenRx.lastIndex;
-    }
-    stack[stack.length - 1].children.push(text.slice(cursor));
-    return root;
-}
-
-function renderSanitizerChildren(children, keepSet, extraSet, rescueOnly = false) {
-    let out = '';
-    for (const child of children) {
-        if (typeof child === 'string') {
-            if (!rescueOnly) out += child;
-            continue;
-        }
-        if (child.kind === 'named-bracket') {
-            if (!child.closed) {
-                if (rescueOnly) {
-                    out += renderSanitizerChildren(child.children, keepSet, extraSet, true);
-                } else {
-                    out += child.openToken;
-                    out += renderSanitizerChildren(child.children, keepSet, extraSet);
-                }
-            } else if (keepSet.has(child.rule)) {
-                out += renderSanitizerChildren(child.children, keepSet, extraSet);
-            } else if (!extraSet.has(child.rule)) {
-                out += child.openToken;
-                out += renderSanitizerChildren(child.children, keepSet, extraSet);
-                out += child.closeToken;
-            }
-            continue;
-        }
-        const kept = child.closed && keepSet.has(child.normalized ?? child.name);
-        if (kept) {
-            out += renderSanitizerChildren(child.children, keepSet, extraSet);
-        } else if (!child.closed) {
-            out += renderSanitizerChildren(child.children, keepSet, extraSet, rescueOnly);
-        } else if (child.kind === 'bracket' && !extraSet.has(child.name) && !rescueOnly) {
-            out += `[[${renderSanitizerChildren(child.children, keepSet, extraSet)}]]`;
-        } else {
-            out += renderSanitizerChildren(child.children, keepSet, extraSet, true);
-        }
-    }
-    return out;
-}
-
-export function stripTags(raw, opts = {}) {
-    if (!raw) return '';
-    const keep  = parseTagList(opts.keepTags  ?? 'content');
-    const extra = parseTagList(opts.extraTags ?? '');
-    let s = String(raw);
-    // 1. HTML/XML comments
-    s = s.replace(/<!--[\s\S]*?-->/g, '');
-    // 2. Parse paired wrappers as a hierarchy. Kept XML descendants are rescued
-    //    through stripped XML ancestors; explicit named-bracket removal drops its whole
-    //    subtree, while kept content still follows the recursive cleaning rules.
-    const keepSet = new Set(keep);
-    const extraSet = new Set(extra);
-    s = renderSanitizerChildren(parseSanitizerTree(s, keepSet, extraSet).children, keepSet, extraSet);
-    // 3. Collapse the whitespace left behind by removed blocks
-    s = s.replace(/\n{3,}/g, '\n\n').trim();
-    return s;
-}
+export const normalizeTagList = normalizeTagRules;
+export const stripTags = sanitizeStoryBody;
 
 // ─── Chat helpers ────────────────────────────────────────────────────────────
 function getChat() { return getContext().chat || []; }

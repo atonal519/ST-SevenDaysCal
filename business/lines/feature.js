@@ -193,11 +193,15 @@ export function createLinesFeature(env = {}) {
         }).join('');
         return `${env.jumpHint?.() || ''}${cards}`;
     };
-    const inlineHtml = (raw = null, readOnly = false) => {
+    const inlineHtml = (raw = null, readOnly = false, coldItems = null) => {
         if (env.getSettings?.().linesInlineEnabled === false) return '';
         const value = raw == null ? env.readRaw?.() || '' : raw;
         const view = inlineState(value, { readOnly });
-        const dashedSub = !readOnly && view.dashed.enabled ? dashed?.inlineHtml?.() || '' : '';
+        // Historical cold knowledge comes only from its floor snapshot and never exposes the live refresh control.
+        const dashedEnabled = env.getSettings?.().dashedEnabled === true;
+        const dashedSub = readOnly
+            ? (dashedEnabled && Array.isArray(coldItems) && coldItems.length ? dashed?.inlineHtml?.(coldItems, true) || '' : '')
+            : view.dashed.enabled ? dashed?.inlineHtml?.(coldItems) || '' : '';
         const body = view.lines.map((line, i) => {
             const adult = line.adult === true;
             const color = (env.stageColors || {})[line.stage] || '#9aa6b2';

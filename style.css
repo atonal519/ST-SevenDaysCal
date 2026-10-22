@@ -1070,6 +1070,18 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-settings-total-row .sp-cfg-hint { color: var(--sp-on-surface); }
 .sp-settings-total-row .sp-cfg-hint { margin: 0; padding-left: 24px; }
 
+/* 总开关旁显示版本状态与公告，窄窗自然换行。 */
+.sp-settings-master-row { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;min-width:0; }
+#sp-update-controls-slot { min-width:0; }
+#sp-update-feedback-slot:empty, #sp-update-feedback-slot:has([hidden]) { display:none; }
+.sp-update-controls { display:flex;align-items:center;gap:4px;flex:0 0 auto; }
+.sp-update-status,.sp-update-notice-button { display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:26px;padding:4px 7px;border:1px solid var(--sp-divider);border-radius:6px;background:var(--sp-surface);color:var(--sp-on-surface);font-size:var(--sp-fs-75);line-height:1.2;white-space:nowrap;cursor:pointer; }
+.sp-update-status[data-state="available"]::before { content:"";width:5px;height:5px;border-radius:50%;background:var(--sp-primary);flex:0 0 auto; }
+.sp-update-status:hover,.sp-update-notice-button:hover { border-color:var(--sp-primary); }
+.sp-update-status:focus-visible,.sp-update-notice-button:focus-visible { outline:2px solid var(--sp-primary);outline-offset:2px; }
+.sp-update-status:disabled { opacity:.6;cursor:default; }
+.sp-update-feedback { margin:1px 0 0;color:var(--sp-on-surface);font-size:var(--sp-fs-75);line-height:1.5;overflow-wrap:anywhere; }
+
 /* ─── Settings layers (五组收纳盒) ───────────────────────────────────────────── */
 .sp-settings-layer:not(:last-child) { border-bottom: none; }
 .sp-settings-layer-title {
@@ -3761,6 +3773,16 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex-direction: column;
     gap           : 10px;
 }
+.sp-dialog-sheet-custom { max-height:calc(100dvh - 40px);overflow:hidden;box-sizing:border-box; }
+.sp-dialog-custom { min-height:0;overflow-y:auto;overscroll-behavior:contain; }
+.sp-dialog-sheet-custom > :not(.sp-dialog-custom) { flex:0 0 auto; }
+.sp-update-notice { min-width:0;max-width:70ch;white-space:normal;overflow-wrap:anywhere;color:var(--sp-on-surface);font-size:var(--sp-fs-85);line-height:1.65; }
+.sp-update-notice > :first-child { margin-top:0; }
+.sp-update-notice > :last-child { margin-bottom:0; }
+.sp-update-notice h1,.sp-update-notice h2,.sp-update-notice h3 { line-height:1.35;margin:1.2em 0 .5em;font-size:1.1em; }
+.sp-update-notice a { color:var(--sp-primary);text-decoration:underline;text-underline-offset:2px; }
+.sp-update-notice pre { white-space:pre-wrap;overflow-wrap:anywhere; }
+.sp-update-notice code { font-size:.92em; }
 .sp-dialog-editor-sheet {
     background-color: var(--sp-sheet-bg-legacy);
     background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));

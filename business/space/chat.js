@@ -54,17 +54,14 @@ export function createSpaceChat(env = {}) {
                 return Object.freeze({ status: 'cancelled' });
             }
             diagnostic.accepted({ phase: 'response' });
-            const liveTarget = repository.capture();
-            const changedChat = String(liveTarget?.chatId || '') !== String(target?.chatId || '');
-            const baseHistory = changedChat ? repository.load(liveTarget) : history();
-            const userHistory = changedChat ? appendSpaceUser(baseHistory, userMsg).history : baseHistory;
             const widgetContext = {
                 ...(Array.isArray(messages?.pointBaselines) ? { pointBaselines: messages.pointBaselines } : {}),
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
-                ...(messages?.expectedWidgetKind === 'outline_widget' && messages?.outlineRawToken ? { outlineRawToken: messages.outlineRawToken } : {}),
+                ...(Array.isArray(messages?.allowedWidgetKinds) ? { allowedWidgetKinds: messages.allowedWidgetKinds } : {}),
+                ...(messages?.outlineRawToken && (messages?.expectedWidgetKind === 'outline_widget' || messages?.allowedWidgetKinds?.includes?.('outline_widget')) ? { outlineRawToken: messages.outlineRawToken } : {}),
             };
-            if (!repository.replace(liveTarget, appendSpaceAssistant(userHistory, reply, widgetContext))) {
+            if (!repository.replace(target, appendSpaceAssistant(appended.history, reply, widgetContext))) {
                 const error = diagnostic.rejected(makeDiagnosticError('save', { phase: 'save' }), { phase: 'save', reasonCode: 'space-save-failed' });
                 env.ui?.appendMessage?.('system', '发送失败：回复保存失败，请重试');
                 return Object.freeze({ status: 'failed', error });
@@ -78,6 +75,7 @@ export function createSpaceChat(env = {}) {
                     pointBaselines: savedReply?.pointBaselines,
                     lineBaselines: savedReply?.lineBaselines,
                     expectedWidgetKind: savedReply?.expectedWidgetKind,
+                    allowedWidgetKinds: savedReply?.allowedWidgetKinds,
                     outlineRawToken: savedReply?.outlineRawToken,
                     historyIndex: history().length - 1,
                     legacyPointOwner: !Array.isArray(savedReply?.pointBaselines),

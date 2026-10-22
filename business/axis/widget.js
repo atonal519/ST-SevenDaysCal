@@ -2,7 +2,7 @@
 export function createAxisWidgetActions(env = {}) {
     function applyAlmanacWidget(body, button, idx) {
         const items = env.parseAlmanac?.(body) || [], item = items[Number(idx)] || (items.length === 1 ? items[0] : null);
-        if (!item) return env.error?.('卡片格式不完整，无法应用');
+        if (!item) return env.error?.('这张日期卡当前无法应用，请按现行历法重新生成');
         if (!env.key?.()) return env.error?.('当前对话没有可写入的轴缓存');
         item.pin = true; const existing = env.loadItems?.() || []; const seen = new Set(existing.map(env.dedupKey));
         if (seen.has(env.dedupKey(item))) { env.done?.(button, '轴里已有'); return env.error?.('这个日期轴里已经有了'); }

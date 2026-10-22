@@ -60,13 +60,14 @@ function isCurrentWritableFloor(mesId) {
 
 // ── 写 ────────────────────────────────────────────────────────────────────
 // snap 形状（全部可空，缺哪块渲染端就不渲哪段）：
-//   { v, ts, point, line, almanac, anchor, pool, recall }
+//   { v, ts, point, line, almanac, anchor, pool, recall, cold }
 //     point   : 点 raw 字符串（<calendar_widget>…）
 //     line    : 线 raw 字符串（含 <line_widget>… 或线缓存 raw）
 //     almanac : 历条目数组（loadAlmanac() 的归一化结果）
 //     anchor  : { month, day, year?, eraLabel? } 当时的「今天」锚点
 //     pool    : 【AI 楼】当时的暗账「标注池」精简条目 [{id,事由,类型,起始锚,周期长度,到期锚,标签,锁,静音}]（可选）
 //     recall  : 【用户楼】当轮召回注入回显 [{id,事由,类型,起始锚,现状}]（可选）
+//     cold    : 【AI 楼】当时楼内实际显示的最多两条冷知识纯文本（可选）
 //   兼容旧快照中的 ledger 字段：读取端忽略它，不影响其它字段。
 //
 // 用户楼也存快照，因为召回框需要在历史用户楼复现当轮注入。
@@ -80,6 +81,7 @@ export function writeSnapshot(mesId, snap) {
     if (!msg || !isCurrentWritableFloor(mesId)) return false;
     const calendar = snap?.calendar;
     if (!isValidCalendarDescriptor(calendar)) return false;
+    const prev = isExternalMode() ? readExternalSnapshot(msg) : msg.extra?.[SNAP_KEY];
 
     const payload = {
         v: SNAP_VERSION,
@@ -96,10 +98,12 @@ export function writeSnapshot(mesId, snap) {
         recall:  Array.isArray(snap?.recall) ? snap.recall : [],
         calendar: JSON.parse(JSON.stringify(calendar)),
     };
+    if (!msg.is_user && Array.isArray(snap?.cold)) payload.cold = snap.cold.slice(0, 2).filter(text => typeof text === 'string' && text.trim());
+    // A hidden inline setting means “do not refresh this display field”, not “erase an already frozen floor”.
+    else if (!msg.is_user && Array.isArray(prev?.cold)) payload.cold = prev.cold.filter(text => typeof text === 'string').slice(0, 2);
     if (snap?.weekdayRef && Number.isInteger(+snap.weekdayRef.refDoy) && Number.isInteger(+snap.weekdayRef.refWd)) payload.weekdayRef = { refDoy: +snap.weekdayRef.refDoy, refWd: +snap.weekdayRef.refWd };
 
     // 幂等：内容没变就不写（ts 不参与比较，否则永远"变了"）。
-    const prev = isExternalMode() ? readExternalSnapshot(msg) : msg.extra?.[SNAP_KEY];
     if (prev && _sameSnapContent(prev, payload)) return false;
 
     if (isExternalMode()) {
@@ -123,6 +127,7 @@ export function writeSnapshot(mesId, snap) {
 function _sameSnapContent(a, b) {
     if (a.point !== b.point) return false;
     if (a.line !== b.line) return false;
+    if (JSON.stringify(a.cold || []) !== JSON.stringify(b.cold || [])) return false;
     const am = a.anchor, bm = b.anchor;
     if (!!am !== !!bm) return false;
     if (am && bm && (am.month !== bm.month || am.day !== bm.day || am.year !== bm.year || am.eraLabel !== bm.eraLabel)) return false;
@@ -175,6 +180,7 @@ export function readSnapshot(mesId) {
         recall:  Array.isArray(snap.recall) ? snap.recall : [],
         calendar: snap.v >= 2 && isValidCalendarDescriptor(snap.calendar) ? JSON.parse(JSON.stringify(snap.calendar)) : null,
     };
+    if (Array.isArray(snap.cold)) out.cold = snap.cold.filter(text => typeof text === 'string').slice(0, 2);
     if (snap.weekdayRef && Number.isInteger(+snap.weekdayRef.refDoy) && Number.isInteger(+snap.weekdayRef.refWd)) out.weekdayRef = { refDoy: +snap.weekdayRef.refDoy, refWd: +snap.weekdayRef.refWd };
     return out;
 }

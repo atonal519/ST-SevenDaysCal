@@ -56,7 +56,7 @@ export function createSpaceUi(host = {}) {
         for (let index = history.length - 1; index >= 0; index -= 1) {
             const message = history[index];
             if (message?.role !== 'assistant' || message.portableReadonly === true) continue;
-            if (message.expectedWidgetKind === 'outline_widget'
+            if ((message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget'))
                 && typeof message.outlineRawToken === 'string' && message.outlineRawToken
                 && normalizeOutlineResponse(message.content)) return index;
         }
@@ -67,12 +67,13 @@ export function createSpaceUi(host = {}) {
         query('#sp-space-msgs')?.empty?.();
         const latestOutline = latestOutlineCandidateIndex(history);
         history.forEach((message, index) => {
-            const hasOutlineCandidate = message.expectedWidgetKind === 'outline_widget'
+            const hasOutlineCandidate = message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget')
                 || extractWidgets(message.content).widgets.some(widget => widget.kind === 'outline_widget');
             appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
                 pointBaselines: message.pointBaselines,
                 lineBaselines: message.lineBaselines,
                 expectedWidgetKind: message.expectedWidgetKind,
+                allowedWidgetKinds: message.allowedWidgetKinds,
                 outlineRawToken: message.outlineRawToken,
                 currentOutlineRaw: host.currentOutlineRaw?.() || '',
                 historyIndex: index,

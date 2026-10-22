@@ -276,6 +276,24 @@ test('JSON line arrays use the shared parser and preserve candidate slots and na
     const oldWithTicket = validateLinesResponse(`<storylines_widget>${JSON.stringify([{ Line: '旧名|延展|今天|agency|world|stall|false|pin|false', Ticket: 'TICKET-1', Desc: '状态', Next: '后续' }])}</storylines_widget>`);
     assert.equal(auditLineEvolution({ previousLines: saved, generatedLines: oldWithTicket.model, freshTickets: [{ ticketId: 'TICKET-1' }], intent: 'advance' }).reason, 'evolution-old-line-ticket');
 });
+test('stage and when key labels normalize through every shared line parser', () => {
+    const tagged = '标签线|stage=成形|when=2027-03-19 09:30|agency=world|stall=false|pin=false';
+    const parsedRow = parseLineRow(tagged);
+    assert.deepEqual([parsedRow.stage, parsedRow.when, parsedRow.agency], ['成形', '2027-03-19 09:30', 'world']);
+
+    const legacyNine = parseLineRow('九槽标签线|stage=收束|when=2027-03-19 09:30|agency|world|stall|false|pin|false');
+    assert.deepEqual([legacyNine.fieldCount, legacyNine.stage, legacyNine.when, legacyNine.agency], [6, '收束', '2027-03-19 09:30', 'world']);
+
+    const response = `<storylines_widget>\nLine: ${tagged}\nDesc: 状态\nNext: 下一步\n</storylines_widget>`;
+    const checked = validateLinesResponse(response);
+    assert.equal(checked.ok, true);
+    assert.deepEqual([checked.model[0].stage, checked.model[0].when], ['成形', '2027-03-19 09:30']);
+    assert.deepEqual([parseLines(checked.raw)[0].stage, parseLines(checked.raw)[0].when], ['成形', '2027-03-19 09:30']);
+    assert.deepEqual([parseLineCard(response).stage, parseLineCard(response).when], ['成形', '2027-03-19 09:30']);
+
+    const unknown = parseLineRow('未知标签线|延展|明天|role=world|stall=false|pin=false');
+    assert.equal(unknown.agency, 'role=world', '未知标签仍留在原字段，不被猜测或移位');
+});
 test('wrapped malformed first-eight candidate still occupies its original slot before validation', () => {
     const valid = index => `<Line: 包装${index}|起线|今天|world|false|false</Line>\n<Ticket: TICKET-${index}</Ticket>\n<Desc>状态${index}</Desc>\n<Next>下一步${index}</Next>`;
     const malformed = '<Line: 无效候选</Line>\n<Desc>缺 tuple 字段</Desc>\n<Next>不得补位</Next>';
@@ -517,7 +535,7 @@ test('ticket category suffixes normalize only complete IDs and never override lo
 });
 test('release prompt caps only first generation while preserving global agency and local 6x3 cues', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial', firstRun: true, freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
-    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '不得突然扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响明确', '收束＝解决、和解、新平衡或事务落定', '淡出＝不再值得追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
+    for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '无充分依据时不扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响明确', '收束＝解决、和解、新平衡或事务落定', '淡出＝不再值得追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
     assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
     assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
@@ -597,7 +615,7 @@ test('release prompt allows evidence-based offscreen progress across intents and
         buildLinesPrompt('用户', '角色', 'user', '', 'micro', { intent: 'reroll', pinnedBackground: locked, rerollNames: ['上一版线'], freshTickets: [ticket] }),
     ];
     for (const prompt of prompts) {
-        for (const phrase of ['已有正文、记忆与世界设定确立的事实', '既有主体的动机、资源、行动条件和实际经过的故事时间', '可以在场外合理推进自身进展', '正文暂未提及或当前主角未参与不等于停滞', '普通场外推演也不等于凭空编造', '不要求每条线每轮都变化或升级阶段', '没有充分依据时，不得突然扩大伤害或制造不可逆后果', '时间跨度须符合已有进程依据']) assert.match(prompt, new RegExp(phrase));
+        for (const phrase of ['已有正文、记忆与世界设定确立的事实', '既有主体的动机、资源、行动条件和实际经过的故事时间', '无新依据的未展开线维持当前状态和入口', '旧线中的推演（含 Desc/Next）本身不能证明已发生', 'NPC 可按实际故事时间自主做准备、尝试联系等小步', '不跳过关键互动或自行结算结果', '不得倒填角色早已知情、已通知、承诺、接受或拒绝、迟到或失约等过去事实', '不代替玩家回应']) assert.match(prompt, new RegExp(phrase));
         assert.doesNotMatch(prompt, /每轮都依据连续正文证据与人物动机/);
         assert.match(prompt, /agency=world 表示其他人物、势力、机构或环境即使 用户 暂不参与也能自行推进/);
         assert.match(prompt, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
@@ -612,6 +630,25 @@ test('release prompt allows evidence-based offscreen progress across intents and
     assert.match(prompts[1], /旧活线/);
     assert.match(prompts[2], /刷新不要求延续旧自动线/);
     assert.match(prompts[2], /上一版自动线主题·仅名称避重/);
+});
+
+test('shared fact and pending-progress guidance appears once across line generation intents and injection', () => {
+    const old = serializeLines([{ name: '待签署', stage: '延展', when: '近日', agency: 'world', desc: '双方准备核对文本', next: '资料齐备后由签署方决定是否签署' }]);
+    const prompts = [
+        buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial' }),
+        buildLinesPrompt('用户', '角色', 'user', old, 'auto', { intent: 'advance' }),
+        buildLinesPrompt('用户', '角色', 'user', old, 'auto', { intent: 'reroll' }),
+    ];
+    for (const prompt of prompts) {
+        assert.match(prompt, /Next 是待发生方向/);
+        assert.match(prompt, /无新依据的未展开线维持当前状态和入口/);
+        assert.match(prompt, /不得倒填角色早已知情、已通知、承诺、接受或拒绝、迟到或失约/);
+        assert.equal((prompt.match(/【线索事实与待展开进展】/g) || []).length, 1);
+    }
+    const injected = buildLinesInjection(activeLines(old));
+    assert.match(injected, /Next 是待发生方向/);
+    assert.equal((injected.match(/【线索事实与待展开进展】/g) || []).length, 1);
+    assert.match(injected, /资料齐备后由签署方决定是否签署/);
 });
 test('Ticket is transient and absent from serialized storage/model', () => {
     const checked = validateLinesResponse('<storylines_widget>\nLine: 新线|推进|筹备|1|今天|world|false|false\nTicket: TICKET-1\nDesc: d\nNext: n\n</storylines_widget>');
@@ -1059,6 +1096,8 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, adultMode: () => 'off', settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
     controller.refresh();
     assert.match(calls.at(-1)[1], /活线/);
+    assert.match(calls.at(-1)[1], /Next 是待发生方向/);
+    assert.equal((calls.at(-1)[1].match(/【线索事实与待展开进展】/g) || []).length, 1);
     assert.match(calls.at(-1)[1], /【人物自主与相互回应】/);
     assert.doesNotMatch(calls.at(-1)[1], /终线/);
     controller.refresh();

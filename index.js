@@ -1,4 +1,4 @@
-import { getContext, extension_settings, extensionNames } from '../../../extensions.js';
+import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import * as worldInfoCore from '../../../world-info.js';
@@ -20,6 +20,9 @@ import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
+import { createPluginUpdates } from './runtime/plugin-updates.js';
+import { createPluginUpdatesView } from './business/ui/plugin-updates-view.js';
+import { showdown, DOMPurify } from '/lib.js';
 import { createAutomationGate } from './automation-gate.js';
 import { createDateCoordinator } from './date-coordinator.js';
 import {
@@ -38,7 +41,7 @@ import {
 import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom.js';
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, maskKey } from './utils/format.js';
-import { getSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
+import { getSettings, getWrapperSettings, updateWrapperSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
 import { QUICK_REPLY_SHORTCUTS, createQuickReplyShortcutSync, registerQuickReplyShortcutCommand } from './runtime/quick-reply-shortcuts.js';
 import { characterCardMatches, effectivePluginEnabled, excludedCharacterSet, isCharacterExcluded, renderCharacterExclusionRows, setCharacterExcluded as updateCharacterExcluded } from './runtime/character-exclusion.js';
 import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
@@ -612,7 +615,7 @@ bindLedgerCapture({
     parseClock: parseStoryClockPure,
     parseDate: parseJudgedDate,
     calendarForFloor: calendarForStoryFloor,
-    stripTags: (text) => memory.stripTags(text, { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }),
+    stripTags: (text) => memory.stripTags(text, getWrapperSettings()),
     settings: getSettings,
     systemTypes: system_message_types,
     eventTypes: LEDGER_EVENT_TYPES,
@@ -696,7 +699,7 @@ const ledgerInjectionController = createLedgerInjectionController({
     daysSince: ledgerDaysSince,
     dueInfo: ledgerDueInfo,
     narrative: ledgerNarrativeMessage,
-    stripTags: text => memory.stripTags(text, { keepTags: getSettings().keepTags, extraTags: getSettings().extraTags }),
+    stripTags: text => memory.stripTags(text, getWrapperSettings()),
 });
 const refreshLedgerInjection = () => ledgerInjectionController.refresh();
 const ledgerJudgeController = createLedgerJudgeController({
@@ -779,6 +782,14 @@ const ledgerSnapshotBridge = createLedgerSnapshotBridge({
     cloneCalendar: cloneCalDesc,
     weekdayRef: () => almWeekdayRef(loadCalDesc()),
     echo: () => ledgerInjectionController.echo,
+    // Freeze the same bounded projection the current inline block renders, so history never reads live knowledge.
+    readCold: () => {
+        const settings = getSettings();
+        return settings.inlineRenderEnabled !== false && settings.dashedEnabled === true
+            && settings.linesInlineEnabled !== false && !linesFeature.dashed?.isBusy?.()
+            ? linesFeature.dashed?.parse?.(2) || []
+            : undefined;
+    },
     write: (id, value) => snapshot.writeSnapshot(id, value),
 });
 const freezeSnapshotToFloor = mesId => ledgerSnapshotBridge.freeze(mesId);
@@ -1667,12 +1678,26 @@ const customDialog = createDialogManager({
     $: jQuery,
     mount: { appendChild: el => _spDialogShadow?.appendChild(el) },
     removeOverlay: () => $dialog('#sp-addon-dialog').remove(),
-    getRootClass: () => `sp-root sp-${currentTheme}`,
+    getRootClass: () => `sp-root sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`,
     subscribeContextChange: handler => {
         eventSource.on(event_types.CHAT_CHANGED, handler);
         return () => eventSource.removeListener?.(event_types.CHAT_CHANGED, handler);
     },
 });
+
+// 本机 manifest 只读一次；不阻塞主窗，首开设置会等待同一 Promise 后检查更新。
+const pluginUpdatesReady = fetch(new URL('manifest.json', import.meta.url), { credentials: 'same-origin' })
+    .then(async response => {
+        if (!response.ok) throw new Error();
+        return { manifest: await response.json(), failed: false };
+    }).catch(() => ({ manifest: {}, failed: true }))
+    .then(({ manifest, failed }) => {
+        const updates = createPluginUpdates({ moduleUrl: import.meta.url, extensionTypes: () => extensionTypes, noticePath: manifest.update_notice, headers: scriptCore.getRequestHeaders });
+        return Object.freeze({ ...updates, readNotice: kind => failed && kind !== 'available'
+            ? Promise.resolve({ ok: false, message: '暂时无法读取已安装版本公告，请刷新后重试。' })
+            : updates.readNotice(kind) });
+    });
+let pluginUpdatesView = null;
 
 async function selectPointWidgetOwner({ edit = false } = {}) {
     const ctx = getContext();
@@ -1911,6 +1936,8 @@ const spaceFeature = createSpaceFeature({
         numberedPoints: numberedPointList,
         readLineRaw: () => readStore(getLinesCacheKey())?.raw || '',
         parseLines: parseCanonicalLines,
+        parseAlmanac: parseAlmanacWidget,
+        parseEra: parseEraWidget,
         readLedgerText: () => {
             try {
                 const items = ledger.listEntries() || [];
@@ -2187,6 +2214,9 @@ jQuery(async () => {
     injectToastContainer();
     // Apply saved theme mode (day/night/auto) now that settings are guaranteed loaded
     applyTheme(getEffectiveTheme());
+    if (_stListeners.wrapperSettings) eventSource.removeListener?.(event_types.SETTINGS_UPDATED, _stListeners.wrapperSettings);
+    _stListeners.wrapperSettings = refreshWrapperInputs;
+    if (event_types.SETTINGS_UPDATED) eventSource.on(event_types.SETTINGS_UPDATED, _stListeners.wrapperSettings);
     // Initialize memory system — wires event listeners internally
     memory.initMemory({
         getSettings: () => {
@@ -2201,8 +2231,7 @@ jQuery(async () => {
                 memoryL0Group  : Number.isFinite(+s.memoryL0Group) ? +s.memoryL0Group : 5,
                 memoryL1Group  : Number.isFinite(+s.memoryL1Group) ? +s.memoryL1Group : 10,
                 memorySkipShort: Number.isFinite(+s.memorySkipShort) ? +s.memorySkipShort : 50,
-                keepTags       : typeof s.keepTags  === 'string' ? s.keepTags  : 'content',
-                extraTags      : typeof s.extraTags === 'string' ? s.extraTags : '',
+                ...getWrapperSettings(),
             };
         },
         callApi: callMemoryApi,
@@ -3224,6 +3253,7 @@ function bindLinesHistoryUi($linesWrap) {
 }
 
 function injectModal() {
+    pluginUpdatesView?.dispose();
     const cfg = loadCfg();
     const hasCustomApi = !!(cfg.url && cfg.key);
     // 弹窗宿主独立于主面板：主面板关闭时仍保持可见，空宿主不拦截页面点击。
@@ -3308,10 +3338,14 @@ function injectModal() {
 
                             <!-- ═══════════ 总开关 ═══════════ -->
                             <div class="sp-settings-total-row" id="sp-settings-total">
-                                <label class="sp-mode-opt">
-                                    <input type="checkbox" id="sp-plugin-enabled" ${getSettings().pluginEnabled !== false ? 'checked' : ''}>
-                                    <span>启用构画</span>
-                                </label>
+                                <div class="sp-settings-master-row">
+                                    <label class="sp-mode-opt">
+                                        <input type="checkbox" id="sp-plugin-enabled" ${getSettings().pluginEnabled !== false ? 'checked' : ''}>
+                                        <span>启用构画</span>
+                                    </label>
+                                    <div id="sp-update-controls-slot"></div>
+                                </div>
+                                <div id="sp-update-feedback-slot"></div>
                                 <label class="sp-mode-opt" id="sp-storyclock-section">
                                     <input type="checkbox" id="sp-storyclock-enabled" ${getSettings().storyClockEnabled !== false ? 'checked' : ''}>
                                     <span>时间戳</span>
@@ -3664,11 +3698,9 @@ function injectModal() {
                                         <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（创作链只用内置强化词）。也可追加创作规范，如：去八股、控制文风、叙事口吻…"></textarea>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">读取 AI 楼层原文时的标签过滤规则，<strong>对全部生成链路生效</strong>（记忆摘要、点 / 线 / 面生成及间内讨论材料），用来剔除状态栏 / 思维链等包裹、避免污染上下文。多个用英文逗号分隔；XML 包裹可写标签名或带尖括号（<code>content</code> / <code>&lt;content&gt;</code> 等效），双中括号填写 <code>[[...]]</code>，命名中括号填写 <code>[DRAFT]...[/DRAFT]</code>（名称对应实际包裹，三个点是配置占位）。可组合填写 <code>content,[[...]]</code>，并支持中文、日文等 Unicode 标签名。</p>
+                                        <p class="sp-cfg-hint">白鳥系列插件全部共享</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
-                                        <p class="sp-cfg-hint">标签本身去掉、<strong>内部文字保留</strong>（如正文被 <code>content</code> 包裹）。</p>
                                         <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
-                                        <p class="sp-cfg-hint">剔除包裹及内部内容；XML 和 <code>[[...]]</code> 中明确保留的子标签仍会保留。命名中括号如 <code>[DRAFT]...[/DRAFT]</code> 则整块剔除，包括内部的 <code>&lt;content&gt;</code>。普通正文中的未闭合中括号会保留原文，不会吞掉后文。</p>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-storyclock"><summary>时间戳提示词</summary>
                                         <p class="sp-cfg-hint" id="sp-storyclock-coordination">${storyClockStatusCopy(storyClockController.refresh())}</p>
@@ -3972,6 +4004,19 @@ function injectModal() {
         <link rel="stylesheet" href="${ST_BASE}css/fontawesome.min.css">
         <div class="sp-root sp-${currentTheme}" style="display:contents">${html}</div>`;
     document.documentElement.appendChild(host);
+
+    const updateControlsSlot = inEl('#sp-update-controls-slot');
+    const updateFeedbackSlot = inEl('#sp-update-feedback-slot');
+    void pluginUpdatesReady.then(updates => {
+        pluginUpdatesView?.dispose();
+        pluginUpdatesView = createPluginUpdatesView({
+            updates, dialog: customDialog,
+            renderMarkdown: text => DOMPurify.sanitize(new showdown.Converter().makeHtml(text), { FORBID_TAGS: ['img', 'iframe', 'object', 'embed', 'style', 'form', 'input', 'button', 'textarea', 'select', 'option', 'fieldset', 'legend'], FORBID_ATTR: ['style'] }),
+            notifyUser: ({ kind, text }) => showToast(text, null, kind === 'error'),
+        });
+        updateControlsSlot.appendChild(pluginUpdatesView.controls);
+        updateFeedbackSlot.appendChild(pluginUpdatesView.feedback);
+    });
 
     if (cfg.key) $in('#sp-cfg-key').val(maskKey(cfg.key)).data('real', cfg.key);
 
@@ -6280,7 +6325,7 @@ function buildRecentChatEntries(ctx, floorCount = 6, perMessageChars = 2500) {
     if (!Array.isArray(chat) || !chat.length || !(Number(floorCount) > 0)) return [];
     const charName = ctx.name2 || '角色';
     const s = getSettings();
-    const stripOpts = { keepTags: s.keepTags, extraTags: s.extraTags };
+    const stripOpts = getWrapperSettings();
     const rows = [];
     for (const { message: m, mesId } of selectVisibleChatHistory(chat, floorCount, {
         mapMessage: (message, id) => ({ message, mesId: id }),
@@ -6745,7 +6790,7 @@ function buildAnimaRecallQuery(explicitQuery = '') {
     const ctx = getContext();
     const recent = selectVisibleChatHistory(ctx?.chat, 6);
     const s = getSettings();
-    const tail = recent.map(m => memory.stripTags(String(m?.mes || ''), { keepTags: s.keepTags, extraTags: s.extraTags }).slice(-700)).join('\n');
+    const tail = recent.map(m => memory.stripTags(String(m?.mes || ''), getWrapperSettings()).slice(-700)).join('\n');
     return `${explicitQuery}\n${tail}`.slice(-6000);
 }
 function selectAnimaSlices(slices, query, limit) {
@@ -6946,7 +6991,7 @@ function buildRecentGenerationHistory(ctx, historyLimit, opts = {}) {
     const effectiveHistoryLimit = recentFallback && historyLimit === 3 ? 6 : historyLimit;
     if (!(Number(effectiveHistoryLimit) > 0)) return [];
     const settings = getSettings();
-    const stripOpts = { keepTags: settings.keepTags, extraTags: settings.extraTags };
+    const stripOpts = getWrapperSettings();
     return selectVisibleChatHistory(ctx?.chat, effectiveHistoryLimit, {
         excludedAssistant: opts.excludedAssistant,
         mapMessage: (message, mesId) => ({
@@ -8295,6 +8340,7 @@ function toggleSettings() {
     settingsOpen = !settingsOpen;
     const $overlay = $in('#sp-settings-overlay');
     if (settingsOpen) {
+        void pluginUpdatesReady.then(updates => updates.ensureChecked());
         renderQuickReplyShortcutStatus();
         const savedLinesMode = getLinesMode();
         for (const value of ['turns', 'days', 'manual']) {
@@ -8366,8 +8412,7 @@ function renderMemorySection() {
     $in('#sp-mem-database-worldbook-options').toggle(useDatabase);
     $in('#sp-mem-anima-recall').val(getAnimaRecallCount());
     // 标签设置属于全局清洗规则，与记忆源无关；必须在各外部源 early-return 前回填。
-    $in('#sp-mem-keeptags').val(typeof s.keepTags === 'string' ? s.keepTags : 'content');
-    $in('#sp-mem-extratags').val(typeof s.extraTags === 'string' ? s.extraTags : '');
+    refreshWrapperInputs();
     // 自定义提示词是全局设置、与记忆源无关，必须在下面按源分支的 early-return 之前回填，
     // 否则用户选 Anima/柏宝书时函数提前 return，重开面板这框会空白（值其实已存盘）。
     $in('#sp-custom-prompt').val(typeof s.customPrompt === 'string' ? s.customPrompt : '');
@@ -8546,6 +8591,14 @@ function bindTheaterHandlers() {
     theaterFeature?.bindSettings($in('.sp-settings-body'));
 }
 
+function refreshWrapperInputs() {
+    const value = getWrapperSettings();
+    for (const [selector, key] of [['#sp-mem-keeptags', 'keepTags'], ['#sp-mem-extratags', 'extraTags']]) {
+        const input = $in(selector)[0];
+        if (input && !input.matches?.(':focus')) input.value = value[key];
+    }
+}
+
 function bindMemoryHandlers() {
     $in('#sp-mem-source-qqj').on('change', function () {
         const s = getSettings();
@@ -8620,28 +8673,16 @@ function bindMemoryHandlers() {
         this.value = v;
         saveSettingsDebounced();
     });
-    // Tag sanitizer inputs — normalize Unicode XML names and paired wrapper rules, then save.
-    // Applies to future reads; existing L0 summaries built with old rules keep
-    // their hash and stay valid — new content read after change uses new rules.
-    // input=即打即存（存 sanitize 值但不回写 value，免光标跳）；change=失焦时规范化回写显示。
-    // 关键：只用 change 会在「输入框还没失焦就点保存/关面板」时丢掉那次编辑（表现为“动了 API，标签/提示词被重置”）。
-    function sanitizeTagList(raw) {
-        return normalizeTagRules(raw).join(',');
-    }
+    // Save only the edited field; the other field may have changed in another plugin's panel.
+    function sanitizeTagList(raw) { return normalizeTagRules(raw).join(','); }
     function bindTagField(sel, key) {
-        // sel 是 #sp-mem-* 选择器串（设置区在 shadow 内）→ 必须 $in 绑定，否则不落存
-        $in(sel).on('input', function () {
-            getSettings()[key] = sanitizeTagList(this.value);
-            saveSettingsDebounced();
-        }).on('change', function () {
-            const v = sanitizeTagList(this.value);
-            getSettings()[key] = v;
-            this.value = v;                 // 失焦才回写，避免打字途中光标跳到末尾
-            saveSettingsDebounced();
-            stSaveSettings();
-        });
+        $in(sel).on('input', function () { updateWrapperSettings({ [key]: this.value }); saveSettingsDebounced(); })
+            .on('change', function () {
+                const value = sanitizeTagList(this.value); updateWrapperSettings({ [key]: value }); this.value = value;
+                saveSettingsDebounced(); stSaveSettings();
+            }).on('blur', refreshWrapperInputs);
     }
-    bindTagField('#sp-mem-keeptags',  'keepTags');
+    bindTagField('#sp-mem-keeptags', 'keepTags');
     bindTagField('#sp-mem-extratags', 'extraTags');
     $in('#sp-custom-prompt').on('input', function () {
         getSettings().customPrompt = this.value;

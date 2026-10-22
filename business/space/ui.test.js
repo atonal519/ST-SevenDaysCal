@@ -1,0 +1,109 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createSpaceUi } from './ui.js';
+import { createSpaceRenderer } from './render.js';
+import { appendSpaceAssistant } from './schema.js';
+import { createAxisWidgetActions } from '../axis/widget.js';
+
+test('语义面候选重绘后仍注册同一正式稿依据并执行既有应用动作', async () => {
+    const rawToken = 'formal-outline-token';
+    const candidate = '<outline_widget>Beat: 两周后|误会澄清|关系|主线|信任增加\nScene: 两人核对消息来源</outline_widget>';
+    const history = appendSpaceAssistant([], candidate, {
+        allowedWidgetKinds: ['outline_widget'], outlineRawToken: rawToken,
+    });
+    const normalizedCandidate = history[0].content;
+    const handlers = new Map();
+    const queryResult = { empty() {}, append() {}, html() {}, text() {} };
+    const rootWrapper = {
+        length: 1,
+        off() { return this; },
+        on(event, selector, handler) { handlers.set(`${event} ${selector}`, handler); return this; },
+    };
+    const element = () => ({ scrollTop: 0, scrollHeight: 0 });
+    const fakeNode = () => ({
+        addClass() { return this; }, attr() { return this; }, html() { return this; },
+        append() { return this; }, appendTo() { return this; }, empty() { return this; },
+    });
+    let actionCall;
+    const ui = createSpaceUi({
+        query: selector => selector === '#sp-space-wrap' ? rootWrapper : queryResult,
+        element,
+        $: value => typeof value === 'string' ? fakeNode() : {
+            prop: () => false,
+            attr: name => name === 'data-wid' ? value.wid : undefined,
+        },
+        currentOutlineRaw: () => '<outline_widget>Beat: 当前|正式稿|关系|主线|保留\nScene: 正式正文</outline_widget>',
+        widgetActions: () => ({ outline: async (...args) => { actionCall = args; } }),
+        toast() {},
+    });
+    ui.bindControllers({
+        renderer: createSpaceRenderer(),
+        chat: { history: () => history, busy: false },
+    });
+    ui.bind();
+
+    for (let pass = 0; pass < 2; pass += 1) {
+        ui.renderHistory(history);
+        const [wid, stored] = ui.widgetRecords()[0];
+        assert.equal(stored.kind, 'outline_widget');
+        assert.equal(stored.outlineRawToken, rawToken);
+        await handlers.get('click.spSpaceFeature .sp-space-widget-apply').call({ wid });
+        assert.equal(actionCall[0], normalizedCandidate);
+        assert.equal(actionCall[1], rawToken);
+    }
+});
+
+test('轴日期每张预览绑定独立原项，历法变化后无效项不会移位应用成下一项', async () => {
+    const history = appendSpaceAssistant([], '<almanac_widget>Item: A|festival|12|1|1||十二月项目\nItem: B|festival|1|1|1||一月项目</almanac_widget>', {
+        expectedWidgetKind: 'almanac_widget', allowedWidgetKinds: ['almanac_widget'],
+    });
+    let validMonths = new Set([1, 12]);
+    const parseAlmanac = body => {
+        const entries = [
+            { match: /Item: A\|festival\|12\|1\|1\|\|十二月项目/, item: { name: 'A', type: 'festival', month: 12, day: 1, days: 1, displayDate: '', note: '十二月项目' } },
+            { match: /Item: B\|festival\|1\|1\|1\|\|一月项目/, item: { name: 'B', type: 'festival', month: 1, day: 1, days: 1, displayDate: '', note: '一月项目' } },
+        ];
+        return entries.filter(entry => entry.match.test(body) && validMonths.has(entry.item.month)).map(entry => ({ ...entry.item }));
+    };
+    const saved = [];
+    const errors = [];
+    const axis = createAxisWidgetActions({
+        parseAlmanac,
+        key: () => 'axis-key',
+        loadItems: () => [],
+        dedupKey: item => item.name,
+        saveItems: items => { saved.splice(0, saved.length, ...items); return true; },
+        error: message => { errors.push(message); return { ok: false }; },
+    });
+    const handlers = new Map();
+    const queryResult = { empty() {}, append() {}, html() {}, text() {} };
+    const rootWrapper = { length: 1, off() { return this; }, on(event, selector, handler) { handlers.set(`${event} ${selector}`, handler); return this; } };
+    const fakeNode = () => ({ addClass() { return this; }, attr() { return this; }, html() { return this; }, append() { return this; }, appendTo() { return this; }, empty() { return this; } });
+    const ui = createSpaceUi({
+        query: selector => selector === '#sp-space-wrap' ? rootWrapper : queryResult,
+        element: () => ({ scrollTop: 0, scrollHeight: 0 }),
+        $: value => typeof value === 'string' ? fakeNode() : {
+            prop: () => false,
+            attr: name => name === 'data-wid' ? value.wid : name === 'data-idx' ? '0' : undefined,
+        },
+        widgetActions: () => ({ almanac: (...args) => axis.applyAlmanacWidget(...args) }),
+        toast() {},
+    });
+    ui.bindControllers({ renderer: createSpaceRenderer({ parseAlmanac }), chat: { history: () => history, busy: false } });
+    ui.bind();
+    ui.renderHistory(history);
+    const cards = ui.widgetRecords().map(([wid, widget]) => ({ wid, body: widget.body }));
+    assert.equal(cards.length, 2);
+    assert.match(cards[0].body, /Item: A\|festival\|12/);
+    assert.match(cards[1].body, /Item: B\|festival\|1/);
+    assert.notEqual(cards[0].body, cards[1].body);
+
+    validMonths = new Set([1]);
+    const click = handlers.get('click.spSpaceFeature .sp-space-widget-apply');
+    await click.call({ wid: cards[0].wid });
+    assert.deepEqual(saved, []);
+    assert.match(errors.at(-1), /当前无法应用，请按现行历法重新生成/);
+
+    await click.call({ wid: cards[1].wid });
+    assert.deepEqual(saved.map(item => item.name), ['B']);
+});
