@@ -370,7 +370,7 @@ function createPersistentLedgerCaptureController(options) {
                 const prompt = env.appendTravel?.(buildCapturePrompt(first), travel) || buildCapturePrompt(first);
                 const recentVisible = visibleRecords.slice(-CAPTURE_CONTEXT_FLOORS);
                 let raw;
-                try { raw = await env.callApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, CAPTURE_CONTEXT_FLOORS, { ...(travel || {}), noAlmanac: true, ledgerSourceFloors: recentVisible, promptMode: 'mechanical', diagnosticModule: 'ledger-capture', diagnosticSink: diagnostic.sink }); }
+                try { raw = await env.callApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, CAPTURE_CONTEXT_FLOORS, { ...(travel || {}), noAlmanac: true, ledgerSourceFloors: recentVisible, diagnosticModule: 'ledger-capture', diagnosticSink: diagnostic.sink }); }
                 catch (error) { markLedgerError(error, { phase: 'capture-request' }); throw error; }
                 if (!current(ctrl, chatId, ownerSnapshot, travel)) return { status: 'cancelled', reason: 'source-stale-chat', stale: true };
                 const parsed = parse(raw);
@@ -428,7 +428,7 @@ function createPersistentLedgerCaptureController(options) {
                 let raw;
                 try {
                     const provenanceCfg = env.provenanceConfig?.() || cfg;
-                    raw = await env.callApi(ctx, buildProvenancePrompt(checkpoint.candidates, i + 1, batches.length), provenanceCfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, 0, { noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, promptMode: 'mechanical', diagnosticModule: 'ledger-provenance', diagnosticSink: provenanceDiagnostic.sink });
+                    raw = await env.callApi(ctx, buildProvenancePrompt(checkpoint.candidates, i + 1, batches.length), provenanceCfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, 0, { noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, diagnosticModule: 'ledger-provenance', diagnosticSink: provenanceDiagnostic.sink });
                 } catch (error) { markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: batches.length }); throw error; }
                 if (!current(ctrl, chatId, ownerSnapshot, travel)) return { status: 'cancelled', reason: 'source-stale-chat', stale: true };
                 const parsed = parse(raw), hits = [];
@@ -618,7 +618,7 @@ export function createLedgerCaptureController(options = {}) {
             let picked = checkpoint?.picked || null;
             if (!picked) {
                 const prompt = env.appendTravel?.(buildCapturePrompt(isFirst), travel) || buildCapturePrompt(isFirst);
-                const captureOpts = { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-capture', diagnosticSink: diagnostic.sink };
+                const captureOpts = { ...(travel || {}), noAlmanac: true, diagnosticModule: 'ledger-capture', diagnosticSink: diagnostic.sink };
                 // 最终常规请求只喂最近 3 个可见 AI 楼；内部 6 楼记录仍完整保留给来源锚、稳定性与溯源批处理。
                 const recentVisibleRecords = ledgerAiFloorRecords().filter(record => {
                     const message = ctx.chat?.[record.floor];
@@ -660,7 +660,7 @@ export function createLedgerCaptureController(options = {}) {
                     try {
                         const provenanceCfg = env.provenanceConfig?.() || cfg;
                         if (!provenanceCfg?.url || !provenanceCfg?.key) throw Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' });
-                        result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), provenanceCfg, userName, charName, ctrl.signal, 0, { ...sourceTravel, noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, promptMode: 'mechanical', diagnosticModule: 'ledger-provenance', diagnosticSink: provenanceDiagnostic.sink });
+                        result = await env.callApi(ctx, buildProvenancePrompt(unresolved, i + 1, provenanceBatches.length), provenanceCfg, userName, charName, ctrl.signal, 0, { ...sourceTravel, noAlmanac: true, ledgerSourceFloors: batch, temperature: 0.3, diagnosticModule: 'ledger-provenance', diagnosticSink: provenanceDiagnostic.sink });
                     }
                     catch (error) {
                         markLedgerError(error, { phase: 'source-provenance', batchNo: i + 1, batchTotal: provenanceBatches.length });

@@ -1,6 +1,6 @@
 import { icon } from '../../utils/icons.js';
-import { extractWidgets, spaceMessagePlainText } from './schema.js';
-import { normalizeOutlineResponse, parseOutline } from '../outline/schema.js';
+import { extractWidgets, spaceMessagePlainText, spacePageId } from './schema.js';
+import { normalizeOutlineResponse } from '../outline/schema.js';
 
 export function createSpaceUi(host = {}) {
     const query = host.query || (() => null);
@@ -16,6 +16,38 @@ export function createSpaceUi(host = {}) {
     let widgetSeq = 0;
     let controllers = null;
     let bound = false;
+    let activePage = '1';
+    const drafts = new Map();
+    const scrolls = new Map();
+    let thinking = null;
+    let pageAnimation = null;
+    const pageIds = () => controllers?.repository?.pages?.() || ['1'];
+    const syncPages = () => {
+        if (!pageIds().includes(activePage)) activePage = '1';
+        const bar = query('#sp-space-pages');
+        bar?.prop?.('hidden', pageIds().length < 2);
+        for (const id of ['1', '2']) query(`[data-space-page="${id}"]`)?.attr?.('aria-selected', String(activePage === id))?.attr?.('tabindex', activePage === id ? '0' : '-1');
+        query('#sp-space-add-page')?.prop?.('disabled', pageIds().length >= 2)?.attr?.('title', pageIds().length >= 2 ? '已有两个窗口' : '新增第二个窗口');
+    };
+    const switchPage = pageId => {
+        if (pageId === activePage || !pageIds().includes(pageId)) return;
+        drafts.set(activePage, String(query('#sp-space-input')?.val?.() || ''));
+        scrolls.set(activePage, element('#sp-space-msgs')?.scrollTop || 0);
+        activePage = pageId;
+        query('#sp-space-input')?.val?.(drafts.get(pageId) || '');
+        host.autoGrow?.(element('#sp-space-input'));
+        host.closeActionMenus?.();
+        renderHistory(controllers.chat.history());
+        const messages = element('#sp-space-msgs');
+        if (messages && scrolls.has(pageId)) messages.scrollTop = scrolls.get(pageId);
+        pageAnimation?.cancel?.();
+        const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+        pageAnimation = messages?.animate?.(reduced ? [{ opacity: 0.7 }, { opacity: 1 }] : [
+            { clipPath: 'inset(0 0 100% 0)', transform: 'translateY(-8px)' },
+            { clipPath: 'inset(0 0 0% 0)', transform: 'translateY(0)' },
+        ], { duration: reduced ? 120 : 200, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+        host.onPageChanged?.();
+    };
 
     const registerWidget = (widget, messageContext = {}) => {
         const wid = String(++widgetSeq);
@@ -32,11 +64,13 @@ export function createSpaceUi(host = {}) {
                 : null,
             legacyPointOwner: messageContext.legacyPointOwner === true,
             readOnly: messageContext.readOnly === true,
+            pageId: activePage,
             identity: host.captureIdentity?.() || null,
         });
         return wid;
     };
     const appendMessage = (role, content, historyIndex = null, messageContext = {}) => {
+        if ((messageContext.pageId || '1') !== activePage) return;
         messageContext = { ...messageContext, currentOutlineRaw: host.currentOutlineRaw?.() || '' };
         const parts = controllers.renderer.message(role, content, historyIndex, registerWidget, messageContext);
         const $wrap = host.$?.('<div>').addClass(`sp-chat-msg-wrap ${parts.wrapClass}`);
@@ -56,7 +90,7 @@ export function createSpaceUi(host = {}) {
     const latestOutlineCandidateIndex = history => {
         for (let index = history.length - 1; index >= 0; index -= 1) {
             const message = history[index];
-            if (message?.role !== 'assistant' || message.portableReadonly === true) continue;
+            if (message?.role !== 'assistant' || message.portableReadonly === true || spacePageId(message) !== activePage) continue;
             if ((message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget'))
                 && typeof message.outlineRawToken === 'string' && message.outlineRawToken
                 && normalizeOutlineResponse(message.content)) return index;
@@ -64,13 +98,16 @@ export function createSpaceUi(host = {}) {
         return -1;
     };
     const renderHistory = history => {
+        syncPages();
         widgets.clear();
         query('#sp-space-msgs')?.empty?.();
         const latestOutline = latestOutlineCandidateIndex(history);
         history.forEach((message, index) => {
+            if (spacePageId(message) !== activePage) return;
             const hasOutlineCandidate = message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget')
                 || extractWidgets(message.content).widgets.some(widget => widget.kind === 'outline_widget');
             appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
+                pageId: spacePageId(message),
                 pointBaselines: message.pointBaselines,
                 lineBaselines: message.lineBaselines,
                 expectedWidgetKind: message.expectedWidgetKind,
@@ -83,43 +120,24 @@ export function createSpaceUi(host = {}) {
                 legacyPointOwner: message.role === 'assistant' && !Object.prototype.hasOwnProperty.call(message, 'pointBaselines'),
             });
         });
-    };
-    const renderLegacyOutlineHistory = history => {
-        const root = query('#sp-legacy-outline-history');
-        if (!root) return;
-        root.empty?.();
-        const rows = Array.isArray(history) ? history.filter(item => item?.role && item?.content) : [];
-        if (!rows.length) { root.text('暂无旧面讨论记录'); return; }
-        for (const row of rows) {
-            const $item = host.$?.('<div>').addClass(`sp-space-legacy-msg sp-space-legacy-${row.role === 'assistant' ? 'ai' : 'user'}`);
-            const content = String(row.content);
-            const parsed = extractWidgets(content);
-            const hasOutlineWidget = parsed.widgets.some(widget => widget.kind === 'outline_widget');
-            const normalized = row.role === 'assistant' ? normalizeOutlineResponse(content) : '';
-            const hasBareOutline = !!normalized && !hasOutlineWidget;
-            const outlineLike = hasOutlineWidget || hasBareOutline || /(?:<outline_widget\b|^\s*(?:Beat|Scene)\s*[:：])/im.test(content);
-            const prose = outlineLike && !normalized ? '' : hasOutlineWidget ? parsed.text : hasBareOutline ? '' : parsed.text;
-            const beats = normalized ? parseOutline(normalized) : [];
-            const lines = [`${row.role === 'assistant' ? 'AI' : '我'}：`];
-            if (prose) lines.push(prose);
-            if (beats.length) lines.push(...beats.map((beat, index) => `${index + 1}. ${beat.title || '未命名'}${beat.scene ? `：${beat.scene}` : ''}`));
-            else if (outlineLike) lines.push('旧面草稿格式无法识别，可从备份导出查看');
-            else if (!prose) lines.push(content);
-            $item?.text?.(lines.join('\n'));
-            $item?.appendTo?.(root);
-        }
+        if (thinking?.pageId === activePage) thinking.node = appendThinking();
     };
     const emptyMessages = () => { widgets.clear(); query('#sp-space-msgs')?.empty?.(); };
-    const beginThinking = () => {
-        const $dots = host.$?.('<div>')
-            .addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking')
-            .html('<span class="sp-typing"><i></i><i></i><i></i></span>')
-            .appendTo(query('#sp-space-msgs'));
+    const appendThinking = () => {
+        const dots = host.$?.('<div>').addClass('sp-chat-msg sp-chat-msg-ai sp-chat-thinking')
+            .html('<span class="sp-typing"><i></i><i></i><i></i></span>').appendTo(query('#sp-space-msgs'));
         const messages = element('#sp-space-msgs');
         if (messages) messages.scrollTop = messages.scrollHeight;
-        return $dots;
+        return dots;
     };
-    const endThinking = thinking => thinking?.remove?.();
+    const beginThinking = (pageId = activePage) => {
+        thinking = { pageId, node: pageId === activePage ? appendThinking() : null };
+        return thinking;
+    };
+    const endThinking = value => {
+        value?.node?.remove?.();
+        if (thinking === value) thinking = null;
+    };
 
     const startEdit = ($message, index) => {
         const original = controllers.chat.history()[index]?.content ?? '';
@@ -165,21 +183,35 @@ export function createSpaceUi(host = {}) {
             void controllers.chat.send(message);
         };
         $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
-        $root.on('click.spSpaceFeature', '[data-space-module-key]', function () {
-            const key = String(host.$(this).attr('data-space-module-key') || '');
-            if (!key) return;
-            host.openQuickReplyShortcut?.(key);
-            const details = this.closest?.('details');
-            if (details) details.open = false;
+        $root.on('click.spSpaceFeature', '[data-space-page]', function () { switchPage(host.$(this).attr('data-space-page')); });
+        $root.on('keydown.spSpaceFeature', '[data-space-page]', event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            switchPage(event.key === 'Home' ? '1' : event.key === 'End' ? '2' : activePage === '1' ? '2' : '1');
+            element(`[data-space-page="${activePage}"]`)?.focus?.();
         });
-        if (!isMobileViewport()) {
-            $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
+        $root.on('click.spSpaceFeature', '#sp-space-more', function (event) {
+            event.stopPropagation();
+            const menu = this.closest('.sp-action-menu');
+            const open = !host.$(menu).hasClass('sp-action-menu-open');
+            host.closeActionMenus?.();
+            host.$(menu).toggleClass('sp-action-menu-open', open).find('.sp-action-menu-list').prop('hidden', !open);
+            host.$(this).attr('aria-expanded', String(open));
+            syncPages();
+        });
+        $root.on('click.spSpaceFeature', '#sp-space-add-page', event => {
+            event.stopPropagation(); host.closeActionMenus?.();
+            if (pageIds().length >= 2) return;
+            const pageId = controllers.repository.addPage();
+            if (pageId) switchPage(pageId);
+            else host.toast?.('新增窗口失败，请重试', true);
+        });
+        $root.on('keydown.spSpaceFeature', '#sp-space-input', event => {
                 const nativeEvent = event.originalEvent;
-                if (event.key !== 'Enter' || event.shiftKey || event.isComposing || nativeEvent?.isComposing || event.repeat || nativeEvent?.repeat) return;
+                if (isMobileViewport() || event.key !== 'Enter' || event.shiftKey || event.isComposing || nativeEvent?.isComposing || event.repeat || nativeEvent?.repeat) return;
                 event.preventDefault();
                 sendInput();
-            });
-        }
+        });
         $root.on('input.spSpaceFeature', '#sp-space-input', function () { host.autoGrow?.(this); });
         $root.on('click.spSpaceFeature', '.sp-chat-msg-delete', function () {
             if (controllers.chat.busy) return;
@@ -241,22 +273,31 @@ export function createSpaceUi(host = {}) {
             else if (stored.kind === 'era_widget') actions.era?.(stored.body, $button);
             else if (stored.kind === 'outline_widget') await actions.outline?.(stored.body, stored.outlineRawToken, $button);
         });
-        $root.on('click.spSpaceFeature', '#sp-space-clear', async () => {
-            if (controllers.chat.busy || !controllers.chat.history().length) return;
+        $root.on('click.spSpaceFeature', '#sp-space-clear', async event => {
+            event.stopPropagation(); host.closeActionMenus?.();
+            const pageId = activePage;
+            if (controllers.chat.busy || !controllers.chat.history().some(message => spacePageId(message) === pageId)) return;
             const confirmed = await host.confirm?.({
-                title: '清空对话',
-                body: '将清空"间"的局外聊天记录。',
-                confirmText: '清空',
+                title: '清屏',
+                body: `将删除窗口${pageId}的全部讨论记录。`,
+                confirmText: '清屏',
                 cancelText: '取消',
             });
-            if (confirmed) controllers.chat.clear();
+            if (confirmed) controllers.chat.clear(pageId);
         });
     };
     return Object.freeze({
         bindControllers: value => { controllers = value; },
         bind,
         renderHistory,
-        renderLegacyOutlineHistory,
+        activePageId: () => activePage,
+        switchPage,
+        resetPages: () => {
+            activePage = '1'; drafts.clear(); scrolls.clear(); thinking = null; pageAnimation?.cancel?.();
+            query('#sp-space-input')?.val?.('');
+            host.autoGrow?.(element('#sp-space-input'));
+            syncPages();
+        },
         appendMessage,
         emptyMessages,
         beginThinking,

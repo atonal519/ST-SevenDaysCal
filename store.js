@@ -13,7 +13,7 @@
 //       'lines-user'         : { raw, ts },
 //       'dashed-user'        : { items: [ { id, text, createdAt, locked }, ... ], ts },
 //       'creative-chat-user' : [ { role, content }, ... ],
-//       'space-chat-user'    : [ ... ],
+//       'space-chat-user'    : { version: 1, pages: ['1'], messages: [ ... ] } // 旧数组仍可读取,
 //       'almanac-user'       : { items: [ ... ], ts },
 //       'caldesc-user'      : { raw, ts }, 'caldesc-fallback-user': { raw, ts },
 //       'date-anchor-user'  : { raw, ts },

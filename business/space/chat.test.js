@@ -1,8 +1,82 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import { createSpaceChat } from './chat.js';
+import { createSpaceContext } from './context.js';
 import { createSpaceRepository } from './repository.js';
 import { createSpaceIdentity } from './identity.js';
+
+test('间超过20条历史完整保存并经正式上下文与客户端发送，本轮只追加一次回复', async t => {
+    const host = 'data:text/javascript,' + encodeURIComponent(`
+        export const extension_settings = { 'schedule-planner': { pluginEnabled: true } };
+        export const getContext = () => ({ name1: '用户', name2: '角色', chatMetadata: {}, getRequestHeaders: () => ({}) });
+        export const saveSettingsDebounced = () => {};
+        export const substituteParams = value => String(value);
+    `);
+    const hooks = registerHooks({
+        resolve(specifier, context, nextResolve) {
+            if (specifier.endsWith('/extensions.js') || specifier.endsWith('/script.js')) return { url: host, shortCircuit: true };
+            return nextResolve(specifier, context);
+        },
+    });
+    t.after(() => hooks.deregister());
+    const { bindApiClient, postChatCompletion } = await import('../../api/client.js');
+    bindApiClient({ enabled: () => true });
+    const original = Array.from({ length: 24 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant', content: `早期讨论${index + 1}`,
+    }));
+    original[0].content = '最早备忘：下次讨论先核对旧约定。';
+    original[1] = {
+        role: 'assistant', content: '收到备忘。<line_widget>旧候选正文</line_widget>',
+        pointBaselines: [{ view: 'user', charName: '', rawToken: 'point-baseline', ts: 1 }],
+        lineBaselines: [{ name: '旧线', occurrence: 0 }],
+        expectedWidgetKind: 'line_widget', allowedWidgetKinds: ['line_widget'],
+    };
+    let stored = structuredClone(original);
+    const writes = [], requests = [], rendered = [], redraws = [];
+    const target = createSpaceIdentity({ chatId: 'A', historyKey: { kind: 'space-chat', view: 'user', charName: '' } });
+    const repository = createSpaceRepository({
+        captureIdentity: () => target, isCurrent: () => true,
+        readStore: () => stored,
+        writeStore: (_key, value) => { stored = value; writes.push(structuredClone(value)); return true; },
+    });
+    repository.load();
+    const context = createSpaceContext({ context: () => ({ name1: '用户', name2: '角色' }) });
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        assert.equal(url, '/api/backends/chat-completions/generate');
+        requests.push(JSON.parse(options.body));
+        return new Response(JSON.stringify({ choices: [{ message: { content: '已核对早期备忘。' } }] }), {
+            headers: { 'content-type': 'application/json' },
+        });
+    });
+    const chat = createSpaceChat({
+        repository, loadConfig: () => ({ url: 'https://model.fixture/v1', key: 'fixture', model: 'fixture-model' }),
+        buildMessages: context.buildMessages,
+        postCompletion: ({ config, ...options }) => postChatCompletion({ cfg: config, ...options }),
+        ui: {
+            appendMessage: (...args) => rendered.push(args), renderHistory: history => redraws.push(history),
+            beginThinking: () => ({}), endThinking() {},
+        },
+    });
+    const question = '请回顾最早的备忘，再回应这次问题。';
+    assert.equal((await chat.send(question)).status, 'updated');
+    assert.equal(requests.length, 1);
+    assert.equal(writes.length, 2);
+    assert.deepEqual({ savedOnSend: writes[0].messages.length, sentHistoryMessages: requests[0].messages.length - 1, savedAfterReply: stored.messages.length }, {
+        savedOnSend: 25, sentHistoryMessages: 25, savedAfterReply: 26,
+    });
+    assert.deepEqual(writes[0].messages.slice(0, 24), original);
+    assert.deepEqual(stored.messages.slice(0, 24), original);
+    assert.deepEqual(stored.messages.slice(24).map(({ role, content }) => ({ role, content })), [
+        { role: 'user', content: question }, { role: 'assistant', content: '已核对早期备忘。' },
+    ]);
+    const sent = requests[0].messages.slice(1);
+    const expected = original.map(({ role, content }) => ({ role, content }));
+    expected[1].content = '收到备忘。【此前回复含线卡片候选（不代表已应用）】';
+    assert.deepEqual(sent, [...expected, { role: 'user', content: question }]);
+    assert.deepEqual(rendered.map(([role, , index]) => [role, index]), [['user', 24], ['ai', 25]]);
+    assert.equal(redraws.length, 0);
+});
 
 test('间正常发送只捕获一次目标，用户与回复保留在同一历史', async () => {
     let release; let captures = 0;
@@ -27,7 +101,7 @@ test('间正常发送只捕获一次目标，用户与回复保留在同一历�
     assert.equal((await pending).status, 'updated');
     assert.equal(captures, 1);
     assert.deepEqual(writes, ['A', 'A']);
-    assert.deepEqual(roots.get('A').map(item => [item.role, item.content]), [
+    assert.deepEqual(roots.get('A').messages.map(item => [item.role, item.content]), [
         ['user', '已有问题'], ['assistant', '已有回复'], ['user', '讨论一下'], ['assistant', '讨论结论'],
     ]);
     assert.ok(rendered.some(item => item[0] === 'ai'));
@@ -47,7 +121,7 @@ test('间讨论的呈现异常保留已本地应用的回复', async () => {
     assert.equal(result.status, 'updated');
     assert.equal(result.reply, '已生成回复');
     assert.match(result.uiError.message, /render failed/);
-    assert.equal(roots.get('A').at(-1).content, '已生成回复');
+    assert.equal(roots.get('A').messages.at(-1).content, '已生成回复');
 });
 
 test('间在历史和首次显示中沿用本轮卡片白名单', async () => {
@@ -66,7 +140,7 @@ test('间在历史和首次显示中沿用本轮卡片白名单', async () => {
         ui: { appendMessage: (...args) => rendered.push(args), beginThinking: () => ({}), endThinking() {} },
     });
     assert.equal((await chat.send('帮我整理当前面')).status, 'updated');
-    const stored = roots.get('A').at(-1);
+    const stored = roots.get('A').messages.at(-1);
     assert.deepEqual(stored.allowedWidgetKinds, ['outline_widget']);
     assert.equal(stored.outlineRawToken, 'formal-token');
     const aiRender = rendered.find(args => args[0] === 'ai');

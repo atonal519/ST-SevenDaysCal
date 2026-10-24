@@ -2,16 +2,21 @@ import { normalizeOutlineResponse } from '../outline/schema.js';
 import { parseLineCard } from '../lines/schema.js';
 import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord } from '../point/parse.js';
 
-export const SPACE_HISTORY_CAP = 20;
+export const spacePageId = message => message?.pageId === '2' ? '2' : '1';
 
 export function normalizeSpaceHistory(saved) {
-    return Array.isArray(saved) ? saved.filter(item => item?.role && item?.content) : [];
+    const rows = Array.isArray(saved) ? saved : saved?.version === 1 ? saved.messages : [];
+    return Array.isArray(rows) ? rows.filter(item => item?.role && item?.content) : [];
 }
 
-export function appendSpaceUser(history, content, cap = SPACE_HISTORY_CAP) {
-    const next = [...history, { role: 'user', content }];
-    const overflow = Math.max(0, next.length - cap);
-    return Object.freeze({ history: overflow ? next.slice(overflow) : next, trimmed: overflow > 0 });
+export function normalizeSpaceDocument(saved) {
+    const messages = normalizeSpaceHistory(saved);
+    const secondPage = saved?.version === 1 && saved.pages?.includes?.('2') || messages.some(message => spacePageId(message) === '2');
+    return { version: 1, pages: secondPage ? ['1', '2'] : ['1'], messages };
+}
+
+export function appendSpaceUser(history, content, pageId = '1') {
+    return Object.freeze({ history: [...history, { role: 'user', content, pageId }] });
 }
 
 export function appendSpaceAssistant(history, content, context = null) {
@@ -20,7 +25,7 @@ export function appendSpaceAssistant(history, content, context = null) {
         const normalized = normalizeOutlineResponse(content);
         if (normalized) savedContent = normalized;
     }
-    const message = { role: 'assistant', content: savedContent };
+    const message = { role: 'assistant', content: savedContent, ...(context?.pageId ? { pageId: context.pageId } : {}) };
     if (Array.isArray(context?.pointBaselines)) message.pointBaselines = context.pointBaselines;
     if (Array.isArray(context?.lineBaselines)) message.lineBaselines = context.lineBaselines;
     // 预期卡型随 assistant 历史保存，刷新或重绘仍按原请求校验；旧历史缺字段时保持宽松兼容。
@@ -185,6 +190,7 @@ export function stripWidgetsForApi(history) {
             }
         }
         const apiMessage = { ...message, content: cleaned };
+        delete apiMessage.pageId;
         delete apiMessage.pointBaselines;
         delete apiMessage.lineBaselines;
         delete apiMessage.expectedWidgetKind;

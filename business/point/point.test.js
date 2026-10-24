@@ -13,11 +13,24 @@ import { __portableChatDataTestSeams, buildPortableChatPackage, createPortableIm
 test('daily menu prompt and parser support a compact optional intro and keep valid partial rows', () => {
     const prompt = buildDailyMenuPrompt({ storyDate: null, previousMenu: { items: [{ name: '旧菜' }, { name: '旧汤' }] } });
     assert.match(prompt, /故事日期未确认/);
-    assert.match(prompt, /当前世界观、角色近况及当地可得食材/);
-    assert.match(prompt, /Title: 短主题；Intro: 一小段菜单介绍或选菜理由/);
-    assert.match(prompt, /Dish: 菜名 \| 类别 \| 短说明/);
+    assert.match(prompt, /世界设定、角色近况、供餐条件和可得食材/);
+    assert.match(prompt, /Title: 短主题/);
+    assert.match(prompt, /Intro: 一小段菜单介绍或选菜理由/);
+    assert.match(prompt, /Dish: 菜名 \| 类别 \| 1–2句说明/);
     assert.match(prompt, /语气轻松俏皮，菜单文字不用emoji/);
     assert.match(prompt, /旧菜、旧汤/);
+    assert.match(prompt, /Image用中文说明最终可见的菜品构成/);
+    assert.match(prompt, /区分成品外表与内部组织/);
+    assert.match(prompt, /被完整外皮、不透明容器、浓汁或其他食材遮住的结构，不写成表面清晰可见/);
+    assert.match(prompt, /不从库存、其他菜或常见摆盘另取配料/);
+    assert.doesNotMatch(prompt, /简短英文|英文生图提示词/);
+    const customRules = 'Write the Image in English, showing only the finished dish.';
+    const customized = buildDailyMenuPrompt({ imageRules: customRules });
+    assert.ok(customized.includes(customRules));
+    assert.doesNotMatch(customized, /Image用中文|区分成品外表与内部组织|完整中文菜名/);
+    assert.match(customized, /凡会在Image中出现的配料、酱汁和点缀，都先在Dish交代/);
+    assert.equal(buildDailyMenuPrompt({ imageRules: ' \n ' }), buildDailyMenuPrompt());
+    assert.match(buildDailyMenuPrompt({ storyDate: '初春7日' }), /故事日期：初春7日。/);
     assert.equal((prompt.match(/Title:/g) || []).length, 1);
     assert.equal((prompt.match(/Intro:/g) || []).length, 1);
     assert.equal((prompt.match(/Dish:/g) || []).length, 1);
@@ -69,14 +82,15 @@ test('daily menu shares 点 storage statistics/clear kind and portable export ow
 
 test('daily menu controller only replaces the previous menu after a confirmed application and preserves it on errors', async () => {
     let currentOwner = null; let saved = { title: '旧菜单', items: [{ name: '旧菜' }] }; let promptSent = ''; let writeCount = 0; const toasts = [];
+    let imageRules = '本次自定义配图规则';
     const owners = {
         create: () => { currentOwner = { controller: new AbortController() }; return currentOwner; },
         isCurrent: owner => owner === currentOwner && !owner.controller.signal.aborted,
         finish: owner => { if (owner === currentOwner) currentOwner = null; },
     };
     const controller = createDailyMenuController({
-        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
-        generate: async (prompt, signal) => { promptSent = prompt; if (signal.aborted) throw new DOMException('aborted', 'AbortError'); return 'Title: 新菜单\nIntro: 舰上水培菜今晚也有新花样 😊\nDish: 炖菜 | 主菜 | 慢炖'; },
+        owners, chatId: () => 'chat', read: () => saved, storyDate: () => null, imageRules: () => imageRules,
+        generate: async (prompt, signal) => { promptSent = prompt; if (signal.aborted) throw new DOMException('aborted', 'AbortError'); return 'Title: 新菜单\nIntro: 舰上水培菜今晚也有新花样 😊\nDish: 炖菜 | 主菜 | 慢炖\nImage: 炖菜。块状食材与汤汁混合。'; },
         write: async value => { writeCount++; saved = value; return { ok: true, commitState: 'local-applied' }; },
         render: () => {}, toast: message => toasts.push(message),
     });
@@ -88,6 +102,9 @@ test('daily menu controller only replaces the previous menu after a confirmed ap
     assert.equal(writeCount, 1);
     assert.match(promptSent, /故事日期未确认/);
     assert.match(promptSent, /Intro: 一小段菜单介绍或选菜理由/);
+    assert.match(promptSent, /本次自定义配图规则/);
+    assert.equal(saved.items[0].imagePrompt, '炖菜。块状食材与汤汁混合。');
+    assert.doesNotMatch(renderDailyMenuHtml(saved), /块状食材与汤汁混合/);
     saved = { title: '保留菜单', items: [{ name: '保留菜' }] };
     const failed = createDailyMenuController({
         owners, chatId: () => 'chat', read: () => saved, storyDate: () => null,
@@ -126,6 +143,15 @@ test('daily menu controller only replaces the previous menu after a confirmed ap
     assert.equal(refresh.uiError, true);
     assert.equal(saved.title, '新菜单');
     assert.equal(toasts.at(-1), '内容已更新，界面刷新失败');
+
+    imageRules = '下一次使用的新配图规则';
+    assert.equal((await controller.run()).status, 'updated');
+    assert.match(promptSent, /下一次使用的新配图规则/);
+    assert.doesNotMatch(promptSent, /本次自定义配图规则|Image用中文/);
+    imageRules = '';
+    assert.equal((await controller.run()).status, 'updated');
+    assert.match(promptSent, /Image用中文说明最终可见的菜品构成/);
+    assert.doesNotMatch(promptSent, /下一次使用的新配图规则|简短英文/);
 });
 
 test('point parser removes arbitrary structural wrappers without weakening fields or metadata', () => {

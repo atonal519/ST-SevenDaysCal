@@ -99,7 +99,7 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
-                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
+                options: { diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
             });
             if (!currentAndOwned(task) || !repository.matches(target, baseline)) return { status: 'cancelled' };
             const decision = parseOutlineAdvanceDecision(answer);
@@ -172,7 +172,7 @@ export function createOutlineJudge({
                 userName: ctx?.name1 || '用户',
                 charName: ctx?.name2 || '角色',
                 signal: task.controller.signal,
-                options: { promptMode: 'mechanical', diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
+                options: { diagnosticModule: 'outline-judge', diagnosticSink: diagnostic.sink },
             });
             if (!currentAndOwned(task) || externalSignal?.aborted || !repository.matches(target, baseline)) return { status: 'cancelled' };
             const next = parseOutlineRelocationAnswer(answer, beats.length);

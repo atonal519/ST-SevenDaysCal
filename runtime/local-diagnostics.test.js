@@ -14,6 +14,7 @@ test('local diagnostics persist a bounded module result without prompts or crede
     };
     try {
         const diagnostics = await import(`./local-diagnostics.js?test=${Date.now()}`);
+        diagnostics.bindLocalDiagnosticsContext(() => null, new URL('../diagnostics.local.json', import.meta.url).href);
         diagnostics.bindLocalDiagnosticsContext(() => ({ getRequestHeaders: () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'host-session-header' }) }));
         diagnostics.captureLocalGenerationDiagnostic({
             requestId: 'req-local-test', module: 'lines', startedAt: 123, floor: 8, replyId: 'reply-local-test',
@@ -84,6 +85,7 @@ test('local diagnostics keep the newest attempt while late results update bounde
     };
     try {
         const diagnostics = await import(`./local-diagnostics.js?history=${Date.now()}`);
+        diagnostics.bindLocalDiagnosticsContext(() => null, new URL('../diagnostics.local.json', import.meta.url).href);
         diagnostics.captureLocalGenerationDiagnostic({ requestId: 'req-old', runId: 'run-old', module: 'outline', startedAt: 100, result: { processing: 'preparing', ui: 'not-requested', commit: 'not-requested', events: [] } });
         diagnostics.captureLocalGenerationDiagnostic({ requestId: 'req-new', runId: 'run-new', module: 'outline', startedAt: 200, event: { event: 'generation-accepted', status: 'accepted' } });
         diagnostics.captureLocalGenerationDiagnostic({ requestId: 'req-old', module: 'outline', startedAt: 100, event: { event: 'generation-ui-failed', status: 'failed', phase: 'ui', reasonCode: 'render-failed' } });
@@ -126,6 +128,7 @@ test('local diagnostics retry a transient write failure without another event', 
     };
     try {
         const diagnostics = await import(`./local-diagnostics.js?retry=${Date.now()}`);
+        diagnostics.bindLocalDiagnosticsContext(() => null, new URL('../diagnostics.local.json', import.meta.url).href);
         diagnostics.captureLocalGenerationDiagnostic({ runId: 'run-retry', module: 'axis', startedAt: 300, event: { event: 'generation-rejected', status: 'rejected', phase: 'prepare', reasonCode: 'prepare-failed' } });
         await new Promise((resolve, reject) => {
             const start = Date.now();
@@ -159,6 +162,7 @@ test('local diagnostics backfill a successful server merge before flushing concu
     };
     try {
         diagnostics = await import(`./local-diagnostics.js?put-backfill=${Date.now()}`);
+        diagnostics.bindLocalDiagnosticsContext(() => null, new URL('../diagnostics.local.json', import.meta.url).href);
         diagnostics.captureLocalGenerationDiagnostic({ requestId: 'req-old', module: 'lines', startedAt: 100, event: { event: 'generation-accepted', status: 'accepted' } });
         await new Promise((resolve, reject) => {
             const start = Date.now();
@@ -167,5 +171,24 @@ test('local diagnostics backfill a successful server merge before flushing concu
         });
         assert.equal(writes[1].data.attempts.lines.requestId, 'req-server');
         assert.equal(writes[1].data.recentAttempts.lines.find(item => item.requestId === 'req-old').result.ui, 'failed');
+    } finally { globalThis.fetch = originalFetch; }
+});
+
+test('diagnostics use the entry-bound plugin URL once for repeated events', async () => {
+    const originalFetch = globalThis.fetch;
+    const reads = [];
+    const configUrl = 'https://fixture.invalid/scripts/extensions/third-party/renamed-gouhua/diagnostics.local.json';
+    globalThis.fetch = async url => {
+        reads.push(String(url));
+        return { ok: true, json: async () => ({ enabled: false }) };
+    };
+    try {
+        const diagnostics = await import(`./local-diagnostics.js?entry-url=${Date.now()}`);
+        diagnostics.bindLocalDiagnosticsContext(() => null, configUrl);
+        diagnostics.captureLocalGenerationDiagnostic({ requestId: 'first', module: 'lines' });
+        await new Promise(resolve => setTimeout(resolve, 220));
+        diagnostics.captureLocalGenerationDiagnostic({ requestId: 'second', module: 'lines' });
+        await new Promise(resolve => setTimeout(resolve, 220));
+        assert.deepEqual(reads, [configUrl]);
     } finally { globalThis.fetch = originalFetch; }
 });

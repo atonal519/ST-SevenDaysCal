@@ -138,7 +138,6 @@ export function createLinesGenerationController(env = {}) {
             const raw = await waitForSignal(env.callApi(prompt, signal, {
                 ...(travelContext || {}),
                 ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}),
-                promptMode: 'planning',
                 diagnosticModule: 'lines',
                 diagnosticSink: diagnostic.sink,
                 diagnosticContext: { owner: owner.token, channel: owner.channel, chatRevision, floor: swipeCtx?.mesId },

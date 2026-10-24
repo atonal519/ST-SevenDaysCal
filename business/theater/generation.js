@@ -10,7 +10,7 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
         // snapshot carries its own reversed names.
         const frozenStoryContext = { ...(storyContext || {}), userName, charName };
         onStage?.('折射');
-        const raw = await write(buildWriteMessages(input, { userName, charName, storyContext: frozenStoryContext }, settings), { signal, userName, charName, promptMode: 'creative', diagnosticModule: 'theater-generation', diagnosticSink: diagnostic.sink });
+        const raw = await write(buildWriteMessages(input, { userName, charName, storyContext: frozenStoryContext }, settings), { signal, userName, charName, diagnosticModule: 'theater-generation', diagnosticSink: diagnostic.sink });
         if (!String(raw || '').trim()) throw diagnostic.rejected(makeDiagnosticError('empty-output', { phase: 'empty-output' }), { phase: 'parse', reasonCode: 'theater-empty-draft' });
         if (!isCurrent()) throw Object.assign(new Error('theater-owner-stale'), { name: 'AbortError' });
         diagnostic.accepted({ phase: 'validation', reasonCode: 'theater-draft-valid' });
@@ -19,7 +19,7 @@ export function createTheaterGeneration({ write, beautify, buildWriteMessages, b
         const beautifyDiagnostic = createGenerationDiagnosticScope('theater-beautify');
         let beautifyAccepted = false;
         try {
-            const response = await beautify(buildBeautifyMessages(raw, settings), { signal, userName, charName, promptMode: 'mechanical', diagnosticModule: 'theater-beautify', diagnosticSink: beautifyDiagnostic.sink });
+            const response = await beautify(buildBeautifyMessages(raw, settings), { signal, userName, charName, diagnosticModule: 'theater-beautify', diagnosticSink: beautifyDiagnostic.sink });
             htmlRaw = extractTheaterHtmlResponse(response);
             if (!htmlRaw) throw makeDiagnosticError('invalid-structure', { phase: 'validation' });
             beautifyDiagnostic.accepted({ phase: 'validation', reasonCode: 'beautify-valid' });

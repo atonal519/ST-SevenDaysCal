@@ -1,4 +1,5 @@
 .pi/
+/node_modules/
 /tools/diagnostics.local.json
 
 /diagnostics.local.json

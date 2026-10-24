@@ -1221,14 +1221,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-bottom: 6px;
 }
 
-#sp-prompts-section .sp-prompt-global[open] {
-    gap: 0;
-}
-#sp-prompts-section .sp-prompt-global > textarea {
-    margin-top: 10px !important;
-}
-
 /* 各提示词编辑项：上一行说明与下方文本框必须有明确的视觉断开。 */
+#sp-prompts-section .sp-prompt-jailbreak > textarea,
+#sp-prompts-section .sp-prompt-menu-images > textarea,
 #sp-prompts-section .sp-prompt-storyclock > textarea,
 #sp-prompts-section .sp-prompt-space #sp-space-persona-editor > textarea,
 #sp-prompts-section .sp-prompt-theater-write > textarea {
@@ -1278,7 +1273,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     transform-origin: 50% 50%;
 }
 #sp-prompts-section .sp-settings-subsection[open] > summary::before { transform: rotate(90deg); }
-#sp-prompts-section .sp-prompt-global > .sp-cfg-hint { margin-top: 4px; }
+#sp-prompts-section .sp-prompt-jailbreak > .sp-cfg-hint,
+#sp-prompts-section .sp-prompt-menu-images > .sp-cfg-hint { margin-top: 4px; }
 #sp-content-switches-section .sp-dashed-keep-row { padding-left: calc(var(--sp-settings-disclosure-width) + var(--sp-settings-disclosure-gap)); }
 
 #sp-prompts-section .sp-settings-subsection .sp-tag-opt {
@@ -2174,6 +2170,22 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-daily-menu-item strong { font-size: var(--sp-fs-88); font-weight: 500; }
 .sp-daily-menu-category { margin-left: 7px; color: var(--sp-subtle); font-size: var(--sp-fs-75); }
 .sp-daily-menu-item p { margin: 4px 0 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); white-space: pre-wrap; }
+.sp-daily-menu-description { cursor: pointer; }
+.sp-daily-menu-item-head { display: flex; align-items: center; gap: 8px; }
+.sp-daily-menu-item-title { flex: 1 1 auto; min-width: 0; line-height: 1.45; }
+.sp-daily-menu-image-tools { display: flex; flex: 0 0 auto; gap: 8px; }
+.sp-daily-menu-image-pill { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 40px; height: 26px; padding: 3px 5px; border: 1px solid var(--sp-divider); border-radius: 999px; background: transparent; color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.3; white-space: nowrap; cursor: pointer; outline: none; }
+.sp-daily-menu-image-toggle { width: 52px; }
+.sp-daily-menu-image-pill:hover { background: var(--sp-surface-high); color: var(--sp-primary); }
+.sp-daily-menu-image-pill:focus-visible { outline: 2px solid var(--sp-primary); outline-offset: -2px; }
+.sp-daily-menu-image-pill[aria-expanded="true"], .sp-daily-menu-image-cancel { color: var(--sp-primary); border-color: var(--sp-primary); }
+.sp-daily-menu-image-body { height: 0; padding: 0; overflow: hidden; font-size: var(--sp-fs-80); transition: height 220ms ease; }
+.sp-daily-menu-image-inner { display: flow-root; }
+.sp-daily-menu-image-body [hidden] { display: none; }
+.sp-daily-menu-item .sp-daily-menu-image-status, .sp-daily-menu-item .sp-daily-menu-image-error, .sp-daily-menu-item .sp-daily-menu-image-empty { margin: 4px 0 0; line-height: 1.5; }
+.sp-daily-menu-image-preview { margin-top: 6px; }
+.sp-daily-menu-image-preview:empty { margin-top: 0; }
+.sp-daily-menu-image-picture { display: block; width: 100%; height: auto; max-height: 360px; object-fit: contain; border-radius: 7px; }
 .sp-daily-menu-empty { margin: 10px 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); }
 .sp-daily-menu-card .sp-gen-btn { margin-top: 10px; }
 
@@ -2225,9 +2237,10 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-gutter: stable;
     color: var(--sp-on-surface);
 }
+.sp-daily-menu-overlay, .sp-daily-menu-sheet, .sp-daily-menu-content { scrollbar-width: none; -ms-overflow-style: none; }
+.sp-daily-menu-overlay::-webkit-scrollbar, .sp-daily-menu-sheet::-webkit-scrollbar, .sp-daily-menu-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .sp-daily-menu-content .sp-daily-menu-header > strong { display: none; }
 @media (max-width: 640px) {
     .sp-daily-menu-sheet {
@@ -3006,15 +3019,14 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 
 
-.sp-space-modules { flex: 0 0 auto; position: relative; padding: 3px 10px; border-bottom: 1px solid var(--sp-divider); color: var(--sp-subtle); font-size: var(--sp-fs-72); }
-.sp-space-modules > summary { cursor: pointer; width: fit-content; }
-.sp-space-modules-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 0 3px; max-height: 22vh; overflow: auto; }
-.sp-space-modules-list button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--sp-divider); border-radius: 14px; color: var(--sp-on-surface); background: var(--sp-sheet-bg); font-size: inherit; }
-.sp-space-legacy { flex: 0 0 auto; padding: 3px 10px; border-bottom: 1px solid var(--sp-divider); color: var(--sp-subtle); font-size: var(--sp-fs-72); }
-.sp-space-legacy > summary { cursor: pointer; width: fit-content; }
-#sp-legacy-outline-history { max-height: 24vh; overflow: auto; padding: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.sp-space-legacy-msg { padding: 5px 7px; border-top: 1px solid var(--sp-divider); color: var(--sp-on-surface); }
-.sp-space-legacy-ai { color: var(--sp-subtle); }
+.sp-space-pages { display: flex; flex: 0 0 auto; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--sp-divider); }
+.sp-space-pages[hidden] { display: none; }
+.sp-space-pages button { border: 1px solid transparent; border-radius: 6px; padding: 5px 10px; background: transparent; color: var(--sp-subtle); font: inherit; font-size: var(--sp-fs-78); cursor: pointer; }
+.sp-space-pages button[aria-selected="true"] { background: var(--sp-hover-bg); color: var(--sp-primary); border-color: var(--sp-divider); }
+.sp-space-pages button:focus-visible, .sp-space-more-menu button:focus-visible { outline: 2px solid var(--sp-primary); outline-offset: 2px; }
+.sp-space-more-menu { flex: 0 0 auto; }
+.sp-space-more-menu .sp-action-menu-list { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+.sp-space-more-menu .sp-action-menu-item:disabled { color: var(--sp-subtle); opacity: 0.65; cursor: default; background: transparent; }
 /* Chat area bg — cascade lives in the main shared-token block (top of file).
    Auto mode uses the opaque host-tint mapping when supported, otherwise the existing host-tint cascade;
    forced day/night override it in the .sp-forced-* block. */

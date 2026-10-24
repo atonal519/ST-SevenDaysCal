@@ -49,7 +49,7 @@ test('explicit no-content reroll refreshes without filtering, writing, or removi
         context: () => ({ name1: 'User', name2: 'Character' }), chatId: () => 'chat',
         loadConfig: () => ({ url: 'fixture', key: 'fixture' }),
         callApi: async (_ctx, _prompt, _cfg, _user, _char, _signal, _historyLimit, options) => {
-            assert.equal(options.promptMode, 'planning');
+            assert.equal(options.diagnosticModule, 'dashed');
             return '{"items":[]}';
         },
         filterRerollItems: items => { rerollFilters++; return items; },

@@ -1,7 +1,6 @@
 // Optional server-local BaiNiao projection. The ignored config contains only
 // an enable switch; requests reuse the logged-in host session and never carry
 // API credentials or chat metadata into the record.
-const CONFIG_URL = new URL('../diagnostics.local.json', import.meta.url).href;
 const API_BASE = '/api/plugins/st-bainiaodata/v1';
 const NAMESPACE = 'st-sevendayscal';
 const COLLECTION = 'private-diagnostics';
@@ -20,13 +19,16 @@ let flushing = false;
 let dirty = false;
 let retries = 0;
 let getContext = () => null;
+let configUrl = null;
 
-export function bindLocalDiagnosticsContext(getter) {
+export function bindLocalDiagnosticsContext(getter, url) {
     if (typeof getter === 'function') getContext = getter;
+    if (typeof url === 'string' && url) configUrl = url;
 }
 
 async function config() {
-    if (!configPromise) configPromise = fetch(CONFIG_URL, { cache: 'no-store' })
+    if (!configUrl) return null;
+    if (!configPromise) configPromise = fetch(configUrl, { cache: 'no-store' })
         .then(response => response.ok ? response.json() : null)
         .catch(() => null);
     const value = await configPromise;

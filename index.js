@@ -43,9 +43,11 @@ import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, maskKey } from './utils/format.js';
 import { getSettings, getWrapperSettings, updateWrapperSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
+import { setProcessingPrompt } from './runtime/settings.js';
+import { BASE_PROCESSING_PROMPT } from './utils/shared-processing-prompt.js';
 import { QUICK_REPLY_SHORTCUTS, createQuickReplyShortcutSync, registerQuickReplyShortcutCommand } from './runtime/quick-reply-shortcuts.js';
 import { characterCardMatches, effectivePluginEnabled, excludedCharacterSet, isCharacterExcluded, renderCharacterExclusionRows, setCharacterExcluded as updateCharacterExcluded } from './runtime/character-exclusion.js';
-import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, GEN_TEMPERATURE } from './api/client.js';
+import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindApiClient, getJailbreakPrompt, GEN_TEMPERATURE } from './api/client.js';
 import { normalizeApiUrl } from './api/sse.js';
 import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
 import { readDiagnosticTrace, recordChatBoundary, shareRecentDiagnosticTrace, traceDiagnosticEvent } from './runtime/diagnostic-trace.js';
@@ -164,7 +166,9 @@ import { createWeekdayConsumerContext } from './business/axis/weekday-coordinato
 import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
 import { createDateDetectionController } from './business/axis/date-detection.js';
 
-bindExternalChatStorage({ getContext, coreModule: scriptCore, fetchImpl: (...args) => globalThis.fetch(...args) });
+// Source and bundled entries both live at the plugin root.
+const EXT_BASE = new URL('.', import.meta.url).href;
+bindExternalChatStorage({ getContext, coreModule: scriptCore, fetchImpl: (...args) => globalThis.fetch(...args), diagnosticsConfigUrl: EXT_BASE + 'diagnostics.local.json' });
 
 // Must be initialized before the top-level bindAxisAnchor() wiring below.
 // Keeping this as a const preserves the shared terminal-stage semantics while
@@ -217,6 +221,7 @@ import { createAdvanceStrategy } from './business/lines/strategy.js';
 import { createLinesFeature, linesGenerationFailureText } from './business/lines/feature.js';
 import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
+import { normalizeSpaceHistory } from './business/space/schema.js';
 import { createSpaceFeature } from './business/space/feature.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { pointRawToken } from './business/space/schema.js';
@@ -255,7 +260,9 @@ import {
     batchBarHtml, BATCH_SCOPES, batchScopeIds, execBatch, renderLedgerSheet, renderLedgerControls,
 } from './business/ledger/render.js';
 import { formatLedgerList } from './business/ledger/inline.js';
-import { createDailyMenuController, parseDailyMenu, renderDailyMenuHtml } from './business/point/daily-menu.js';
+import { createDailyMenuController, DEFAULT_DAILY_MENU_IMAGE_RULES, parseDailyMenu } from './business/point/daily-menu.js';
+import { createDailyMenuImageController, dailyMenuContentKey } from './business/point/daily-menu-images.js';
+import { disposeDailyMenuImages, refreshDailyMenuImageDrawer, renderDailyMenuView, setDailyMenuImageExpanded, showDailyMenuImageError } from './ui/point/daily-menu-images.js';
 
 const syncQuickReplyShortcuts = createQuickReplyShortcutSync({
     getApi: () => globalThis.quickReplyApi,
@@ -366,6 +373,7 @@ const $dialog = (sel) => {
     return el ? $(el) : $();
 };
 const removeDialogOverlays = () => {
+    disposeDailyMenuImages(_spDialogShadow?.querySelector('#sp-daily-menu-dialog'));
     $dialog('#sp-confirm, #sp-store-conflict, #sp-addon-dialog, #sp-daily-menu-dialog').remove();
 };
 
@@ -560,6 +568,7 @@ dailyMenuController = createDailyMenuController({
     owners: pointTaskOwners,
     chatId: () => getContext()?.chatId,
     read: () => readStore(keyDesc('daily-menu', 'user', '')),
+    imageRules: () => getSettings().dailyMenuImageRules,
     storyDate: () => {
         const date = almTodayAnchorEvidence();
         if (!date) return null;
@@ -573,10 +582,28 @@ dailyMenuController = createDailyMenuController({
             throw makeDiagnosticError('config-missing');
         }
         const ctx = getContext();
-        return callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 3, { promptMode: 'creative', diagnosticModule: 'point', diagnosticSink, includeMemory: false });
+        return callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 3, { diagnosticModule: 'point', diagnosticSink, includeMemory: false });
     },
     write: (value, options) => writeStoreConfirmed(keyDesc('daily-menu', 'user', ''), value, options),
     render: ({ busy } = {}) => renderDailyMenuCard({ busy }),
+    toast: showToast,
+});
+const dailyMenuImageController = createDailyMenuImageController({
+    owners: pointTaskOwners,
+    api: () => globalThis.STBaiBaiImage,
+    capture: () => {
+        const ctx = getContext();
+        const characterName = String(ctx?.name2 || '').trim() || '未命名角色';
+        const key = keyDesc('daily-menu', 'user', '');
+        return { characterName, read: () => readStore(key), write: (value, options) => writeStoreConfirmed(key, value, options) };
+    },
+    render: ({ index, menuKey, menu }) => {
+        const host = _spDialogShadow?.querySelector('#sp-daily-menu-content');
+        if (host?.dailyMenuContentKey !== menuKey) return;
+        const current = readStore(keyDesc('daily-menu', 'user', ''));
+        const visible = current && dailyMenuContentKey(current) === menuKey ? current : menu;
+        refreshDailyMenuImageDrawer(host.querySelector(`.sp-daily-menu-image[data-menu-image-index="${index}"]`), visible, dailyMenuImageController, escapeHtml);
+    },
     toast: showToast,
 });
 const pointInlineRenderer = createPointInlineRenderer({
@@ -1357,7 +1384,7 @@ async function startTimeTravel(targetDate) {
                     const live = collectTimeTravelContext(run.sourceDate, run.targetDate);
                     const prompt = buildTravelDirectionPrompt({ ...live, preference, excluded });
                     const ctx = getContext();
-                    const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE, promptMode: 'creative', diagnosticModule: 'time-travel-direction' });
+                    const raw = await callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 10, { temperature: GEN_TEMPERATURE, diagnosticModule: 'time-travel-direction' });
                     if (signal?.aborted || !isTimeTravelSelectionCurrent(run)) throw Object.assign(new Error('时旅选择已结束'), { name: 'AbortError' });
                     const directions = parseTravelDirections(raw, excluded);
                     if (!directions.length) throw makeDiagnosticError('empty-output');
@@ -1445,7 +1472,6 @@ function appendTravelPromptContext(prompt, travelContext = null) {
 }
 
 // 样式在每个插件 Shadow Root 内独立加载；图标由本地 Tabler Outline 路径内联显示。
-const EXT_BASE = new URL('.', import.meta.url).href;
 // 品牌保留原有 Solar pen-new-round-outline（MIT）圆环笔；功能图标使用 Tabler Outline。
 const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M1.25 12C1.25 6.063 6.063 1.25 12 1.25a.75.75 0 0 1 0 1.5A9.25 9.25 0 1 0 21.25 12a.75.75 0 0 1 1.5 0c0 5.937-4.813 10.75-10.75 10.75S1.25 17.937 1.25 12m15.52-9.724a3.503 3.503 0 0 1 4.954 4.953l-6.648 6.649c-.371.37-.604.604-.863.806a5.3 5.3 0 0 1-.987.61c-.297.141-.61.245-1.107.411l-2.905.968a1.492 1.492 0 0 1-1.887-1.887l.968-2.905c.166-.498.27-.81.411-1.107q.252-.526.61-.987c.202-.26.435-.492.806-.863zm3.893 1.06a2.003 2.003 0 0 0-2.832 0l-.376.377q.032.145.098.338c.143.413.415.957.927 1.469a3.9 3.9 0 0 0 1.807 1.025l.376-.376a2.003 2.003 0 0 0 0-2.832m-1.558 4.391a5.4 5.4 0 0 1-1.686-1.146a5.4 5.4 0 0 1-1.146-1.686L11.218 9.95c-.417.417-.58.582-.72.76a4 4 0 0 0-.437.71c-.098.203-.172.423-.359.982l-.431 1.295l1.032 1.033l1.295-.432c.56-.187.779-.261.983-.358q.378-.18.71-.439c.177-.139.342-.302.759-.718z" clip-rule="evenodd"/></svg>';
 
@@ -1533,15 +1559,15 @@ const MODULE_INTROS = {
         _iSub('索要可用方案') +
         _iText('请说清目标和要新增或修改的内容。有可用方案时，点对应按钮才写入正式内容；自然语言示例（不是固定口令）：<br>“把这件事整理成可应用到点的方案”<br>“把这个伏笔整理成可应用到线的方案”<br>“把这天整理成可应用到轴的纪念日”<br>“按刚讨论的月份生成完整历法”<br>“把刚才的思路整理成可应用到面的方案”。') +
         _iText('普通讨论、目标不清或方案不完整时不会出现可用按钮；可继续补充要求或编辑问题重发。') +
-        _iText('发送新问题时会清理较旧记录。一轮完整问答结束后，间内最多可能暂时显示 21 条消息。') +
+        _iText('记录会完整保留并作为共用背景发给模型。更多菜单可新增第二个窗口，上方切换；两页可以分别讨论，内容互通。') +
         _iSub('消息操作') +
         _iKey('send',    '发送',       '发送消息') +
-        _iKey('pencil',            '编辑并重发', '只在你的消息上出现；会从这里截断后续记录并重新提问') +
+        _iKey('pencil',            '编辑并重发', '只在你的消息上出现；会删去当前窗口从这里起的后续记录并重新提问') +
         _iKey('copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
         _iKey('trash',          '删除',       '删除单条间内消息') +
-        _iKey('clear-all',          '清空',       '清掉当前聊天的全部间内记录') +
+        _iKey('dots-vertical',      '更多',       '清屏只删除当前窗口的记录；新增窗口最多开到两个') +
         _iSub('其他模块') +
-        _iText('模块入口只会打开对应页面，不会自动生成。刻度、冷知识、菜单、小剧场、坐标和记忆没有应用卡片，请在对应模块操作；今日菜单从点页餐具入口进入，设置项在构画设置页更改。旧面讨论可在此查看，只读。'),
+        _iText('刻度、冷知识、菜单、小剧场、坐标和记忆没有应用卡片，请在对应模块操作；今日菜单从点页餐具入口进入，设置项在构画设置页更改。旧面讨论仍保留在数据导出中。'),
     theater:
         _iLede('「棱」是按当前故事背景写独立短篇或番外的地方，结果不进入正式角色扮演楼层。') +
         _iText('可直接填写要求，也可从模板起草；模板库在设置 → 数据设置 → 小剧场模板库。') +
@@ -1908,7 +1934,6 @@ const spaceFeature = createSpaceFeature({
     context: getContext,
     keyDesc,
     readStore,
-    readLegacyOutlineHistory: () => readStore(keyDesc('creative-chat', 'user', '')) || [],
     writeStore,
     loadConfig: loadCfg,
     postCompletion: ({ config, ...options }) => postChatCompletion({ cfg: config, ...options }),
@@ -2054,7 +2079,7 @@ const spaceFeature = createSpaceFeature({
         copyText: copyPlainText,
         confirm: spConfirm,
         toast: (message, error) => showToast(message, null, error),
-        openQuickReplyShortcut,
+        closeActionMenus,
         // 轴动作在本 facade 之后初始化；只在真实点击时读取，严禁顶层提前解引用造成 TDZ。
         widgetActions: () => ({
             point: (body, $button, options) => applyPointWidget(body, $button, options),
@@ -3359,7 +3384,7 @@ function injectModal() {
                                         ${icon(hasCustomApi ? 'circle-check' : 'alert-triangle')}
                                         ${hasCustomApi
                                             ? '已配置独立 API，后台生成不影响聊天'
-                                            : '未配置独立 API：构画生成暂不可用，请填写 Base URL 与 API Key'}
+                                            : '未配置内容 API：请填写 Base URL 与 API Key；小剧场也可使用下方单独选择的预设'}
                                     </div>
                                     <p class="sp-cfg-hint">模型名留空时使用当前内置默认 gpt-4o-mini</p>
 
@@ -3431,10 +3456,20 @@ function injectModal() {
                                     </div>
 
                                     <hr class="sp-mem-divider">
+                                    <label class="sp-cfg-group">小剧场 API</label>
+                                    <p class="sp-cfg-hint">正文、重新生成和美化共用此设置。选择即保存，下一次请求生效。</p>
+                                    <div class="sp-preset-row">
+                                        <button type="button" id="sp-theater-preset-box" class="sp-preset-box" title="选择小剧场 API 预设">
+                                            <span id="sp-theater-preset-label" class="sp-preset-label">跟随内容 API</span>
+                                            ${icon("chevron-down", "sp-preset-caret")}
+                                        </button>
+                                    </div>
+                                    <div id="sp-theater-preset-list" class="sp-preset-list" style="display:none"></div>
+
+                                    <hr class="sp-mem-divider">
                                     <label class="sp-cfg-group">机械任务分流</label>
-                                    <!-- 机械任务分流：把「记忆摘要 / 大纲推进判定」这类机械调用可选路由到某个预设（如便宜小模型）；生成类始终走上面主 API。选项即时生效落 settings.json，无需点保存。留空=不分流 -->
                                     <div class="sp-util-preset-block">
-                                        <p class="sp-cfg-hint">记忆摘要、日期 / 大纲判定这类机械调用改走此预设（如便宜小模型省钱）；正式生成始终走主 API。即时生效，无需保存。</p>
+                                        <p class="sp-cfg-hint">记忆摘要、日期 / 大纲判定这类机械调用改走此预设（如便宜小模型省钱）；其他功能使用内容 API 或各自所选预设。即时生效，无需保存。</p>
                                         <div class="sp-preset-row">
                                             <button type="button" id="sp-util-preset-box" class="sp-preset-box" title="选择机械任务预设">
                                                 <span id="sp-util-preset-label" class="sp-preset-label">跟随主 API（不分流）</span>
@@ -3686,9 +3721,15 @@ function injectModal() {
                             <details class="sp-settings-section" id="sp-prompts-section">
                                 <summary class="sp-settings-section-title">提示词与标签</summary>
                                 <div class="sp-settings-section-body">
-                                    <details class="sp-settings-subsection sp-prompt-global"><summary>创作链自定义提示词 / 写作规范</summary>
-                                        <p class="sp-cfg-hint"><strong>已内置一版创作强化提示词</strong>（不显示）。此处内容<strong>只追加到构画的创作链</strong>，例如点 / 线 / 面 / 间 / 棱写作，适合放去八股、文风和叙事口吻等规范。日期判断、刻度、记忆压缩和排版等机械任务不使用它；全部链路仍自带如实处理虚构敏感内容的基础许可。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
-                                        <textarea id="sp-custom-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="可留空（创作链只用内置强化词）。也可追加创作规范，如：去八股、控制文风、叙事口吻…"></textarea>
+                                    <details class="sp-settings-subsection sp-prompt-jailbreak"><summary>破限提示词</summary>
+                                        <p class="sp-cfg-hint">白鳥系列文字模型请求共用；留空使用内置默认，恢复默认清空自定义。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
+                                        <textarea id="sp-jailbreak-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="白鳥系列共用；留空使用内置默认。"></textarea>
+                                        <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-jailbreak-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-jailbreak-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                    </details>
+                                    <details class="sp-settings-subsection sp-prompt-menu-images"><summary>菜单 · 生图提示词</summary>
+                                        <p class="sp-cfg-hint">用于菜单中每道菜的成品构成描述；留空使用默认，已有菜单不自动重写。</p>
+                                        <textarea id="sp-daily-menu-image-rules" class="sp-input sp-theater-cfg-textarea" placeholder="留空使用内置默认规则。"></textarea>
+                                        <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-daily-menu-image-rules-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-daily-menu-image-rules-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
                                         <p class="sp-cfg-hint">白鳥系列插件全部共享</p>
@@ -3938,12 +3979,20 @@ function injectModal() {
                         </div>
 
                         <div class="sp-space-wrap" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
-                            <details class="sp-space-modules"><summary>模块入口</summary><div class="sp-space-modules-list">${QUICK_REPLY_SHORTCUTS.filter(item => item.key !== 'space').map(item => `<button type="button" data-space-module-key="${escapeAttr(item.key)}">${escapeHtml(item.label)}</button>`).join('')}</div></details>
-                            <details class="sp-space-legacy"><summary>查看旧面讨论（只读）</summary><div id="sp-legacy-outline-history"></div></details>
+                            <div class="sp-space-pages" id="sp-space-pages" role="tablist" aria-label="讨论窗口" hidden>
+                                <button type="button" role="tab" data-space-page="1" aria-selected="true">窗口1</button>
+                                <button type="button" role="tab" data-space-page="2" aria-selected="false" tabindex="-1">窗口2</button>
+                            </div>
                             <div class="sp-space-failure-slot" id="sp-space-failure-slot"></div>
                             <div class="sp-chat-msgs" id="sp-space-msgs"></div>
                             <div class="sp-chat-input-row">
-                                <button id="sp-space-clear" class="sp-icon-btn" title="清空对话">${icon("clear-all")}</button>
+                                <div class="sp-action-menu sp-space-more-menu">
+                                    <button type="button" id="sp-space-more" class="sp-icon-btn sp-action-menu-toggle" title="更多" aria-label="更多讨论操作" aria-expanded="false" aria-controls="sp-space-more-list">${icon("dots-vertical")}</button>
+                                    <div class="sp-action-menu-list" id="sp-space-more-list" hidden>
+                                        <button type="button" id="sp-space-clear" class="sp-action-menu-item">${icon("clear-all")}清屏</button>
+                                        <button type="button" id="sp-space-add-page" class="sp-action-menu-item">${icon("plus")}新增窗口</button>
+                                    </div>
+                                </div>
                                 <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊剧情设定，或请我生成可应用的点／线／轴日期／历法／面方案…"></textarea>
                                 <button id="sp-space-send" class="sp-icon-btn" title="发送">${icon("send")}</button>
                             </div>
@@ -4526,7 +4575,7 @@ function injectModal() {
         refreshLinesInjection();
     });
     // 插件总开关：立刻生效——关则全隐身（藏球/清楼内块/断后台/撤注入），开则按各子开关恢复。
-    // 用 stSaveSettings 立即落盘，避免用户切完立刻刷新丢状态（与 customPrompt 同理）。
+    // 用 stSaveSettings 立即落盘，避免用户切完立刻刷新丢状态。
     $in('#sp-plugin-enabled').on('change', function () {
         getSettings().pluginEnabled = this.checked;
         stSaveSettings();
@@ -5350,10 +5399,10 @@ function setBody(html) {
     else $body.prepend(failureHtml);
 }
 
-function renderDailyMenuCard({ busy = dailyMenuController?.busy?.() || false } = {}) {
+function renderDailyMenuCard({ busy = dailyMenuController?.busy?.() || false, index = null } = {}) {
     const host = _spDialogShadow?.querySelector('#sp-daily-menu-content');
     if (!host) return;
-    host.innerHTML = renderDailyMenuHtml(readStore(keyDesc('daily-menu', 'user', '')), { escapeHtml, busy });
+    renderDailyMenuView(host, readStore(keyDesc('daily-menu', 'user', '')), { escapeHtml, busy, controller: dailyMenuImageController, index });
 }
 
 function openDailyMenuDialog() {
@@ -5384,7 +5433,27 @@ function bindDailyMenuDialogEvents() {
         const close = event.target.closest?.('[data-daily-menu-close]');
         const overlay = event.target.closest?.('#sp-daily-menu-dialog');
         if (close || (overlay && event.target === overlay)) {
+            disposeDailyMenuImages(overlay);
             overlay?.remove();
+            return;
+        }
+        const imageToggle = event.target.closest?.('.sp-daily-menu-image-toggle, .sp-daily-menu-description');
+        if (imageToggle && overlay) {
+            if (imageToggle.classList.contains('sp-daily-menu-description') && (_spDialogShadow.getSelection?.() || window.getSelection())?.toString()) return;
+            const drawer = imageToggle.closest('.sp-daily-menu-image');
+            const toggle = drawer.querySelector('.sp-daily-menu-image-toggle');
+            setDailyMenuImageExpanded(drawer, toggle.getAttribute('aria-expanded') !== 'true');
+            refreshDailyMenuImageDrawer(drawer, readStore(keyDesc('daily-menu', 'user', '')), dailyMenuImageController, escapeHtml);
+            return;
+        }
+        const imageAction = event.target.closest?.('.sp-daily-menu-image-generate, .sp-daily-menu-image-cancel');
+        if (imageAction && overlay) {
+            const index = Number(imageAction.closest('.sp-daily-menu-image').dataset.menuImageIndex);
+            if (imageAction.classList.contains('sp-daily-menu-image-cancel')) dailyMenuImageController.cancel(readStore(keyDesc('daily-menu', 'user', '')), index);
+            else {
+                setDailyMenuImageExpanded(imageAction.closest('.sp-daily-menu-image'), true);
+                void dailyMenuImageController.run(index);
+            }
             return;
         }
         const action = event.target.closest?.('.sp-daily-menu-generate, .sp-daily-menu-cancel');
@@ -5392,10 +5461,11 @@ function bindDailyMenuDialogEvents() {
         if (action.classList.contains('sp-daily-menu-cancel')) dailyMenuController?.cancel('user-cancel');
         else void dailyMenuController?.run();
     });
+    host.addEventListener('error', event => showDailyMenuImageError(event.target), true);
     host.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
         const overlay = event.target.closest?.('#sp-daily-menu-dialog');
-        if (overlay) overlay.remove();
+        if (overlay) { disposeDailyMenuImages(overlay); overlay.remove(); }
     });
 }
 
@@ -5801,8 +5871,7 @@ async function generate(ctx, userName, charName, perspective = 'user', signal = 
     // 生成使用本轮捕获角色的设置，避免异步任务切换角色后串入另一角色偏好。
     const characterKey = charStableKey(ctx);
     const prompt = appendTravelPromptContext(buildPrompt(userName, charName, perspective, pinned, loadCalDesc(), { mode: adultMode, tickets: pointTicketPlan(adultMode, 14) }, { scale: getScale(characterKey), direction: getLineDirection(characterKey) }), travelContext);
-    // 点按剧情事实作未来规划，沿用 planning 保留 BASE 与用户规范，并省去通用正文创作强化词。
-    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), promptMode: 'planning', includeCurrentStoryTime: true, includeOutlinePlan: true, diagnosticModule: 'point', diagnosticSink };
+    const apiOpts = { ...(travelContext?.feedback === 'time-travel' ? { fullMemory: true, ...travelContext } : (travelContext || {})), includeCurrentStoryTime: true, includeOutlinePlan: true, diagnosticModule: 'point', diagnosticSink };
     apiOpts.pointView = perspective;
     if (memoryContext?.memorySnapshot) {
         apiOpts.memorySnapshot = memoryContext.memorySnapshot;
@@ -7484,7 +7553,7 @@ function currentPortableRoots() {
 function portableModuleSummary(portablePackage, id) {
     if (id === 'theater') return `${portablePackage.modules[id].saved.length} 条`;
     const entries = portablePackage.modules[id].entries || {};
-    if (id === 'space') return `${Array.isArray(entries['space-chat-user']) ? entries['space-chat-user'].length : 0} 条对话`;
+    if (id === 'space') return `${normalizeSpaceHistory(entries['space-chat-user']).length} 条对话`;
     return `${Object.keys(entries).length} 项`;
 }
 
@@ -8351,7 +8420,7 @@ function toggleSettings() {
         $overlay.stop(true).css({ display: 'flex', opacity: 0 }).animate({ opacity: 1 }, 180);
     } else {
         $overlay.stop(true).animate({ opacity: 0 }, 150, function () { $(this).css('display', 'none'); });
-        stSaveSettings();   // 关面板即把面板内所有改动立即写盘：兜底防抖未 flush 的字段（customPrompt 等），根治重启丢失
+        stSaveSettings();   // 关面板即把尚未 flush 的设置改动立即写盘
         if (currentCharacterExcluded()) closePanel();
     }
     $in('.sp-settings-btn').toggleClass('sp-btn-active', settingsOpen);
@@ -8407,7 +8476,8 @@ function renderMemorySection() {
     refreshWrapperInputs();
     // 自定义提示词是全局设置、与记忆源无关，必须在下面按源分支的 early-return 之前回填，
     // 否则用户选 Anima/柏宝书时函数提前 return，重开面板这框会空白（值其实已存盘）。
-    $in('#sp-custom-prompt').val(typeof s.customPrompt === 'string' ? s.customPrompt : '');
+    $in('#sp-jailbreak-prompt').val(getJailbreakPrompt());
+    $in('#sp-daily-menu-image-rules').val(typeof s.dailyMenuImageRules === 'string' && s.dailyMenuImageRules.trim() ? s.dailyMenuImageRules : DEFAULT_DAILY_MENU_IMAGE_RULES);
     $in('#sp-storyclock-prompt').val(buildStoryClockPrompt(s));
     $in('#sp-space-persona').val(typeof s.spacePersona === 'string' ? s.spacePersona : '');   // 间·人格覆盖：同为全局设置，须在按源 early-return 前回填
     $in('#sp-space-use-character-persona').prop('checked', s.spaceUseCharacterPersona === true);
@@ -8676,14 +8746,40 @@ function bindMemoryHandlers() {
     }
     bindTagField('#sp-mem-keeptags', 'keepTags');
     bindTagField('#sp-mem-extratags', 'extraTags');
-    $in('#sp-custom-prompt').on('input', function () {
-        getSettings().customPrompt = this.value;
+    $in('#sp-jailbreak-prompt').on('input', function () {
+        setProcessingPrompt(this.value);
         saveSettingsDebounced();
     }).on('blur', function () {
-        getSettings().customPrompt = this.value;
-        stSaveSettings();   // 失焦即落盘，覆盖"填完没关面板就直接刷新"的场景
+        stSaveSettings();
     });
-    // 间·人格覆盖：与 customPrompt 同套持久化（无常驻注入，下次进「间」发消息时经 buildSpaceChatSystemPrompt 现读现生效）。
+    $in('#sp-jailbreak-prompt-load').on('click', function () {
+        const fullDefault = BASE_PROCESSING_PROMPT;
+        $in('#sp-jailbreak-prompt').val(fullDefault);
+        setProcessingPrompt(fullDefault);
+        stSaveSettings();
+    });
+    $in('#sp-jailbreak-prompt-reset').on('click', function () {
+        setProcessingPrompt('');
+        $in('#sp-jailbreak-prompt').val(getJailbreakPrompt());
+        stSaveSettings();
+    });
+    $in('#sp-daily-menu-image-rules').on('input', function () {
+        getSettings().dailyMenuImageRules = this.value;
+        saveSettingsDebounced();
+    }).on('blur', function () {
+        stSaveSettings();
+    });
+    $in('#sp-daily-menu-image-rules-load').on('click', function () {
+        $in('#sp-daily-menu-image-rules').val(DEFAULT_DAILY_MENU_IMAGE_RULES);
+        getSettings().dailyMenuImageRules = DEFAULT_DAILY_MENU_IMAGE_RULES;
+        stSaveSettings();
+    });
+    $in('#sp-daily-menu-image-rules-reset').on('click', function () {
+        $in('#sp-daily-menu-image-rules').val(DEFAULT_DAILY_MENU_IMAGE_RULES);
+        getSettings().dailyMenuImageRules = '';
+        stSaveSettings();
+    });
+    // 间·人格覆盖无常驻注入，下次发消息时由 buildSpaceChatSystemPrompt 读取。
     $in('#sp-space-persona').on('input', function () {
         getSettings().spacePersona = this.value;
         saveSettingsDebounced();
@@ -9325,6 +9421,7 @@ function renderApiPresetList() {
     $in('#sp-preset-del').prop('disabled', !activeId);
     syncPresetLabel();
     syncPresetState();
+    renderTheaterPresetList();
 }
 
 // 「假框」显示当前选中预设名（无原生 select，直接按 activeId 回显）
@@ -9503,6 +9600,31 @@ function bindApiPresetEvents() {
         $in('#sp-util-preset-list').slideUp(120);
         $in('#sp-util-preset-box').removeClass('sp-preset-box-open');
     });
+    $in('#sp-theater-preset-box').on('click', function (e) {
+        e.preventDefault();
+        $in('#sp-theater-preset-list').slideToggle(120);
+        $(this).toggleClass('sp-preset-box-open');
+    });
+    $in('#sp-theater-preset-list').on('click', '.sp-preset-item', function () {
+        getSettings().theaterPresetId = $(this).attr('data-id') || '';
+        saveSettingsDebounced();
+        renderTheaterPresetList();
+        $in('#sp-theater-preset-list').slideUp(120);
+        $in('#sp-theater-preset-box').removeClass('sp-preset-box-open');
+    });
+}
+
+function renderTheaterPresetList() {
+    const $list = $in('#sp-theater-preset-list');
+    if (!$list.length) return;
+    const list = loadApiPresets();
+    const id = getSettings().theaterPresetId || '';
+    const selected = list.find(p => p.id === id);
+    const activeId = selected ? id : '';
+    $list.html(`<button type="button" class="sp-preset-item${!activeId ? ' sp-preset-item-active' : ''}" data-id="">跟随内容 API</button>` + list.map(p => `<button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button>`).join(''));
+    $in('#sp-theater-preset-label').text(selected
+        ? selected.url && selected.key ? selected.name : `${selected.name}（未配置完整，跟随内容 API）`
+        : '跟随内容 API');
 }
 
 // 机械任务预设：内联候选列表 =「跟随主 API（不分流）」+ 每个已存预设。选中项高亮。

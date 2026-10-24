@@ -74,7 +74,7 @@ export function createLedgerJudgeController(options = {}) {
             const date = target || floorContext?.date || env.today?.();
             const judgePrompt = buildJudgePrompt(env, date, judgeable);
             let raw;
-            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, promptMode: 'mechanical', diagnosticModule: 'ledger-judge', diagnosticSink: diagnostic.sink }); }
+            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, diagnosticModule: 'ledger-judge', diagnosticSink: diagnostic.sink }); }
             catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
             if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);

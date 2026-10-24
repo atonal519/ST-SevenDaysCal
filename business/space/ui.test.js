@@ -107,3 +107,20 @@ test('轴日期每张预览绑定独立原项，历法变化后无效项不会�
     await click.call({ wid: cards[1].wid });
     assert.deepEqual(saved.map(item => item.name), ['B']);
 });
+
+test('双页面候选按所属窗口判最新，保留真实公共索引与应用依据', () => {
+    const outline = title => `<outline_widget>Beat: 当前|${title}|关系|主线|结果\nScene: 核对消息来源</outline_widget>`;
+    const history = [
+        { role: 'assistant', content: outline('第一页旧卡'), expectedWidgetKind: 'outline_widget', outlineRawToken: 'formal', pageId: '1' },
+        { role: 'assistant', content: outline('第二页卡'), expectedWidgetKind: 'outline_widget', outlineRawToken: 'formal', pageId: '2' },
+        { role: 'assistant', content: outline('第一页新卡'), expectedWidgetKind: 'outline_widget', outlineRawToken: 'formal', pageId: '1' },
+    ];
+    const node = { empty() {}, attr() { return this; }, prop() { return this; }, val() { return ''; } };
+    const fakeNode = () => ({ addClass() { return this; }, attr() { return this; }, html() { return this; }, append() { return this; }, appendTo() { return this; } });
+    const ui = createSpaceUi({ query: () => node, $: fakeNode, element: () => ({ scrollTop: 0, scrollHeight: 0 }) });
+    ui.bindControllers({ chat: { history: () => history }, repository: { pages: () => ['1', '2'] }, renderer: createSpaceRenderer() });
+    ui.renderHistory(history);
+    assert.deepEqual(ui.widgetEntries().map(({ historyIndex, readOnly }) => [historyIndex, readOnly]), [[0, true], [2, false]]);
+    ui.switchPage('2');
+    assert.deepEqual(ui.widgetEntries().map(({ historyIndex, readOnly, outlineRawToken }) => [historyIndex, readOnly, outlineRawToken]), [[1, false, 'formal']]);
+});

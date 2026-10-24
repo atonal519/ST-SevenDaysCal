@@ -1,4 +1,5 @@
 import { decodeStoreEntry } from './store-codec.js';
+import { normalizeSpaceHistory } from '../business/space/schema.js';
 import { normalizeOutlineResponse } from '../business/outline/schema.js';
 
 export const PORTABLE_CHAT_FORMAT = 'st-sevendayscal-portable';
@@ -30,7 +31,6 @@ const KEY_MATCHERS = Object.freeze({
 const ARRAY_ENTRY_KEYS = Object.freeze({
     points: key => key === 'charnames-recent' || key === 'char-pins',
     outline: key => key === 'creative-chat-user' || key.startsWith('creative-chat-char-'),
-    space: key => key === 'space-chat-user',
 });
 
 function fail(reason, message) {
@@ -74,7 +74,10 @@ function moduleHasContent(id, value) {
     if (id === 'theater') return Array.isArray(value?.saved) && value.saved.length > 0;
     const entries = value?.entries;
     if (!isObject(entries) || !Object.keys(entries).length) return false;
-    if (id === 'space') return Array.isArray(entries['space-chat-user']) && entries['space-chat-user'].length > 0;
+    if (id === 'space') {
+        const value = entries['space-chat-user'];
+        return normalizeSpaceHistory(value).length > 0 || (value?.version === 1 && value.pages?.includes?.('2'));
+    }
     return Object.values(entries).some(item => {
         if (Array.isArray(item)) return item.length > 0;
         if (isObject(item)) {
@@ -134,6 +137,12 @@ function validateModule(id, value) {
     const entries = {};
     for (const [key, item] of Object.entries(value.entries)) {
         if (!KEY_MATCHERS[id]?.(key)) return fail('illegal-module-key', `模块 ${id} 包含不允许的条目：${key}`);
+        if (id === 'space') {
+            if (!Array.isArray(item) && !(isObject(item) && item.version === 1 && Array.isArray(item.messages)
+                && Array.isArray(item.pages) && item.pages.length >= 1 && item.pages.length <= 2
+                && item.pages[0] === '1' && (item.pages.length === 1 || item.pages[1] === '2'))) return fail('invalid-entry', '间的对话结构不正确');
+            entries[key] = clone(item); continue;
+        }
         const expectsArray = ARRAY_ENTRY_KEYS[id]?.(key) === true;
         if (expectsArray ? !Array.isArray(item) : !isObject(item)) return fail('invalid-entry', `模块 ${id} 的条目 ${key} 顶层结构不正确`);
         entries[key] = clone(decodeStoreEntry(key, item));
@@ -168,12 +177,12 @@ export function parsePortableChatPackage(text, { maxBytes = PORTABLE_CHAT_MAX_BY
 }
 
 export function markImportedSpaceHistory(value) {
-    if (!Array.isArray(value)) return [];
-    return clone(value).map(message => {
+    const messages = clone(Array.isArray(value) ? value : value?.messages || []).map(message => {
         if (message?.role !== 'assistant' || (!SPACE_WIDGET_RX.test(String(message.content || ''))
             && !(message.expectedWidgetKind === 'outline_widget' && normalizeOutlineResponse(message.content)))) return message;
         return { ...message, portableReadonly: true };
     });
+    return Array.isArray(value) ? messages : { ...clone(value), messages };
 }
 
 export function rebindImportedDateAnchor(value, targetChatId) {

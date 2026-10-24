@@ -31,8 +31,8 @@ export function createAxisGenerationController(env = {}) {
             // 整历 reroll 必须与旧历隔离：既不把当前历作为 system 数据源再喂回模型，
             // 也让统一消息构建器剥掉记忆/历史里残留的旧 widget。补录仍需看现有历去重，保持旧调用不变。
             const apiOptions = supplement
-                ? { fullMemory: true, promptMode: 'planning', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink }
-                : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac', promptMode: 'planning', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink };
+                ? { fullMemory: true, diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink }
+                : { fullMemory: true, noAlmanac: true, reroll: true, module: 'almanac', diagnosticModule: 'axis-generation', diagnosticSink: diagnostic.sink };
             if (axisState.almanacAbortController !== ctrl) return cancelOwned();
             const raw = await env.callApi(chat, prompt, cfg, userName, charName, ctrl.signal, 3, apiOptions);
             if (axisState.almanacAbortController !== ctrl) return { status: 'cancelled' };

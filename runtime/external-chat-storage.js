@@ -75,7 +75,7 @@ async function readHostState(target) {
 
 export function bindExternalChatStorage(options = {}) {
     binding = { ...binding, ...options };
-    bindLocalDiagnosticsContext(binding.getContext);
+    bindLocalDiagnosticsContext(binding.getContext, binding.diagnosticsConfigUrl);
     binding.nativeHostBridge = options.nativeHostBridge || createNativeExternalChatHostBridge({
         getContext: binding.getContext,
         fetchImpl: (...args) => binding.fetchImpl(...args),

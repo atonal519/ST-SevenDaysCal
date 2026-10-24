@@ -1,5 +1,5 @@
 import { buildSpaceChatSystemPrompt, buildSpaceHelpText } from './prompts.js';
-import { compactLineBaselines, compactPointBaselines, latestSpaceWidget, stripWidgetsForApi } from './schema.js';
+import { compactLineBaselines, compactPointBaselines, latestSpaceWidget, spacePageId, stripWidgetsForApi } from './schema.js';
 
 export const LEDGER_READ_KEYWORDS = Object.freeze(['刻度', '暗历', '暗账', '状态', '伤', '病', '孕', '约定', '周期', '待办', '身心', '现在怎', '好了没', '没了结']);
 
@@ -232,6 +232,10 @@ const previousFormatTarget = (history, latestWidget, widgetParsers) => {
 
 export function classifySpaceIntent(userMsg, historySnapshot = [], widgetParsers = {}) {
     const message = String(userMsg || '').trim();
+    if (widgetParsers.pageId) {
+        const scoped = historySnapshot.map(item => spacePageId(item) === widgetParsers.pageId ? item : null);
+        if (latestSpaceWidget(scoped, sourceReference(message).kind, widgetParsers)) historySnapshot = scoped;
+    }
     const requestedMaterials = requestedSpaceMaterials(message);
     const routedTargets = explicitTargetRoutes(message);
     let routedKinds = [...new Set(routedTargets.map(({ kind }) => kind))];
@@ -407,12 +411,13 @@ export function numberedSpacePointGroups(scopes, numberedPoints, userName = '用
 }
 
 export function createSpaceContext(env = {}) {
-    const buildMessages = async ({ target, userMsg, historySnapshot }) => {
+    const buildMessages = async ({ target, userMsg, historySnapshot, pageId = '1', pages = ['1'] }) => {
         const ctx = env.context?.() || {};
         const userName = ctx.name1 || '用户';
         const charName = ctx.name2 || '角色';
         const message = String(userMsg || '');
         const intent = classifySpaceIntent(message, historySnapshot, {
+            pageId,
             parseAlmanac: env.parseAlmanac,
             parseEra: env.parseEra,
         });
@@ -520,7 +525,10 @@ export function createSpaceContext(env = {}) {
             preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' },
             intent,
         });
-        const messages = [{ role: 'system', content: system }, ...historyMessages, { role: 'user', content: userMsg }];
+        const sharedPages = pages.length > 1 || historySnapshot.some(item => spacePageId(item) === '2');
+        const pageNote = sharedPages ? `\n【讨论窗口】当前在窗口${pageId}。以下两窗口记录按实际先后共享；窗口标记表示来源，不表示连续问答。` : '';
+        const apiHistory = sharedPages ? historyMessages.map((item, index) => ({ ...item, content: `【窗口${spacePageId(historySnapshot[index])}】\n${item.content}` })) : historyMessages;
+        const messages = [{ role: 'system', content: system + pageNote }, ...apiHistory, { role: 'user', content: userMsg }];
         Object.defineProperty(messages, 'pointBaselines', { value: compactPointBaselines(pointScopes), enumerable: false });
         Object.defineProperty(messages, 'lineBaselines', { value: Object.freeze(lineBaselines), enumerable: false });
         // 本地 transport 元数据，不发送给 API；冻结本轮唯一允许应用的卡型。

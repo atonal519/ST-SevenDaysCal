@@ -25,13 +25,14 @@ export function createSpaceFeature(env = {}) {
     });
     const context = createSpaceContext(env.contextEnv);
     const renderer = createSpaceRenderer(env.renderEnv);
-    const ui = createSpaceUi({ ...env.ui, captureIdentity, isCurrentIdentity: isCurrent });
+    const ui = createSpaceUi({ ...env.ui, captureIdentity, isCurrentIdentity: isCurrent, onPageChanged: () => renderFailure() });
     const failureNotes = createPanelFailureStore({ escapeHtml: env.escapeHtml });
-    const failureKey = target => JSON.stringify([String(target?.chatId || ''), Number(target?.chatRevision) || 0]);
+    const failureKey = (target, pageId = ui.activePageId()) => JSON.stringify([String(target?.chatId || ''), Number(target?.chatRevision) || 0, pageId]);
     const renderFailure = () => ui.setFailureHtml?.(failureNotes.html('space-chat', failureKey(repository.capture())));
     let sendAttempt = 0;
     const chat = createSpaceChat({
         repository,
+        activePageId: ui.activePageId,
         loadConfig: env.loadConfig,
         buildMessages: context.buildMessages,
         postCompletion: env.postCompletion,
@@ -68,13 +69,12 @@ export function createSpaceFeature(env = {}) {
         } },
         abort: { value: reason => { sendAttempt++; failureNotes.clear('space-chat', failureKey(repository.capture())); renderFailure(); return chat.abort(reason); } },
     });
-    ui.bindControllers({ chat: chatUi, renderer });
+    ui.bindControllers({ chat: chatUi, renderer, repository });
 
     const open = () => {
         ui.setPlaceholder(env.placeholder?.() || getSpaceChatPlaceholder());
         chat.load();
         ui.renderHistory(chat.history());
-        ui.renderLegacyOutlineHistory?.(env.readLegacyOutlineHistory?.() || []);
         renderFailure();
     };
     const onChatChanged = ({ enabled = true } = {}) => {
@@ -83,6 +83,7 @@ export function createSpaceFeature(env = {}) {
         ui.clearWidgets();
         if (!enabled) return;
         repository.clearMemory();
+        ui.resetPages();
         ui.emptyMessages();
     };
     const abortAll = (reason = 'manual-abort') => {
@@ -97,12 +98,14 @@ export function createSpaceFeature(env = {}) {
     const refreshAfterStoreClear = kind => {
         if (kind !== 'space-chat') return;
         repository.clearMemory();
+        ui.resetPages();
         ui.clearWidgets();
         if (env.isOpen?.()) ui.renderHistory(chat.history());
     };
     const refreshFromStore = kind => {
         if (kind !== 'space-chat') return;
         chat.load();
+        ui.resetPages();
         if (env.isOpen?.()) ui.renderHistory(chat.history());
     };
     return Object.freeze({

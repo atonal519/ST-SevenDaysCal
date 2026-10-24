@@ -89,7 +89,7 @@ export function createDateDetectionController(options = {}) {
         const remove = options.bridge?.(externalSignal, ctrl) || (() => {});
         try {
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
-            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT, { promptMode: 'mechanical', diagnosticModule: 'axis-date', diagnosticSink: diagnostic.sink });
+            const raw = await options.callApi(ctx, options.prompt?.() || DATE_JUDGE_PROMPT, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, DATE_JUDGE_HISTORY_LIMIT, { diagnosticModule: 'axis-date', diagnosticSink: diagnostic.sink });
             if (!current(ctrl, ownerIdentity, externalSignal)) return { status: 'cancelled' };
             const md = options.parse?.(raw);
             if (!md) {
