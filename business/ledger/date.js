@@ -1,4 +1,4 @@
-// 刻度日期纯逻辑：只依赖轴提供的当前日期与环形日期差，不读取宿主状态。
+// 刻度日期纯逻辑：当前日期由刻度截止范围提供，不读取宿主状态。
 let deps = { today: () => null, daysUntil: () => null, daysUntilFull: null, listEntries: () => [] };
 const hasYear = value => value != null && value !== '' && Number.isFinite(Number(value));
 
@@ -6,13 +6,24 @@ export function bindLedgerDate(next = {}) {
     deps = { ...deps, ...next };
 }
 
-export function ledgerDaysSince(entry, today = deps.today()) {
+export function ledgerEntryWithinCutoff(entry, maxFloor = Infinity) {
+    if (maxFloor === undefined || maxFloor === Infinity) return true;
+    if (!Number.isInteger(maxFloor)) return false;
+    return [entry?.起始锚, entry?.现状锚].every(anchor => {
+        const floor = anchor?.楼层;
+        return floor == null || String(floor).trim() === '' || !Number.isInteger(Number(floor)) || Number(floor) <= maxFloor;
+    });
+}
+
+export function ledgerDaysSince(entry, today = deps.today(), maxFloor = deps.floor?.()) {
+    if (!today || !ledgerEntryWithinCutoff(entry, maxFloor)) return null;
     const a = entry?.起始锚?.历日期;
     if (!a || !Number.isFinite(+a.month) || !Number.isFinite(+a.day)) return null;
     return deps.daysUntil(today.month, today.day, a);
 }
 
-export function ledgerDueInfo(entry, today = deps.today()) {
+export function ledgerDueInfo(entry, today = deps.today(), maxFloor = deps.floor?.()) {
+    if (!today || !ledgerEntryWithinCutoff(entry, maxFloor)) return null;
     const d = entry?.到期锚?.历日期;
     if (!d || !Number.isFinite(+d.month) || !Number.isFinite(+d.day)) return null;
     // 一次性事项没有年份/周期时无法判断它属于哪一轮，保持 unknown，禁止猜未来或过期；
@@ -36,10 +47,10 @@ export function listJudgeableLedger({ includePending = false } = {}) {
         && entry.来源状态 !== '来源已删除');
 }
 
-export function fmtLedgerForJudge(entry, today = deps.today()) {
-    const since = ledgerDaysSince(entry, today);
-    const sinceText = since == null ? '起始不明' : (since === 0 ? '今天登记' : `距登记 ${since} 天`);
-    const due = ledgerDueInfo(entry, today);
+export function fmtLedgerForJudge(entry, today = deps.today(), maxFloor = deps.floor?.()) {
+    const since = ledgerDaysSince(entry, today, maxFloor);
+    const sinceText = !ledgerEntryWithinCutoff(entry, maxFloor) ? '登记时点尚未纳入当前范围' : since == null ? '起始不明' : (since === 0 ? '今天登记' : `距登记 ${since} 天`);
+    const due = ledgerDueInfo(entry, today, maxFloor);
     const dueAnchor = entry?.到期锚?.历日期;
     const unresolvedDueDate = !due && dueAnchor && Number.isFinite(+dueAnchor.month) && Number.isFinite(+dueAnchor.day)
         && entry?.类型 !== '周期' && entry?.周期长度 == null

@@ -52,6 +52,18 @@ function tailPart(context) {
     return context.split('━ 尚未摘要的近期正文 ━\n')[1] || '';
 }
 
+test('an explicit ledger floor boundary excludes newer raw text while ordinary consumers still read the latest floor', () => {
+    const floors = makeFloors(11);
+    const groups = makeGroups(floors, 5);
+    const meta = { sourcePolicy: 'current', L0: {}, L1: [] };
+    addL0Summary(meta, groups[0]);
+    addL0Summary(meta, groups[1]);
+    const bounded = runMemoryContext({ floors, groups, meta }, { maxFloor: 10 });
+    assert.match(bounded, /SUMMARY_6-10/, 'summary ending at the boundary remains valid');
+    assert.doesNotMatch(bounded, /BODY_11/);
+    assert.match(runMemoryContext({ floors, groups, meta }), /BODY_11/, 'other module defaults retain the latest floor');
+});
+
 test('valid L0 sources append only uncovered continuous AI floors after the three-floor request window', () => {
     for (const [count, expected] of [[9, [6]], [10, [6, 7]], [11, [6, 7, 8]]]) {
         const floors = makeFloors(count);

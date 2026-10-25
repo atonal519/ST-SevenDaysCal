@@ -656,15 +656,19 @@ export function consumeMigrationNotice() {
 }
 
 // ─── Memory context for injection ────────────────────────────────────────────
-export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false } = {}) {
+export function getMemoryContext({ excludeMesIds = [], includeRecentRaw = false, maxFloor } = {}) {
     if (_getSettings().useBaiBaiBook || _getSettings().useAnima || _getSettings().useDatabase || _getSettings().useQianQianJie) return '';
     const m = meta();
     if (!m) return '';
     const parts = [];
-    const floors = getAiFloors();
-    const groups = getStableGroups(floors);
+    const allFloors = getAiFloors();
+    const bounded = Number.isInteger(maxFloor);
+    const floors = bounded ? allFloors.filter(floor => Number(floor.mesid) <= maxFloor) : allFloors;
+    // Preserve already-stable summary groups; do not delay them a second time.
+    const groups = getStableGroups(allFloors).filter(group => !bounded || Number(group.floors.at(-1)?.mesid) <= maxFloor);
     const legacy = sourcePolicy(m) === 'legacy-needs-rebuild';
-    const l1Entries = legacy ? (m.L1 || []) : validL1Entries(m, groups).filter(l1 => String(l1.text || '').trim());
+    const l1Entries = (legacy ? (m.L1 || []) : validL1Entries(m, groups).filter(l1 => String(l1.text || '').trim()))
+        .filter(l1 => !bounded || Number(l1.range?.[1]) <= maxFloor);
     if (l1Entries.length) {
         parts.push('━ 早期章节 ━');
         for (const l1 of l1Entries) {

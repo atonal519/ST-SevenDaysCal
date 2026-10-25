@@ -1,4 +1,5 @@
 // 刻度注入正文纯函数；日期数值由调用方预先计算，避免模块读取宿主状态。
+import { ledgerEntryWithinCutoff } from './date.js';
 export function buildLedgerInjectionText(picked = []) {
     const states = picked.filter(entry => entry.类型 === '持续状态');
     const timed = picked.filter(entry => entry.类型 !== '持续状态');
@@ -30,10 +31,10 @@ export function createLedgerInjectionController(options = {}) {
     const KEY = options.key || 'sp_ledger_remind';
     const DEPTH = options.depth ?? 2;
     let echo = [];
-    const sceneText = (n = 4) => {
+    const sceneText = (n = 4, maxFloor = Infinity) => {
         const chat = options.context?.().chat || [];
         const parts = [];
-        for (let i = chat.length - 1; i >= 0 && parts.length < n; i--) {
+        for (let i = Math.min(chat.length - 1, maxFloor); i >= 0 && parts.length < n; i--) {
             const message = chat[i];
             if (!message || message.is_user || message.is_system) continue;
             if (!options.narrative?.(message)) continue;
@@ -49,12 +50,15 @@ export function createLedgerInjectionController(options = {}) {
             const ctx = options.context?.();
             if (typeof ctx?.setExtensionPrompt !== 'function') return;
             if (!options.enabled?.() || options.settings?.().ledgerInject !== true) { clear(ctx); return; }
-            const entries = options.entries?.() || [];
-            const picked = options.select?.(entries, sceneText(options.sceneFloors || 4), options.today?.()) || [];
+            const floorContext = options.floorContext?.();
+            if (floorContext && floorContext.floor == null) { clear(ctx); return; }
+            const today = floorContext ? floorContext.date : options.today?.();
+            const entries = (options.entries?.() || []).filter(entry => ledgerEntryWithinCutoff(entry, floorContext ? floorContext.floor : Infinity));
+            const picked = options.select?.(entries, sceneText(options.sceneFloors || 4, floorContext?.floor ?? Infinity), today, undefined, floorContext?.floor) || [];
             if (!picked.length) { clear(ctx); return; }
             const pt = ctx.constants?.promptTypes?.IN_CHAT ?? 1;
             const pr = ctx.constants?.promptRoles?.SYSTEM ?? 0;
-            const annotated = picked.map(entry => ({ ...entry, _daysSince: options.daysSince?.(entry), _dueInfo: options.dueInfo?.(entry) }));
+            const annotated = picked.map(entry => ({ ...entry, _daysSince: options.daysSince?.(entry, today, floorContext?.floor), _dueInfo: options.dueInfo?.(entry, today, floorContext?.floor) }));
             ctx.setExtensionPrompt(KEY, buildLedgerInjectionText(annotated), pt, DEPTH, false, pr);
             echo = picked.map(e => ({ id: e.id, 事由: e.事由, 类型: e.类型, 起始锚: e.起始锚, 现状: e.现状 }));
         },

@@ -17,17 +17,17 @@ export function bindLedgerSelect(e) { env = e; }
 // 单条打分结合基础权重与场景相关度；分数越高越优先注入。
 //   基础：用户锁（用户在意）> 临近/过期到期 > 近期登记 > 持续状态活跃底分。
 //   场景：牵扯∪标签 任一命中最近正文 → 显著加分（正文正谈到 → 此刻最相关）。
-export function scoreLedgerEntry(entry, sceneText, _today) {
+export function scoreLedgerEntry(entry, sceneText, today, maxFloor) {
     let score = 1;                                   // 活跃即有底分
     if (entry.锁 === '用户锁') score += 6;           // 用户手动在意的，优先带上
-    const du = env.ledgerDueInfo(entry);
+    const du = env.ledgerDueInfo(entry, today, maxFloor);
     if (du) {
         if (du.过期) score += 8;                     // 已过期没兑现，最该提醒
         else if (du.天数 <= 1) score += 7;           // 今天/明天到期
         else if (du.天数 <= 3) score += 4;
         else if (du.天数 <= 7) score += 2;
     }
-    const since = env.ledgerDaysSince(entry);
+    const since = env.ledgerDaysSince(entry, today, maxFloor);
     if (since != null) {
         if (since <= 2) score += 3;                  // 刚登记，热
         else if (since <= 7) score += 1;
@@ -43,13 +43,13 @@ export function scoreLedgerEntry(entry, sceneText, _today) {
 // 相关度门槛：此刻是否「确有理由被想起」。任一命中即可注入；全不中＝当下静默条，这轮不埋（仍活跃、仍在池里）。
 // 与 scoreLedgerEntry 分工：这里是「注不注入」的布尔闸；score 只在相关条超上限时用来排序取前 N。
 // 判据：① 用户锁（手动在意·等于「始终纳入」）② 正文点到名（牵扯/标签命中近景）③ 有临近/过期死线（≤7 天或已过）④ 刚登记（≤2 天还热）。
-export function isLedgerSalient(entry, sceneText) {
+export function isLedgerSalient(entry, sceneText, today, maxFloor) {
     if (entry.锁 === '用户锁') return true;                       // 用户手动锁的 → 一定带（想常驻注入就锁它）
     const eventHit = !!sceneText && eventKeys(entry).some(k => sceneText.includes(k));
     if (eventHit) return true;
-    const du = env.ledgerDueInfo(entry);
+    const du = env.ledgerDueInfo(entry, today, maxFloor);
     if (entry.类型 === '约定待办' || entry.类型 === '周期') return !!du && (du.过期 || du.天数 <= 7); // 远期约定不因刚登记召回
-    const since = env.ledgerDaysSince(entry);
+    const since = env.ledgerDaysSince(entry, today, maxFloor);
     if (since != null && since >= 0 && since <= 2) return true;   // 持续状态刚登记还热
     return false;
 }
@@ -58,12 +58,12 @@ export function isLedgerSalient(entry, sceneText) {
 // 相关条 ≤ limit 全带（有几条埋几条·凑不满就不凑）；超 limit 才按 score 降序截前 limit（取最相关的）。空进空出。
 // 静音（暂停埋入）条一律排除：不进注入集 → 连带不进召回（_ledgerInjectEcho 从 picked 派生）。仍是活跃、仍显示在标注池。
 // 门槛防止活跃池变大后用无关条目硬凑 limit；静音条也不会被下一名自动补位。
-export function selectLedgerForInject(entries, sceneText, today, limit = 8) {
+export function selectLedgerForInject(entries, sceneText, today, limit = 8, maxFloor) {
     const active  = (entries || []).filter(e => e && e.状态 !== '已了结' && e.静音 !== true);
-    const salient = active.filter(e => isLedgerSalient(e, sceneText));
+    const salient = active.filter(e => isLedgerSalient(e, sceneText, today, maxFloor));
     if (salient.length <= limit) return salient;
     return salient
-        .map(e => ({ e, s: scoreLedgerEntry(e, sceneText, today) }))
+        .map(e => ({ e, s: scoreLedgerEntry(e, sceneText, today, maxFloor) }))
         .sort((a, b) => b.s - a.s)
         .slice(0, limit)
         .map(x => x.e);

@@ -5,12 +5,12 @@ import { createLedgerJudgeController } from './judge.js';
 
 test('刻度 judge local apply survives a renderer exception and returns a UI error', async () => {
     const writes = [], toasts = [];
-    const context = () => ({ chatId: 'ledger-chat', name1: 'User', name2: 'Character', chat: [] });
+    const context = () => ({ chatId: 'ledger-chat', name1: 'User', name2: 'Character', chat: [{ mes: '前一正文' }, { mes: '最新正文' }] });
     let applied = false;
     const controller = createLedgerJudgeController({
         context, charKey: () => 'character', listJudgeable: () => [{ id: 'L1', 事由: 'event', 类型: '持续状态', 现状: 'before' }],
         config: () => ({ url: 'fixture', key: 'fixture' }), calendar: () => null, validDate: () => null,
-        today: () => ({ month: 1, day: 1 }), floorContext: () => ({ floor: null, date: null }),
+        today: () => ({ month: 1, day: 1 }), floorContext: () => ({ floor: 0, date: { month: 1, day: 1 } }),
         appendTravel: prompt => prompt, callApi: async () => 'fixture',
         parseJudge: () => ({ status: 'ok', changes: [{ id: 'L1', 动作: '维持', 现状: 'after' }] }),
         getEntry: () => ({ id: 'L1', 事由: 'event', 状态: '活跃', 锁: '', 来源状态: '' }),
@@ -27,8 +27,8 @@ test('刻度 judge local apply survives a renderer exception and returns a UI er
 });
 
 test('刻度 capture local apply survives a refresh exception and does not repeat generation', async () => {
-    const context = () => ({ chatId: 'capture-chat', name1: 'User', name2: 'Character', chat: [] });
-    bindLedgerCapture({ context, parseClock: () => ({}), parseDate: () => null, stripTags: value => value, settings: () => ({}) });
+    const context = () => ({ chatId: 'capture-chat', name1: 'User', name2: 'Character', chat: [{ mes: '前一正文' }, { mes: '最新正文' }] });
+    bindLedgerCapture({ context, parseClock: () => ({ endMeta: { date: { month: 1, day: 1 } } }), parseDate: () => null, stripTags: value => value, settings: () => ({}) });
     const writes = [], toasts = [];
     let apiCalls = 0;
     const controller = createLedgerCaptureController({

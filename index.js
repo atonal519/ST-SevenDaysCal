@@ -636,7 +636,7 @@ function calendarForStoryFloor(floor) {
 // 选择器需要日期口径但不依赖轴模块，由宿主在此注入以避免循环引用。
 bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
 const axisDateContext = createAxisDateContext({ today: almTodayAnchor, daysUntil: almDaysUntil, daysUntilFull: almDaysBetweenFull, weekdayRef: almWeekdayRef, weekdayFor: almWeekdayFor });
-bindLedgerDate({ today: () => axisDateContext.today(), daysUntil: axisDateContext.daysUntil, daysUntilFull: axisDateContext.daysUntilFull, listEntries: () => ledger.listEntries() });
+bindLedgerDate({ today: () => ledgerFloorDateContext().date, floor: () => ledgerFloorDateContext().floor, daysUntil: axisDateContext.daysUntil, daysUntilFull: axisDateContext.daysUntilFull, listEntries: () => ledger.listEntries() });
 bindLedgerSchema({ parseJudgedDate, ledgerTypes: ledger.TYPES });
 bindLedgerCapture({
     context: getContext,
@@ -723,7 +723,7 @@ const ledgerInjectionController = createLedgerInjectionController({
     settings: getSettings,
     entries: () => ledger.listEntries(),
     select: selectLedgerForInject,
-    today: almTodayAnchor,
+    floorContext: ledgerFloorDateContext,
     daysSince: ledgerDaysSince,
     dueInfo: ledgerDueInfo,
     narrative: ledgerNarrativeMessage,
@@ -1513,7 +1513,7 @@ const MODULE_INTROS = {
         _iKey('trash',         '删除',       '移除这条日期') +
         _iSub('刻度 · 时间账') +
         _iText('刻度分持续状态、约定待办和周期三类。自动标注默认关闭；在设置 → 推进设置 → 刻度中，标注或更新间隔设为 0 可分别关闭对应任务，两个都设为 0 时完全手动，仍可手动标注和更新。') +
-        _iText('在刻度页或楼内“标注池”点［标注］捞取新条，点［更新］按时间刷新现状。') +
+        _iText('在刻度页或楼内“标注池”点［标注］捞取新条，点［更新］按时间刷新现状。依据前一条 AI 正文标注和更新；最新回复会在下一条 AI 出现后纳入。') +
         _iText('潜伏注入默认关闭；必须同时开启“允许潜伏注入主楼 AI（线 / 面 / 刻度）”总开关和刻度自己的“潜伏注入主楼 AI”才生效。') +
         _iKey('pencil',         '编辑',     '手动改字段；保存后自动成为用户锁') +
         _iKey('lock',        '锁定',     'AI 更新不再改这条；与是否注入主楼是两回事') +
@@ -1960,7 +1960,12 @@ const spaceFeature = createSpaceFeature({
         readLedgerText: () => {
             try {
                 const items = ledger.listEntries() || [];
-                return items.length ? formatLedgerList(items, { daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo }) : '';
+                if (!items.length) return '';
+                const cutoff = ledgerFloorDateContext();
+                return formatLedgerList(items, {
+                    daysSince: entry => ledgerDaysSince(entry, cutoff.date, cutoff.floor),
+                    dueInfo: entry => ledgerDueInfo(entry, cutoff.date, cutoff.floor),
+                });
             } catch { return '【刻度读取失败】本轮暂时无法读取这项资料。'; }
         },
         readWorldInfo: (ctx, triggerText, referenceHistory, titleSupplementText = '') => buildWorldInfoContext(ctx, triggerText === undefined ? undefined : { triggerText, triggerMode: 'query', referenceHistory, titleSupplementText }),
@@ -3869,7 +3874,7 @@ function injectModal() {
                                         <div class="sp-settings-section-body">
                                             <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-capture-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerCaptureInterval()))}"><span>条 AI 回复标注一次</span></label>
                                             <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-judge-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerJudgeInterval()))}"><span>条 AI 回复更新一次现状</span></label>
-                                            <p class="sp-cfg-hint">间隔设为 0 可关闭对应自动任务；手动标注和更新仍可使用。默认每 5 条自动标注、每 4 条自动更新现状。</p>
+                                            <p class="sp-cfg-hint">间隔设为 0 可关闭对应自动任务；手动标注和更新仍可使用。默认每 5 条自动标注、每 4 条自动更新现状。依据前一条 AI 正文标注和更新，最新回复在下一条 AI 出现后纳入。</p>
                                             <p class="sp-cfg-group">首次历史溯源范围</p>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="recent" ${getSettings().ledgerHistoryScope !== 'all' && getSettings().ledgerHistoryScope !== 'custom' ? 'checked' : ''}><span>最近</span><input id="sp-ledger-history-limit" class="sp-input sp-interval-input" type="number" min="1" max="500" value="${escapeAttr(String(Math.max(1, Math.min(500, Number(getSettings().ledgerHistoryLimit) || 50))))}"><span>个有效历史角色回复（默认）</span></label>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="all" ${getSettings().ledgerHistoryScope === 'all' ? 'checked' : ''}><span>全部有效历史角色回复</span></label>
@@ -6969,7 +6974,7 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
 // Alternate sources are mutually exclusive; only an explicitly confirmed per-request
 // fallback may omit a source. Read failures otherwise propagate to the generation UI.
 async function _getMemTextRaw(opts = {}) {
-    const { excludeMesIds, source, ...sourceOpts } = opts;
+    const { excludeMesIds, maxFloor, source, ...sourceOpts } = opts;
     const s = getSettings();
     const selectedSource = source || (s.useQianQianJie ? 'qianqianjie'
         : s.useAnima ? 'anima'
@@ -7027,7 +7032,7 @@ async function _getMemTextRaw(opts = {}) {
             throw makeDiagnosticError('memory-read', { phase: 'memory' });
         }
     }
-    return memory.getMemoryContext({ excludeMesIds, includeRecentRaw: true });
+    return memory.getMemoryContext({ excludeMesIds, includeRecentRaw: true, maxFloor });
 }
 
 // 记忆源先按各自的召回规则选材，再把已选文本原样交给生成；上下文容量由上游模型服务决定。
@@ -7142,13 +7147,13 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
             } else if (snapshot?.status === 'read-required') {
                 if (!isMemoryReadSnapshot(snapshot)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
                 reportPhase('memory');
-                rawMemText = await getMemText({ source: snapshot.source, full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds });
+                rawMemText = await getMemText({ source: snapshot.source, full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
             } else {
                 throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
             }
         } else {
             reportPhase('memory');
-            rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds });
+            rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
         }
         memText = sanitizeGenerationContextText(rawMemText, { reroll: opts.reroll });
     }

@@ -3,10 +3,12 @@ import { ledgerFailureText, logLedgerFailure, markLedgerError } from './diagnost
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError } from '../../api/diagnostics.js';
 import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { addCalendarDays } from '../calendar/date.js';
+import { ledgerContextThroughFloor } from './capture.js';
+import { ledgerEntryWithinCutoff } from './date.js';
 export const JUDGE_FLOORS = 3;
 
-export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || []) {
-    const lines = entries.map(e => env.fmtLedger?.(e, today)).join('\n');
+export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || [], maxFloor) {
+    const lines = entries.map(e => env.fmtLedger?.(e, today, maxFloor)).join('\n');
     return `请暂停角色扮演，作为剧情连续性助手，只做一件事：根据下面【已登记事件】各自「距今过了多少天」和最近正文，判断哪些事件的状态**该随时间变化了**，只输出需要更新的那几条。
 
 【已登记事件】（方括号是编号，天数已由系统算好，你不必自己算日期）
@@ -33,22 +35,31 @@ export function createLedgerJudgeController(options = {}) {
     const env = options;
     let busy = false;
     let abortController = null;
-    const ownerOf = () => {
-        return ledgerOwnerIdentity(env.context?.() || {});
+    const ownerOf = (maxFloor = Infinity) => {
+        return ledgerOwnerIdentity(ledgerContextThroughFloor(env.context?.() || {}, maxFloor));
     };
     const sameOwner = sameLedgerOwner;
-    const current = (ctrl, owner, travel) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && sameOwner(owner, ownerOf());
-    const finish = (ctrl, owner) => {
+    const current = (ctrl, owner, travel, maxFloor) => abortController === ctrl && !ctrl.signal.aborted && !travel?.signal?.aborted && sameOwner(owner, ownerOf(maxFloor));
+    const finish = (ctrl, owner, maxFloor) => {
         if (abortController !== ctrl) return false;
         busy = false; abortController = null;
-        if (sameOwner(owner, ownerOf())) { try { env.render?.(); } catch {} try { env.refreshInline?.(true); } catch {} }
+        if (sameOwner(owner, ownerOf(maxFloor))) { try { env.render?.(); } catch {} try { env.refreshInline?.(true); } catch {} }
         return true;
     };
     const run = async (manual = false, travel = null) => {
         const diagnostic = createGenerationDiagnosticScope('ledger-judge', { background: !manual });
         if (busy) return { status: 'busy', reason: '已有刻度更新正在进行' };
-        const ctx = env.context();
-        const owner = env.identity?.() || ownerOf(); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf()); abortController = ctrl; busy = true; env.setFabBusy?.(true);
+        const liveCtx = env.context();
+        const floorContext = env.floorContext?.();
+        const floor = floorContext?.floor ?? null;
+        const target = env.validDate?.(travel?.targetDate, env.calendar?.());
+        const date = target || floorContext?.date;
+        if (floor == null || !date) {
+            if (manual) env.toast?.(floor == null ? '继续对话后，刻度会从前一条 AI 正文开始更新。' : '前一条及更早正文还没有明确日期，刻度暂时等待。');
+            return { status: 'skipped', reason: floor == null ? 'no-confirmed-floor' : 'no-confirmed-date', applied: [], feedbackShown: manual };
+        }
+        const ctx = ledgerContextThroughFloor(liveCtx, floor);
+        const owner = ownerOf(floor); owner.target = env.target?.(); const ctrl = new AbortController(); owner.guard = () => !ctrl.signal.aborted && !travel?.signal?.aborted && abortController === ctrl && sameOwner(owner, ownerOf(floor)); abortController = ctrl; busy = true; env.setFabBusy?.(true);
         let reconcile = null;
         const removeBridge = env.bridge?.(travel?.signal, ctrl) || (() => {});
         env.render?.(); env.refreshInline?.(true);
@@ -56,27 +67,23 @@ export function createLedgerJudgeController(options = {}) {
             try { reconcile = await env.reconcile?.(owner); } catch (error) { error.phase ||= 'source-scan-failed'; return { status: 'failed', reason: error.phase, reconcile: null, applied: [], error }; }
             if (reconcile?.error) {
                 if ((reconcile.phase || reconcile.error.phase) === 'rollback-save-failed') return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error: reconcile.error };
-                if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
+                if (ctrl.signal.aborted || travel?.signal?.aborted || !current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error: reconcile.error };
                 const reason = reconcile.error?.saveResult?.reason === 'invalid-operation' ? 'invalid-operation' : reconcile.phase || reconcile.error.phase || 'source-state-invalid';
                 return { status: 'failed', reason, reconcile, applied: [], error: reconcile.error, saveResult: reconcile.error.saveResult, reconcileCommitted: false };
             }
-            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+            if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
-            const judgeable = (env.listJudgeable?.(manual ? { includePending: true } : {}) || []).filter(entry => entry?.来源状态 !== '来源已删除' && (manual || entry?.来源状态 !== '待确认'));
+            const judgeable = (env.listJudgeable?.(manual ? { includePending: true } : {}) || []).filter(entry => entry?.来源状态 !== '来源已删除' && (manual || entry?.来源状态 !== '待确认') && ledgerEntryWithinCutoff(entry, floor));
             if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
             if (!judgeable.length) return { status: 'skipped', reason: 'no-entry', reconcile, applied: [] };
             const cfg = env.config?.();
             if (!cfg?.url || !cfg?.key) return { status: 'failed', reason: 'no-api', error: Object.assign(new Error('未配置 API'), { diagnosticCode: 'config-missing' }), reconcile, applied: [] };
-            const target = env.validDate?.(travel?.targetDate, env.calendar?.());
-            const floorContext = env.floorContext?.();
-            const floor = floorContext?.floor ?? null;
-            const date = target || floorContext?.date || env.today?.();
-            const judgePrompt = buildJudgePrompt(env, date, judgeable);
+            const judgePrompt = buildJudgePrompt(env, date, judgeable, floor);
             let raw;
-            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, diagnosticModule: 'ledger-judge', diagnosticSink: diagnostic.sink }); }
+            try { raw = await env.callApi(ctx, env.appendTravel?.(judgePrompt, travel) || judgePrompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', ctrl.signal, JUDGE_FLOORS, { ...(travel || {}), noAlmanac: true, ledgerCutoffFloor: floor, diagnosticModule: 'ledger-judge', diagnosticSink: diagnostic.sink }); }
             catch (error) { markLedgerError(error, { phase: 'judge-request' }); throw error; }
-            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+            if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             const parsed = env.parseJudge?.(raw);
             if (parsed?.status === 'none') { diagnostic.accepted({ phase: 'validation', reasonCode: 'judge-explicit-none' }); return { status: 'unchanged', reason: 'none', reconcile, applied: [] }; }
             if (parsed?.status === 'invalid') { const error = diagnostic.rejected(makeDiagnosticError('parse', { phase: 'parse' }), { phase: 'parse', reasonCode: 'judge-format-unrecognized' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
@@ -85,7 +92,7 @@ export function createLedgerJudgeController(options = {}) {
             let rejectedFormat = false;
             let rejectedSource = false;
             for (const change of parsed?.changes || []) {
-                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+                if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
                 if (!change || !/^L\d+$/.test(String(change.id || '')) || !['维持', '滚周期', '了结'].includes(change.动作)) { rejectedFormat = true; continue; }
                 if (!judgeableIds.has(change.id)) { rejectedSource = true; continue; }
                 const entry = env.getEntry?.(change.id);
@@ -104,7 +111,7 @@ export function createLedgerJudgeController(options = {}) {
                 }
                 applied.push({ id: entry.id, patch, close: change.动作 === '了结',事由: entry.事由 });
             }
-            if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+            if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (!applied.length) {
                 if (rejectedSource) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-source-state-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'source-state-invalid', reconcile, applied: [], error, feedbackShown: manual }; }
                 if (rejectedFormat) { const error = diagnostic.rejected(makeDiagnosticError('invalid-fields', { phase: 'validation' }), { phase: 'validation', reasonCode: 'judge-fields-invalid' }); if (manual || env.settings?.()?.notifyMode === 'full') env.toast?.(`刻度判定失败：${diagnosticMessage(error)}`, null, true); return { status: 'invalid', reason: 'format', reconcile, applied: [], error, feedbackShown: manual }; }
@@ -117,9 +124,9 @@ export function createLedgerJudgeController(options = {}) {
             if (env.applyAtomic) {
                 if (saved?.commitState === 'local-applied') diagnostic.locallyApplied({ reasonCode: 'judge-local-applied' });
                 else if (saved?.commitState === 'confirmed') diagnostic.committed({ reasonCode: 'judge-confirmed' });
-                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, reconcile, applied: [] };
+                if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'committed-but-stale', committed: true, reconcile, applied: [] };
             } else {
-                if (!current(ctrl, owner, travel)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
+                if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
                 for (const change of applied) { env.update?.(change.id, change.patch); if (change.close) env.close?.(change.id); }
                 // The fallback updater has no persistence receipt to classify here.
             }
@@ -131,7 +138,7 @@ export function createLedgerJudgeController(options = {}) {
         } catch (error) {
             if (abortController !== ctrl) return { status: 'cancelled', reason: 'superseded', reconcile, applied: [], error };
             if (ctrl.signal.aborted || error?.name === 'AbortError' || travel?.signal?.aborted) return { status: 'cancelled', reason: 'aborted', reconcile, applied: [], error };
-            if (!sameOwner(owner, ownerOf())) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
+            if (!sameOwner(owner, ownerOf(floor))) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [], error };
             if (error?.ledgerPhase === 'rollback-save-failed' || error?.phase === 'rollback-save-failed') { logLedgerFailure(error, { ledgerPhase: 'rollback-save-failed' }); if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.('刻度判定失败：保存状态无法确认，请检查当前聊天数据', null, true); return { status: 'failed', reason: 'rollback-save-failed', reconcile, applied: [], error }; }
             if (error?.spDisabled) return { status: 'skipped', reason: 'spDisabled', reconcile, applied: [], error };
             const reason = error?.phase || (error?.spDisabled ? 'spDisabled' : 'api-failed');
@@ -140,7 +147,7 @@ export function createLedgerJudgeController(options = {}) {
                 if (!manual && env.settings?.()?.notifyMode === 'full') env.toast?.(ledgerFailureText('刻度判定失败', error, { phase: error?.ledgerPhase || 'judge-request' }), null, true);
             }
             return { status: 'failed', reason, error, saveResult: error?.saveResult, reconcile, reconcileCommitted: reconcile?.summary?.changed === true, applied: [] };
-        } finally { finish(ctrl, owner); removeBridge(); env.setFabBusy?.(false); }
+        } finally { finish(ctrl, owner, floor); removeBridge(); env.setFabBusy?.(false); }
     };
     return { run, abort: (reason = 'manual-abort') => abortController?.abort(reason), reset: (reason = 'reset') => { abortController?.abort(reason); busy = false; abortController = null; }, get isBusy() { return busy; }, get abortController() { return abortController; } };
 }
