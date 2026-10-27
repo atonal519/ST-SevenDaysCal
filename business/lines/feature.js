@@ -565,15 +565,8 @@ export function createLinesFeature(env = {}) {
         syncInline(chatId);
         return actual;
     };
-    const historySaveUncertain = result => {
-        if (result?.commitState === 'unknown' || result?.saveResult?.commitState === 'unknown') return true;
-        const state = env.storageStatus?.();
-        return state?.mode === 'external' && (state.pendingCurrent === true || state.status === 'unavailable');
-    };
     const historyCommitCurrent = (attempt, baseline) => {
         if (pendingHistoryRestore !== attempt) return false;
-        const state = env.storageStatus?.();
-        if (state?.mode === 'external' && (state.pendingCurrent === true || state.status === 'unavailable')) return true;
         const actual = historyRead(attempt.storeKey);
         return lineStoreMatches(actual, baseline) || lineStoreMatches(actual, attempt.value);
     };
@@ -637,18 +630,16 @@ export function createLinesFeature(env = {}) {
                 try {
                     stored = await writer?.(storeKey, restored.value, { ownerGuard: () => historyCommitCurrent(attempt, baseline) });
                 } catch (error) {
-                    const uncertain = historySaveUncertain(error);
-                    if (!uncertain && pendingHistoryRestore === attempt) pendingHistoryRestore = null;
-                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
-                    env.toast?.(uncertain ? '历史版本保存结果未确认，请到存储管理重试并核实当前线' : lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
+                    if (pendingHistoryRestore === attempt) pendingHistoryRestore = null;
+                    const actual = resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
+                    env.toast?.(lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
                     return false;
                 }
                 const confirmed = stored === true || (stored?.ok === true && ['confirmed', 'local-applied'].includes(stored?.commitState));
                 if (!confirmed || stored?.stale) {
-                    const uncertain = historySaveUncertain(stored);
-                    if (!uncertain && pendingHistoryRestore === attempt) pendingHistoryRestore = null;
-                    const actual = uncertain ? null : resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
-                    env.toast?.(uncertain ? '历史版本保存结果未确认，请到存储管理重试并核实当前线' : lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
+                    if (pendingHistoryRestore === attempt) pendingHistoryRestore = null;
+                    const actual = resyncAfterHistoryFailure(chatId, boundaryEpoch, storeKey);
+                    env.toast?.(lineStoreMatches(actual, baseline) ? '历史版本保存失败，当前线没有改变' : '线已变化，历史版本未恢复', true);
                     return false;
                 }
                 if (pendingHistoryRestore === attempt) pendingHistoryRestore = null;
@@ -661,7 +652,7 @@ export function createLinesFeature(env = {}) {
             }
         } finally {
             historyBusy = false;
-            if (env.isPanelActive?.() && !historySaveUncertain()) refreshPanel(true);
+            if (env.isPanelActive?.()) refreshPanel(true);
         }
     };
     const historyToolbarState = () => {

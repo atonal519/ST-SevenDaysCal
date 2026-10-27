@@ -527,7 +527,7 @@ export function createInlineFeature(env = {}) {
         el?.querySelectorAll?.(BOX_SELECTOR)?.forEach(box => box.remove());
     };
     const directBoxes = msg => [...(msg?.querySelectorAll?.(':scope > ' + BOX_SELECTOR) || [])];
-    const mount = (el, isLatest) => {
+    const mount = (el, isLatest, { freezeSnapshots = true } = {}) => {
         if (!pluginEnabled() || !el) return;
         syncRenderedChat();
         const msg = el.querySelector?.('.mes_text');
@@ -537,7 +537,7 @@ export function createInlineFeature(env = {}) {
         const renderKey = renderedBoxKey(el);
         let snap = null, coldItems = null;
         if (isLatest) {
-            const frozen = env.freezeSnapshot?.(mid);
+            const frozen = freezeSnapshots ? env.freezeSnapshot?.(mid) : env.readSnapshot?.(Number(mid));
             if (!isUser && Array.isArray(frozen?.cold)) coldItems = frozen.cold;
         }
         else {
@@ -587,7 +587,7 @@ export function createInlineFeature(env = {}) {
             for (const entry of entries) {
                 const el = entry.target;
                 const latest = el === current.currentEl;
-                if (entry.isIntersecting) mount(el, latest);
+                if (entry.isIntersecting) mount(el, latest, { freezeSnapshots: false });
                 else if (!latest) unmount(el);
             }
         }, { root: null, rootMargin: '200px 0px', threshold: 0 });
@@ -601,7 +601,7 @@ export function createInlineFeature(env = {}) {
             const latest = el === current.currentEl;
             if (current.winSet.has(el)) {
                 inlineObserver?.observe(el);
-                if (latest || inViewport(el)) mount(el, latest);
+                if (latest || inViewport(el)) mount(el, latest, { freezeSnapshots: shared?.freezeSnapshots !== false });
             } else {
                 inlineObserver?.unobserve(el);
                 unmount(el);
@@ -635,7 +635,7 @@ export function createInlineFeature(env = {}) {
                 const context = env.getContext?.() || {};
                 const window = computeWindow(floors);
                 env.coordinateChanged?.({ floors, context });
-                if (!env.isStreaming?.()) refresh(true, { floors, context, window });
+                if (!env.isStreaming?.()) refresh(true, { floors, context, window, freezeSnapshots: false });
             }, 400);
         });
         chatObserver.observe(chat, { childList: true, subtree: true });

@@ -1,5 +1,5 @@
 // store.js — 点、线、面、间、虚线、历法与日期锚的统一逻辑存储层。
-// `sp-store` 逻辑根可承载于普通聊天 metadata 或外置后端；localStorage 只保留旧数据迁移源和
+// `sp-store` 随当前聊天 metadata 保存；localStorage 只保留旧数据迁移源和
 // 设备级草稿。sp-memory、sp-theater、sp-ledger 与全局坐标各自有独立仓库，不由本模块改写。
 //
 // 数据形状（子键 = `{kind}-{scope}`，scope = user | char-<encodeURIComponent(name)>）：
@@ -24,15 +24,13 @@
 // baibai_book / variables / LWB_SNAP 等是别的插件的数据，一律只读、绝不删。
 
 import { getContext } from '../../../extensions.js';
-import { deleteChatRoot, externalOwnKeyBytes, getChatRoot, isExternalMode, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext, restoreDeletedChatRoot } from './runtime/external-chat-storage.js';
+import { deleteChatRoot, getChatRoot, prepareNormalChatStoreForSave, registerChatStorageContext } from './runtime/chat-storage.js';
 import { decodeStoreEntry } from './runtime/store-codec.js';
-import { createDeadlineSignal } from './runtime/deadline.js';
 
-registerExternalStorageContext(getContext);
+registerChatStorageContext(getContext);
 
 const STORE_KEY      = 'sp-store';
 const SCHEMA_VERSION = 1;
-const EXTERNAL_CONFIRMED_SAVE_LIMIT_MS = 30_000;
 
 // 构画自己拥有的 chat_metadata 顶层 key。面板据此区分"构画 vs 别的插件"，也是 clearOwnKey 的白名单。
 export const OWN_KEYS = ['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger'];
@@ -104,8 +102,6 @@ function persist(options = {}) {
     // 普通聊天数据先应用到当前 metadata，再通过宿主标准保存入口提交。
     const ctx = getContext?.();
     if (!ctx) return;
-    const external = persistExternalRoots();
-    if (external !== null) return external;
     prepareNormalChatStoreForSave(ctx);
     try {
         const result = persistNow(ctx);
@@ -130,22 +126,12 @@ function persist(options = {}) {
 async function persistAsync() {
     const ctx = getContext?.();
     if (!ctx) return;
-    const external = persistExternalRoots({ confirmed: true });
-    if (external !== null) return await external;
     const metadata = ctx.chatMetadata;
     const current = getContext?.();
     if (metadata && current?.chatMetadata !== metadata) return;
     prepareNormalChatStoreForSave(current || ctx);
     const result = persistNow(current || ctx);
     if (result && typeof result.then === 'function') await result;
-}
-
-function confirmedSaveError(saved, fallback = 'store-save-unconfirmed') {
-    if (!saved || (saved.ok === true && saved.commitState === 'confirmed')) return null;
-    if (!Object.prototype.hasOwnProperty.call(saved, 'ok') && !saved.commitState) return null;
-    return Object.assign(new Error(saved.reason || (saved.commitState === 'unknown' ? '外置写入结果未确认，请刷新后核实' : fallback)), {
-        phase: 'save', commitState: saved.commitState || 'not-dispatched', saveResult: saved,
-    });
 }
 
 const cloneStoreValue = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -161,25 +147,10 @@ export async function writeDataConfirmed(kind, view, charName, value, options = 
     const metadata = ctx.chatMetadata;
     const key = subKey(kind, view, charName);
     const externalGuard = typeof options.ownerGuard === 'function' ? options.ownerGuard : () => true;
-    const sameMetadata = () => getContext?.()?.chatId === chatId && getContext?.()?.chatMetadata === metadata;
     const current = () => !options.signal?.aborted && externalGuard();
-    if (!current() || isExternalMode() && !sameMetadata()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
+    if (!current()) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
 
-    if (isExternalMode()) {
-        const bounded = createDeadlineSignal({ signal: options.signal, deadlineAt: options.deadlineAt, timeoutMs: EXTERNAL_CONFIRMED_SAVE_LIMIT_MS, reason: 'store-confirmed-save-timeout' });
-        try {
-            if (!current() || !sameMetadata() || bounded.signal.aborted) return { ok: false, reason: 'stale-before-save', commitState: 'not-dispatched', dispatched: false };
-            const s = store(true);
-            if (!s) return { ok: false, reason: 'external-not-ready', commitState: 'not-dispatched', dispatched: false };
-            const beforeHad = Object.hasOwn(s.data, key);
-            const beforeValue = beforeHad ? cloneStoreValue(s.data[key]) : undefined;
-            return await persistExternalRoots({
-                ...options, signal: bounded.signal, deadlineAt: bounded.deadlineAt, ownerGuard: current,
-                confirmed: true,
-                intent: { rootKey: STORE_KEY, key, beforeHad, beforeValue, afterHad: value != null, afterValue: value == null ? undefined : cloneStoreValue(value) },
-            });
-        } finally { bounded.dispose(); }
-    }
+
 
     // 普通聊天先应用本地子键，再沿用宿主既有 saveMetadata 流程；其返回值不代表远端 ACK。
     const applied = writeData(kind, view, charName, value, {
@@ -228,7 +199,7 @@ export function readData(kind, view = 'user', charName = '') {
 }
 
 // 当前 chat 的全部非空点 scope。间只通过这条只读 seam 看点存档，避免用固定槽/最近角色
-// 代替真实全集，也避免绕过外置存储根直接读取 chatMetadata。
+// 代替真实全集，也统一各模块的存档读取入口。
 export function scheduleScopesFromData(data = {}) {
     const source = data && typeof data === 'object' ? data : {};
     const scopes = [];
@@ -440,11 +411,10 @@ export async function clearDataKeyAsync(dataKey) {
     const previous = s.data[dataKey];
     delete s.data[dataKey];
     try {
-        const saved = await persistAsync();
-        const error = confirmedSaveError(saved); if (error) throw error;
+        await persistAsync();
         return true;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown' && !(dataKey in s.data)) { s.data[dataKey] = previous; }
+        if (!(dataKey in s.data)) { s.data[dataKey] = previous; }
         throw error;
     }
 }
@@ -457,22 +427,19 @@ export async function clearKindAsync(kind) {
     if (!removed.length) return 0;
     for (const [sk] of removed) { delete s.data[sk]; }
     try {
-        const saved = await persistAsync();
-        const error = confirmedSaveError(saved); if (error) throw error;
+        await persistAsync();
         return removed.length;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown') for (const [sk, value] of removed) if (!(sk in s.data)) { s.data[sk] = value; }
+        for (const [sk, value] of removed) if (!(sk in s.data)) { s.data[sk] = value; }
         throw error;
     }
 }
 
 // 某个构画自有顶层 key（如 sp-store / sp-memory / sp-theater / sp-ledger）当前占用字节。
 export function ownKeyBytes(key) {
-    const external = externalOwnKeyBytes(key);
-    if (external !== null) return external;
-    const cm = getContext?.()?.chatMetadata;
-    if (!cm || cm[key] == null) return 0;
-    return valueBytes(cm[key]) + String(key).length * 2;
+    const root = getChatRoot(key);
+    if (root == null) return 0;
+    return valueBytes(root) + String(key).length * 2;
 }
 
 // 整体删掉一个构画自有顶层 key（由存储管理面板按白名单调用）。
@@ -491,14 +458,12 @@ export async function clearOwnKeyAsync(key) {
     const previous = cloneStoreValue(root);
     if (!deleteChatRoot(key)) return false;
     try {
-        const saved = await persistAsync();
-        const error = confirmedSaveError(saved); if (error) throw error;
+        await persistAsync();
         return true;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown') {
+        {
             const restored = getChatRoot(key, { create: true, factory: () => previous });
-            if (!restored) restoreDeletedChatRoot(key, previous);
-            else if (restored !== previous) { for (const child of Object.keys(restored)) delete restored[child]; Object.assign(restored, previous); }
+            if (restored && restored !== previous) { for (const child of Object.keys(restored)) delete restored[child]; Object.assign(restored, previous); }
         }
         throw error;
     }
@@ -601,10 +566,6 @@ export function migrateChatFromLocalStorage(chatId) {
     if (!chatId) return { status: 'none' };
     const legacy = scanLegacy(chatId);
     if (!legacy.length) return { status: 'none' };
-    // External current records require confirmed CAS before browser copies may
-    // be deleted. The legacy upgrader is deliberately synchronous, so retain
-    // localStorage and defer rather than pretending an enqueued PUT succeeded.
-    if (isExternalMode()) return { status: 'external-deferred', count: legacy.length };
 
     const s = store(true);
     if (!s) return { status: 'none' };
@@ -630,7 +591,6 @@ export function migrateChatFromLocalStorage(chatId) {
 
 // 冲突决策：用户选「保留本机」→ 清掉云端构画子键、写入 legacy、删 localStorage。
 export function applyLegacyOverCloud(legacy) {
-    if (isExternalMode()) return false;
     const s = store(true);
     if (!s || !Array.isArray(legacy)) return false;
     for (const sk of Object.keys(s.data)) if (kindOfSubKey(sk)) delete s.data[sk];

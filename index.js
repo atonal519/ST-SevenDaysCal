@@ -51,22 +51,8 @@ import { postChatCompletion, callCustomApi, callMemoryApi, callTheaterApi, bindA
 import { normalizeApiUrl } from './api/sse.js';
 import { safeDiagnosticLog, diagnosticMessage, makeDiagnosticError, shouldNotifyGeneration, classifyGenerationError } from './api/diagnostics.js';
 import { readDiagnosticTrace, recordChatBoundary, shareRecentDiagnosticTrace, traceDiagnosticEvent } from './runtime/diagnostic-trace.js';
-import {
-    abortMigration,
-    bindExternalChatStorage,
-    buildCurrentChatDiagnosticPackage,
-    getChatRoot,
-    isExternalMode,
-    isExternalReady,
-    loadExternalChat,
-    migrateCurrentChat,
-    probeExternalBackend,
-    pruneExternalSnapshots,
-    prepareNormalChatStoreForSave,
-    refreshDiagnosticRetention,
-    replaceExternalRootsAtomic,
-    storageStatus,
-} from './runtime/external-chat-storage.js';
+import { buildCurrentChatDiagnosticPackage, getChatRoot, hasLegacyChatStorage, prepareNormalChatStoreForSave, refreshDiagnosticRetention, registerChatStorageContext } from './runtime/chat-storage.js';
+import { readLegacyChatReturn, applyLegacyChatReturn } from './runtime/legacy-chat-return.js';
 import { decodeStoreRoot } from './runtime/store-codec.js';
 import {
     PORTABLE_CHAT_MAX_BYTES,
@@ -79,7 +65,7 @@ import {
 } from './runtime/portable-chat-data.js';
 import { normalizeTagRules } from './utils/tag-names.js';
 import { ADULT_MODES, ADULT_MODE_LABELS, adultModeForCharacter } from './business/lines/adult.js';
-import { NARRATIVE_PACE_VALUES, readNarrativePacePreference, saveNarrativePacePreference, updateNarrativePacePrompt } from './business/narrative-preferences.js';
+import { NARRATIVE_PACE_VALUES, readNarrativePacePreference, saveNarrativePacePreference } from './business/narrative-preferences.js';
 import { axisState } from './business/axis/state.js';
 import {
     ALM_TYPES,
@@ -168,7 +154,7 @@ import { createDateDetectionController } from './business/axis/date-detection.js
 
 // Source and bundled entries both live at the plugin root.
 const EXT_BASE = new URL('.', import.meta.url).href;
-bindExternalChatStorage({ getContext, coreModule: scriptCore, fetchImpl: (...args) => globalThis.fetch(...args), diagnosticsConfigUrl: EXT_BASE + 'diagnostics.local.json' });
+registerChatStorageContext(getContext);
 
 // Must be initialized before the top-level bindAxisAnchor() wiring below.
 // Keeping this as a const preserves the shared terminal-stage semantics while
@@ -239,9 +225,10 @@ let inlineFeature = null;
 
 function refreshInlineWindow(immediate = false) { return inlineFeature?.refresh?.(immediate); }
 function _clearAllInlineBoxes() { return inlineFeature?.clear?.(); }
+function announceCalendarChange() { globalThis.dispatchEvent?.(new CustomEvent('st-sevendayscal:calendar-changed')); }
 function syncLatestAlmanacBlock(expectedChatId = null) {
     if (expectedChatId != null && getContext().chatId !== expectedChatId) return;
-    globalThis.dispatchEvent?.(new CustomEvent('st-sevendayscal:calendar-changed'));
+    announceCalendarChange();
     return refreshInlineWindow(true);
 }
 function syncLatestScheduleBlock(expectedChatId = null) {
@@ -286,7 +273,7 @@ if (event_types.EXTENSION_SETTINGS_LOADED) {
     });
 }
 
-// 固定目标仅作为外置/输入来源索引；普通 metadata 写入走标准 saveMetadata。
+// 固定目标作为业务输入来源索引；聊天 metadata 使用标准 saveMetadata。
 const getLedgerTarget = () => {
     try { return typeof scriptCore.resolveChatStateTarget === 'function' ? scriptCore.resolveChatStateTarget() : null; }
     catch { return null; }
@@ -1795,7 +1782,6 @@ const linesFeature = createLinesFeature({
     onBusyChange: busy => setFabBusy(busy),
     toast: (message, error) => showToast(message, null, error),
     dialog: customDialog,
-    storageStatus,
     pluginEnabled, getSettings, getMode: getLinesMode, getInterval: getLinesInterval,
     floorSignature: _floorSig, messageText: mid => getContext().chat?.[mid]?.mes,
     chat: () => getContext().chat, lastAssistant: () => snapshotLastAssistant(getContext().chat),
@@ -1821,9 +1807,6 @@ const linesFeature = createLinesFeature({
     renderPanelDom: ({ toolbar, body }) => { $in('#sp-lines-toolbar').html(toolbar); $in('#sp-lines-list').html(body); },
     injectionEnv: {
         context: () => getContext(), settings: getSettings, enabled: injectEnabled,
-        adultMode: () => getAdultMode(charStableKey(getContext())),
-        direction: () => getLineDirection(charStableKey(getContext())),
-        scale: () => getScale(charStableKey(getContext())),
         readRaw: () => readStore(getLinesCacheKey())?.raw || '',
         promptTypes: getContext()?.constants?.promptTypes || {}, promptRoles: getContext()?.constants?.promptRoles || {}, clean: cleanText,
     },
@@ -2006,7 +1989,7 @@ const spaceFeature = createSpaceFeature({
             try {
                 const root = getChatRoot('sp-theater', { create: false });
                 const metadata = root && typeof root === 'object' ? root : { version: 1, saved: [] };
-                const saved = runtime.repository.loadSaved({ chatId: ctx?.chatId, metadata, external: isExternalMode() });
+                const saved = runtime.repository.loadSaved({ chatId: ctx?.chatId, metadata });
                 const drafts = runtime.repository.loadDrafts(ctx?.chatId);
                 index = [...saved.map(item => ({ ...item, source: '已保存作品' })), ...drafts.map(item => ({ ...item, source: '本聊天草稿' }))];
             } catch { savedError = '【棱作品索引读取失败】'; }
@@ -2217,8 +2200,6 @@ export function parseFontFamilyFromCss(cssText) {
 }
 
 jQuery(async () => {
-    const initialStorageLoad = currentCharacterExcluded() ? Promise.resolve() : loadExternalChat({ force: true });
-    if (isExternalMode()) await initialStorageLoad;
     // 界面字号缩放：把持久化的 uiScale 写进 --sp-scale，令牌即刻按此缩放（早于注入 UI，防首帧闪错号）
     document.documentElement.style.setProperty('--sp-scale', String(Number(getSettings().uiScale) || 1));
     // 界面字体：按持久化的 uiFontUrl/uiFontFamily 挂 <link> + 写 --sp-font-user（早于注入 UI，防字体闪切）
@@ -2293,7 +2274,7 @@ jQuery(async () => {
     initChatObserver();
     // 首屏补挂：backfill 内部 refreshLinesInjection()（潜伏注入）+ refreshInlineWindow(true)
     // 统一挂线/历/点三段。历/点无独立首屏副作用，全汇流到同一防抖窗口刷新，一次即可。
-    scheduleForChatBoundary(backfillLinesInlineBlocks, 800);
+    if (!hasLegacyChatStorage()) scheduleForChatBoundary(backfillLinesInlineBlocks, 800);
     // Reset view state and reload cache on chat switch
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = async () => {
@@ -2355,9 +2336,7 @@ jQuery(async () => {
             ensureExcludedCharacterSettingsOnly();
             return;
         }
-        const loadingChatId = String(getContext()?.chatId || '');
-        await loadExternalChat({ force: true });
-        if (String(getContext()?.chatId || '') !== loadingChatId) return;
+        if (hasLegacyChatStorage()) { pointState.cachedSchedule = ''; setBody(legacyStorageHintHtml()); renderCurrentChatStorageMode(); if ($(`#${MODAL_ID}`).is(':visible')) showLegacyChatReturn(); return; }
         // 老用户升级：把本 chat 散在 localStorage 的点线面间**同步**搬进 chat_metadata，
         // 必须早于下面任何 load（否则读的是空 metadata）。冲突（云端/本机各一份且不同）时
         // migrate 不动任何数据，稍后异步弹窗让用户决策。
@@ -2374,8 +2353,7 @@ jQuery(async () => {
         closeTaDrawer();            // 换 chat：收起可能开着的 TA▾ 抽屉
         updateTaTriggerLabel();     // charViewName 已清 → 标签回落「TA」
         $in('#sp-content-title').text('点');
-        pointState.cachedSchedule = loadCachedForCurrentChat();
-        renderDailyMenuCard();
+        refreshChatStorageViews({ renderBody: false });
         if ($(`#${MODAL_ID}`).is(':visible') && !pointState.isGenerating) {
             $in('#sp-outline-wrap').hide();
             $in('#sp-lines-wrap').hide();
@@ -2385,7 +2363,6 @@ jQuery(async () => {
             $in('#sp-almanac-wrap').hide();
             $in('#sp-body').show();
             $inAll('.sp-outline-btn').removeClass('sp-btn-active');
-            updateCreativeChatModeUI();
             $in('#sp-space-msgs').empty();
             if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
             else setBody(pointScheduleEmptyHtml());
@@ -2405,25 +2382,12 @@ jQuery(async () => {
             console.error('[SP calendar] 角色默认历法自动应用失败', safeDiagnosticLog('axis', 'save', error));
             if (getSettings().notifyMode === 'full') showToast('角色默认历法没有自动应用成功', null, true);
         });
-        // 切进来立即按新 chat 的大纲+游标重设注入（关着或无大纲时内部自清）。
-        outlineFeature.injection.refresh();
-        // 线注入同步一并重设：楼内块靠上面 300ms 的 backfill 补挂（要等 DOM），但注入不能等——
-        // 否则这 300ms 窗口内若触发生成，上一个 chat 的线注入会残留污染新 chat 首楼。
-        // refreshLinesInjection 幂等（关/无活跃线时内部自清），与 backfill 内那次重复无副作用。
-        refreshLinesInjection();
-        refreshStoryClockInjection();   // 时间戳：切 chat 重设常驻注入（ST 切 chat 会清 extensionPrompt）
-        refreshLedgerInjection();       // 暗历注入：切 chat → 账随 chat_metadata 变，重设（关/空时内部自清）
-        refreshNarrativePacePrompt();   // 全局创作幅度槽与聊天内容无关，切 chat 后重设
     };
-    // A new chat without an external marker keeps ordinary chat_metadata storage; migration is explicit.
+    // Business roots always stay in the current chat metadata.
     eventSource.on(event_types.CHAT_CHANGED, _stListeners.chat);
-    refreshNarrativePacePrompt();
     if (_stListeners.diagnosticRetention) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
     _stListeners.diagnosticRetention = () => { if (!currentCharacterExcluded()) refreshDiagnosticRetention(getContext()); };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.diagnosticRetention);
-    if (_stListeners.externalSnapshotPrune) eventSource.removeListener?.(event_types.MESSAGE_DELETED, _stListeners.externalSnapshotPrune);
-    _stListeners.externalSnapshotPrune = () => { if (!currentCharacterExcluded() && isExternalMode()) void pruneExternalSnapshots(getContext()?.chat || []); };
-    eventSource.on(event_types.MESSAGE_DELETED, _stListeners.externalSnapshotPrune);
     // 初始化时当前聊天可能已经 ready，需主动检查 localStorage 旧数据；同步判断，冲突弹窗延后显示。
     try {
         const _mig0 = currentCharacterExcluded() ? { status: 'skipped' } : store.migrateChatFromLocalStorage(getContext().chatId);
@@ -2794,7 +2758,6 @@ function abortPortableImportTasks(reason = 'portable-import') {
 // 开：按各子开关恢复——显示悬浮球、重挂楼内块与线/面/故事时钟/刻度注入、补锚点入口。事件监听不注销，靠各 listener 的 pluginEnabled() 闸空转。
 function applyPluginEnabled(on, { characterExcluded = false } = {}) {
     const ctx = getContext();
-    refreshNarrativePacePrompt();
     if (on) {
         if (theaterMode) theaterFeature.open();
         $(`#${FAB_ID}`).css('display', fabEnabled() ? '' : 'none');
@@ -2856,6 +2819,15 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
 // 保留 .sp-dashed-inline 兼容选择器，用于清理旧 DOM 中的独立虚线块。
 // 新楼层挂线块 + （可选）首次推进生成。渲染改由 refreshInlineWindow() 统一负责；
 // 入口保留唯一真副作用——首次推进的线生成，以及推进前后的即时刷窗。
+// Re-read restored or newly opened chat roots through the same panel and injection paths.
+function refreshChatStorageViews({ renderBody = true } = {}) {
+    pointState.cachedSchedule = loadCachedForCurrentChat();
+    renderDailyMenuCard();
+    if (renderBody) setBody(pointState.cachedSchedule || pointScheduleEmptyHtml());
+    outlineFeature.injection.refresh();
+    refreshLinesInjection(); refreshStoryClockInjection(); refreshLedgerInjection();
+    spaceFeature.refreshFromStore('space-chat');
+}
 // Back-fill：切聊天/初始化/主开关切换时的入口。渲染交给窗口控制器；保留潜伏注入 refresh 真副作用。
 async function backfillLinesInlineBlocks() {
     refreshLinesInjection();   // chat 切换/初始化/主开关切换 → 重设潜伏注入（关闭时内部会清空）
@@ -3817,17 +3789,17 @@ function injectModal() {
                                     <details class="sp-settings-section" id="sp-adult-scale-section">
                                         <summary class="sp-settings-section-title">内容偏好设置</summary>
                                         <div class="sp-settings-section-body">
-                                            <p class="sp-cfg-group">剧情推进幅度（全局）</p>
+                                            <p class="sp-cfg-group">剧情推进幅度（构画共用）</p>
                                             <div class="sp-mode-row" id="sp-narrative-pace-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">控制场景时间跨度与过渡取舍；不改变时间戳判定，不用于点卡片。线、面创作及正常回复共用此设置。</p>
+                                            <p class="sp-cfg-hint">仅用于构画内部线、面及间内线创作的时间跨度与过渡取舍，不影响酒馆正文，不改变时间戳判定，不用于点卡片。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group" id="sp-scale-hint">创作关注尺度（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-scale-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">影响点、线、面正式稿及间内面方案；尺度决定观察焦点，不改变冲突强度或时间速度。线／面潜伏注入需分别开启各自开关后才会采用当前设置。</p>
+                                            <p class="sp-cfg-hint">仅影响构画内部点、线、面及间内相关卡片生成；尺度决定观察焦点，不改变冲突强度或时间速度，不影响酒馆正文。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">剧情走向倾向（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-line-direction-row"><!-- populated when settings opens --></div>
-                                            <p class="sp-cfg-hint">影响点、线、面正式稿及间内面方案；只在事实、动机、时间与因果均支持的合理走向中调整优先级。线／面潜伏注入需分别开启各自开关后才会采用当前设置；用户本轮明确要求优先。</p>
+                                            <p class="sp-cfg-hint">仅影响构画内部点、线、面及间内相关卡片生成；只在事实、动机、时间与因果均支持的合理走向中调整优先级，不影响酒馆正文；用户本轮明确要求优先。</p>
                                             <hr class="sp-mem-divider">
                                             <p class="sp-cfg-group">成人剧情模式（按角色保存）</p>
                                             <div class="sp-mode-row" id="sp-adult-row"><!-- populated when settings opens --></div>
@@ -3900,13 +3872,10 @@ function injectModal() {
                                         <summary class="sp-settings-section-title">存储管理</summary>
                                         <div class="sp-settings-section-body">
                                             <p class="sp-cfg-hint">统管构画的数据占用，按存储位置分层。</p>
-                                            <div class="sp-storage-mode-card">
-                                                <div class="sp-storage-group-head">当前聊天的数据存储</div>
-                                                <div id="sp-storage-mode-status" class="sp-cfg-hint">检测中…</div>
-                                                <div class="sp-mem-actions">
-                                                    <button id="sp-storage-migrate" class="sp-save-btn" type="button" hidden>迁出到白鳥数据后端</button>
-                                                    <button id="sp-storage-retry" class="sp-mem-btn" type="button" hidden>重试加载</button>
-                                                </div>
+                                            <div id="sp-storage-mode-card" class="sp-storage-mode-card" hidden>
+                                                <div class="sp-storage-group-head">旧构画数据需要迁回聊天</div>
+                                                <div id="sp-storage-mode-status" class="sp-cfg-hint"></div>
+                                                <div class="sp-mem-actions"><button id="sp-storage-return" class="sp-save-btn" type="button">迁回聊天</button></div>
                                             </div>
                                             <div class="sp-storage-mode-card">
                                                 <div class="sp-storage-group-head">当前聊天 · 按模块备份与迁入</div>
@@ -4560,15 +4529,11 @@ function injectModal() {
         const charKey = charStableKey(getContext());
         if (!charKey) return;
         setScale(charKey, this.value);
-        refreshLinesInjection();
-        outlineFeature.injection.refresh();
     });
     $in('#sp-line-direction-row').on('change.autoSave', 'input[name="sp-line-direction"]', function () {
         const charKey = charStableKey(getContext());
         if (!charKey) return;
         setLineDirection(charKey, this.value);
-        refreshLinesInjection();
-        outlineFeature.injection.refresh();
     });
     $in('#sp-narrative-pace-row').on('change.autoSave', 'input[name="sp-narrative-pace"]', function () {
         setNarrativePace(this.value);
@@ -4577,7 +4542,6 @@ function injectModal() {
         const charKey = charStableKey(getContext());
         if (!charKey) return;
         setAdultMode(charKey, this.value);
-        refreshLinesInjection();
     });
     // 插件总开关：立刻生效——关则全隐身（藏球/清楼内块/断后台/撤注入），开则按各子开关恢复。
     // 用 stSaveSettings 立即落盘，避免用户切完立刻刷新丢状态。
@@ -5068,6 +5032,7 @@ function refreshCharPinIcon() {
 
 function openSidebarView(view) {
     if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
+    if (showLegacyChatReturn()) return;
     $in('#sp-module-intro-pop').hide();
     const $btn = $in(`.sp-side-tab.sp-view-btn[data-view="${view}"]`).first();
     if (!$btn.length) return;
@@ -5265,6 +5230,7 @@ function openSchedule(targetView = null) {
         ensureExcludedCharacterSettingsOnly();
         return;
     }
+    if (showLegacyChatReturn()) return;
     resetPanelToScheduleHome();   // 先归位到点首页（清所有子视图 mode/wrap），作为恢复的干净基线
     renderDailyMenuCard();
     if (targetView) {
@@ -5366,6 +5332,7 @@ function showPanel() {
     // 旧 toast / 后台完成回调也会直接 showPanel；统一在共同出口把排除卡导向设置，
     // 避免 light DOM 入口绕过 shadow 内的业务点击捕获闸。
     if (currentCharacterExcluded()) ensureExcludedCharacterSettingsOnly();
+    else if (hasLegacyChatStorage()) showLegacyChatReturn();
     setTimeout(() => {
         positionPanel();
         syncMobileViewport();
@@ -5900,7 +5867,6 @@ function charStableKey(ctx) {
 }
 
 async function restoreCurrentCharacterAfterExclusion() {
-    await loadExternalChat({ force: true });
     if (currentCharacterExcluded()) return false;
     const migration = store.migrateChatFromLocalStorage(getContext().chatId);
     if (migration.status === 'conflict') scheduleForChatBoundary(() => showStoreConflictDialog(migration), 700);
@@ -6113,14 +6079,9 @@ function getNarrativePace() {
     return readNarrativePacePreference(getSettings());
 }
 
-function refreshNarrativePacePrompt() {
-    return updateNarrativePacePrompt({ context: getContext(), enabled: pluginEnabled(), pace: getNarrativePace() });
-}
-
 function setNarrativePace(value) {
     return saveNarrativePacePreference(getSettings(), value, {
         save: saveSettingsDebounced,
-        refresh: refreshNarrativePacePrompt,
     });
 }
 
@@ -7422,97 +7383,42 @@ function storageRow(label, bytesText, btnHtml = '', extraClass = '') {
     </div>`;
 }
 
-async function renderCurrentChatStorageMode() {
-    const $status = $in('#sp-storage-mode-status');
-    const $migrate = $in('#sp-storage-migrate');
-    const $retry = $in('#sp-storage-retry');
-    if (!$status.length) return;
-    $migrate.prop('hidden', true); $retry.prop('hidden', true);
-    if (currentCharacterExcluded()) {
-        $status.text('当前角色卡已排除；不会检测或切换这段单聊的构画存储位置。');
-        return;
-    }
-    const state = storageStatus();
-    if (!state.chatId) { $status.text('当前没有打开聊天。'); return; }
-    if (state.busy) { $status.text('当前聊天的构画存储位置正在切换，请等待完成。'); return; }
-    if (state.mode === 'external') {
-        if (state.status === 'ready') {
-            $status.text(`当前聊天已使用白鳥数据后端。聊天文件只保留定位标记与楼层快照指针；单独导出聊天不会包含完整构画数据，请同时保留后端数据。${state.error ? ` 最近一次外置操作失败：${state.error}` : ''}`);
-        } else {
-            $status.text(`当前聊天已迁出，但后端数据不可用：${state.error || '尚未加载'}。构画不会把它当成空数据，也不会自动回退写入聊天文件。`);
-            $retry.prop('hidden', state.status === 'invalid');
-        }
-        return;
-    }
-    $status.text('正在检测白鳥数据后端…');
-    const probe = await probeExternalBackend();
-    if (currentCharacterExcluded()) return;
-    if (storageStatus().chatId !== state.chatId || storageStatus().mode !== 'chat') return;
-    if (probe.ok) {
-        $status.text('当前仍随聊天文件存储。可主动把当前聊天的构画数据迁到白鳥数据后端；迁移前原聊天保持不变。');
-        $migrate.prop('hidden', false);
-    } else {
-        $status.text('未检测到兼容的白鳥数据后端；当前聊天继续沿用原存储方式。');
-    }
+let legacyReturnBusy = false;
+const legacyStorageHintHtml = () => '<div class="sp-cfg-hint">旧构画数据仍在白鳥中，请到设置的存储管理点击“迁回聊天”。</div>';
+function renderCurrentChatStorageMode() {
+    const pending = !currentCharacterExcluded() && hasLegacyChatStorage();
+    $in('#sp-storage-mode-card').prop('hidden', !pending);
+    if (!pending) return;
+    $in('#sp-storage-mode-status').text('这段聊天以前迁出过构画数据。请保持白鳥可用，点击下方按钮迁回；正文、其它插件资料和白鳥源数据保留。');
+    $in('#sp-storage-return').prop('disabled', legacyReturnBusy).text(legacyReturnBusy ? '正在迁回…' : '迁回聊天');
 }
-
-function mountMigrationOverlay() {
-    document.getElementById('sp-storage-migration-overlay')?.remove();
-    const overlay = document.createElement('div');
-    overlay.id = 'sp-storage-migration-overlay';
-    const overlayTheme = `sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`;
-    overlay.innerHTML = `<div class="sp-root sp-progress-card ${overlayTheme}" role="dialog" aria-modal="true" style="position:relative;z-index:auto;width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background-color:var(--sp-sheet-bg-legacy);background-image:linear-gradient(var(--sp-sheet-bg),var(--sp-sheet-bg));color:var(--sp-on-surface);box-shadow:0 20px 70px #000b;font-family:var(--sp-font);font-size:var(--sp-fs-100)">
-        <div style="font-size:var(--sp-fs-115);font-weight:700;margin-bottom:10px">正在迁移当前聊天的构画数据</div>
-        <div data-sp-migration-status style="font-size:var(--sp-fs-88);line-height:1.65;opacity:.86">准备复制并逐项回读校验…</div>
-        <button class="sp-btn" data-sp-migration-abort type="button" style="margin-top:18px;width:100%;min-height:42px">中断迁移</button>
-    </div>`;
-    Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
-    const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
-    for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.addEventListener(name, block, true);
-    document.documentElement.appendChild(overlay);
-    overlay.querySelector('[data-sp-migration-abort]').addEventListener('click', abortMigration);
-    return {
-        progress(info = {}) {
-            const committing = info.phase === 'committing';
-            overlay.querySelector('[data-sp-migration-status]').textContent = committing ? '外置副本已校验，正在提交聊天定位标记与快照指针。此阶段不能撤销，请等待确认。' : `正在复制并校验 ${info.done || 0} / ${info.total || '…'} 项…`;
-            const button = overlay.querySelector('[data-sp-migration-abort]'); button.disabled = committing; button.textContent = committing ? '正在确认最终提交…' : '中断迁移';
-        },
-        unknown(message) {
-            overlay.querySelector('[data-sp-migration-status]').textContent = message;
-            const button = overlay.querySelector('[data-sp-migration-abort]'); button.disabled = false; button.textContent = '关闭（请刷新聊天后核实）';
-            button.onclick = () => this.close();
-        },
-        close() { for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.removeEventListener(name, block, true); overlay.remove(); },
-    };
+function showLegacyChatReturn() {
+    if (!hasLegacyChatStorage()) return false;
+    if (!settingsOpen) toggleSettings();
+    const section = inEl('#sp-storage-section');
+    if (section) { const layer = section.closest('.sp-settings-layer'); if (layer) layer.open = true; section.open = true; section.scrollIntoView?.({ block: 'nearest' }); }
+    renderCurrentChatStorageMode();
+    return true;
 }
-
-async function startCurrentChatMigration() {
-    if (currentCharacterExcluded()) return;
-    const initial = storageStatus();
-    if (initial.busy) { showToast('当前聊天的构画存储位置正在切换，请等待完成', null, 'info'); return; }
-    if (!initial.chatId || initial.mode !== 'chat') return;
-    const confirmed = await customDialog.confirm({
-        title: '迁出当前聊天的构画数据',
-        body: '仅迁移当前聊天。期间页面会被锁定并暂停构画任务；复制阶段可中断，最终提交阶段必须等待确认。迁出后，单独导出聊天不再包含完整构画数据。',
-        note: '请确保后端数据也有备份。此次迁移不会搬动正文、其它插件数据、世界书、坐标收藏或设备草稿。',
-        confirmText: '开始迁移', cancelText: '取消',
-    });
-    if (!confirmed || storageStatus().chatId !== initial.chatId) return;
-    _abortAllBackground();
-    const overlay = mountMigrationOverlay();
-    let result;
-    try { result = await migrateCurrentChat({ onProgress: info => overlay.progress(info) }); }
-    catch (error) { result = { ok: false, reason: 'migration-failed', error }; }
-    if (result.ok) {
-        overlay.close(); showToast('当前聊天的构画数据已迁出并完成回读校验');
-        renderStorageUsage(); renderCurrentChatStorageMode();
-    } else if (result.reason === 'publish-unknown') {
-        overlay.unknown(result.error?.message || '最终提交结果未知，请刷新聊天核实后再继续使用构画。');
-    } else {
-        overlay.close();
-        showToast(result.reason === 'aborted' ? '迁移已中断，原聊天数据未切换' : '迁移失败，本次迁移未完成。', null, result.reason !== 'aborted');
-        renderCurrentChatStorageMode();
-    }
+async function startCurrentChatReturn() {
+    if (currentCharacterExcluded() || legacyReturnBusy || !hasLegacyChatStorage()) return;
+    const ctx = getContext();
+    if (typeof ctx?.saveChat !== 'function') { showToast('酒馆没有可用的聊天保存入口，请更新酒馆后再迁回', null, true); return; }
+    legacyReturnBusy = true; renderCurrentChatStorageMode();
+    try {
+        const plan = await readLegacyChatReturn({ context: ctx });
+        applyLegacyChatReturn(ctx, plan);
+        prepareNormalChatStoreForSave(ctx);
+        await ctx.saveChat();
+        resetPanelToScheduleHome();
+        refreshChatStorageViews();
+        announceCalendarChange();
+        inlineFeature?.refresh?.(true, { freezeSnapshots: false });
+        renderStorageUsage(); renderMemorySection();
+        showToast('已迁回当前聊天，保存已交给酒馆');
+    } catch (error) {
+        showToast(error?.message || '迁回未完成，请保持白鳥可用后重试', null, true);
+    } finally { legacyReturnBusy = false; renderCurrentChatStorageMode(); }
 }
 
 function downloadDiagnosticPackage(data) {
@@ -7538,13 +7444,8 @@ let portableImportPickerIdentity = null;
 
 function portableStorageAvailable(actionLabel) {
     if (currentCharacterExcluded()) return false;
-    const state = storageStatus();
-    if (!state.chatId) { showToast(`请先打开一个聊天，再${actionLabel}`, null, 'info'); return false; }
-    if (state.busy) { showToast(`当前聊天的构画存储位置正在切换，请等待完成后再${actionLabel}`, null, 'info'); return false; }
-    if (state.mode === 'external' && !isExternalReady()) {
-        showToast(`当前聊天的白鳥数据尚未就绪，不能${actionLabel}。请先重试加载。`, null, true);
-        return false;
-    }
+    if (!getContext()?.chatId) { showToast(`请先打开一个聊天，再${actionLabel}`, null, 'info'); return false; }
+    if (hasLegacyChatStorage()) { showToast('请先在存储管理中把旧构画数据迁回当前聊天', null, 'info'); showLegacyChatReturn(); return false; }
     return true;
 }
 
@@ -7653,11 +7554,6 @@ function mountPortableImportOverlay() {
     };
     activePortableImportOverlayClose = close;
     return {
-        unknown(message) {
-            overlay.querySelector('[data-sp-portable-status]').textContent = message;
-            const button = overlay.querySelector('[data-sp-portable-close]');
-            button.hidden = false; button.onclick = close;
-        },
         close,
     };
 }
@@ -7665,13 +7561,6 @@ function mountPortableImportOverlay() {
 async function commitPortableImport({ identity, originalRoots, portablePackage, selectedModules }) {
     const originalPlan = createPortableImportPlan({ roots: originalRoots, portablePackage, selectedModules, targetChatId: identity.chatId });
     if (!originalPlan.ok) return originalPlan;
-    if (isExternalMode()) {
-        return replaceExternalRootsAtomic({
-            expectedRoots: originalPlan.expectedRoots,
-            replacementRoots: originalPlan.replacementRoots,
-        });
-    }
-
     // The preview/selection is the user confirmation. Rebase those selected roots
     // against current live metadata, then make one ordinary host save call.
     const ctx = getContext();
@@ -7772,19 +7661,15 @@ async function importPortableFile(file, identity) {
     if (decision !== 'apply' || !portableStorageAvailable('导入数据')) return;
     const originalRoots = currentPortableRoots();
     abortPortableImportTasks('portable-import');
-    // Confirmed imports commit through the target chat's existing storage mode, including external CAS when marked.
+    // Apply the selected modules once through the ordinary chat metadata save.
     const overlay = mountPortableImportOverlay();
     let result;
     try { result = await commitPortableImport({ identity, originalRoots, portablePackage, selectedModules: picked.values }); }
     catch (error) { result = { ok: false, reason: 'import-failed', error, commitState: 'not-dispatched' }; }
-    if (result.ok && ['confirmed', 'local-applied'].includes(result.commitState)) {
+    if (result.ok && result.commitState === 'local-applied') {
         overlay.close();
         refreshPortableImportedModules(picked.values);
         showToast(`已导入：${selectedLabels}`);
-        return;
-    }
-    if (result.commitState === 'unknown') {
-        overlay.unknown('保存结果暂时无法确认。请关闭后刷新当前聊天核实；在确认前不要重复导入。');
         return;
     }
     overlay.close();
@@ -7797,7 +7682,7 @@ async function exportCurrentChatDiagnosticPackage() {
     const choice = await customDialog.choose({
         title: '导出当前聊天诊断包',
         body: '诊断包会包含最近两个有效 AI 楼的请求记录（每个模块仅保留最新一次），包括 AI 输入与回复，可能含剧情。默认不附带完整聊天楼层，也绝不导出 API 配置、URL、密码、请求头或其它聊天。',
-        note: '这不是完整可导入备份。若当前聊天已迁出，仍需另外保留白鳥数据后端。',
+        note: '这份诊断包用于排查问题，不是完整可导入备份。',
         choices: [
             { value: 'cancel', label: '取消' },
             { value: 'safe', label: '导出诊断（不附完整聊天）', primary: true },
@@ -7818,7 +7703,7 @@ async function renderStorageUsage() {
     if (!$body.length) return;
     if (currentCharacterExcluded()) {
         $body.html('<div class="sp-cfg-hint" style="padding:4px 0">当前角色卡已排除；不会读取或改动这段单聊的构画数据。</div>');
-        $in('#sp-storage-migrate, #sp-storage-retry').prop('hidden', true);
+        $in('#sp-storage-mode-card').prop('hidden', true);
         return;
     }
     const fmt = store.formatBytes;
@@ -7860,7 +7745,7 @@ async function renderStorageUsage() {
     // 先渲染同步部分 + 收藏占位（服务器读取慢，先占位再补）
     $body.html(`
         <div class="sp-storage-group">
-            <div class="sp-storage-group-head">${storageStatus().mode === 'external' ? '本聊天（白鳥外置数据）' : '本聊天（随聊天文件存服务端）'}</div>
+            <div class="sp-storage-group-head">本聊天（随聊天文件存服务端）</div>
             ${chatHtml}
         </div>
         <div class="sp-storage-group">
@@ -7989,7 +7874,7 @@ function refreshEditorsFromCurrentStore(kind) {
 // 绑定存储管理面板的清理按钮（委托到 #sp-storage-body，内容动态渲染）+ 刷新。
 function bindStorageHandlers() {
     $in('#sp-storage-refresh').on('click', () => { if (!currentCharacterExcluded()) void renderStorageUsage(); });
-    $in('#sp-storage-migrate').on('click', () => { if (!currentCharacterExcluded()) void startCurrentChatMigration(); });
+    $in('#sp-storage-return').on('click', () => { void startCurrentChatReturn(); });
     $in('#sp-storage-portable-export').on('click', () => { if (!currentCharacterExcluded()) void exportPortableModules(); });
     $in('#sp-storage-portable-import').on('click', () => {
         if (currentCharacterExcluded()) return;
@@ -8007,18 +7892,6 @@ function bindStorageHandlers() {
         this.value = '';
         if (file && !currentCharacterExcluded()) void importPortableFile(file, identity);
     });
-    $in('#sp-storage-retry').on('click', async () => {
-        if (currentCharacterExcluded()) return;
-        const before = storageStatus().chatId;
-        await loadExternalChat({ force: true });
-        if (storageStatus().chatId !== before) return;
-        if (storageStatus().status === 'ready') {
-            linesFeature.reconcileHistoryStorage();
-        }
-        renderCurrentChatStorageMode(); renderStorageUsage();
-        showToast(storageStatus().status === 'ready' ? '外置构画数据已重新加载' : `重试失败：${storageStatus().error || '后端不可用'}`, null, storageStatus().status !== 'ready');
-    });
-
     const $body = $in('#sp-storage-body');
 
     // 日历条目必须按精确 dataKey 删除，不能调用按 kind 前缀的清理。
@@ -8891,8 +8764,6 @@ function bindMemoryHandlers() {
                 if (current % 3 === 0 || done || aborted) refreshMemoryStatus();
             });
             if (!result?.aborted) showToast(result?.unresolvedGroups ? `重构完成，但有 ${result.unresolvedGroups} 组没有有效摘要（短楼或净化为空）` : '重构完成');
-            else if (result.saveState === 'confirmed') showToast('已在保存阶段中止，但重构结果已确认落盘并生效');
-            else if (result.saveState === 'unknown') showToast('已在保存阶段中止，写入结果未确认；请刷新后核实当前记忆', null, true);
             else showToast('已中止，已还原到重构前的记忆');
         } catch (err) {
             showToast('重构失败：' + diagnosticMessage(err), null, true);

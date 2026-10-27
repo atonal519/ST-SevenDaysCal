@@ -128,25 +128,3 @@ test('permanent theater title can be edited after its draft has been removed', a
     assert.equal((await repository.updateSavedTitle({ chatId: 'A', metadata }, 'only-saved', 'Renamed', { savedBaseline: baseline })).ok, true);
     assert.equal(metadata.saved[0].title, 'Renamed');
 });
-
-test('external theater persistence still dispatches through its record saver', async () => {
-    const metadata = { saved: [], version: 1 };
-    const calls = [];
-    const metadataSaver = {
-        capture: (target, after) => ({ target, after }),
-        dispatch: async (captured, options) => { calls.push({ captured, options }); return { ok: true, commitState: 'confirmed' }; },
-    };
-    const repository = createTheaterRepository({
-        metadata: () => metadata,
-        metadataSaver,
-        requireFixedSaver: true,
-    });
-    const result = await repository.promoteToSaved({
-        chatId: 'A', external: true, metadata, target: { recordId: 'record-A' }, metadataSnapshot: {}, isCurrent: () => true,
-    }, piece('external'));
-    assert.equal(result.ok, true);
-    assert.equal(result.commitState, 'confirmed');
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].captured.target.recordId, 'record-A');
-    assert.equal(calls[0].captured.after['sp-theater'].saved[0].id, 'external');
-});

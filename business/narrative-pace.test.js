@@ -6,7 +6,6 @@ import {
     normalizeNarrativePace,
     readNarrativePacePreference,
     saveNarrativePacePreference,
-    updateNarrativePacePrompt,
 } from './narrative-preferences.js';
 import { buildLinesPrompt } from './lines/prompt.js';
 import { buildLinesInjection } from './lines/strategy.js';
@@ -31,44 +30,23 @@ test('pace defaults to free and produces only the selected compact guidance', ()
         const contract = narrativePaceContract(value);
         assert.equal(countContract(contract), 1);
         assert.match(contract, new RegExp(labels[value]));
+        assert.doesNotMatch(contract, /成年|成人/);
         for (const other of NARRATIVE_PACE_VALUES.filter(item => item !== value)) {
             assert.doesNotMatch(contract, new RegExp(labels[other]));
         }
     }
 });
 
-test('global setting saves one scalar, persists, and refreshes the host prompt', () => {
+test('global setting saves the internal generation pace without a host prompt callback', () => {
     const settings = { scale: { card: 'micro' }, lineDirection: { card: 'tragic' } };
     let saves = 0;
-    const refreshed = [];
     assert.equal(saveNarrativePacePreference(settings, 'fast', {
         save: () => saves++,
-        refresh: pace => refreshed.push(pace),
     }), 'fast');
     assert.equal(settings.narrativePace, 'fast');
     assert.deepEqual(settings.scale, { card: 'micro' });
     assert.deepEqual(settings.lineDirection, { card: 'tragic' });
     assert.equal(saves, 1);
-    assert.deepEqual(refreshed, ['fast']);
-});
-
-test('normal main reply slot updates on value changes, has no activity gate, and clears when disabled', () => {
-    const calls = [];
-    const context = {
-        constants: { promptTypes: { IN_CHAT: 17 }, promptRoles: { SYSTEM: 29 } },
-        setExtensionPrompt: (...args) => calls.push(args),
-    };
-    assert.equal(updateNarrativePacePrompt({ context, enabled: true }), narrativePaceContract('free'));
-    updateNarrativePacePrompt({ context, enabled: true, pace: 'slow' });
-    updateNarrativePacePrompt({ context, enabled: true, pace: 'fast' });
-    updateNarrativePacePrompt({ context, enabled: false, pace: 'fast' });
-    assert.equal(calls.length, 4);
-    assert.deepEqual(calls.map(([key, content, type, depth, scan, role]) => [key, content, type, depth, scan, role]), [
-        ['sp_narrative_pace', narrativePaceContract('free'), 17, 4, false, 29],
-        ['sp_narrative_pace', narrativePaceContract('slow'), 17, 4, false, 29],
-        ['sp_narrative_pace', narrativePaceContract('fast'), 17, 4, false, 29],
-        ['sp_narrative_pace', '', 17, 4, false, 29],
-    ]);
 });
 
 test('the selected global mode reaches line/outline creation and Space outline requests once; point and latent preference contracts exclude it', () => {
@@ -87,6 +65,7 @@ test('the selected global mode reaches line/outline creation and Space outline r
         for (const prompt of [line, outline, spaceLine]) {
             assert.equal(countContract(prompt), 1);
             assert.match(prompt, new RegExp(labels[pace]));
+            assert.doesNotMatch(prompt, /成年亲密互动|成人亲密互动/);
         }
         assert.equal(countContract(spaceOutline), 0);
         assert.match(line, /Line: 名称\|阶段\|时间锚点\|player或world\|true或false\|false/);
@@ -105,7 +84,7 @@ test('the selected global mode reaches line/outline creation and Space outline r
         assert.equal(countContract(point), 0);
         assert.equal(countContract(discussionSpace), 0);
     }
-    assert.doesNotMatch(buildLinesInjection([], { scale: 'auto' }), /缓慢地顺势推进|剧情推进幅度/);
+    assert.doesNotMatch(buildLinesInjection([]), /缓慢地顺势推进|剧情推进幅度/);
 });
 
 test('the interval line-card request reads the shared global pace through its existing preference callback', async () => {

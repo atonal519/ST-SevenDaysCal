@@ -7,29 +7,19 @@ import { buildWriteMessages, buildBeautifyMessages } from './prompts.js';
 import { sanitizeHtml, safePlainTextHtml } from './html.js';
 import { createTheaterTemplates } from './templates.js';
 import { THEATER_TEMPLATE_BOOK, THEATER_DRAFT_CAP, theaterDraftKey } from './constants.js';
-import { getChatRoot, isExternalMode, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from '../../runtime/external-chat-storage.js';
+import { getChatRoot, prepareNormalChatStoreForSave, registerChatStorageContext } from '../../runtime/chat-storage.js';
 
 export function createTheaterRuntime(host = {}) {
-    registerExternalStorageContext(host.getContext);
+    registerChatStorageContext(host.getContext);
     const owners = createTaskOwnerManager();
-    const storageSaver = {
-        supported: true,
-        capture: target => target?.external ? { external: true } : null,
-        dispatch: (captured, options) => captured?.external
-            ? persistExternalRoots({ confirmed: true, ownerGuard: options?.isCurrent })
-            : Promise.resolve({ ok: false, commitState: 'not-dispatched' }),
-        confirm: () => Promise.resolve({ confirmed: false, available: false }),
-    };
     const captureTarget = (chatId = host.getContext?.()?.chatId) => {
         const context = host.getContext?.(); context.chatMetadata ||= {};
-        const external = isExternalMode();
         const metadata = getChatRoot('sp-theater', { create: true, factory: () => ({ version: 1, saved: [] }) });
-        // The metadata/file target and its real CAS remain fixed; changing the visible chat is not a cancellation signal.
-        return { chatId, metadata, external, metadataSnapshot: { ...(context.chatMetadata || {}) }, target: external ? { external: true } : host.coreModule?.resolveChatStateTarget?.(), persist: () => { if (external) return persistExternalRoots({ confirmed: true }); prepareNormalChatStoreForSave(context); return context.saveMetadata?.(); }, isCurrent: () => true };
+        return { chatId, metadata, persist: () => { prepareNormalChatStoreForSave(context); return context.saveMetadata?.(); }, isCurrent: () => true };
     };
     const repository = createTheaterRepository({
         storage: host.storage, metadata: () => captureTarget().metadata, persist: () => { const context = host.getContext?.(); prepareNormalChatStoreForSave(context); return context?.saveMetadata?.(); },
-        keyForChat: host.keyForChat || theaterDraftKey, metadataSaver: storageSaver.supported ? storageSaver : null, requireFixedSaver: storageSaver.supported, cap: THEATER_DRAFT_CAP,
+        keyForChat: host.keyForChat || theaterDraftKey, cap: THEATER_DRAFT_CAP,
     });
     const templates = createTheaterTemplates({ context: host.getContext, bookName: THEATER_TEMPLATE_BOOK });
     const generation = createTheaterGeneration({

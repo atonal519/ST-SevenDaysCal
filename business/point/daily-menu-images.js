@@ -1,5 +1,4 @@
 import { createGenerationDiagnosticScope } from '../../api/diagnostics.js';
-import { captureLocalGenerationDiagnostic } from '../../runtime/local-diagnostics.js';
 
 // Images belong to the text of one menu; adding a different dish's image does
 // not change that ownership or prevent independent dish requests from merging.
@@ -43,7 +42,6 @@ export function createDailyMenuImageController(env) {
         for (const [oldKey, value] of states) if (!value.busy && !oldKey.startsWith(`${menuKey}:`)) states.delete(oldKey);
         const owner = env.owners.create(`point-daily-menu-image-${index}`);
         const diagnostic = createGenerationDiagnosticScope('menu-image');
-        const record = details => captureLocalGenerationDiagnostic({ ...diagnostic.metadata(), ...details });
         const current = { busy: true, message: '正在准备绘图…', owner };
         states.set(key, current);
         const update = message => { current.message = message; redraw(index, menuKey, menu); };
@@ -61,14 +59,12 @@ export function createDailyMenuImageController(env) {
                 return { status: 'failed', reason: 'not-configured' };
             }
             const request = imageRequest(item, target.characterName);
-            record({ event: { event: 'image-request', dishIndex: index, dishName: item.name, menuGeneratedAt: menu.generatedAt, request } });
             const result = await api.generate(request, {
                 signal: owner.controller.signal,
                 onProgress: progress => { if (env.owners.isCurrent(owner)) update(progressText(progress)); },
             });
             if (!env.owners.isCurrent(owner)) { current.message = '已取消本次操作'; return { status: 'cancelled' }; }
             // Pixels stay in BaiBai's gallery; diagnostics retain only returned reference fields.
-            record({ transport: { status: 'success' }, rawResponse: JSON.stringify({ path: result?.path, seed: result?.seed, backend: result?.backend, hasImage: !!result?.dataUrl }) });
             const path = typeof result?.path === 'string' ? result.path.trim() : '';
             if (!path) {
                 diagnostic.rejected(new Error('gallery-save-failed'), { phase: 'save', reasonCode: 'menu-image-gallery-save-failed' });
@@ -78,8 +74,7 @@ export function createDailyMenuImageController(env) {
             diagnostic.accepted({ reasonCode: 'menu-image-gallery-reference' });
             const image = { path, ...(Number.isFinite(result.seed) ? { seed: result.seed } : {}) };
             phase = 'save';
-            // Both dishes may finish while an external CAS is pending. Only the
-            // short reference merge/write waits; generation stays with BaiBai.
+            // Merge each completed dish reference into the latest saved menu.
             const operation = referenceSave.then(async () => {
                 const latest = target.read();
                 if (dailyMenuContentKey(latest) !== menuKey || JSON.stringify(latest?.items?.[index]?.image || null) !== imageBefore) return { ok: false, reason: 'menu-changed' };
@@ -92,7 +87,6 @@ export function createDailyMenuImageController(env) {
                 env.toast?.('菜单或这道菜的配图已变化，本次图片仍保留在柏宝绘图库');
                 return { status: 'changed' };
             }
-            record({ event: { event: 'image-reference-save-result', ok: saved === true || saved?.ok === true, commitState: saved?.commitState, reason: saved?.reason, path } });
             if (!(saved === true || saved?.ok === true)) {
                 update('图片已保存在柏宝绘图库，但未能关联到菜单');
                 return { status: 'failed', reason: 'save' };
@@ -103,7 +97,6 @@ export function createDailyMenuImageController(env) {
             return { status: 'updated', image };
         } catch (error) {
             if (owner.controller.signal.aborted || error?.code === 'aborted') { current.message = '已取消本次操作'; return { status: 'cancelled' }; }
-            if (phase === 'generate') record({ transport: { status: 'failed', errorClass: String(error?.code || error?.name || 'Error') } });
             diagnostic.rejected(error, { phase, reasonCode: `menu-image-${phase}-failed` });
             update(phase === 'save' ? '图片已保存在柏宝绘图库，但未能关联到菜单' : failureText(error));
             return { status: 'failed', reason: phase };

@@ -1,18 +1,18 @@
 // memory.js — 构画内置故事记忆。
 // L0 按 N 个 assistant 楼压缩，L1 再按 M 个 L0 合并；包含最新 assistant 楼的组延后一楼，
 // 避免 swipe 尚未稳定时过早摘要。每组保存净化正文的 hash，编辑、重生成或切 swipe 后会失效重排。
-// 逻辑根 `sp-memory` 随当前聊天保存，实际可承载于聊天 metadata 或外置后端，不使用 localStorage。
+// 逻辑根 `sp-memory` 随当前聊天保存，保存于聊天 metadata，不使用 localStorage。
 
 import { getContext } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../../script.js';
 import { normalizeTagRules } from './utils/tag-names.js';
 import { sanitizeStoryBody } from './utils/shared-body-wrappers.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, safeDiagnosticLog } from './api/diagnostics.js';
-import { getChatRoot, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from './runtime/external-chat-storage.js';
+import { getChatRoot, prepareNormalChatStoreForSave, registerChatStorageContext } from './runtime/chat-storage.js';
 import { ledgerHistoricalNarrativeMessage } from './business/ledger/capture.js';
 import { normalizeMemorySummary } from './business/memory/summary-schema.js';
 
-registerExternalStorageContext(getContext);
+registerChatStorageContext(getContext);
 
 const MEMORY_KEY = 'sp-memory';
 const SCHEMA_VERSION = 3;
@@ -130,42 +130,23 @@ function freshMeta() {
 function persist() {
     // 后台队列逐步应用结果；普通 metadata 写入沿用宿主标准保存入口。
     const ctx = getContext();
-    const external = persistExternalRoots();
-    if (external !== null) return external;
     if (!ctx) return;
     prepareNormalChatStoreForSave(ctx);
     if (ctx.saveMetadata) ctx.saveMetadata();
     else ctx.saveMetadataDebounced?.();
 }
 
-// 外置记忆仍需真实 record CAS 确认；普通聊天 metadata 只报告本地应用。
+// 当前聊天 metadata 先应用，再交给宿主标准保存。
 async function persistConfirmed(ownerGuard) {
     if (!ownerGuard()) throw Object.assign(new Error('当前聊天或记忆源已变化，未保存本次记忆'), {
         code: 'stale-memory-owner',
         result: { ok: false, stale: true, dispatched: false, commitState: 'not-dispatched' },
     });
-    const external = persistExternalRoots({ confirmed: true, ownerGuard });
-    if (external !== null) {
-        let result;
-        try { result = await external; }
-        catch (cause) {
-            const conflict = Number(cause?.status) === 409;
-            throw Object.assign(new Error(`外置记忆写入失败（${cause?.message || 'unknown'}）`), {
-                code: 'memory-save-rejected', diagnosticCode: 'save', externalStorage: true, cause,
-                result: { ok: false, dispatched: conflict, commitState: conflict ? 'conflict' : 'not-dispatched' },
-            });
-        }
-        if (!result?.ok || result.commitState !== 'confirmed' || result.stale || !ownerGuard()) {
-            const reason = result?.reason || result?.commitState || 'unknown';
-            throw Object.assign(new Error(`外置记忆写入未确认（${reason}）`), { code: 'memory-save-unconfirmed', diagnosticCode: 'save', externalStorage: true, result });
-        }
-        return result;
-    }
     const ctx = getContext();
-    if (!ctx) throw Object.assign(new Error('当前聊天不可用，未保存本次记忆'), { diagnosticCode: 'save', externalStorage: false });
+    if (!ctx) throw Object.assign(new Error('当前聊天不可用，未保存本次记忆'), { diagnosticCode: 'save', localSaveFailure: true });
     prepareNormalChatStoreForSave(ctx);
     const save = typeof ctx.saveMetadata === 'function' ? ctx.saveMetadata.bind(ctx) : ctx.saveMetadataDebounced?.bind(ctx);
-    if (typeof save !== 'function') throw Object.assign(new Error('宿主没有可用的聊天保存接口'), { diagnosticCode: 'save', externalStorage: false });
+    if (typeof save !== 'function') throw Object.assign(new Error('宿主没有可用的聊天保存接口'), { diagnosticCode: 'save', localSaveFailure: true });
     try {
         const result = save();
         if (result && typeof result.then === 'function') result.catch(error => console.warn('[SP memory] host save rejected after local apply', error));
@@ -602,7 +583,7 @@ async function runL1(groupKeys, memory = null, diagnosticScope = null) {
 // ─── Health report ───────────────────────────────────────────────────────────
 export function getHealthReport() {
     const m = meta();
-    if (!m) return { totalAi: 0, totalGroups: 0, withL0: 0, pending: 0, permaFailed: 0, strippedEmpty: 0, l1Chapters: 0, latestFloorPending: false, paused: true, lastError: '当前聊天的外置构画数据不可用', busy: false, unavailable: true };
+    if (!m) return { totalAi: 0, totalGroups: 0, withL0: 0, pending: 0, permaFailed: 0, strippedEmpty: 0, l1Chapters: 0, latestFloorPending: false, paused: true, lastError: '当前聊天的构画数据尚未就绪', busy: false, unavailable: true };
     const floors = getAiFloors();
     const groups = getStableGroups(floors);
     const totalGroups = groups.length;
@@ -742,7 +723,7 @@ export async function fillMissing(onProgress) {
         && _lifecycleEpoch === lifecycleEpoch
         && builtInMemoryEnabled();
     let m = meta();
-    if (!m) throw new Error('当前聊天的外置构画数据不可用');
+    if (!m) throw new Error('当前聊天的构画数据尚未就绪');
     if (sourcePolicy(m) === 'legacy-needs-rebuild') {
         if (_abortController === ctrl) _abortController = null;
         return { aborted: false, current: 0, total: 0, legacyNeedsRebuild: true };
@@ -772,7 +753,7 @@ export async function fillMissing(onProgress) {
             try { await persistConfirmed(ownerGuard); }
             catch (error) {
                 if (ctrl.signal.aborted || !ownerGuard()) return aborted(0);
-                if (error?.externalStorage === false) restoreMemoryRoot(m, initial);
+                if (error?.localSaveFailure === true) restoreMemoryRoot(m, initial);
                 throw error;
             }
             m = meta();
@@ -788,7 +769,7 @@ export async function fillMissing(onProgress) {
                 try { await persistConfirmed(ownerGuard); }
                 catch (error) {
                     if (ctrl.signal.aborted || !ownerGuard()) return aborted(i);
-                    if (error?.externalStorage === false) restoreMemoryRoot(m, beforeStep);
+                    if (error?.localSaveFailure === true) restoreMemoryRoot(m, beforeStep);
                     throw error;
                 }
                 const detail = m.failed[targets[i]]?.lastErr || '未生成有效摘要';
@@ -798,7 +779,7 @@ export async function fillMissing(onProgress) {
             try { await persistConfirmed(ownerGuard); }
             catch (error) {
                 if (ctrl.signal.aborted || !ownerGuard()) return aborted(i);
-                if (error?.externalStorage === false) restoreMemoryRoot(m, beforeStep);
+                if (error?.localSaveFailure === true) restoreMemoryRoot(m, beforeStep);
                 throw error;
             }
             m = meta();
@@ -821,7 +802,7 @@ export async function fillMissing(onProgress) {
             try { await persistConfirmed(ownerGuard); }
             catch (error) {
                 if (ctrl.signal.aborted || !ownerGuard()) return aborted(targets.length);
-                if (error?.externalStorage === false) restoreMemoryRoot(m, beforeStep);
+                if (error?.localSaveFailure === true) restoreMemoryRoot(m, beforeStep);
                 throw error;
             }
             m = meta();
@@ -847,13 +828,13 @@ export async function rebuildAll(onProgress) {
         && _lifecycleEpoch === lifecycleEpoch
         && builtInMemoryEnabled();
     const m = meta();
-    if (!m) throw new Error('当前聊天的外置构画数据不可用');
+    if (!m) throw new Error('当前聊天的构画数据尚未就绪');
     // 生成期只写私有副本，正式 root 继续供其它模块读取；完整生成后才进入一次性提交。
     const working = freshMeta();
     const generationDiagnostics = [];
     try {
         const groups = getStableGroups();
-        const totalSteps = groups.length + 1;   // 最后一步专门表示 confirmed 保存完成
+        const totalSteps = groups.length + 1;   // 最后一步表示本地数据应用完成
         const aborted = (current, { phase = 'generating', saveState = 'not-started', restored = true } = {}) => {
             const result = { aborted: true, current, total: totalSteps, phase, saveState, restored };
             onProgress?.(result);
@@ -892,27 +873,20 @@ export async function rebuildAll(onProgress) {
         try { persisted = await persistConfirmed(ownerGuard); }
         catch (error) {
             if (ctrl.signal.aborted || !ownerGuard()) {
-                const commitState = error?.result?.commitState;
-                if (commitState === 'confirmed' || commitState === 'host-save-complete') {
-                    return aborted(totalSteps, { phase: 'saving', saveState: 'confirmed', restored: false });
-                }
-                if (commitState === 'unknown' || commitState === 'conflict') {
-                    return aborted(groups.length, { phase: 'saving', saveState: 'unknown', restored: false });
-                }
                 restoreMemoryRoot(m, previous);
                 return aborted(groups.length, { phase: 'saving', saveState: 'not-dispatched', restored: true });
             }
-            if (error?.externalStorage === false) restoreMemoryRoot(m, previous);
+            if (error?.localSaveFailure === true) restoreMemoryRoot(m, previous);
             throw error;
         }
         for (const diagnostic of generationDiagnostics) {
             diagnostic.locallyApplied({ reasonCode: 'memory-rebuild-local-applied' });
             diagnostic.uiDisplayed({ reasonCode: 'memory-rebuild-progress-applied' });
         }
-        onProgress?.({ current: totalSteps, total: totalSteps, done: true, phase: 'complete', saveState: persisted?.commitState || 'unknown' });
-        return { aborted: false, current: totalSteps, total: totalSteps, phase: 'complete', saveState: persisted?.commitState || 'unknown', restored: false, unresolvedGroups };
+        onProgress?.({ current: totalSteps, total: totalSteps, done: true, phase: 'complete', saveState: persisted?.commitState || 'local-applied' });
+        return { aborted: false, current: totalSteps, total: totalSteps, phase: 'complete', saveState: persisted?.commitState || 'local-applied', restored: false, unresolvedGroups };
     } finally {
-        // 保存期按最终提交状态决定保留候选或恢复旧 root；unknown 不能按“确定未写入”回滚。
+        // 回收本次手动重构的任务引用。
         if (_activeRebuild?.ctrl === ctrl) _activeRebuild = null;
         if (_abortController === ctrl) _abortController = null;
     }

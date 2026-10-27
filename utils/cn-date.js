@@ -23,10 +23,12 @@ export function _cnToNumber(s) {
     if (t.includes('千') || t.includes('百')) {
         let total = 0; let rest = t;
         for (const [unit, factor] of [['千', 1000], ['百', 100]]) {
+            rest = rest.replace(/^[零〇]+/, '');
             const parts = rest.split(unit);
             if (parts.length > 1) { total += (parts[0] ? (_CN_NUM_MAP[parts[0]] ?? Number(parts[0])) : 1) * factor; rest = parts.slice(1).join(unit); }
         }
-        if (rest) { const tail = _cnToNumber(rest); if (tail != null) total += tail; }
+        rest = rest.replace(/^[零〇]+/, '');
+        if (rest) { const tail = _cnToNumber(rest); if (tail == null) return null; total += tail; }
         return total || null;
     }
     if (t.includes('十')) {

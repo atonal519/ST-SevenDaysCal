@@ -10,7 +10,6 @@ import { gzipSync } from '../vendor/fflate-gzip.mjs';
 
 test('production index/store applies ordinary chat metadata immediately without waiting for host ACK', async () => {
     const repo = path.resolve(new URL('..', import.meta.url).pathname);
-    const externalEncodedLine = encodeStoreEntry('lines-user', { raw: 'external older line '.repeat(1200), ts: 55, history: [{ raw: 'recoverable external history', id: 'old-line', locked: true }] });
     const malformedDiagnostics = { codec: 'stsc-gzip-base64', version: 1, payload: Buffer.from(gzipSync(new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, unexpected: 'x'.repeat(1000) })))).toString('base64') };
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'st7cal-local-applied-'));
     const indexUrl = pathToFileURL(path.join(repo, 'index.js')).href;
@@ -38,7 +37,7 @@ const fixtures = new Map([
   ['SlashCommandParser.js', ${JSON.stringify(pathToFileURL(slashParser).href)}], ['SlashCommand.js', ${JSON.stringify(pathToFileURL(slashCommand).href)}],
 ]);
 export async function resolve(specifier, context, nextResolve) { const hit = [...fixtures].find(([name]) => specifier.endsWith('/' + name) || specifier === name); if (hit) return { url: hit[1], shortCircuit: true }; return nextResolve(specifier, context); }
-export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, bindExternalChatStorage, loadExternalChat, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, openQuickReplyShortcut, openSidebarView, openSchedule, handleViewButtonClick, setCurrentViewForTest: value => { currentView = value; }, registerShortcutCommandForTest: () => registerQuickReplyShortcutCommand({ parser: SlashCommandParser, commandClass: SlashCommand, open: openQuickReplyShortcut, notify: (message, isError) => showToast(message, null, isError) }), setLastMainViewForTest: value => { _lastMainView = value; }, shortcutState: () => ({ outlineMode, linesMode, spaceMode, theaterMode, almanacMode: axisState.almanacMode, almanacSheet: axisState._almanacSheet, linesSheet: linesFeature.sheet, settingsOpen, currentView, lastMainView: _lastMainView }), setShortcutUiForTest: value => { _spShadow = value; }, prepareShortcutViewDependencies: () => { theaterFeature ??= { busy: false, leave() {}, open() {}, onPanelClosed() {}, onPluginDisabled() {} }; coordinateRuntime ??= { feature: { open() {}, close() {} } }; }, setSettingsOpenForTest: value => { settingsOpen = value; }, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } }; globalThis.__hostSaveSeam.showToast = showToast; globalThis.__hostSaveSeam.timeTravelDirectionLoadErrorText = timeTravelDirectionLoadErrorText; globalThis.__hostSaveSeam.memoryPreCheckConfirm = memoryPreCheckConfirm; globalThis.__hostSaveSeam.renderMemorySection = renderMemorySection; globalThis.__hostSaveSeam.bindLedgerBusyForTest = chat => bindLedgerEvents({ almanac: { on() { return this; }, off() { return this; } }, chat, $: globalThis.jQuery, settings: getSettings, saveSettings() {}, capture: { run: async () => ({ status: "unchanged" }), abort() {} }, judge: { run: async () => ({ status: "unchanged" }) }, captureState: () => ({ busy: true }), actions: {}, render() {}, refreshInline() {}, identity: () => null, isCurrentIdentity: () => true, editor: {}, archive: {}, batch: { scopes: [], scope() {}, selected() { return new Set(); }, reset() {}, ids() { return []; }, exec() {} }, toast: showToast });\\n', shortCircuit: true }; }
+export async function load(url, context, nextLoad) { const loaded = await nextLoad(url, context); if (url.split('?')[0] !== index) return loaded; return { ...loaded, source: String(loaded.source) + '\\n;globalThis.__hostSaveSeam = { writeStoreConfirmed, writeStore, writeRaw: store.writeRaw, writeBatch: store.writeBatch, writeData: store.writeData, readStore, keyDesc, snapshotWrite: snapshot.writeSnapshot, commitPortableImport, buildPortableChatPackage, buildCurrentChatDiagnosticPackage, storeKinds: store.KINDS, usageByKind: store.usageByKind, clearKind: store.clearKind, addLedgerEntries: ledger.addEntriesAtomic, buildMessages, getSettings, dailyMenuController, abortBackground: _abortAllBackground, preparePluginDisable: () => { theaterFeature ??= { onPluginDisabled() {} }; }, memory, openDailyMenuDialog, openQuickReplyShortcut, openSidebarView, openSchedule, handleViewButtonClick, setCurrentViewForTest: value => { currentView = value; }, registerShortcutCommandForTest: () => registerQuickReplyShortcutCommand({ parser: SlashCommandParser, commandClass: SlashCommand, open: openQuickReplyShortcut, notify: (message, isError) => showToast(message, null, isError) }), setLastMainViewForTest: value => { _lastMainView = value; }, shortcutState: () => ({ outlineMode, linesMode, spaceMode, theaterMode, almanacMode: axisState.almanacMode, almanacSheet: axisState._almanacSheet, linesSheet: linesFeature.sheet, settingsOpen, currentView, lastMainView: _lastMainView }), setShortcutUiForTest: value => { _spShadow = value; }, prepareShortcutViewDependencies: () => { theaterFeature ??= { busy: false, leave() {}, open() {}, onPanelClosed() {}, onPluginDisabled() {} }; coordinateRuntime ??= { feature: { open() {}, close() {} } }; }, setSettingsOpenForTest: value => { settingsOpen = value; }, renderDailyMenuCard, bindDailyMenuDialogEvents, renderSchedule, pointScheduleEmptyHtml, setDialogShadow: value => { _spDialogShadow = value; }, setDailyMenuController: value => { dailyMenuController = value; }, setThemeForTest: value => { currentTheme = value; } }; globalThis.__hostSaveSeam.showToast = showToast; globalThis.__hostSaveSeam.timeTravelDirectionLoadErrorText = timeTravelDirectionLoadErrorText; globalThis.__hostSaveSeam.memoryPreCheckConfirm = memoryPreCheckConfirm; globalThis.__hostSaveSeam.renderMemorySection = renderMemorySection; globalThis.__hostSaveSeam.bindLedgerBusyForTest = chat => bindLedgerEvents({ almanac: { on() { return this; }, off() { return this; } }, chat, $: globalThis.jQuery, settings: getSettings, saveSettings() {}, capture: { run: async () => ({ status: "unchanged" }), abort() {} }, judge: { run: async () => ({ status: "unchanged" }) }, captureState: () => ({ busy: true }), actions: {}, render() {}, refreshInline() {}, identity: () => null, isCurrentIdentity: () => true, editor: {}, archive: {}, batch: { scopes: [], scope() {}, selected() { return new Set(); }, reset() {}, ids() { return []; }, exec() {} }, toast: showToast });\\n', shortCircuit: true }; }
 `);
         await fs.writeFile(runner, `
 import { setContext } from ${JSON.stringify(pathToFileURL(harness).href)};
@@ -176,8 +175,8 @@ if (packedLines?.codec !== 'stsc-gzip-base64' || packedQqj?.codec !== 'stsc-gzip
 if ('dashed-user' in largeMetadata['sp-store'].data) throw new Error('production save created the absent dashed key');
 if (JSON.stringify(seam.readStore(seam.keyDesc('lines', 'user', ''))) !== JSON.stringify(linesValue)) throw new Error('production read changed current line or recoverable history data');
 if (JSON.stringify(seam.readStore(seam.keyDesc('qqj-prompt-cache', 'user', ''))) !== JSON.stringify(qqjValue)) throw new Error('production QQJ fallback read changed cache data');
-const decodedDiagnostics = await import(${JSON.stringify(pathToFileURL(path.join(repo, 'runtime/external-chat-storage.js')).href)});
-const retainedDiagnostics = decodedDiagnostics.getExternalDiagnostics();
+const decodedDiagnostics = await import(${JSON.stringify(pathToFileURL(path.join(repo, 'runtime/chat-storage.js')).href)});
+const retainedDiagnostics = decodedDiagnostics.getChatDiagnostics();
 if (Object.hasOwn(retainedDiagnostics[0].attempts.lines, 'messages') || retainedDiagnostics[0].attempts.lines.rawResponse !== 'retained raw') throw new Error('production TTL did not remove only expired request messages');
 if (retainedDiagnostics[1].attempts.point.messages?.[0]?.content !== 'pending request body') throw new Error('production TTL removed an unresolved request');
 const portableBuilt = seam.buildPortableChatPackage({ selectedModules: ['lines'], roots: { 'sp-store': largeMetadata['sp-store'] }, exportedAt: 'fixed' });
@@ -254,7 +253,7 @@ const malformedDiagnosticContext = context('bad-diagnostics-chat', malformedDiag
 malformedDiagnosticContext.chat = [{ is_user: false, is_system: false, mes: 'diagnostic structure probe' }];
 setContext(malformedDiagnosticContext);
 const originalMalformedDiagnostics = malformedDiagnosticRoot['sp-store'].data['diagnostics-v1'];
-try { decodedDiagnostics.getExternalDiagnostics(); throw new Error('bad diagnostic wrapper read as an empty value'); }
+try { decodedDiagnostics.getChatDiagnostics(); throw new Error('bad diagnostic wrapper read as an empty value'); }
 catch (error) { if (error.message === 'bad diagnostic wrapper read as an empty value') throw error; }
 try { decodedDiagnostics.refreshDiagnosticRetention(); throw new Error('diagnostic update silently replaced malformed storage'); }
 catch (error) { if (error.message === 'diagnostic update silently replaced malformed storage') throw error; }
@@ -266,14 +265,14 @@ for (const legacyDiagnostics of [{}, { marker: 'retain' }]) {
   const legacyRoot = { 'sp-store': { version: 1, data: { 'diagnostics-v1': legacyDiagnostics } } };
   const legacyContext = context('legacy-diagnostics-chat', legacyRoot, { is_group: false, file_name: 'legacy-diagnostics-chat', char_name: 'Role', avatar_url: 'role.png' });
   setContext(legacyContext);
-  if (decodedDiagnostics.getExternalDiagnostics().length !== 0) throw new Error('legacy plain diagnostics without floors lost the empty-list fallback');
+  if (decodedDiagnostics.getChatDiagnostics().length !== 0) throw new Error('legacy plain diagnostics without floors lost the empty-list fallback');
   if (legacyRoot['sp-store'].data['diagnostics-v1'] !== legacyDiagnostics) throw new Error('reading legacy plain diagnostics rewrote its stored value');
 }
 const legacyLargeDiagnostics = { marker: 'old diagnostic shape '.repeat(1000) };
 const legacyLargeRoot = { 'sp-store': { version: 1, data: { 'diagnostics-v1': legacyLargeDiagnostics } } };
 setContext(context('legacy-large-diagnostics-chat', legacyLargeRoot, { is_group: false, file_name: 'legacy-large-diagnostics-chat', char_name: 'Role', avatar_url: 'role.png' }));
 seam.writeStore(seam.keyDesc('schedule', 'user', ''), { raw: 'normal save preserves legacy diagnostic shape', ts: 4 });
-if (legacyLargeRoot['sp-store'].data['diagnostics-v1'] !== legacyLargeDiagnostics || decodedDiagnostics.getExternalDiagnostics().length !== 0) throw new Error('normal save packed or broke a legacy diagnostic value without floors');
+if (legacyLargeRoot['sp-store'].data['diagnostics-v1'] !== legacyLargeDiagnostics || decodedDiagnostics.getChatDiagnostics().length !== 0) throw new Error('normal save packed or broke a legacy diagnostic value without floors');
 
 const snapshotCalendar = { kind: 'custom', id: 'snapshot-save-test', revision: 1, weekdayCycle: 7, era: '纪', months: [{ name: '一月', days: 30 }, { name: '二月', days: 30 }] };
 const snapshotValue = { point: 'p', line: 'l', almanac: [], pool: [], recall: [], calendar: snapshotCalendar, anchor: { month: 1, day: 2 } };
@@ -306,15 +305,7 @@ const ledgerThrowMetadata = {};
 setContext(context('ledger-throw-chat', ledgerThrowMetadata, { is_group: false, file_name: 'ledger-throw-chat', char_name: 'Role', avatar_url: 'role.png' }, () => { saveCalls++; throw new Error('synthetic synchronous host save failure'); }));
 const thrownLedger = await seam.addLedgerEntries([{ 事由: '已应用事项', 类型: '持续状态', 现状: '仍在本地。' }]);
 if (thrownLedger.length !== 1 || ledgerThrowMetadata['sp-ledger']?.entries?.[0]?.事由 !== '已应用事项') throw new Error('ordinary ledger batch rolled back after host save threw');
-let diagnosticWrite = null;
-globalThis.fetch = async (url, options = {}) => {
-  if (String(url).endsWith('/diagnostics.local.json')) return { ok: true, json: async () => ({ enabled: true }) };
-  if (String(url).includes('/private-diagnostics/')) {
-    if (options.method === 'PUT') { diagnosticWrite = JSON.parse(options.body); return { ok: true, status: 200, json: async () => ({ revision: 1 }) }; }
-    return { ok: false, status: 404, json: async () => ({}) };
-  }
-  throw new Error('unexpected request in in-memory memory test: ' + String(url));
-};
+globalThis.fetch = async url => { throw new Error('ordinary memory must not request a storage backend: ' + String(url)); };
 const memoryMetadata = { 'sp-memory': { version: 3, L0: {}, L1: [], failed: {}, system: { paused: false, consecutiveFails: 0, lastError: null } } };
 const memoryContext = context('memory-chat', memoryMetadata, { is_group: false, file_name: 'memory-chat', char_name: 'Role', avatar_url: 'role.png' });
 memoryContext.chat = [
@@ -330,9 +321,6 @@ const memoryResult = await Promise.race([
 ]);
 if (memoryResult.aborted || !memoryMetadata['sp-memory'].L0['0-0']?.text) throw new Error('manual memory did not locally apply its generated summary');
 if (saveCalls !== 12 || !memoryProgress.some(item => item.current === 1 && item.done === false)) throw new Error('manual memory did not progress immediately after one standard save');
-await new Promise((resolve, reject) => { const start = Date.now(); const poll = () => diagnosticWrite ? resolve() : Date.now() - start > 1500 ? reject(new Error('manual memory diagnostic did not flush')) : setTimeout(poll, 20); poll(); });
-const memoryAttempt = diagnosticWrite.data.attempts.memory;
-if (memoryAttempt.result.processing !== 'accepted' || memoryAttempt.result.commit !== 'local-applied' || memoryAttempt.result.ui !== 'displayed') throw new Error('manual memory diagnostic is missing its terminal stages: ' + JSON.stringify(memoryAttempt.result));
 let callbackCount = 0;
 const oldMetadata = { 'sp-store': { version: 1, data: {} } };
 setContext(context('old-chat', oldMetadata, { is_group: false, file_name: 'old-chat', char_name: 'Role', avatar_url: 'role.png' }));
@@ -484,27 +472,6 @@ popup.remove();
 seam.getSettings().themeMode = 'day'; seam.setThemeForTest('day');
 seam.openDailyMenuDialog();
 if (!popup.className.includes('sp-root') || !popup.className.includes('sp-day') || !popup.className.includes('sp-forced-day')) throw new Error('forced-theme popup did not use the selected forced palette class');
-const externalContext = { chatId: 'external-codec-chat', chatMetadata: { 'sp-storage': { provider: 'st-bainiaodata', schemaVersion: 1, collection: 'codec-test', currentRecord: 'current', diagnosticsRecord: 'diagnostics' } }, chat: [] };
-const externalWrites = [];
-seam.bindExternalChatStorage({ getContext: () => externalContext, fetchImpl: async (url, options = {}) => {
-  if (String(url).endsWith('/health')) return { ok: true, status: 200, json: async () => ({ apiVersion: 1, records: true, recordList: true, optimisticRevision: true, atomicReplace: true }) };
-  if (String(url).endsWith('/codec-test')) return { ok: true, status: 200, json: async () => [
-    { recordId: 'current', revision: 1, data: { schemaVersion: 1, roots: { 'sp-store': { version: 1, data: { 'lines-user': ${JSON.stringify(externalEncodedLine)} } } } } },
-    { recordId: 'diagnostics', revision: 1, data: { schemaVersion: 1, floors: [] } },
-  ] };
-  if (String(url).endsWith('/codec-test/current') && options.method === 'PUT') { externalWrites.push(JSON.parse(options.body)); return { ok: true, status: 200, json: async () => ({ revision: 2 }) }; }
-  throw new Error('unexpected external codec request: ' + String(url));
-} });
-setContext(externalContext);
-const externalStatus = await seam.loadExternalChat({ force: true });
-if (externalStatus.status !== 'ready') throw new Error('external encoded-root fixture did not load: ' + externalStatus.status);
-const externalRead = seam.readStore(seam.keyDesc('lines', 'user', ''));
-if (externalRead.raw !== 'external older line '.repeat(1200) || externalRead.history[0].locked !== true) throw new Error('external mode did not decode a manually migrated store value');
-const externalReplacement = { raw: 'new external plain value', ts: 56 };
-const externalWriteResult = await seam.writeStoreConfirmed(seam.keyDesc('lines', 'user', ''), externalReplacement);
-if (externalWriteResult.commitState !== 'confirmed' || externalWrites.length !== 1) throw new Error('external confirmed CAS path changed');
-const externalSavedLine = externalWrites[0].data.roots['sp-store'].data['lines-user'];
-if (externalSavedLine.codec || JSON.stringify(externalSavedLine) !== JSON.stringify(externalReplacement)) throw new Error('external CAS write did not preserve its plain-value contract');
 const originalSetTimeout = globalThis.setTimeout; const toastDelays = [];
 globalThis.setTimeout = (_callback, delay) => { toastDelays.push(delay); return 1; };
 globalThis.toastr = null; delete globalThis.__zmerUniversalToastThemeCleanup;

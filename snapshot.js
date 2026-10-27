@@ -1,13 +1,13 @@
 // snapshot.js — 楼内渲染框的逐楼快照数据层。
 // 快照绑定生成当时的 message，而不是用会随删楼移动的 mesId 另建索引。内置存储写
-// message.extra，并镜像到当前 swipe_info 槽；外置模式保存独立记录与指针。快照属于渲染元数据，
+// message.extra，并镜像到当前 swipe_info 槽。快照属于渲染元数据，
 // 不进入 prompt。只有当前最后一条非系统楼可更新，历史楼保持当时状态。
 
 import { getContext } from '../../../extensions.js';
 import { isValidCalendarDescriptor, resolveSnapshotCalendar } from './runtime/chat-date-anchor.js';
-import { isExternalMode, isExternalReady, prepareNormalChatStoreForSave, readExternalSnapshot, registerExternalStorageContext, writeExternalSnapshot } from './runtime/external-chat-storage.js';
+import { hasLegacyChatStorage, prepareNormalChatStoreForSave, registerChatStorageContext } from './runtime/chat-storage.js';
 
-registerExternalStorageContext(getContext);
+registerChatStorageContext(getContext);
 
 // message.extra 上的键，带 gouhua_ 前缀防和别的扩展撞。
 const SNAP_KEY = 'gouhua_snapshot';
@@ -78,10 +78,10 @@ function isCurrentWritableFloor(mesId) {
 export function writeSnapshot(mesId, snap) {
     const context = ctx();
     const msg = context?.chat?.[Number(mesId)] || null;
-    if (!msg || !isCurrentWritableFloor(mesId)) return false;
+    if (!msg || hasLegacyChatStorage(context) || !isCurrentWritableFloor(mesId)) return false;
     const calendar = snap?.calendar;
     if (!isValidCalendarDescriptor(calendar)) return false;
-    const prev = isExternalMode() ? readExternalSnapshot(msg) : msg.extra?.[SNAP_KEY];
+    const prev = msg.extra?.[SNAP_KEY];
 
     const payload = {
         v: SNAP_VERSION,
@@ -106,11 +106,7 @@ export function writeSnapshot(mesId, snap) {
     // 幂等：内容没变就不写（ts 不参与比较，否则永远"变了"）。
     if (prev && _sameSnapContent(prev, payload)) return false;
 
-    if (isExternalMode()) {
-        if (!isExternalReady()) return false;
-        void writeExternalSnapshot(msg, payload);
-        return true;
-    }
+
 
     if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
     msg.extra[SNAP_KEY] = payload;
@@ -162,7 +158,7 @@ function _mirrorToCurrentSwipe(msg, payload) {
 // 返回 null 表示该楼没有可用快照；渲染端据此不显示楼内块。
 export function readSnapshot(mesId) {
     const msg = messageAt(mesId);
-    const snap = isExternalMode() ? readExternalSnapshot(msg) : msg?.extra?.[SNAP_KEY];
+    const snap = hasLegacyChatStorage() ? null : msg?.extra?.[SNAP_KEY];
     if (!snap || typeof snap !== 'object') return null;
     // 容错归一：老/脏快照缺字段时补齐缺省，读取端拿到的形状恒定。
     const out = {

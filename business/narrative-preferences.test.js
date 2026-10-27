@@ -12,15 +12,14 @@ import { createOutlineFeature } from './outline/feature.js';
 const scales = ['auto', 'macro', 'meso', 'micro'];
 const preferences = scale => ({ scale, direction: 'tragic' });
 
-test('every narrative scale reaches point, line, outline, Space outline, and outline injection prompts', () => {
+test('every narrative scale reaches internal point, line, outline and Space creation prompts', () => {
     for (const scale of scales) {
         const prefs = preferences(scale);
         const point = buildPointPrompt('用户', '角色', 'user', null, null, null, prefs);
         const line = buildLinesPrompt('用户', '角色', 'user', '', scale, {}, 'off', 'tragic');
         const outline = buildOutlinePrompt('用户', '角色', 'user', prefs);
         const chat = buildSpaceChatSystemPrompt({ userName: '用户', charName: '角色', preferences: prefs, requestedMaterials: { outline: true }, intent: { action: 'write', kind: 'outline_widget' } });
-        const injection = buildOutlineInjectionText([{ title: '当前', scene: '现状' }, { title: '后续', scene: '方向' }], 1, undefined, prefs);
-        for (const prompt of [point, line, outline, chat, injection]) {
+        for (const prompt of [point, line, outline, chat]) {
             assert.match(prompt, new RegExp(`叙事尺度·观察焦点】.*${scale === 'auto' ? '自动' : scale === 'macro' ? '宏观' : scale === 'meso' ? '中观' : '微观'}`));
             assert.match(prompt, /悲剧倾向/);
             assert.match(prompt, /不得扭曲既有事实/);
@@ -126,57 +125,41 @@ test('semantic-route applies point/line preferences only if it chooses those car
     assert.doesNotMatch(semanticUnrelated, /<outline_widget>|【面草稿】/);
 });
 
-test('outline hidden injection refreshes preferences only while both injection switches are enabled', () => {
-    let enabled = true;
-    let prefs = preferences('meso');
+test('outline host injection keeps current and future material and respects both switches', () => {
+    let injectEnabled = true; let outlineInject = true;
     const injected = [];
     const ctx = { setExtensionPrompt: (_key, text) => injected.push(text) };
     const target = {};
     const repository = {
-        capture: () => target,
-        isCurrent: candidate => candidate === target,
-        readOutline: () => ({ raw: '<outline_widget>Beat: 当下|当前|阶段|主线|继续\nScene: 组织内部协作\nSubtext: 题记\nThink: 阶段缘由</outline_widget>' }),
+        capture: () => target, isCurrent: candidate => candidate === target,
+        readOutline: () => ({ raw: '<outline_widget>Beat: 当下|当前|阶段|主线|继续\nScene: 组织内部协作\nSubtext: 题记\nThink: 阶段缘由\nBeat: 后续|未来|阶段|主线|继续\nScene: 后续计划\nSubtext: 题记\nThink: 阶段缘由</outline_widget>' }),
         cursor: () => 1,
     };
-    const injection = createOutlineInjection({
-        repository,
-        context: () => ctx,
-        settings: () => ({ outlineInject: enabled }),
-        injectEnabled: () => true,
-        preferences: () => prefs,
-    });
+    const injection = createOutlineInjection({ repository, context: () => ctx, settings: () => ({ outlineInject }), injectEnabled: () => injectEnabled });
     injection.refresh();
-    assert.match(injected.at(-1), /中观：观察已有组织/);
-    prefs = preferences('micro');
-    injection.refresh();
-    assert.match(injected.at(-1), /微观：观察人物当下的行动/);
-    enabled = false;
-    injection.refresh();
-    assert.equal(injected.at(-1), '');
+    assert.match(injected.at(-1), /当前节点：.*当前/);
+    assert.match(injected.at(-1), /下个节点（仅供未来方向）：.*未来/);
+    assert.match(injected.at(-1), /组织内部协作|后续计划/);
+    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度/);
+    outlineInject = false; injection.refresh(); assert.equal(injected.at(-1), '');
+    outlineInject = true; injectEnabled = false; injection.refresh(); assert.equal(injected.at(-1), '');
 });
 
-test('line hidden injection refreshes the shared scale/direction contract and respects its switch', () => {
-    let prefs = preferences('macro');
-    let enabled = true;
+test('line host injection keeps event facts and pending directions without internal generation rules', () => {
+    let injectEnabled = true; let linesInject = true;
     const injected = [];
     const ctx = { setExtensionPrompt: (_key, text) => injected.push(text) };
     const controller = createLinesInjectionController({
-        context: () => ctx,
-        settings: () => ({ linesEnabled: true, linesInject: enabled }),
-        enabled: () => true,
+        context: () => ctx, settings: () => ({ linesEnabled: true, linesInject }), enabled: () => injectEnabled,
         readRaw: () => '<storylines_widget>\nLine: 当前线|延展|近日|world|false|false\nDesc: 既有背景\nNext: 下一步\n</storylines_widget>',
-        direction: () => prefs.direction,
-        scale: () => prefs.scale,
     });
     controller.refresh();
-    assert.match(injected.at(-1), /宏观：观察已有势力/);
-    assert.match(injected.at(-1), /悲剧倾向/);
-    prefs = preferences('meso');
-    controller.refresh();
-    assert.match(injected.at(-1), /中观：观察已有组织/);
-    enabled = false;
-    controller.refresh();
-    assert.equal(injected.at(-1), '');
+    assert.match(injected.at(-1), /当前线|既有背景|下一步/);
+    assert.match(injected.at(-1), /既成事实|待发生方向/);
+    assert.doesNotMatch(injected.at(-1), /下一步：下一步：/);
+    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度|人物自主与相互回应|线索事实与待展开进展|成人模式|每条 Next|整张票/);
+    linesInject = false; controller.refresh(); assert.equal(injected.at(-1), '');
+    linesInject = true; injectEnabled = false; controller.refresh(); assert.equal(injected.at(-1), '');
 });
 
 test('outline feature passes the current character preferences into the generation API prompt', async () => {

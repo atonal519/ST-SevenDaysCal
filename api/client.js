@@ -18,9 +18,9 @@ import {
     safeAbortReason,
     traceDiagnosticEvent,
 } from '../runtime/diagnostic-trace.js';
-import { isExternalMode, isExternalReady, isStorageBusy, recordDiagnosticAttempt, recordDiagnosticTransport, registerExternalStorageContext } from '../runtime/external-chat-storage.js';
+import { hasLegacyChatStorage, recordDiagnosticAttempt, recordDiagnosticTransport, registerChatStorageContext } from '../runtime/chat-storage.js';
 
-registerExternalStorageContext(getContext);
+registerChatStorageContext(getContext);
 
 // 依赖注入桥：client.js 不反向 import index.js，UI 忙碌态、调试数据源与消息构建器由宿主注入。
 const _bridge = {
@@ -199,11 +199,7 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     throwIfPreAborted(signal);
     // 总开关硬闸：插件关闭时挡住一切生成（手动 + 后台判定），防任何路径漏网。tag 供调用方识别、静默处理。
     if (!_bridge.enabled()) { const e = makeDiagnosticError('config-missing'); e.spDisabled = true; throw e; }
-    if (isStorageBusy() || (isExternalMode() && !isExternalReady())) {
-        const error = new Error(isStorageBusy() ? '构画正在迁移当前聊天，已暂停生成' : '当前聊天的外置构画数据尚未加载或后端不可用，请重试加载后再生成');
-        error.phase = 'storage';
-        throw error;
-    }
+    if (hasLegacyChatStorage()) throw new Error('请先到构画设置的存储管理中，将旧数据迁回当前聊天');
     if (!cfg?.url || !cfg?.key) throw makeDiagnosticError('config-missing');
     const ctx = getContext();
     if (!ctx?.getRequestHeaders) throw new Error('SillyTavern 上下文不可用');

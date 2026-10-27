@@ -20,7 +20,7 @@ test('menu parses explicitly bound hidden image descriptions and retains old dis
     assert.equal(parsed.items[1].imagePrompt, undefined);
     assert.equal(parsed.items[2].imagePrompt, 'green vegetables on a plate');
     const prompt = buildDailyMenuPrompt();
-    assert.match(prompt, /Dish用1–2句写清主要与辅助食材、可见调味、关键处理和烹调方式及成菜口感/); assert.match(prompt, /Image:/); assert.match(prompt, /Image用中文/);
+    assert.match(prompt, /Dish用1–2句写清主要与辅助食材、可见调味、关键处理和烹调方式及成菜口感/); assert.match(prompt, /Image:/); assert.match(prompt, /以完整中文菜名开头，后接英文成菜描述/);
     const html = renderDailyMenuHtml(parsed);
     assert.equal((html.match(/class="sp-daily-menu-image-toggle/g) || []).length, 3);
     assert.doesNotMatch(html, /<details|<summary|>菜品配图</);

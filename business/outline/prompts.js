@@ -3,7 +3,7 @@ import { narrativePaceContract, narrativePreferenceContract } from '../narrative
 export const OUTLINE_INJECT_KEY = 'sp_outline_step';
 export const OUTLINE_INJECT_DEPTH = 4;
 
-export function buildOutlineInjectionText(beats, cursor, cleanText = value => String(value || ''), preferences = {}) {
+export function buildOutlineInjectionText(beats, cursor, cleanText = value => String(value || '')) {
     const current = beats[cursor - 1];
     const next = beats?.[cursor] || null;
     const format = beat => `${beat.time ? beat.time + '·' : ''}《${beat.title}》${beat.type ? '·' + beat.type : ''}`;
@@ -11,7 +11,6 @@ export function buildOutlineInjectionText(beats, cursor, cleanText = value => St
         '【剧情大纲·当前进度参考·仅供你把握走向，切勿直接引用或点破】',
         '请把下面的「当前节点」当作此刻所处的阶段；大纲只提供阶段方向，不规定故事推进速度。',
         '自然、含蓄地顺着它叙事；把「下个节点」当作隐约的方向，不要生硬跳进、不要提前抖开。',
-        narrativePreferenceContract(preferences),
         `当前节点：${format(current)}` + (current.scene ? `\n  ${cleanText(current.scene)}` : ''),
     ];
     if (next) parts.push(`下个节点（仅供未来方向）：${format(next)}` + (next.scene ? `\n  ${cleanText(next.scene)}` : ''));

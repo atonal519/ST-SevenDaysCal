@@ -15,30 +15,6 @@ function validateLedgerIdentity(entries, seq) {
     // 删除是合法 disposition；调用方在计划阶段另行熔断非空→空，不能要求所有原 ID 都保留。
     return true;
 }
-export async function handleUnknownPersistence(saved, restore, compensate) {
-    if (saved?.commitState !== 'unknown') return saved;
-    const confirmation = await saved.confirm?.();
-    restore();
-    if (confirmation?.submitted === false) {
-        throw Object.assign(new Error('persistence-not-committed'), { phase: 'persistence-not-committed', confirmed: false, submitted: false });
-    }
-    if (confirmation?.submitted === true || confirmation?.confirmed === true) {
-        try { const rollback = await compensate?.(); if (rollback?.ok === false || rollback?.commitState === 'unknown') throw Object.assign(new Error('rollback-save-failed'), { phase: 'rollback-save-failed' }); }
-        catch (error) { error.phase = 'rollback-save-failed'; throw error; }
-        throw Object.assign(new Error('persistence-unknown'), { phase: 'persistence-unknown', confirmed: true });
-    }
-    if (confirmation?.available === false || !confirmation) throw Object.assign(new Error('persistence-unknown'), { phase: 'persistence-unknown', submitted: null });
-    throw Object.assign(new Error('persistence-unknown'), { phase: 'persistence-unknown', submitted: null });
-}
-
-async function compensateAndThrow(original, restore, compensate) {
-    restore();
-    try {
-        const rollback = await compensate?.();
-        if (rollback?.ok === false || rollback?.commitState === 'unknown') throw Object.assign(new Error('rollback-save-failed'), { phase: 'rollback-save-failed' });
-    } catch (error) { error.phase = 'rollback-save-failed'; throw error; }
-    throw original;
-}
 export async function reconcileStateAtomic(state, sources, chatLength, save, normalize = value => value, guard = () => true) {
     if (!guard()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' });
     const before = clone(state.entries);
@@ -57,20 +33,13 @@ export async function reconcileStateAtomic(state, sources, chatLength, save, nor
         if (!validateLedgerIdentity(state.entries, state.seq)) throw fail('source-plan-invalid', 'source-state-invalid');
         if (!guard()) { state.entries = before; throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' }); }
         const saved = await save?.(guard);
-        if (saved?.commitState === 'unknown') await handleUnknownPersistence(saved, () => { state.entries = before; state.seq = beforeSeq; }, () => save?.(() => true, { compensate: true }));
         if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'source-save-failed'), { phase: 'source-save-failed', saveResult: saved });
         const postSaveError = !validateLedgerIdentity(state.entries, state.seq)
             ? fail('source-state-invalid', 'source-state-invalid')
             : JSON.stringify({ entries: state.entries, seq: state.seq }) !== JSON.stringify(planned)
                 ? fail('source-plan-invalid', 'source-state-invalid') : null;
-        if (postSaveError) await compensateAndThrow(postSaveError, () => { state.entries = before; state.seq = beforeSeq; }, () => save?.(() => true, { compensate: true }));
-        if (!guard()) {
-            if (saved?.commitState === 'legacy-unconfirmed') {
-                state.entries = before; state.seq = beforeSeq;
-                throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat', saveResult: saved });
-            }
-            await compensateAndThrow(fail('source-stale-chat', 'source-stale-chat'), () => { state.entries = before; state.seq = beforeSeq; }, () => save?.(() => true, { compensate: true }));
-        }
+        if (postSaveError) throw postSaveError;
+        if (!guard()) throw fail('source-stale-chat', 'source-stale-chat');
         return result;
     }
     catch (error) { state.entries = before; state.seq = beforeSeq; error.phase ||= 'source-save-failed'; error.planSummary ||= planSummary; throw error; }

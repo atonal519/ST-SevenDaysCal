@@ -16,6 +16,27 @@ class Node {
     get firstElementChild() { return this.children[0] || null; }
 }
 
+test('read-only refresh mounts restored content while business refresh still freezes the latest floor', () => {
+    let freezes = 0;
+    const current = new Node('mes', { mesid: '1', is_user: 'true' });
+    current.appendChild(new Node('mes_text'));
+    const feature = createInlineFeature({
+        documentRef: { createElement: () => new Node() }, windowRef: {},
+        pluginEnabled: () => true, getContext: () => ({ chatId: 'restored-inline-test' }),
+        getSettings: () => ({ inlineRenderEnabled: true }),
+        freezeSnapshot: () => { freezes++; return {}; }, readSnapshot: () => ({}),
+        buildUserRecall: () => '<div class="sp-inline-box">已恢复内容</div>',
+    });
+    const shared = { window: { renderFloors: [current], currentEl: current, winSet: new Set([current]) } };
+
+    feature.refresh(true, { ...shared, freezeSnapshots: false });
+    assert.equal(freezes, 0);
+    assert.match(current.querySelector('.mes_text').firstElementChild._innerHTML, /已恢复内容/);
+
+    feature.refresh(true, shared);
+    assert.equal(freezes, 1);
+});
+
 test('historical mount renders its saved cold texts without reading current inventory', () => {
     let inventoryReads = 0;
     const savedCold = ['历史楼冷知识甲', '历史楼冷知识乙'];

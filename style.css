@@ -277,6 +277,7 @@ q::after {
 
 /* ─── Sheet ──────────────────────────────────────────────────────────────────── */
 .sp-sheet {
+    --sp-sheet-radius: 20px;
     position      : fixed;
     top           : 80px;
     right         : 20px;
@@ -286,7 +287,7 @@ q::after {
        但即便酒馆主题带 alpha 也不会把弹窗变透明（透明酒馆主题下的兜底）。*/
     background-color: var(--sp-sheet-bg-legacy);
     background-image: linear-gradient(var(--sp-sheet-bg), var(--sp-sheet-bg));
-    border-radius : 20px;
+    border-radius : var(--sp-sheet-radius);
     box-shadow    : var(--sp-shadow);
     display       : grid;
     grid-template-columns: 44px 1fr;
@@ -682,7 +683,7 @@ q::after {
     flex-direction: column;
     overflow: hidden;
     box-sizing: border-box;
-    /* 所有视图（点/线/面/间/棱/坐标）共用底部留白，右下角隐形缩放区也落在这里。
+    /* 所有视图（点/线/面/间/棱/坐标）共用底部留白，右下角缩放把手也落在这里。
        必须使用 border-box，避免 padding 撑高盒子后被 sheet 的 overflow:hidden 裁掉。 */
     padding-bottom: 14px;
 }
@@ -2275,16 +2276,31 @@ select.sp-input { appearance: none; cursor: pointer; }
     height     : 26px;
     box-sizing : border-box;
     cursor     : se-resize;
-    /* 把手完全隐形：不画图标/背景，只把右下角这块三角当缩放命中区。clip-path 同时
-       裁掉视觉与命中区 → 只有角上斜线能拖，其它位置一律穿透、不触发缩放。配合
-       .sp-main 的 padding-bottom，命中区正好落在底部留白带内。可调：加大 width/height
-       更好抓、减小更隐蔽。 */
-    clip-path  : polygon(100% 0, 100% 100%, 0 100%);
-    font-size  : 0;            /* 收掉图标字形 */
-    color      : transparent;
+    font-size  : 0;
+    color      : var(--sp-subtle);
     /* z:25 让把手压在设置遮罩(z:20)之上，开着设置也能缩放；全文弹窗(z:30)仍会盖住，
        那是模态，先关它即可。 */
     z-index    : 25;
+}
+/* 沿用千千结的同心弧线；构画没有外框边线，圆心直接按主窗圆角定位。 */
+.sp-resize-handle::before,
+.sp-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: calc(26px - var(--sp-sheet-radius));
+    left: calc(26px - var(--sp-sheet-radius));
+    box-sizing: border-box;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    border-bottom-right-radius: 100%;
+}
+.sp-resize-handle::before {
+    width: calc(var(--sp-sheet-radius) - 4px);
+    height: calc(var(--sp-sheet-radius) - 4px);
+}
+.sp-resize-handle::after {
+    width: calc(var(--sp-sheet-radius) - 8px);
+    height: calc(var(--sp-sheet-radius) - 8px);
 }
 
 /* ─── Toast (top) ────────────────────────────────────────────────────────────── */
@@ -2462,6 +2478,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     .sp-backdrop { display: none; }
 
     .sp-sheet {
+        --sp-sheet-radius: 14px;
         position        : fixed;
         top             : calc(20px + env(safe-area-inset-top, 0px));
         left            : 50%;
@@ -2472,7 +2489,7 @@ select.sp-input { appearance: none; cursor: pointer; }
         max-width       : calc(100dvw - 20px);
         height          : calc(100dvh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
         max-height      : calc(100dvh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-        border-radius   : 14px;
+        border-radius   : var(--sp-sheet-radius);
         pointer-events  : all;
         animation-name  : sp-sheet-in-mobile;
     }

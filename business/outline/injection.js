@@ -31,7 +31,7 @@ export function formatOutlinePlanningProjection(projection, cleanText = value =>
     return lines.join('\n');
 }
 
-export function createOutlineInjection({ repository, context, settings, injectEnabled, cleanText, preferences } = {}) {
+export function createOutlineInjection({ repository, context, settings, injectEnabled, cleanText } = {}) {
     const clear = () => {
         const ctx = context?.();
         if (typeof ctx?.setExtensionPrompt === 'function') ctx.setExtensionPrompt(OUTLINE_INJECT_KEY, '');
@@ -64,7 +64,7 @@ export function createOutlineInjection({ repository, context, settings, injectEn
         const promptRole = ctx.constants?.promptRoles?.SYSTEM ?? 0;
         ctx.setExtensionPrompt(
             OUTLINE_INJECT_KEY,
-            buildOutlineInjectionText(projection.beats, projection.cursor, cleanText, preferences?.(ctx)),
+            buildOutlineInjectionText(projection.beats, projection.cursor, cleanText),
             promptType,
             OUTLINE_INJECT_DEPTH,
             false,

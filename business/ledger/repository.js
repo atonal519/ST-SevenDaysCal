@@ -1,11 +1,11 @@
-// 构画刻度的存储层。逻辑根 `sp-ledger` 可承载于普通聊天 metadata 或外置后端；本文件只负责
+// 构画刻度的存储层。逻辑根 `sp-ledger` 可承载于当前聊天 metadata；本文件只负责
 // schema、读写和事务，捕获、判定、选择、注入与渲染由同域模块处理。读路径不得创建空根；
-// 批量路径保留输入与同键编辑检查；普通 metadata 一次应用并触发宿主保存，外置路径保留 revision CAS。
+// 批量路径保留输入与同键编辑检查；普通 metadata 一次应用并触发宿主保存。
 
 const { getContext = () => null } = await import('../../../../../extensions.js').catch(() => ({}));
-import { getChatRoot, isExternalMode, persistExternalRoots, prepareNormalChatStoreForSave, registerExternalStorageContext } from '../../runtime/external-chat-storage.js';
+import { getChatRoot, prepareNormalChatStoreForSave, registerChatStorageContext } from '../../runtime/chat-storage.js';
 
-registerExternalStorageContext(getContext);
+registerChatStorageContext(getContext);
 
 const LEDGER_KEY     = 'sp-ledger';
 const SCHEMA_VERSION = 1;
@@ -24,7 +24,7 @@ const SCHEMA_VERSION = 1;
 const TYPES  = ['持续状态', '约定待办', '周期'];
 const STATES = ['活跃', '已了结'];
 const cloneState = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-import { reconcileStateAtomic as reconcileStateAtomicCore, handleUnknownPersistence } from './repository-transaction.js';
+import { reconcileStateAtomic as reconcileStateAtomicCore } from './repository-transaction.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  chat_metadata 存取（照 store.js store()/persist() 同款：读路径不实例化空壳）
@@ -65,8 +65,6 @@ function persist() {
     // 立即应用标准宿主保存；普通生成流程不等待宿主 Promise，也不把它当作远端确认。
     const ctx = getContext?.();
     if (!ctx) return;
-    const external = persistExternalRoots();
-    if (external !== null) return external;
     prepareNormalChatStoreForSave(ctx);
     try {
         const result = ctx.saveMetadata ? ctx.saveMetadata() : ctx.saveMetadataDebounced?.();
@@ -75,10 +73,8 @@ function persist() {
     } catch (error) { console.warn('[SP ledger] host save threw after local apply', error); }
 }
 
-// 批量路径共用一个保存入口；外置 record 有真实 revision CAS，普通 metadata 只报告 local-applied。
+// 批量路径共用普通 metadata 保存入口，报告 local-applied。
 function persistAwaitable(boundContext = null, options = {}) {
-    const external = persistExternalRoots({ confirmed: true, ownerGuard: options.ownerGuard });
-    if (external !== null) return external;
     const ctx = boundContext || getContext?.();
     if (!ctx) return Promise.resolve();
     prepareNormalChatStoreForSave(ctx);
@@ -141,12 +137,7 @@ function validLedgerIdentity(entries, seq) {
     const max = ids.reduce((n, id) => /^L\d+$/.test(id) ? Math.max(n, Number(id.slice(1))) : n, 0);
     return ids.every(id => /^L\d+$/.test(id)) && new Set(ids).size === ids.length && (seq === undefined || (Number.isInteger(seq) && seq >= max));
 }
-async function compensateOrFail(persist, ctx, target, before, restore, original) {
-    restore();
-    try { const rollback = await persist(ctx, { compensate: true, target }); if (rollback?.ok === false || rollback?.commitState === 'unknown') throw Object.assign(new Error('rollback-save-failed'), { phase: 'rollback-save-failed' }); }
-    catch (error) { error.phase = 'rollback-save-failed'; throw error; }
-    throw original;
-}
+function restoreAndFail(restore, error) { restore(); throw error; }
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  读 / 写 / 删（对外主 API）
@@ -200,18 +191,11 @@ export async function addEntriesAtomic(items) {
     try {
         const prepared = list.map(obj => normalizeEntry(obj, `L${++m.seq}`));
         m.entries.push(...prepared);
-        const saved = await persistAwaitable();
-        if (saved && (saved.ok !== true || !['confirmed', 'local-applied'].includes(saved.commitState))) {
-            throw Object.assign(new Error(saved.reason || (saved.commitState === 'unknown' ? '外置写入结果未确认，请刷新后核实' : 'ledger-save-unconfirmed')), {
-                phase: 'save', commitState: saved.commitState || 'not-dispatched', saveResult: saved,
-            });
-        }
+        await persistAwaitable();
         return prepared;
     } catch (error) {
-        if (error?.saveResult?.commitState !== 'unknown') {
-            m.entries.length = oldLen;
-            m.seq = oldSeq;
-        }
+        m.entries.length = oldLen;
+        m.seq = oldSeq;
         throw error;
     }
 }
@@ -220,8 +204,6 @@ export async function addEntriesAtomic(items) {
 export async function applyCapturePlanAtomic({ additions = [], patches = [], metaPatch = null } = {}, owner = null, runtime = null) {
     const m = runtime?.state || ledger(true); if (!m) return { added: [], patched: [] };
     const ctx = runtime?.context || getContext?.(); const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
-    const guard = () => !owner || !isExternalMode() || (owner.guard ? owner.guard() : true);
-    if (!guard()) throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' });
     const before = cloneState(m);
     let planned = null;
     const addedIds = new Set();
@@ -290,18 +272,10 @@ export async function applyCapturePlanAtomic({ additions = [], patches = [], met
         if (m.provenanceCheckpoint?.ledgerRevision === '@after') m.provenanceCheckpoint.ledgerRevision = ledgerRevision(m);
         planned = cloneState(m);
         if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length)) throw Object.assign(new Error('capture-plan-invalid'), { phase: 'capture-state-invalid' });
-        if (!guard()) throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' });
-        const saved = await persist(ctx, { ownerGuard: guard, target: owner?.target });
-        if (saved?.commitState === 'unknown') await handleUnknownPersistence(saved, restore, () => persist(ctx, { compensate: true, target: owner?.target }));
+        const saved = await persist(ctx);
         if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'capture-save-failed'), { phase: 'capture-save-failed', saveResult: saved });
-        if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length) || JSON.stringify(m) !== JSON.stringify(planned)) await compensateOrFail(persist, ctx, owner?.target, before, restore, Object.assign(new Error('capture-state-invalid'), { phase: 'capture-state-invalid' }));
-        if (!guard()) {
-            if (saved?.commitState === 'legacy-unconfirmed') {
-                restore();
-                throw Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat', saveResult: saved });
-            }
-            await compensateOrFail(persist, ctx, owner?.target, before, restore, Object.assign(new Error('capture-stale-chat'), { phase: 'capture-stale-chat' }));
-        }
+        if (!validLedgerIdentity(m.entries, m.seq) || (before.entries.length > 0 && m.entries.length < before.entries.length) || JSON.stringify(m) !== JSON.stringify(planned)) restoreAndFail(restore, Object.assign(new Error('capture-state-invalid'), { phase: 'capture-state-invalid' }));
+
         return { added, patched: applied.map(id => ({ id })), ledgerRevision: ledgerRevision(m), commitState: saved?.commitState };
     } catch (error) { restore(); throw error; }
 }
@@ -309,9 +283,7 @@ export async function applyCapturePlanAtomic({ additions = [], patches = [], met
 export async function reconcileEntriesAtomic(sources, chatLength, owner = null, runtime = null) {
     const m = runtime?.state || ledger(true); if (!m) return { changed: false, summary: { cleaned: 0, remapped: 0, lockedMissing: 0, pending: 0 } };
     const ctx = runtime?.context || getContext?.(); const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
-    const guard = () => !owner || !isExternalMode() || (owner.guard ? owner.guard() : true);
-    const save = async (check, options = {}) => { if (!options.compensate && !check?.()) throw Object.assign(new Error('source-stale-chat'), { phase: 'source-stale-chat' }); return persist(ctx, { ...options, ownerGuard: check, target: owner?.target }); };
-    const result = await reconcileStateAtomicCore(m, sources, chatLength, save, normalizeEntry, guard);
+    const result = await reconcileStateAtomicCore(m, sources, chatLength, () => persist(ctx), normalizeEntry);
     return result;
 }
 
@@ -324,8 +296,6 @@ export async function reconcileStateAtomic(state, sources, chatLength, save) {
 export async function applyJudgePatchesAtomic(patches = [], owner = null, runtime = null) {
     const m = runtime?.state || ledger(true); if (!m) return { ok: false, reason: 'no-ledger', applied: [] };
     const ctx = runtime?.context || getContext?.(); const persist = runtime?.save || ((bound, options) => persistAwaitable(bound, options));
-    const guard = () => !owner || !isExternalMode() || (owner.guard ? owner.guard() : true);
-    if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
     const before = cloneState(m.entries); const applied = [];
     try {
         if (!validLedgerIdentity(m.entries, m.seq)) throw Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' });
@@ -336,18 +306,10 @@ export async function applyJudgePatchesAtomic(patches = [], owner = null, runtim
             if (change.close) entry.状态 = '已了结';
             applied.push(entry.事由);
         }
-        if (!guard()) throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' });
-        const saved = await persist(ctx, { ownerGuard: guard, target: owner?.target });
-        if (saved?.commitState === 'unknown') await handleUnknownPersistence(saved, () => { m.entries = before; }, () => persist(ctx, { compensate: true, target: owner?.target }));
+        const saved = await persist(ctx);
         if (saved && saved.ok === false) throw Object.assign(new Error(saved.reason || 'judge-save-failed'), { phase: 'judge-save-failed', saveResult: saved });
-        if (!validLedgerIdentity(m.entries, m.seq)) await compensateOrFail(persist, ctx, owner?.target, { entries: before, seq: m.seq }, () => { m.entries = before; }, Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' }));
-        if (!guard()) {
-            if (saved?.commitState === 'legacy-unconfirmed') {
-                m.entries = before;
-                throw Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat', saveResult: saved });
-            }
-            await compensateOrFail(persist, ctx, owner?.target, { entries: before }, () => { m.entries = before; }, Object.assign(new Error('judge-stale-chat'), { phase: 'judge-stale-chat' }));
-        }
+        if (!validLedgerIdentity(m.entries, m.seq)) restoreAndFail(() => { m.entries = before; }, Object.assign(new Error('judge-state-invalid'), { phase: 'judge-state-invalid' }));
+
         return { ok: true, applied, commitState: saved?.commitState };
     } catch (error) { m.entries = before; error.phase ||= 'judge-save-failed'; throw error; }
 }

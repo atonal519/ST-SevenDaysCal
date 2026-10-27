@@ -1,7 +1,5 @@
 import { parseLines, TERMINAL_LINE_STAGES } from './schema.js';
-import { adultInjectionGuidance } from './adult.js';
-import { LINE_FACT_PROGRESS_GUIDE, LINE_RELATIONSHIP_AGENCY_GUIDE } from './prompt.js';
-import { narrativePreferenceContract } from '../narrative-preferences.js';
+import { prefixNext } from './inline.js';
 
 export const TERMINAL_STAGES = TERMINAL_LINE_STAGES;
 
@@ -39,22 +37,17 @@ export function activeLines(raw, { includeTerminal = false } = {}) {
     return lines.filter(line => line.name && (includeTerminal || !TERMINAL_STAGES.has(line.stage)));
 }
 
-export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】', adultMode = 'off', direction = 'natural', scale = 'auto' } = {}) {
+export function buildLinesInjection(lines, { prefix = '【潜伏的伏笔·仅供你把握暗线走向，切勿直接引用或点破】' } = {}) {
     const items = (Array.isArray(lines) ? lines : []).map(line => {
         const when = String(line.when || '').trim();
         const parts = [`- ${line.name}（${line.stage}${when ? `·${when}` : ''}${line.stall ? '·停滞' : ''}）`];
-        if (line.desc) parts.push(`  ${line.desc}`);
-        if (line.next) parts.push(`  ${line.next}`);
+        if (line.desc) parts.push(`  当前状态：${line.desc}`);
+        if (line.next) parts.push(`  ${prefixNext(line.next, line.stall)}`);
         return parts.join('\n');
     });
-    const adultGuidance = adultInjectionGuidance(adultMode);
     return [
         prefix,
-        '以下是当前跟踪的事件线，仅供把握后续方向；在故事有依据时自然、含蓄地呈现线索，不要生硬提及、让角色直接谈论或一次抖开。',
-        narrativePreferenceContract({ scale, direction }),
-        LINE_FACT_PROGRESS_GUIDE,
-        LINE_RELATIONSHIP_AGENCY_GUIDE,
-        adultGuidance,
+        '下一步或恢复条件是待发生方向，只供推演，不得当作既成事实或提前兑现；玩家尚未作出的关键选择保持开放。',
         ...items,
     ].filter(Boolean).join('\n');
 }

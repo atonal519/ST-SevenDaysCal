@@ -41,39 +41,6 @@ test('delayed chat UI callback runs against the live view without a boundary ref
     assert.equal(calls, 1);
 });
 
-test('exclusion restore stops if the live character is excluded', async () => {
-    const region = productionFunctions('async function restoreCurrentCharacterAfterExclusion() {', 'function getLegacyWiFilter() {');
-    const chain = { removeClass() { return this; }, addClass() { return this; }, show() { return this; }, hide() { return this; }, empty() { return this; }, text() { return this; } };
-    const makeHarness = () => {
-        const load = deferred();
-        const calls = { migration: [], bodies: [], load: 0 };
-        const context = { chatId: 'before-await', chatMetadata: {} };
-        let excluded = false;
-        const sandbox = {
-            getContext: () => context,
-            loadExternalChat: () => { calls.load++; return load.promise; },
-            currentCharacterExcluded: () => excluded,
-            store: { migrateChatFromLocalStorage: chatId => { calls.migration.push(chatId); return { status: 'none' }; } },
-            scheduleForChatBoundary() {}, pointState: {},
-            loadCachedForCurrentChat: () => `cache:${context.chatId}`,
-            pluginEnabled: () => true, applyPluginEnabled() {},
-            coordinateRuntime: { feature: { close() {} } },
-            $in: () => chain, $inAll: () => chain,
-            closeTaDrawer() {}, updateTaTriggerLabel() {}, setBody: body => calls.bodies.push(body),
-            renderMemorySection() {}, renderStorageUsage() {}, renderCurrentChatStorageMode() {},
-        };
-        return { calls, load, sandbox, setExcluded: value => { excluded = value; } };
-    };
-
-    const excluded = makeHarness();
-    const restoreExcluded = evaluateFunctionRegion(region, 'restoreCurrentCharacterAfterExclusion', excluded.sandbox);
-    const excludedRestore = restoreExcluded();
-    excluded.setExcluded(true);
-    excluded.load.resolve();
-    assert.equal(await excludedRestore, false);
-    assert.deepEqual(excluded.calls.migration, []);
-});
-
 test('chat creation events have no automatic backend migration listener; chat-change wiring remains', () => {
     const region = productionFunctions('if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);', '// 初始化时当前聊天可能已经 ready');
     const registrations = [];
@@ -83,15 +50,15 @@ test('chat creation events have no automatic backend migration listener; chat-ch
         removeListener: (type, handler) => removed.push([type, handler]),
     };
     const sandbox = {
-        _stListeners: { chat: null, diagnosticRetention: null, externalSnapshotPrune: null },
+        _stListeners: { chat: null, diagnosticRetention: null, legacyReturn: null },
         eventSource,
         event_types: { CHAT_CHANGED: 'chat-changed', CHAT_CREATED: 'chat-created', GROUP_CHAT_CREATED: 'group-chat-created', CHARACTER_MESSAGE_RENDERED: 'rendered', MESSAGE_DELETED: 'deleted' },
-        refreshNarrativePacePrompt() {}, currentCharacterExcluded: () => false,
-        refreshDiagnosticRetention() {}, getContext: () => ({ chat: [] }), isExternalMode: () => false,
-        pruneExternalSnapshots() {},
+        currentCharacterExcluded: () => false,
+        refreshDiagnosticRetention() {}, getContext: () => ({ chat: [] }), hasLegacyChatStorage: () => false,
+
     };
     evaluateFunctionRegion(region, 'undefined', sandbox);
-    assert.deepEqual(registrations.map(([type]) => type), ['chat-changed', 'rendered', 'deleted']);
+    assert.deepEqual(registrations.map(([type]) => type), ['chat-changed', 'rendered']);
     assert.ok(!registrations.some(([type]) => type === 'chat-created' || type === 'group-chat-created'));
     assert.equal(removed.length, 0);
     assert.equal(indexSource.includes('handleNewChatStorage'), false);

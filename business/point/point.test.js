@@ -19,15 +19,15 @@ test('daily menu prompt and parser support a compact optional intro and keep val
     assert.match(prompt, /Dish: 菜名 \| 类别 \| 1–2句说明/);
     assert.match(prompt, /语气轻松俏皮，菜单文字不用emoji/);
     assert.match(prompt, /旧菜、旧汤/);
-    assert.match(prompt, /Image用中文说明最终可见的菜品构成/);
-    assert.match(prompt, /区分成品外表与内部组织/);
-    assert.match(prompt, /被完整外皮、不透明容器、浓汁或其他食材遮住的结构，不写成表面清晰可见/);
+    assert.match(prompt, /以完整中文菜名开头，后接英文成菜描述/);
+    assert.match(prompt, /通常100–160英文词/);
+    assert.match(prompt, /完整外皮和封口保留自然遮挡/);
     assert.match(prompt, /不从库存、其他菜或常见摆盘另取配料/);
     assert.doesNotMatch(prompt, /简短英文|英文生图提示词/);
-    const customRules = 'Write the Image in English, showing only the finished dish.';
+    const customRules = ' \nWrite the Image in English, showing only the finished dish.\n ';
     const customized = buildDailyMenuPrompt({ imageRules: customRules });
     assert.ok(customized.includes(customRules));
-    assert.doesNotMatch(customized, /Image用中文|区分成品外表与内部组织|完整中文菜名/);
+    assert.doesNotMatch(customized, /以完整中文菜名开头|通常100–160英文词/);
     assert.match(customized, /凡会在Image中出现的配料、酱汁和点缀，都先在Dish交代/);
     assert.equal(buildDailyMenuPrompt({ imageRules: ' \n ' }), buildDailyMenuPrompt());
     assert.match(buildDailyMenuPrompt({ storyDate: '初春7日' }), /故事日期：初春7日。/);
@@ -147,10 +147,10 @@ test('daily menu controller only replaces the previous menu after a confirmed ap
     imageRules = '下一次使用的新配图规则';
     assert.equal((await controller.run()).status, 'updated');
     assert.match(promptSent, /下一次使用的新配图规则/);
-    assert.doesNotMatch(promptSent, /本次自定义配图规则|Image用中文/);
+    assert.doesNotMatch(promptSent, /本次自定义配图规则|以完整中文菜名开头/);
     imageRules = '';
     assert.equal((await controller.run()).status, 'updated');
-    assert.match(promptSent, /Image用中文说明最终可见的菜品构成/);
+    assert.match(promptSent, /以完整中文菜名开头，后接英文成菜描述/);
     assert.doesNotMatch(promptSent, /下一次使用的新配图规则|简短英文/);
 });
 

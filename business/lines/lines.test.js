@@ -14,7 +14,7 @@ import { createSwipeLinesStore } from './swipe-store.js';
 import { createLinesActions } from './actions.js';
 import { mergePinned, editLineDescription, editLineFields } from './mutations.js';
 import { activeLines, buildLinesInjection } from './strategy.js';
-import { adultInjectionGuidance, adultModeForCharacter, allocateAdultPools, adultPromptGuidance, drawAdultSelections } from './adult.js';
+import { adultModeForCharacter, allocateAdultPools, adultPromptGuidance, drawAdultSelections } from './adult.js';
 import { drawTickets } from './vectors/draw.js';
 import { serializeVectorCue } from './vectors/codec.js';
 import { commitLineWidget } from './widget.js';
@@ -435,7 +435,7 @@ test('adult provenance is local-only and survives storage round trip', () => {
 test('adult Next guidance enforces one adjacent step in every context', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', {}, 'dominant');
     for (const phrase of ['零接触', '互动中', '临近或结束后', '不得跨两个以上区间', '不必兑现整张票']) assert.match(prompt, new RegExp(phrase));
-    for (const guidance of [adultPromptGuidance('mixed'), adultPromptGuidance('dominant'), adultInjectionGuidance('mixed'), adultInjectionGuidance('dominant')]) {
+    for (const guidance of [adultPromptGuidance('mixed'), adultPromptGuidance('dominant')]) {
         assert.match(guidance, /参与者均非玩家时照写实际回应/);
         assert.match(guidance, /已明确自愿时可据此推进/);
         assert.match(guidance, /可写有据未来动作或待发生回应，不能冒充事实/);
@@ -545,7 +545,7 @@ test('release prompt caps only first generation while preserving global agency a
     assert.match(prompt, /本轮真实唯一 Ticket 与 6×3 Cue/);
     assert.match(prompt, /团队补齐资料后由实际签署方决定是否签字/);
 });
-test('relationship agency guidance is shared once across line generation intents and main-floor injection', () => {
+test('relationship agency guidance stays in line generation intents', () => {
     const expected = '不自动把日常安排、照顾、亲近或一次让步扩写为持续控制';
     for (const intent of ['initial', 'advance', 'reroll']) {
         for (const adultMode of ['off', 'mixed', 'dominant']) {
@@ -562,9 +562,8 @@ test('relationship agency guidance is shared once across line generation intents
         }
     }
     const injected = buildLinesInjection(activeLines(raw));
-    assert.match(injected, /【人物自主与相互回应】/);
-    assert.ok(injected.includes(expected));
-    assert.equal((injected.match(/【人物自主与相互回应】/g) || []).length, 1);
+    assert.doesNotMatch(injected, /【人物自主与相互回应】/);
+    assert.ok(!injected.includes(expected));
 });
 test('advance prompt leaves line count to the story and does not require every old line', () => {
     const baseline = serializeLines([
@@ -632,7 +631,7 @@ test('release prompt allows evidence-based offscreen progress across intents and
     assert.match(prompts[2], /上一版自动线主题·仅名称避重/);
 });
 
-test('shared fact and pending-progress guidance appears once across line generation intents and injection', () => {
+test('generation fact rules stay internal while injection explains pending data', () => {
     const old = serializeLines([{ name: '待签署', stage: '延展', when: '近日', agency: 'world', desc: '双方准备核对文本', next: '资料齐备后由签署方决定是否签署' }]);
     const prompts = [
         buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial' }),
@@ -646,8 +645,8 @@ test('shared fact and pending-progress guidance appears once across line generat
         assert.equal((prompt.match(/【线索事实与待展开进展】/g) || []).length, 1);
     }
     const injected = buildLinesInjection(activeLines(old));
-    assert.match(injected, /Next 是待发生方向/);
-    assert.equal((injected.match(/【线索事实与待展开进展】/g) || []).length, 1);
+    assert.match(injected, /待发生方向/);
+    assert.doesNotMatch(injected, /【线索事实与待展开进展】/);
     assert.match(injected, /资料齐备后由签署方决定是否签署/);
 });
 test('Ticket is transient and absent from serialized storage/model', () => {
@@ -676,7 +675,7 @@ test('adult line modes keep off unchanged and reserve explicit adult candidates'
     assert.equal(adultModeForCharacter({ adultMode: { c: 'invalid' } }, 'c'), 'off');
 });
 test('adult line guidance leaves unmade player responses open and keeps selection structure stable', () => {
-    for (const guidance of [adultPromptGuidance('mixed'), adultPromptGuidance('dominant'), adultInjectionGuidance('mixed'), adultInjectionGuidance('dominant')]) {
+    for (const guidance of [adultPromptGuidance('mixed'), adultPromptGuidance('dominant')]) {
         assert.match(guidance, /玩家尚未回应时.*不代写.*同意、拒绝或配合/);
     }
     const selected = drawAdultSelections('dominant', 3, { random: () => 0 });
@@ -1092,13 +1091,13 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     assert.match(buildLinesInjection(activeLines(raw)), /活线（起线·今天）/);
     assert.doesNotMatch(buildLinesInjection(activeLines(raw)), /推进·起线/);
     assert.doesNotMatch(buildLinesInjection(activeLines(raw)), /终线/);
+    assert.match(buildLinesInjection([{ name: '待恢复', stage: '延展', stall: true, next: '恢复条件：资料补齐' }]), /恢复条件：资料补齐/);
     const calls = [];
-    const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, adultMode: () => 'off', settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
+    const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
     controller.refresh();
     assert.match(calls.at(-1)[1], /活线/);
-    assert.match(calls.at(-1)[1], /Next 是待发生方向/);
-    assert.equal((calls.at(-1)[1].match(/【线索事实与待展开进展】/g) || []).length, 1);
-    assert.match(calls.at(-1)[1], /【人物自主与相互回应】/);
+    assert.match(calls.at(-1)[1], /下一步或恢复条件是待发生方向/);
+    assert.doesNotMatch(calls.at(-1)[1], /【线索事实与待展开进展】|【人物自主与相互回应】/);
     assert.doesNotMatch(calls.at(-1)[1], /终线/);
     controller.refresh();
     assert.doesNotMatch(calls.at(-1)[1], /成人模式/);
@@ -1326,24 +1325,13 @@ test('inline state separates active and settled lines while retaining settled ca
     assert.equal(state.activeCount, 7); assert.equal(state.settledCount, 3); assert.equal(state.count, 10);
     assert.equal(state.lines.length, 10); assert.match(state.injectText, /活0/); assert.doesNotMatch(state.injectText, /收0/);
 });
-test('adult injection guidance varies by mode without changing line storage', () => {
-    const lines = activeLines(raw);
-    assert.equal(adultInjectionGuidance('off'), '');
-    assert.match(adultInjectionGuidance('mixed'), /实际行为推进/);
-    assert.match(adultInjectionGuidance('dominant'), /主要叙事方向/);
-    assert.doesNotMatch(buildLinesInjection(lines), /成人模式/);
-    assert.match(buildLinesInjection(lines, { adultMode: 'dominant' }), /成人主导模式/);
-    assert.match(buildLinesInjection(lines, { adultMode: 'dominant' }), /不要生硬提及、不要让角色直接谈论、更不要一次抖开/);
-    assert.match(buildLinesInjection(lines, { adultMode: 'dominant' }), /相邻动作\/节奏变化/);
-});
-
-test('injection controller refreshes adult guidance immediately after mode changes', () => {
-    const calls = []; let mode = 'off';
-    const controller = createLinesInjectionController({ context: { setExtensionPrompt: (...args) => calls.push(args) }, enabled: () => true, adultMode: () => mode, settings: () => ({ linesEnabled: true, linesInject: true }), readRaw: () => raw });
-    controller.refresh();
-    assert.doesNotMatch(calls.at(-1)[1], /成人模式/);
-    mode = 'dominant'; controller.refresh();
-    assert.match(calls.at(-1)[1], /成人主导模式/);
+test('adult generation guidance remains internal and line host injection carries only materials', () => {
+    assert.equal(adultPromptGuidance('off'), '');
+    assert.match(adultPromptGuidance('mixed'), /成人追加合同/);
+    assert.match(adultPromptGuidance('dominant'), /成人追加合同/);
+    const injected = buildLinesInjection(activeLines(raw));
+    assert.doesNotMatch(injected, /成人模式|成人主导模式|每条 Next|整张票|叙事尺度|剧情倾向/);
+    assert.match(injected, /既成事实|待发生方向/);
 });
 
 test('concurrent generation entry is owned once and stale owner cannot commit', async () => {

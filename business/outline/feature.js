@@ -70,7 +70,6 @@ export function createOutlineFeature(env = {}) {
         settings: env.settings,
         injectEnabled: env.injectEnabled,
         cleanText: env.cleanText,
-        preferences: env.preferences,
     });
     const refreshPanel = (target = repository.capture()) => {
         if (!repository.isCurrent(target)) return;

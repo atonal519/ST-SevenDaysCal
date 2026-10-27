@@ -1,8 +1,7 @@
 // Shared, deliberately lossy diagnostics for AI generation paths.
 // Never copy upstream response bodies, URLs, prompts, keys, or model output here.
 import { isDiagnosticRequestId, safeSaveDiagnosticFields, traceDiagnosticEvent } from '../runtime/diagnostic-trace.js';
-import { recordDiagnosticResult } from '../runtime/external-chat-storage.js';
-import { captureLocalGenerationDiagnostic } from '../runtime/local-diagnostics.js';
+import { recordDiagnosticResult } from '../runtime/chat-storage.js';
 
 const CODES = new Set([
     'config-missing', 'http-400', 'auth', 'not-found', 'rate-limit', 'server',
@@ -52,7 +51,7 @@ const MESSAGES = Object.freeze({
     parse: 'AI 已回复，但内容格式无法识别；原有内容未改变，请重试。',
     'invalid-structure': 'AI 已回复，但内容结构不完整；原有内容未改变，请重试。',
     'invalid-fields': 'AI 已回复，但有必需字段不符合要求；原有内容未改变，请重试。',
-    save: '内容已生成，但未确认保存完成；请检查当前内容后重试。',
+    save: '内容已生成，但未能保存；请检查当前内容后重试。',
     'recoverable-fallback': '美化失败，已保留原稿。',
     'memory-stale': '本次记忆预检已失效，请重新生成。',
     'memory-read': '所选记忆源读取失败，请检查读取接口和当前聊天绑定后重试。',
@@ -61,16 +60,6 @@ const MESSAGES = Object.freeze({
 
 export function diagnosticMessage(error, options = {}) {
     const code = classifyGenerationError(error, options);
-    const save = error?.saveResult;
-    if (code === 'save' && save?.reason === 'unsupported-core-contract' && save?.commitState === 'not-dispatched') {
-        return '未发出保存：当前宿主缺少可用的安全保存接口，原有线没有被本次候选覆盖。请确认宿主兼容后再试。';
-    }
-    if (code === 'save' && save?.commitState === 'unknown') {
-        return '保存请求已开始，但宿主尚未返回确认。请刷新当前聊天核实保存结果，确认前不要重复生成。';
-    }
-    if (code === 'save' && save?.commitState === 'conflict') {
-        return '当前聊天保存版本已变化，本次未覆盖；请刷新核实后再继续。';
-    }
     let message = MESSAGES[code] || MESSAGES.unknown;
     if (code === 'server') {
         const status = Number(error?.status ?? options.status);
@@ -131,12 +120,10 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
     const startedAt = Date.now();
     const runId = `run-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     let metadata = Object.freeze({ module: safeModule, requestId: '', runId, startedAt });
-    captureLocalGenerationDiagnostic({ runId, module: safeModule, startedAt, result: { processing: 'preparing', commit: 'not-requested', ui: 'not-requested', events: [] } });
     const sink = value => {
         const requestId = typeof value?.requestId === 'string' && isDiagnosticRequestId(value.requestId) ? value.requestId : '';
         if (requestId) {
             metadata = Object.freeze({ module: safeModule, requestId, runId, startedAt, apiStartedAt: Number(value?.startedAt) || Date.now() });
-            captureLocalGenerationDiagnostic({ requestId, runId, module: safeModule, startedAt: metadata.apiStartedAt, runStartedAt: startedAt });
         }
     };
     const annotate = error => attachDiagnosticRequest(error, metadata);
@@ -170,12 +157,6 @@ export function createGenerationDiagnosticScope(module, defaults = {}) {
             privateDetails: uiError,
             ...saveDetails,
         });
-        else captureLocalGenerationDiagnostic({ runId, module: safeModule, startedAt, event: {
-            event, status: options.status || event, phase: options.phase, reasonCode: options.reasonCode,
-            errorClass: error ? classifyGenerationError(error, { phase: options.phase }) : undefined,
-            ...uiError,
-            ...saveDetails,
-        } });
         return traced;
     };
     return Object.freeze({

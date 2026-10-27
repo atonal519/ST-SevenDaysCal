@@ -73,13 +73,6 @@ export function adultPromptGuidance(mode) {
     return `${base}\n${adultNextStepGuidance()}`;
 }
 
-export function adultInjectionGuidance(mode) {
-    const normalized = normalizeAdultMode(mode);
-    if (normalized === 'off') return '';
-    if (normalized === 'mixed') return `成人模式已开启：若当前线涉及明确成年且自愿的亲密发展，可把欲望与实际行为推进落实到有据行为中；非玩家人物仍可主动。${adultNextStepGuidance()}即时后果只写当下行为有据影响，旧 Next 若含多个动作只取第一个有效节点。温和收尾不能单独交差。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。`;
-    return `成人主导模式已开启：把明确成年且自愿的成人行为作为主要叙事方向，落实有据行为与人物主动选择；只推进成人线，普通/SFW 线不得强行成人化。${adultNextStepGuidance()}即时后果只写当下行为有据影响，旧 Next 若含多个动作只取第一个有效节点。不得用含糊暧昧或淡出回避已建立的成人线。仍请把伏笔当作暗流，不要生硬提及、不要让角色直接谈论、更不要一次抖开。`;
-}
-
 export function adultModeForCharacter(settings = {}, key = '') {
     const map = settings.adultMode;
     const configured = map && typeof map === 'object' ? map[key] : undefined;

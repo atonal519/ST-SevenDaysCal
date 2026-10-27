@@ -20,7 +20,7 @@ function parseStoryDate(text, calendarOverride = null) {
         const explicit = s.match(/(?:^|[\s|｜,，=＝])(\d{1,})\s*年/);
         if (explicit && (+explicit[1] < 1 || +explicit[1] > 9999)) return null;
     }
-    const cn = '[零〇一二两兩三四五六七八九十廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟]+';
+    const cn = '[零〇一二两兩三四五六七八九十百千廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟]+';
     const toNumber = value => { const primary = deps.cnToNumber ? deps.cnToNumber(value) : null; return primary == null || Number.isNaN(Number(primary)) ? _cnToNumber(value) : primary; };
     const cnYear = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])(${cn})\\s*年`));
     if (cnYear && (!Number.isInteger(toNumber(cnYear[1])) || toNumber(cnYear[1]) < 1 || toNumber(cnYear[1]) > 9999)) return null;
