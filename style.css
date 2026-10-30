@@ -2632,8 +2632,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     touch-action  : none;
 }
 .sp-fab-btn {
-    width         : var(--sp-size-36);
-    height        : var(--sp-size-36);
+    /* 悬浮入口沿用固定尺寸，界面字号缩放不改变球的直径。 */
+    width         : 36px;
+    height        : 36px;
     border-radius: 50%;
     border         : none;
     cursor       : pointer;
