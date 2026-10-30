@@ -1,3 +1,4 @@
+import { primaryTextColor, syncUiTheme } from './utils/ui-theme.js';
 import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
@@ -18,9 +19,12 @@ import * as ledger from './business/ledger/repository.js';
 import { normalizeLedgerInterval } from './business/ledger/settings.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
+import { createUserNameMask } from './ui/user-name-mask.js';
 import { selectVisibleChatHistory } from './business/lines/history.js';
 import * as snapshot from './snapshot.js';
 import { createDialogManager } from './modal.js';
+import { createApiEditorActions } from './runtime/api-editor.js';
+import { openApiPresetEditor } from './business/ui/api-preset-editor.js';
 import { createPluginUpdates } from './runtime/plugin-updates.js';
 import { createPluginUpdatesView } from './business/ui/plugin-updates-view.js';
 import { showdown, DOMPurify } from '/lib.js';
@@ -42,8 +46,9 @@ import {
 import { escapeHtml, escapeAttr, autoGrowTextarea, cleanText } from './utils/dom.js';
 import { _cnToNumber, _CN_MONTH_ALIAS, extractDayFromTime } from './utils/cn-date.js';
 import { weatherGlyph, maskKey } from './utils/format.js';
-import { getSettings, getWrapperSettings, updateWrapperSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, saveCfg, loadApiPresets, upsertApiPreset, deleteApiPreset, renameApiPreset, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
+import { getSettings, getWrapperSettings, updateWrapperSettings, parseExcludeParams, parseAdditionalParams, loadCfg, loadUtilityCfg, loadApiPresets, fabEnabled, getLinesInterval, saveLinesInterval, getLinesMode, saveLinesMode } from './runtime/settings.js';
 import { setProcessingPrompt } from './runtime/settings.js';
+const apiEditorActions = createApiEditorActions({ getSettings, saveSettings: saveSettingsDebounced, validateAdditional: parseAdditionalParams });
 import { BASE_PROCESSING_PROMPT } from './utils/shared-processing-prompt.js';
 import { QUICK_REPLY_SHORTCUTS, createQuickReplyShortcutSync, registerQuickReplyShortcutCommand } from './runtime/quick-reply-shortcuts.js';
 import { characterCardMatches, effectivePluginEnabled, excludedCharacterSet, isCharacterExcluded, renderCharacterExclusionRows, setCharacterExcluded as updateCharacterExcluded } from './runtime/character-exclusion.js';
@@ -154,6 +159,11 @@ import { createDateDetectionController } from './business/axis/date-detection.js
 
 // Source and bundled entries both live at the plugin root.
 const EXT_BASE = new URL('.', import.meta.url).href;
+// Both Shadow roots must load the stylesheet paired with this build, even when
+// the browser still has an older unversioned style.css cached.
+const STYLESHEET_URL = typeof __GOUHUA_STYLESHEET_REVISION__ === 'string'
+    ? `${EXT_BASE}style.css?v=${__GOUHUA_STYLESHEET_REVISION__}`
+    : `${EXT_BASE}style.css`;
 registerChatStorageContext(getContext);
 
 // Must be initialized before the top-level bindAxisAnchor() wiring below.
@@ -209,6 +219,7 @@ import { syncVectorGlyphTheme } from './business/lines/vectors/glyph.js';
 import { createOutlineFeature } from './business/outline/feature.js';
 import { normalizeSpaceHistory } from './business/space/schema.js';
 import { createSpaceFeature } from './business/space/feature.js';
+import { selectCoordinateReference, selectTheaterReference } from './business/space/material-references.js';
 import { getSpaceChatPlaceholder } from './business/space/prompts.js';
 import { pointRawToken } from './business/space/schema.js';
 import { createChatAnchorRepository } from './runtime/chat-date-anchor.js';
@@ -250,6 +261,9 @@ import { formatLedgerList } from './business/ledger/inline.js';
 import { createDailyMenuController, DEFAULT_DAILY_MENU_IMAGE_RULES, parseDailyMenu } from './business/point/daily-menu.js';
 import { createDailyMenuImageController, dailyMenuContentKey } from './business/point/daily-menu-images.js';
 import { disposeDailyMenuImages, refreshDailyMenuImageDrawer, renderDailyMenuView, setDailyMenuImageExpanded, showDailyMenuImageError } from './ui/point/daily-menu-images.js';
+import { createWardrobeController, formatWardrobeText } from './business/point/wardrobe.js';
+import { createWardrobeImageController, wardrobeContentKey } from './business/point/wardrobe-images.js';
+import { disposeWardrobeImages, refreshWardrobeImageDrawer, renderWardrobeView, setWardrobeImageExpanded, showWardrobeImageError } from './ui/point/wardrobe-images.js';
 
 const syncQuickReplyShortcuts = createQuickReplyShortcutSync({
     getApi: () => globalThis.quickReplyApi,
@@ -280,6 +294,7 @@ const getLedgerTarget = () => {
 };
 const pointTaskOwners = createTaskOwnerManager();
 let dailyMenuController = null;
+let wardrobeController = null;
 let chatBoundaryEpoch = 0;
 let pendingDateBootstrap = null;
 let activeChatBoundaryIdentity = null;
@@ -340,7 +355,7 @@ function createTheaterHostFeature() {
         settings: () => { const s = getSettings(); return { theaterStylePrompt: typeof s.theaterStylePrompt === 'string' ? s.theaterStylePrompt : '', theaterBeautifyPrompt: typeof s.theaterBeautifyPrompt === 'string' ? s.theaterBeautifyPrompt : '' }; },
         onDiagnostic: diagnostic => { console.warn('[SP theater]', diagnostic); if (getSettings().notifyMode === 'full') showToast('小剧场美化失败，已保留原稿', null, true); },
         stage: text => { if (theaterMode) setTheaterBody(loadingHtml(`正在${text}`, 'sp-abort-theater')); },
-        ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), setFailureHtml: html => $in('#sp-theater-failure-slot').html(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore }),
+        ports: createTheaterHostPorts({ $, $in, inEl, documentRef: globalThis.document, getContext, captureTarget: chatId => runtime?.captureTarget?.(chatId), theaterMode: () => theaterMode, modalId: () => MODAL_ID, setBody: html => setTheaterBody(html), setFailureHtml: html => $in('#sp-theater-failure-slot').html(html), loading: loadingHtml, escapeHtml, escapeAttr, settings: getSettings, saveSettingsDebounced, showToast, showPanel, spConfirm, scriptCore, refreshNameMask: refreshUserNameMask }),
     });
     theaterRuntime = runtime;
     return runtime.feature;
@@ -350,6 +365,47 @@ function createTheaterHostFeature() {
 // Declare them before any bind/create call can evaluate the dependency.
 let _spShadow = null;
 let _spDialogShadow = null;
+let userNameMask = null;
+let userNameMaskDiscovery = [];
+const userNameSurfaceSelector = '.sp-inline-box, .sp-progress-card, #sp-toast-wrap, [data-sp-user-name-surface]';
+function refreshUserNameMask(scope) { userNameMask?.refresh(scope); }
+function syncUserNameMask() {
+    const enabled = getSettings().userNameBlurEnabled === true;
+    for (const observer of userNameMaskDiscovery) observer.disconnect();
+    userNameMaskDiscovery = [];
+    userNameMask ??= createUserNameMask({
+        documentRef: document,
+        getRoots: () => [_spShadow, _spDialogShadow, ...document.querySelectorAll(userNameSurfaceSelector)].filter(Boolean),
+        getNames: () => {
+            const ctx = getContext();
+            const macro = substituteParams('{{user}}');
+            return [ctx?.name1, macro !== '{{user}}' ? macro : '', readStore(getCacheKey('user', ''))?.userName,
+                ...(ctx?.chat || []).filter(message => message?.is_user).map(message => message.name)].filter(name => typeof name === 'string' && name.trim());
+        },
+    });
+    userNameMask.sync(enabled);
+    if (!enabled) return;
+    // 只发现构画新挂载的根；主聊天正文不交给打码器。
+    const observed = new Set();
+    const ownsSurface = node => node.nodeType === 1 && (node.matches(userNameSurfaceSelector) || node.querySelector(userNameSurfaceSelector));
+    const observe = (root, subtree) => {
+        if (!root || observed.has(root)) return;
+        observed.add(root);
+        const observer = new MutationObserver(records => {
+            let changed = false;
+            for (const record of records) for (const node of [...record.addedNodes, ...record.removedNodes]) {
+                if (ownsSurface(node)) changed = true;
+                if (node.nodeType === 1 && (node.id === 'chat' || node.querySelector('#chat'))) observe(document.querySelector('#chat'), true);
+            }
+            if (changed) refreshUserNameMask();
+        });
+        observer.observe(root, { childList: true, subtree });
+        userNameMaskDiscovery.push(observer);
+    };
+    observe(document.documentElement, false);
+    observe(document.body, false);
+    observe(document.querySelector('#chat'), true);
+}
 let _activeSpConfirmCancel = null;
 let _activeStoreConflictFinish = null;
 const $in  = (sel) => { const el = _spShadow?.querySelector(sel); return el ? $(el) : $(); };
@@ -361,7 +417,8 @@ const $dialog = (sel) => {
 };
 const removeDialogOverlays = () => {
     disposeDailyMenuImages(_spDialogShadow?.querySelector('#sp-daily-menu-dialog'));
-    $dialog('#sp-confirm, #sp-store-conflict, #sp-addon-dialog, #sp-daily-menu-dialog').remove();
+    disposeWardrobeImages(_spDialogShadow?.querySelector('#sp-wardrobe-dialog'));
+    $dialog('#sp-confirm, #sp-store-conflict, #sp-addon-dialog, #sp-daily-menu-dialog, #sp-wardrobe-dialog').remove();
 };
 
 // store 视图态回退桥：keyDesc 缺省 view/charName 时回退到当前视图/角色（闭包捕获实时值）。
@@ -495,7 +552,7 @@ const pointController = createPointController({
     showPanel,
     setBody,
     loading: loadingHtml,
-    showPrecheckError: message => setBody(`<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>`),
+    showPrecheckError: message => setBody(`<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button></div></div>`),
     recordFailure: (owner, operation, error) => {
         const target = pointPanelTarget(owner?.view, owner?.charName, owner?.chatId, owner?.chatRevision);
         const message = typeof error === 'string' ? error : diagnosticMessage(error);
@@ -590,6 +647,47 @@ const dailyMenuImageController = createDailyMenuImageController({
         const current = readStore(keyDesc('daily-menu', 'user', ''));
         const visible = current && dailyMenuContentKey(current) === menuKey ? current : menu;
         refreshDailyMenuImageDrawer(host.querySelector(`.sp-daily-menu-image[data-menu-image-index="${index}"]`), visible, dailyMenuImageController, escapeHtml);
+    },
+    toast: showToast,
+});
+wardrobeController = createWardrobeController({
+    owners: pointTaskOwners,
+    chatId: () => getContext()?.chatId,
+    read: () => readStore(keyDesc('wardrobe', 'user', '')),
+    storyDate: () => {
+        const date = almTodayAnchorEvidence();
+        if (!date) return null;
+        const year = date.year != null && Number.isInteger(Number(date.year)) ? `${Number(date.year)}年` : '';
+        return `${year}${calMonthName(loadCalDesc(), date.month)}${date.day}日`;
+    },
+    generate: (prompt, signal, diagnosticSink) => {
+        const cfg = loadCfg();
+        if (!cfg.url || !cfg.key) {
+            if (!settingsOpen) toggleSettings();
+            throw makeDiagnosticError('config-missing');
+        }
+        const ctx = getContext();
+        return callCustomApi(ctx, prompt, cfg, ctx.name1 || '用户', ctx.name2 || '角色', signal, 3, { diagnosticModule: 'wardrobe', diagnosticSink, includeMemory: false, includeCurrentStoryTime: true });
+    },
+    write: (value, options) => writeStoreConfirmed(keyDesc('wardrobe', 'user', ''), value, options),
+    render: ({ busy } = {}) => renderWardrobeCard({ busy }),
+    toast: showToast,
+});
+const wardrobeImageController = createWardrobeImageController({
+    owners: pointTaskOwners,
+    api: () => globalThis.STBaiBaiImage,
+    capture: () => {
+        const ctx = getContext();
+        const characterName = String(ctx?.name2 || '').trim() || '未命名角色';
+        const key = keyDesc('wardrobe', 'user', '');
+        return { characterName, read: () => readStore(key), write: (value, options) => writeStoreConfirmed(key, value, options) };
+    },
+    render: ({ index, wardrobeKey, wardrobe }) => {
+        const host = _spDialogShadow?.querySelector('#sp-wardrobe-content');
+        if (host?.wardrobeContentKey !== wardrobeKey) return;
+        const current = readStore(keyDesc('wardrobe', 'user', ''));
+        const visible = current && wardrobeContentKey(current) === wardrobeKey ? current : wardrobe;
+        refreshWardrobeImageDrawer(host.querySelector(`.sp-wardrobe-image[data-wardrobe-image-index="${index}"]`), visible, wardrobeImageController, escapeHtml);
     },
     toast: showToast,
 });
@@ -1062,11 +1160,16 @@ globalThis.STSevenDaysCal = createPhoneCalendarApi({
     read: createPhoneCalendarSource({
         enabled: pluginEnabled, context: getContext, calendar: loadCalDesc,
         items: () => readStore(getAlmanacKey())?.items,
+        entries: () => getChatRoot('sp-ledger', { create: false })?.entries,
+        floorContext: ledgerFloorDateContext,
         anchor: () => getDateAnchor(charStableKey(getContext())),
         calibration: () => getStoryCalibration(charStableKey(getContext())),
         parseClock: parseStoryClockPure,
     }),
     formatDate: (date, calendar, part) => formatCalendarDate(date, calendar, calMonthName, part),
+    selectSchedules: (entries, query, cutoff) => selectLedgerForInject(entries, query, cutoff.date, undefined, cutoff.floor),
+    dueInfo: (entry, cutoff) => ledgerDueInfo(entry, cutoff.date, cutoff.floor),
+    daysSince: (entry, cutoff) => ledgerDaysSince(entry, cutoff.date, cutoff.floor),
 });
 const dateDetectionController = createDateDetectionController({
     context: () => captureGenerationContext(),
@@ -1462,6 +1565,9 @@ function appendTravelPromptContext(prompt, travelContext = null) {
 // 品牌保留原有 Solar pen-new-round-outline（MIT）圆环笔；功能图标使用 Tabler Outline。
 const PEN_ICON_SVG = '<svg class="sp-pen-icon" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M1.25 12C1.25 6.063 6.063 1.25 12 1.25a.75.75 0 0 1 0 1.5A9.25 9.25 0 1 0 21.25 12a.75.75 0 0 1 1.5 0c0 5.937-4.813 10.75-10.75 10.75S1.25 17.937 1.25 12m15.52-9.724a3.503 3.503 0 0 1 4.954 4.953l-6.648 6.649c-.371.37-.604.604-.863.806a5.3 5.3 0 0 1-.987.61c-.297.141-.61.245-1.107.411l-2.905.968a1.492 1.492 0 0 1-1.887-1.887l.968-2.905c.166-.498.27-.81.411-1.107q.252-.526.61-.987c.202-.26.435-.492.806-.863zm3.893 1.06a2.003 2.003 0 0 0-2.832 0l-.376.377q.032.145.098.338c.143.413.415.957.927 1.469a3.9 3.9 0 0 0 1.807 1.025l.376-.376a2.003 2.003 0 0 0 0-2.832m-1.558 4.391a5.4 5.4 0 0 1-1.686-1.146a5.4 5.4 0 0 1-1.146-1.686L11.218 9.95c-.417.417-.58.582-.72.76a4 4 0 0 0-.437.71c-.098.203-.172.423-.359.982l-.431 1.295l1.032 1.033l1.295-.432c.56-.187.779-.261.983-.358q.378-.18.71-.439c.177-.139.342-.302.759-.718z" clip-rule="evenodd"/></svg>';
 
+// 菜单沿原圆环笔的轮廓中心线，使用宿主入口的统一视觉线宽。
+const PEN_MENU_ICON_SVG = '<svg class="sp-menu-pen-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.333333" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M17.3 2.8a2.75 2.75 0 0 1 3.9 3.9l-6.65 6.65c-.75.75-1.08.99-2.05 1.31l-3.52 1.18a.74.74 0 0 1-.94-.94l1.18-3.52c.32-.97.56-1.3 1.31-2.05Z"/><path d="M16.6 3.5c.3 1.79 1.61 3.1 3.4 3.4M8.9 12.6l2.5 2.5"/></svg>';
+
 // 模块介绍：内容标题旁「?」点开的小气泡文案。键对应侧栏 data-view，面向使用者讲清用途与真实操作。
 // 想改文字直接改这里即可（纯展示，不入库、不注入 AI）。
 // 介绍由用途段、普通说明段、短分节标题和图标操作行组成。内容全为作者手写，无用户输入。
@@ -1474,105 +1580,63 @@ const _coordinateIntroSvg = icon('map-pin');
 
 const MODULE_INTROS = {
     schedule:
-        _iLede('「点」从故事里的“今天”开始，为我／TA 安排接下来 3 天的事项，并把更远的事另列在“未来”；它不是人物此刻状态卡。') +
-        _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示，不会自行生成；缺失或不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。模型给出的日期和时间仍可能与剧情不符。') +
-        _iSub('更新方式') +
-        _iText('默认不会随日期变化自动重排，也不会潜伏注入主楼 AI。需要更新时可手动刷新；若要“今天”变化后后台重排，可在设置 → 推进设置 → 日期与点开启“点：后台自动跟随「今天」”，这会额外调用 API。') +
-        _iKey('refresh', '生成／刷新', '按最新剧情重做未锁事项；新结果会覆盖旧的未锁数据') +
-        _iKey('pin',    '固定 TA',    '只把当前 TA 留在 TA▾ 抽屉，方便下次查看；不是锁定事项') +
-        _iKey('dots-vertical', '⋮ 菜单', '每条点的操作都收在这里') +
-        _iKey('pencil',          '编辑',       '手动修改这条事项') +
-        _iKey('lock',         '锁定',       '刷新时保住同名事项不被删除；时间、说明等仍可能随新剧情推进') +
-        _iKey('login-2', '注入', '把这条点写进输入框，供你确认或修改后发送；不是后台注入') +
-        _iKey('trash',        '删除',       '移除这条事项') +
-        _iSub('去间讨论') +
-        _iText('想先讨论再新增或修改点，可去「间」说清人物与目标，例如“把下周的约定整理成可应用到点的方案”。有效回复出现按钮后，点击才写入；新增时还要选择人物。'),
+        _iLede('「点」从故事里的今天起，为我／TA 规划未来三天及更远事项；两个视角分别保存。') +
+        _iText('日期与轴共用。默认手动刷新；设置 → 推进设置 → 日期与点可开启后台跟随今天，会额外调用 API。') +
+        _iKey('refresh', '刷新', '按剧情重排并替换未锁事项；锁定项保留，说明和时间仍可推进') +
+        _iKey('pin', '固定 TA', '留在 TA▾ 抽屉，方便查看') +
+        _iKey('dots-vertical', '事项菜单', '编辑、锁定、注入或删除单条点') +
+        _iText('“注入”会填入输入框，确认后再发送。想先讨论新增或修改，可去「间」生成方案，再点击应用。') +
+        _iSub('菜单与衣橱') +
+        _iKey('tools-kitchen-2', '菜单', '按当前情景拟菜单，可逐道手动生图') +
+        _iKey('hanger', '衣橱', '为在场人物搭配衣服，可逐人手动生成单人全身图') +
+        _iText('两者都无需先生成点，也可用 QR“吃啥／穿啥”打开。生图需配置柏宝绘；衣橱推荐不改变剧情穿着。'),
     almanac:
-        _iLede('「轴」有“即将到来”“日历”“刻度”三页：前两页管理节日、生日、纪念日与故事历法；刻度页跟踪伤情、约定、周期等会随时间变化的账。') +
-        _iText('时间戳是全局时间锚点，也负责星期判定，由主楼 AI 随回复输出。构画只读取、解析和展示；主楼未输出或格式不完整时无法补出可靠时间，可能影响时间判断。没有可靠记录时不会猜现实星期。') +
-        _iSub('节日 · 历法') +
-        _iKey('plus',          '添加',       '手动录入节日／生日／纪念日；手动项生成时会保留') +
-        _iKey('wand', '生成节日', '按世界观重做一整年：保留手动项和锁定项，替换未锁的旧 AI 日期') +
-        _iKey('heart-plus', '补录纪念日', '只追加剧情中新出现的重大里程碑，可能没有结果；新增项自动锁定') +
-        _iKey('calendar-week', '历法管理',   '查看、编辑月份／天数／纪年和历法模板；换历法遇到无效日期时会先让你选择取消、删除或自动修正') +
-        _iKey('lock',          '锁定',       '以后生成节日时保留这条') +
-        _iKey('pencil',           '编辑',       '修改名称、日期、说明等') +
-        _iKey('trash',         '删除',       '移除这条日期') +
-        _iSub('刻度 · 时间账') +
-        _iText('刻度分持续状态、约定待办和周期三类。自动标注默认关闭；在设置 → 推进设置 → 刻度中，标注或更新间隔设为 0 可分别关闭对应任务，两个都设为 0 时完全手动，仍可手动标注和更新。') +
-        _iText('在刻度页或楼内“标注池”点［标注］捞取新条，点［更新］按时间刷新现状。依据前一条 AI 正文标注和更新；最新回复会在下一条 AI 出现后纳入。') +
-        _iText('潜伏注入默认关闭；必须同时开启“允许潜伏注入主楼 AI（线 / 面 / 刻度）”总开关和刻度自己的“潜伏注入主楼 AI”才生效。') +
-        _iKey('pencil',         '编辑',     '手动改字段；保存后自动成为用户锁') +
-        _iKey('lock',        '锁定',     'AI 更新不再改这条；与是否注入主楼是两回事') +
-        _iKey('bell',        '暂停埋入', '暂不注入主楼，但仍留在活跃账上继续跟进；再点恢复') +
-        _iKey('check',       '了结',     '从活跃区移到归档，之后仍可捞回') +
-        _iKey('rotate-2', '捞回',     '归档区：让已了结条目回到活跃区') +
-        _iKey('trash',       '彻底删除', '归档区：不可恢复地删除') +
-        _iSub('去间讨论') +
-        _iText('想先讨论日期或整套历法，可去「间」请 AI 整理成可应用的轴日期或历法方案，例如“把这天定为可应用到轴的纪念日”；有可用方案时点回复下方的应用按钮。刻度账在刻度页或楼内标注池操作，不使用间的应用卡片。'),
+        _iLede('「轴」分即将到来、日历、刻度三页：管理节日、生日、纪念日与历法，跟踪状态、约定和周期。') +
+        _iText('故事时间优先读主楼时间戳，也可手动校准今天；缺戳时按推进设置决定是否调用 API 判定日期。星期沿用可靠记录。') +
+        _iKey('plus', '添加', '手动录入日期事项') +
+        _iKey('wand', '生成节日', '重做全年 AI 日期，保留手动项和锁定项') +
+        _iKey('heart-plus', '补录', '追加剧情纪念日，新条目自动锁定') +
+        _iKey('calendar-week', '历法管理', '编辑月份、天数、纪年和模板；无效日期先确认处理') +
+        _iText('日期事项可编辑、锁定或删除。楼内只显示最近五条，点击事项展开说明；完整列表在轴页查看。') +
+        _iSub('刻度') +
+        _iText('“标注”从正文提取时间账，“更新”刷新现状；依据前一条 AI 正文，最新回复在下一条出现后纳入。') +
+        _iText('编辑保存后自动锁定；锁定项不受 AI 更新。“暂停埋入”只停注入；“了结”移入归档，可捞回或彻底删除。') +
+        _iText('刻度自动任务默认关闭；在推进设置开启“刻度”后按标注／更新间隔运行，0 分别关闭。潜伏注入需总开关和刻度开关。') +
+        _iText('「间」可追加轴日期或应用整套历法；旧日期的编辑、删除及刻度操作在轴页完成。'),
     lines:
-        _iLede('「线」有“平行事件”和“冷知识”两页。平行事件追踪仍在发展的伏笔、人物行动与局势。') +
-        _iText('冷知识要先在设置 → 注入与内容设置 → 功能与内容开关开启“冷知识”，才会参与生成和显示。') +
-        _iSub('推进与注入') +
-        _iText('线可按回合数自动推进、在故事日期变化时推进，或只接受手动推进；策略在设置 → 推进设置 → 线。') +
-        _iText('潜伏注入必须同时开启总开关和线自己的“潜伏注入主楼 AI”。') +
-        _iKey('history', '历史版本', '入口：线主页“重新生成”左侧的回退入口。保留最近 10 份旧版，当前版另计；按真实生成时间从新到旧排列，旧数据时间未知时会如实标明。<br>预览与恢复：选择版本可先预览，再确认恢复；恢复后会成为当前线，供后台潜伏注入、“当前内容”手动注入和后续更新使用。恢复前的当前版也会保留，可再次选回。<br>积累：历史从功能启用后的内容更新开始积累，暂无版本时会提示。') +
-        _iKey('refresh', '重新生成', '重做未锁定的线；锁定线保留') +
-        _iKey('player-track-next',      '推进',     '更新已有线，并可能新增少量真正独立的事件') +
-        _iKey('plus',         '新增冷知识', '冷知识开关控制随线自动生成和楼内显示；手动面板始终可用') +
-        _iKey('dots-vertical', '⋮ 菜单', '每条平行事件的操作都收在这里') +
-        _iKey('pencil',          '编辑',     '手动修改这条线') +
-        _iKey('lock',         '锁定',     '重新生成时保留这条线；AI 不能替你创建用户锁') +
-        _iKey('login-2', '注入', '把单条线写进输入框，供你确认后发送') +
-        _iKey('trash',        '删除',     '移除这条线') +
-        _iSub('间内讨论') +
-        _iText('想新增或调整事件线，可去「间」说清目标，例如“把这个伏笔整理成可应用到线的方案”；看到可用方案的按钮后点击才写入。冷知识仍在本页操作。'),
+        _iLede('「线」追踪平行事件与冷知识。平行事件首次最多八条，后续按剧情自然增减。') +
+        _iKey('refresh', '重新生成', '重做未锁事件线，保留锁定线') +
+        _iKey('player-track-next', '推进', '更新已有线，也可能新增或结束事件') +
+        _iKey('history', '历史版本', '预览并恢复最近十份旧版；恢复前的当前版也会保留') +
+        _iKey('dots-vertical', '事件菜单', '编辑、锁定、注入或删除单条线；注入先填入输入框') +
+        _iText('推进可按回合、日期或手动进行，在推进设置中选择。潜伏注入需同时开启总开关和线开关。') +
+        _iText('冷知识开关控制随线自动生成和楼内显示，手动面板始终可用。新增或修改事件线也可去「间」讨论后应用。'),
     outline:
-        _iLede('「面」显示当前正式剧情大纲。') +
-        _iText('［重新生成］会直接替换整份面。想先讨论或修改草稿，可去「间」说明要一整版面；出现有效草稿后，点「应用到面」才会替换正式稿并从第 1 个节点开始。未点击时正式稿不变。') +
-        _iSub('自动判断与注入') +
-        _iText('自动判断会按设置的间隔识别故事演到哪，只会向后推进，不会自动倒退。') +
-        _iText('大纲潜伏注入必须同时开启总开关、面自己的“大纲自动注入”，并且已经设有当前节点。') +
-        _iKey('refresh',        '重新生成',   '按最新剧情重做并覆盖整份面') +
-        _iKey('box',            '去间讨论',   '打开「间」并预填当前面讨论开头；只会导航和填字，不会自动发送') +
-        _iKey('dots-vertical',   '⋮ 菜单',     '每个节点的操作都收在这里') +
-        _iKey('pencil',                 '编辑',       '手动修改这个节点') +
-        _iKey('focus-2', '设为当前',   '把这个节点标成正在进行；已是当前时显示“取消当前”') +
-        _iKey('login-2', '注入',    '把单个节点写进输入框，供你确认后发送') +
-        _iKey('copy',                '复制',       '复制这个节点的文字') +
-        _iKey('trash',               '删除',       '只删除这个节点'),
+        _iLede('「面」管理正式剧情大纲与当前节点。重新生成会替换整份大纲；「间」里的草稿需点击应用才替换，并从第一节点开始。') +
+        _iKey('box', '去间讨论', '切到间并预填讨论开头，仍需手动发送') +
+        _iKey('dots-vertical', '节点菜单', '编辑、设为当前／取消当前、注入、复制或删除单个节点') +
+        _iText('“注入”先填入输入框。自动判断与潜伏注入共用开关：需开启注入总开关和“大纲自动注入”，并设有当前节点。') +
+        _iText('有下一节点时，按推进设置的间隔调用 API 判断是否向后推进；不会自动倒退。'),
     space:
-        _iLede('「间」用于讨论剧情想法和模块内容，不会写入正式角色扮演楼层，也不会直接推进剧情。') +
-        _iSub('索要可用方案') +
-        _iText('请说清目标和要新增或修改的内容。有可用方案时，点对应按钮才写入正式内容；自然语言示例（不是固定口令）：<br>“把这件事整理成可应用到点的方案”<br>“把这个伏笔整理成可应用到线的方案”<br>“把这天整理成可应用到轴的纪念日”<br>“按刚讨论的月份生成完整历法”<br>“把刚才的思路整理成可应用到面的方案”。') +
-        _iText('普通讨论、目标不清或方案不完整时不会出现可用按钮；可继续补充要求或编辑问题重发。') +
-        _iText('记录会完整保留并作为共用背景发给模型。更多菜单可新增第二个窗口，上方切换；两页可以分别讨论，内容互通。') +
-        _iSub('消息操作') +
-        _iKey('send',    '发送',       '发送消息') +
-        _iKey('pencil',            '编辑并重发', '只在你的消息上出现；会删去当前窗口从这里起的后续记录并重新提问') +
-        _iKey('copy',           '复制',       '只复制这条消息的普通文字；结构化卡片不会随消息一起复制') +
-        _iKey('trash',          '删除',       '删除单条间内消息') +
-        _iKey('dots-vertical',      '更多',       '清屏只删除当前窗口的记录；新增窗口最多开到两个') +
-        _iSub('其他模块') +
-        _iText('刻度、冷知识、菜单、小剧场、坐标和记忆没有应用卡片，请在对应模块操作；今日菜单从点页餐具入口进入，设置项在构画设置页更改。旧面讨论仍保留在数据导出中。'),
+        _iLede('「间」用于讨论剧情和构画内容，记录独立于主楼。最多两个窗口，记录互通。') +
+        _iText('可生成点、线、轴日期、历法和面的方案；有效方案点击应用才写入。新增点需选择人物，应用面会替换整稿。') +
+        _iText('菜单、衣橱、刻度、冷知识、棱、坐标和记忆可讨论，生成或修改请回对应模块。') +
+        _iKey('send', '发送', '说明人物、目标和想新增或修改的内容') +
+        _iKey('pencil', '编辑重发', '修改你的消息，会删除本窗口从这里起的后续记录') +
+        _iKey('copy', '复制', '复制消息文字，不含结构化卡片') +
+        _iKey('trash', '删除', '删除单条消息') +
+        _iKey('dots-vertical', '更多', '新增窗口，或只清空当前窗口'),
     theater:
-        _iLede('「棱」是按当前故事背景写独立短篇或番外的地方，结果不进入正式角色扮演楼层。') +
-        _iText('可直接填写要求，也可从模板起草；模板库在设置 → 数据设置 → 小剧场模板库。') +
-        _iKey('arrows-shuffle', '随机',     '只从模板库随机填入一份模板；确认或修改输入后，还要点“生成小剧场”') +
-        _iKey('file-text', '模板内容', '查看这次生成实际使用的模板文字') +
-        _iKey('arrows-maximize',  '全屏浏览', '铺满视口阅读；再次点击或按 Esc 退出') +
-        _iSub('重新生成、保存与删除') +
-        _iText('［重新生成］沿用当前小剧场的主题／模板再生成一版。') +
-        _iText('可先改标题，再点［永久保存］存到本对话；草稿最多 10 条，新稿会挤掉最旧草稿。') +
-        _iText('草稿和永久稿列表里的［删除］只删除对应稿件。'),
+        _iLede('「棱」按当前故事背景创作独立短篇或番外，结果不进入主楼。') +
+        _iText('填写要求或选模板后，点击生成。模板库在设置 → 数据设置；随机只填入模板。') +
+        _iKey('file-text', '模板内容', '查看本次实际使用的模板') +
+        _iKey('arrows-maximize', '全屏浏览', '再次点击或按 Esc 退出') +
+        _iText('重新生成沿用当前主题／模板。浏览器草稿最多十条，满额淘汰最旧；永久保存后存入本对话。列表中的删除只移除对应稿件。'),
     anchor:
-        _iLede('「坐标」收藏 AI 楼层正文的副本，方便以后回看，不是完整样式快照。') +
-        _iText('收藏按钮位置可在设置 → 通用设置 → 显示与通知管理中选择原楼层位置、消息“…”菜单或两处同时显示。收藏后可立即选择标签，再点任一入口会取消收藏。') +
-        _iSub('收藏管理') +
-        _iText('收藏夹按角色 → 聊天 → 楼层分组，可用标签筛选和管理。删除收藏只删副本，不会删除或改动原楼层。') +
-        _iSvgKey(_coordinateIntroSvg, '坐标形收藏', 'AI 楼原位置或消息“…”菜单里的这枚按钮：点击收藏，再次点击取消收藏') +
-        _iSub('标签与查看') +
-        _iText('［标签管理］可新建、改名、改色或删除标签；删标签不会删收藏。收藏全文右上角的［⛶］进入全屏，［×］删除这份收藏副本。'),
+        _iLede('「坐标」收藏 AI 楼正文副本，按角色、聊天和楼层分组，可按标签筛选。') +
+        _iSvgKey(_coordinateIntroSvg, '收藏', '点击收藏并可选标签，再点取消收藏') +
+        _iText('入口位置在设置 → 显示与通知管理中选择。标签可新建、改名、改色或删除；删标签保留收藏。') +
+        _iText('收藏全文可全屏查看；删除收藏只删副本，原楼不变。'),
 };
 
 let lastDebugPayload = null;
@@ -1972,14 +2036,15 @@ const spaceFeature = createSpaceFeature({
                 return items.length ? `【已存冷知识】\n${items.map(item => `- ${item.text}`).join('\n')}` : '';
             } catch { return '【冷知识读取失败】本轮暂时无法读取这项资料。'; }
         },
+        readWardrobe: () => formatWardrobeText(readStore(keyDesc('wardrobe', 'user', ''))),
         readDailyMenu: () => {
             try {
                 const menu = readStore(keyDesc('daily-menu', 'user', ''));
                 const parsed = menu?.items ? menu : parseDailyMenu(menu?.raw || '');
                 const dishes = Array.isArray(parsed?.items) ? parsed.items : [];
                 if (!dishes.length) return '';
-                return `【已存今日菜单】${parsed.title || '今日菜单'}${parsed.storyDate ? `｜${parsed.storyDate}` : ''}${parsed.intro ? `\n${parsed.intro}` : ''}\n${dishes.map(item => `- ${item.name}（${item.category}）：${item.description}`).join('\n')}`;
-            } catch { return '【今日菜单读取失败】本轮暂时无法读取这项资料。'; }
+                return `【已存今天吃点啥】${parsed.title || '今天吃点啥'}${parsed.storyDate ? `｜${parsed.storyDate}` : ''}${parsed.intro ? `\n${parsed.intro}` : ''}\n${dishes.map(item => `- ${item.name}（${item.category}）：${item.description}`).join('\n')}`;
+            } catch { return '【今天吃点啥读取失败】本轮暂时无法读取这项资料。'; }
         },
         readTheater: async (_target, ctx, message) => {
             const runtime = theaterRuntime;
@@ -1997,11 +2062,7 @@ const spaceFeature = createSpaceFeature({
             let templateError = '';
             try { templates = await runtime.templates.list(); }
             catch { templateError = '【棱模板读取失败】'; }
-            const quote = String(message).match(/[“「"]([^”」"]{2,100})[”」"]/u)?.[1]?.trim() || '';
-            const pieceMatches = quote ? index.filter(item => String(item.title || '').trim() === quote) : [];
-            const templateMatches = quote ? templates.filter(item => String(item.title || '').trim() === quote) : [];
-            const uniquePiece = pieceMatches.length === 1 && templateMatches.length === 0 ? pieceMatches[0] : null;
-            const uniqueTemplate = templateMatches.length === 1 && pieceMatches.length === 0 ? templateMatches[0] : null;
+            const { piece: uniquePiece, template: uniqueTemplate } = selectTheaterReference(message, index, templates);
             return [
                 index.length ? `【棱作品索引】${index.map(item => `${item.title || '无标题'}（${item.source}）`).join('、')}` : '',
                 savedError,
@@ -2024,12 +2085,7 @@ const spaceFeature = createSpaceFeature({
                     : item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId);
             } catch { return '【坐标读取失败】本轮暂时无法读取这项资料。'; }
             const rows = scoped.map(item => `- 楼层 ${item.floorIndex ?? item.messageId ?? '?'}：${item.textPreview || '（无摘要）'}${item.tags?.length ? `｜标签 ${item.tags.join('、')}` : ''}`);
-            const quote = String(message).match(/[“「"]([^”」"]{3,100})[”」"]/u)?.[1]?.trim() || '';
-            const floorMatch = String(message).match(/(?:展开|查看|显示|读)(?:第)?\s*(\d+)\s*(?:楼|层)(?:坐标)?(?:的)?(?:正文|原文|完整内容)?/u);
-            const selectedCandidates = floorMatch
-                ? scoped.filter(item => Number(item.floorIndex ?? item.messageId) === Number(floorMatch[1]))
-                : quote ? scoped.filter(item => String(item.textPreview || '').includes(quote)) : [];
-            const selected = /(?:正文|原文|完整内容|展开)/.test(message) && selectedCandidates.length === 1 ? selectedCandidates[0] : null;
+            const selected = selectCoordinateReference(message, scoped);
             let bodyText = '';
             let bodyError = '';
             if (selected) {
@@ -2048,7 +2104,7 @@ const spaceFeature = createSpaceFeature({
     renderEnv: {
         escapeHtml,
         getUserName: () => getContext().name1 || '用户',
-        formatAi: renderAiMessageHtml,
+        formatAi: text => renderAiMessageHtml(text, { FORBID_TAGS: ['button', 'input', 'textarea', 'select', 'option', 'form', 'iframe', 'object', 'embed'] }),
         parseAlmanac: parseAlmanacWidget,
         parseEra: parseEraWidget,
         loadCalendar: loadCalDesc,
@@ -2217,6 +2273,12 @@ jQuery(async () => {
     });
     injectFab();
     injectToastContainer();
+    syncUserNameMask();
+    for (const type of [event_types.PERSONA_CHANGED, event_types.CHAT_CHANGED, event_types.SETTINGS_UPDATED].filter(Boolean)) {
+        if (_stListeners.userNameMask) eventSource.removeListener?.(type, _stListeners.userNameMask);
+    }
+    _stListeners.userNameMask = () => syncUserNameMask();
+    for (const type of new Set([event_types.PERSONA_CHANGED, event_types.CHAT_CHANGED, event_types.SETTINGS_UPDATED].filter(Boolean))) eventSource.on(type, _stListeners.userNameMask);
     // Apply saved theme mode (day/night/auto) now that settings are guaranteed loaded
     applyTheme(getEffectiveTheme());
     if (_stListeners.wrapperSettings) eventSource.removeListener?.(event_types.SETTINGS_UPDATED, _stListeners.wrapperSettings);
@@ -2278,6 +2340,8 @@ jQuery(async () => {
     // Reset view state and reload cache on chat switch
     if (_stListeners.chat) eventSource.removeListener?.(event_types.CHAT_CHANGED, _stListeners.chat);
     _stListeners.chat = async () => {
+        wardrobeController?.cancel('chat-changed');
+        wardrobeImageController.cancelAll();
         clearMemoryCheckFeedback();
         axisFailureRecency.clearAll();
         // Chat/revision values remain useful for diagnostics and indexes; CHAT_CHANGED reloads views without cancelling generation results.
@@ -2650,10 +2714,11 @@ jQuery(async () => {
     // Track ST theme changes via MutationObserver on documentElement style
     _themeObserver?.disconnect();
     _themeObserver = new MutationObserver(() => {
-        // Only auto mode follows ST; forced day/night ignores ST changes.
-        if ((getSettings().themeMode || 'auto') !== 'auto') return;
         const t = detectSTTheme();
+        // 透明楼内批注跟随其宿主背景；强制模式只管插件自己的不透明面板。
+        if ((getSettings().themeMode || 'auto') !== 'auto') { syncInlineTheme(t); return; }
         if (t !== currentTheme) applyTheme(t);
+        else syncPrimaryTextColor(t);
     });
     _themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
     // 首屏落地插件总开关：若加载时已是关闭态，藏球 / 清块 / 断后台 / 撤注入（各首屏挂载虽已被 pluginEnabled 闸挡，
@@ -2698,6 +2763,8 @@ function _abortAllBackground({ abortStorageMigration = false } = {}) {
     traceDiagnosticEvent('abort-boundary', { module: 'runtime', chatId: ctx.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'plugin-disabled', status: 'dispatch' });
     memory.abortAll('plugin-disabled');
     dailyMenuController?.cancel('plugin-disabled');
+    wardrobeController?.cancel('plugin-disabled');
+    wardrobeImageController.cancelAll();
     const activeTravel = timeTravel.getState();
     if (activeTravel) clearTimeTravelSession(activeTravel, { removeWaitingBlock: activeTravel.phase === 'waiting', reason: 'plugin-disabled' });
     _timeTravelSelectionSeq++;
@@ -2727,6 +2794,8 @@ function _abortAllBackground({ abortStorageMigration = false } = {}) {
 // 导入会同时改动多个业务模块。提交前统一废止仍基于旧数据工作的构画任务，
 // 防止迟到结果在新包落盘后又把旧点/线/历法写回来；这里只中断运行态，不改任何存档。
 function abortPortableImportTasks(reason = 'portable-import') {
+    wardrobeController?.cancel(reason);
+    wardrobeImageController.cancelAll();
     const activeTravel = timeTravel.getState();
     if (activeTravel) clearTimeTravelSession(activeTravel, { removeWaitingBlock: activeTravel.phase === 'waiting', reason });
     _timeTravelSelectionSeq++;
@@ -2823,6 +2892,7 @@ function applyPluginEnabled(on, { characterExcluded = false } = {}) {
 function refreshChatStorageViews({ renderBody = true } = {}) {
     pointState.cachedSchedule = loadCachedForCurrentChat();
     renderDailyMenuCard();
+    renderWardrobeCard();
     if (renderBody) setBody(pointState.cachedSchedule || pointScheduleEmptyHtml());
     outlineFeature.injection.refresh();
     refreshLinesInjection(); refreshStoryClockInjection(); refreshLedgerInjection();
@@ -2846,34 +2916,22 @@ function syncLatestInlineBlock(expectedChatId = null) {
     refreshInlineWindow(true);  // 线数据变 → 立即重算渲染窗口（最新楼会冻快照+全功能重挂，历史楼各自快照）
 }
 
-// ─── 历·楼内日历块（只读，反映历+锚点，无生成）─────────────────────────────────
-// 与线块平行、共存于最新 AI 楼。外壳（标题条）仿线：一个 <details>，收起时是扁扁的
-// 「历 · N个日程」条，点整条即展开——配色/圆角/边框全走线的 .sp-inline-* 类。
-// 展开后的内容是历自己的「往后六天」条：6 格（周X + M/D，从明天起，今天已在大头日期块里、
-// 这里不重复），覆盖到历条目的日子高亮打点；窗口内有节日则每格可点、点下方就地展开当天安排（.sp-alm-sday）。
-// 纯读 loadAlmanac()+锚点，不请求 API、不受 linesEnabled 影响，只受 almanacInlineEnabled 开关控制。
-// itemsArg：null=读当前活历 loadAlmanac()（最新楼）；数组=快照里的历条目（历史楼）。
-// anchorArg：null=读当前锚点 almTodayAnchor()；{month,day}=快照锚点。历本就只读，无按钮需 gate。
-// 楼内轴渲染统一由 axisInlineRenderer 提供。
-
-// 历楼内只读渲染由 axis inline seam 持有；宿主仅提供实时数据与纯历法 helper。
+// 轴楼内只读事项：每项一次，主行显示明确日期范围，原生details展开完整说明。
+// 最新楼传当前数据，历史楼传其快照；历法运算始终显式使用该楼历法，不生成或保存。
 const axisInlineRenderer = createAxisInlineRenderer({
     settings: getSettings,
     loadItems: loadAlmanac,
     today: almTodayAnchor,
     calendar: loadCalDesc,
-    weekdayRef: cal => almWeekdayRef(cal),
     dayOfYear: almDayOfYear,
-    weekdayFor: almWeekdayFor,
     yearLength: calYearLen,
-    monthDayFromDoy: almMonthDayFromDoy,
-    weekdays: ALM_WEEKDAYS,
     itemCoversDoy: almItemCoversDoy,
     typeMeta: almTypeMeta,
     clamp: almClampInt,
     daysUntil: almDaysUntil,
+    endMonthDay: almEndMonthDay,
+    formatDate: (date, calendar) => formatCalendarDate(date, calendar, calMonthName, 'monthDay'),
     escapeHtml,
-    monthName: calMonthName,
     cleanText,
 });
 inlineFeature?.destroy?.();
@@ -2881,7 +2939,7 @@ inlineFeature = createInlineFeature({
     getSettings, extensionSettings: extension_settings, getContext, loadAlmanac, almTodayAnchor, loadCalDesc,
     almWeekdayRef, almDayOfYear, almWeekdayFor, ALM_WEEKDAYS, escapeHtml, calMonthName, getDateAnchor,
     charStableKey, readCacheRaw, getCacheKey, parseCalendar, weatherGlyph, calHasEra, validRealDate,
-    formatCalendarDate, formatStoryClockHeadParts, storyClockEnabled, latestStoryClock, parseJudgedDate, readStore,
+    formatStoryClockHeadParts, storyClockEnabled, latestStoryClock, readStore,
     getLinesCacheKey, parseLines, linesFeature, snapshot, keyDesc, createWeekdayConsumerContext,
     storyWeekdayRefPure, ALM_CHAT_SCAN_LIMIT, pointInlineRenderer, axisInlineRenderer, $, _buildLedgerBlockHtml,
     buildUserRecall: _buildUserRecallBoxHtml,
@@ -2896,7 +2954,11 @@ inlineFeature = createInlineFeature({
     chatMessage: floor => getContext()?.chat?.[floor]?.mes || '', parseStoryClock: (message, calendar) => parseStoryClockPure(message, calendar),
     coordinateChanged: input => coordinateRuntime?.feature?.onChatDomChanged?.(input),
     isStreaming: () => linesFeature.isStreaming(),
-    syncTheme: () => syncVectorGlyphTheme(document, currentTheme, (getSettings().themeMode || 'auto') !== 'auto'),
+    syncTheme: (_doc, box) => {
+        const theme = detectSTTheme();
+        syncUiTheme(box, theme);
+        syncVectorGlyphTheme(document, theme);
+    },
 });
 if (document.querySelector('#chat')) inlineFeature.init();
 // ─── 线·伏笔潜伏注入（隐形注入主楼 AI）────────────────────────────────────────
@@ -3061,6 +3123,7 @@ function openPluginViewWithPrefill(view, inputSelector = '', prefill = '') {
         const old = String($input.val() || '').trimEnd();
         if (!old.includes(prefill)) $input.val(old ? `${old}\n\n${prefill}` : prefill);
         autoGrowTextarea($input[0]);
+        refreshUserNameMask($input[0]);
         $input.trigger('focus');
         resolve(true);
     }, 0));
@@ -3086,8 +3149,8 @@ function initChatObserver() {
 function injectExtButton() {
     // 侧栏入口由魔杖或悬浮按钮打开。
     const wandHtml = `
-        <div id="sp_open_wand" class="list-group-item flex-container flexGap5">
-            <div class="extensionsMenuExtensionButton sp-menu-icon" title="打开构画">${PEN_ICON_SVG}</div>
+        <div id="sp_open_wand" class="list-group-item flex-container flexGap5" style="display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;white-space:nowrap">
+            <div class="extensionsMenuExtensionButton sp-menu-icon" title="打开构画">${PEN_MENU_ICON_SVG}</div>
             <span>构画</span>
         </div>`;
 
@@ -3095,7 +3158,7 @@ function injectExtButton() {
         const c = document.getElementById('sp_wand_container') || document.getElementById('extensionsMenu');
         if (!c || document.getElementById('sp_open_wand')) return false;
         c.insertAdjacentHTML('beforeend', wandHtml);
-        document.getElementById('sp_open_wand')?.addEventListener('click', openSchedule);
+        document.getElementById('sp_open_wand')?.addEventListener('click', () => openSchedule());
         return true;
     }
     if (!mountWandBtn()) {
@@ -3258,9 +3321,10 @@ function injectModal() {
     dialogHost.style.cssText = 'position:fixed;inset:0;z-index:2000003;pointer-events:none';
     _spDialogShadow = dialogHost.attachShadow({ mode: 'open' });
     _spDialogShadow.innerHTML = `
-        <link rel="stylesheet" href="${EXT_BASE}style.css">
+        <link rel="stylesheet" href="${STYLESHEET_URL}">
         <div id="sp-dialog-overlay-host"></div>`;
     bindDailyMenuDialogEvents();
+    bindWardrobeDialogEvents();
     document.documentElement.appendChild(dialogHost);
     const html = `
             <div class="sp-backdrop"></div>
@@ -3311,7 +3375,7 @@ function injectModal() {
                         <div class="sp-sub-toggle-wrap" id="sp-sub-toggle-wrap">
                             <div class="sp-sub-toggle" id="sp-sub-toggle">
                                 <button class="sp-view-btn sp-sub-btn sp-view-active" data-view="user">我</button>
-                                <button class="sp-view-btn sp-sub-btn sp-ta-trigger" data-view="char" id="sp-ta-trigger"><span class="sp-ta-label">TA</span>${icon("chevron-down", "sp-ta-caret")}</button>
+                                <button class="sp-view-btn sp-sub-btn sp-ta-trigger sp-ta-default-label" data-view="char" id="sp-ta-trigger"><span class="sp-ta-label">TA</span><span class="sp-ta-caret-slot" aria-hidden="true">${icon("chevron-down", "sp-ta-caret")}</span></button>
                             </div>
                             <div class="sp-ta-drawer" id="sp-ta-drawer" style="display:none"></div>
                         </div>
@@ -3357,104 +3421,23 @@ function injectModal() {
                             <details class="sp-settings-section">
                                 <summary class="sp-settings-section-title">API</summary>
                                 <div class="sp-settings-section-body">
-                                    <div class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
+                                    <div id="sp-api-status" class="sp-api-notice ${hasCustomApi ? 'sp-notice-ok' : 'sp-notice-warn'}">
                                         ${icon(hasCustomApi ? 'circle-check' : 'alert-triangle')}
                                         ${hasCustomApi
                                             ? '已配置独立 API，后台生成不影响聊天'
-                                            : '未配置内容 API：请填写 Base URL 与 API Key；小剧场也可使用下方单独选择的预设'}
+                                            : '未配置内容 API：可编辑主配置，或新增 API 后选择；小剧场和机械任务可单独选择预设'}
                                     </div>
-                                    <p class="sp-cfg-hint">模型名留空时使用当前内置默认 gpt-4o-mini</p>
-
-                                    <!-- API 存储快切：点假框→就地展开内联预设列表（非原生 select 弹窗，避开 WebView 里弹层被插件盖住）；选一项填入下方输入框即生效；＋新增按域名自动命名、🗑删除，均即时落 settings.json -->
-                                    <div class="sp-preset-row">
-                                        <button type="button" id="sp-preset-box" class="sp-preset-box" title="选择 API 预设">
-                                            <span id="sp-preset-label" class="sp-preset-label">选择预设…</span>
-                                            ${icon("chevron-down", "sp-preset-caret")}
-                                        </button>
-                                        <button id="sp-preset-save" class="sp-fetch-btn" title="把当前这套 API 设置存为新预设">${icon("plus")}</button>
-                                        <button id="sp-preset-del" class="sp-fetch-btn" title="删除当前选中的预设">${icon("trash")}</button>
-                                    </div>
+                                    <label class="sp-cfg-group">内容 API</label>
+                                    <div class="sp-api-purpose-row"><button type="button" id="sp-preset-box" class="sp-preset-box" title="选择内容 API 预设"><span id="sp-preset-label" class="sp-preset-label">主配置</span>${icon("chevron-down", "sp-preset-caret")}</button><button type="button" id="sp-api-edit-content" class="sp-api-edit sp-fetch-btn" aria-label="编辑内容 API">编辑</button></div>
                                     <div id="sp-preset-list" class="sp-preset-list" style="display:none"></div>
-                                    <p id="sp-preset-hint" class="sp-cfg-hint sp-preset-hint" style="display:none"></p>
-                                    <input id="sp-cfg-url" class="sp-input" type="url"
-                                           placeholder="Base URL，如 https://api.openai.com/v1"
-                                           value="${escapeAttr(cfg.url || '')}">
-                                    <div class="sp-key-row">
-                                        <input id="sp-cfg-key" class="sp-input sp-key-input" type="password"
-                                               placeholder="API Key" value="${escapeAttr(cfg.key || '')}">
-                                        <button id="sp-key-toggle" class="sp-eye-btn" title="显示密钥" aria-label="显示密钥">${icon("eye")}</button>
-                                    </div>
-                                    <div class="sp-model-row">
-                                        <input id="sp-cfg-model" class="sp-input sp-model-input" type="text"
-                                               placeholder="模型名称，如 gpt-4o-mini"
-                                               value="${escapeAttr(cfg.model || '')}">
-                                        <button id="sp-fetch-models" class="sp-fetch-btn" title="拉取模型列表">
-                                            ${icon("list")}
-                                        </button>
-                                    </div>
-                                    <details id="sp-model-list-section" class="sp-model-list-section" style="display:none">
-                                        <summary class="sp-model-list-summary">
-                                            ${icon("chevron-right", "sp-model-list-chevron")}
-                                            <span id="sp-model-list-count">已加载 0 个模型</span>
-                                        </summary>
-                                        <div class="sp-model-list-body">
-                                            <input type="text" id="sp-model-list-search" class="sp-input sp-model-list-search" placeholder="搜索模型…" autocomplete="off">
-                                            <div id="sp-model-list-items" class="sp-model-list-items"></div>
-                                        </div>
-                                    </details>
-
-                                    <details class="sp-adv-api" style="margin-top:10px">
-                                        <summary class="sp-adv-api-summary">接口高级选项</summary>
-                                        <div class="sp-adv-api-body">
-                                            <p class="sp-cfg-hint" style="margin-top:8px">
-                                                <b>剔除参数</b>：发送前从请求里删掉这些字段，规避接口对某些参数报 400。多个用换行或逗号分隔，只填参数名。
-                                            </p>
-                                            <textarea id="sp-cfg-exclude" class="sp-input sp-exclude-input" rows="2"
-                                                      placeholder="如：frequency_penalty&#10;presence_penalty">${escapeHtml((cfg.excludeParams || []).join('\n'))}</textarea>
-                                            <p class="sp-cfg-hint" style="margin-top:8px"><b>附加参数（JSON）</b></p>
-                                            <textarea id="sp-cfg-additional" class="sp-input sp-exclude-input" rows="3"
-                                                      placeholder='{"reasoning_effort":"none"}'>${escapeHtml(cfg.spAdditionalParams || '')}</textarea>
-                                            <p class="sp-cfg-hint">参数写法以服务接口为准；留空使用默认。</p>
-                                            <div class="sp-mode-opt" style="margin-top:8px">
-                                                <span>请求超时</span>
-                                                <input id="sp-cfg-timeout" class="sp-input sp-interval-input" type="number" min="5" max="600" value="${escapeAttr(String(cfg.timeoutSec || 180))}">
-                                                <span>秒</span>
-                                            </div>
-                                            <label class="sp-mode-opt" style="margin-top:6px">
-                                                <input type="checkbox" id="sp-cfg-stream" ${cfg.stream ? 'checked' : ''}>
-                                                <span>流式传输</span>
-                                            </label>
-                                        </div>
-                                    </details>
-
-                                    <div class="sp-preset-actions" id="sp-preset-actions">
-                                        <button id="sp-preset-update" class="sp-save-btn" type="button"></button>
-                                        <span id="sp-preset-sync-state" class="sp-cfg-hint" aria-live="polite"></span>
-                                    </div>
-
-                                    <hr class="sp-mem-divider">
                                     <label class="sp-cfg-group">小剧场 API</label>
-                                    <p class="sp-cfg-hint">正文、重新生成和美化共用此设置。选择即保存，下一次请求生效。</p>
-                                    <div class="sp-preset-row">
-                                        <button type="button" id="sp-theater-preset-box" class="sp-preset-box" title="选择小剧场 API 预设">
-                                            <span id="sp-theater-preset-label" class="sp-preset-label">跟随内容 API</span>
-                                            ${icon("chevron-down", "sp-preset-caret")}
-                                        </button>
-                                    </div>
+                                    <div class="sp-api-purpose-row"><button type="button" id="sp-theater-preset-box" class="sp-preset-box" title="选择小剧场 API 预设"><span id="sp-theater-preset-label" class="sp-preset-label">跟随内容 API</span>${icon("chevron-down", "sp-preset-caret")}</button><button type="button" id="sp-api-edit-theater" class="sp-api-edit sp-fetch-btn" aria-label="编辑小剧场 API">编辑</button></div>
                                     <div id="sp-theater-preset-list" class="sp-preset-list" style="display:none"></div>
-
-                                    <hr class="sp-mem-divider">
-                                    <label class="sp-cfg-group">机械任务分流</label>
-                                    <div class="sp-util-preset-block">
-                                        <p class="sp-cfg-hint">记忆摘要、日期 / 大纲判定这类机械调用改走此预设（如便宜小模型省钱）；其他功能使用内容 API 或各自所选预设。即时生效，无需保存。</p>
-                                        <div class="sp-preset-row">
-                                            <button type="button" id="sp-util-preset-box" class="sp-preset-box" title="选择机械任务预设">
-                                                <span id="sp-util-preset-label" class="sp-preset-label">跟随主 API（不分流）</span>
-                                                ${icon("chevron-down", "sp-preset-caret")}
-                                            </button>
-                                        </div>
-                                        <div id="sp-util-preset-list" class="sp-preset-list" style="display:none"></div>
-                                    </div>
+                                    <label class="sp-cfg-group">机械任务 API</label>
+                                    <div class="sp-api-purpose-row"><button type="button" id="sp-util-preset-box" class="sp-preset-box" title="选择机械任务预设"><span id="sp-util-preset-label" class="sp-preset-label">跟随内容 API</span>${icon("chevron-down", "sp-preset-caret")}</button><button type="button" id="sp-api-edit-utility" class="sp-api-edit sp-fetch-btn" aria-label="编辑机械任务 API">编辑</button></div>
+                                    <div id="sp-util-preset-list" class="sp-preset-list" style="display:none"></div>
+                                    <div class="sp-config-actions"><button type="button" id="sp-api-new" class="sp-dialog-button sp-dialog-button-secondary">${icon("plus")} 新增 API</button></div>
+                                    <p id="sp-preset-hint" class="sp-cfg-hint sp-preset-hint" style="display:none"></p>
                                 </div>
                             </details>
 
@@ -3592,11 +3575,15 @@ function injectModal() {
                                 <summary class="sp-settings-section-title">显示与通知管理</summary>
                                 <div class="sp-settings-section-body">
                                     <label class="sp-cfg-group">显示</label>
-                                    <label class="sp-mode-opt" style="margin-top:10px">
+                                    <label class="sp-mode-opt" style="margin-top:var(--sp-size-10)">
                                         <input type="checkbox" id="sp-adult-blur-enabled" ${getSettings().adultBlurEnabled !== false ? 'checked' : ''}>
                                         <span>默认模糊成人内容</span>
                                     </label>
-                                    <div class="sp-cfg-group" style="margin-top:10px">收藏按钮位置（可多选）</div>
+                                    <label class="sp-mode-opt">
+                                        <input type="checkbox" id="sp-user-name-blur-enabled" ${getSettings().userNameBlurEnabled === true ? 'checked' : ''}>
+                                        <span>模糊user名字-感谢安利</span>
+                                    </label>
+                                    <div class="sp-cfg-group" style="margin-top:var(--sp-size-10)">收藏按钮位置（可多选）</div>
                                     <label class="sp-mode-opt">
                                         <input type="checkbox" id="sp-anchor-inline-btn" ${getSettings().anchorInlineBtn !== false ? 'checked' : ''}>
                                         <span>楼层原位置</span>
@@ -3618,7 +3605,7 @@ function injectModal() {
                                     </div>
 
                                     <hr class="sp-mem-divider sp-settings-display-divider">
-                                    <label class="sp-mode-opt" style="margin-top:10px">
+                                    <label class="sp-mode-opt" style="margin-top:var(--sp-size-10)">
                                         <input type="checkbox" id="sp-inline-render-enabled" ${getSettings().inlineRenderEnabled !== false ? 'checked' : ''}>
                                         <span>楼内渲染框</span>
                                     </label>
@@ -3640,20 +3627,20 @@ function injectModal() {
                                             <input type="checkbox" id="sp-ledger-inline-enabled" ${getSettings().ledgerInlineEnabled !== false ? 'checked' : ''}>
                                             <span>标注池</span>
                                         </label>
-                                        <span class="sp-subtoggle-label" style="margin-top:6px">用户楼</span>
+                                        <span class="sp-subtoggle-label" style="margin-top:var(--sp-size-6)">用户楼</span>
                                         <label class="sp-mode-opt sp-mode-opt-sub">
                                             <input type="checkbox" id="sp-recall-inline-enabled" ${getSettings().recallInlineEnabled !== false ? 'checked' : ''}>
                                             <span>召回</span>
                                         </label>
                                     </div>
 
-                                    <label class="sp-mode-opt" style="margin-top:12px">
+                                    <label class="sp-mode-opt" style="margin-top:var(--sp-size-12)">
                                         <span>最多往上渲染</span>
                                         <input id="sp-inline-render-depth" class="sp-input sp-interval-input" type="number" min="0" value="${escapeAttr(String(Number(getSettings().inlineRenderDepth) || 0))}">
                                         <span>层（0=跟随酒馆助手）</span>
                                     </label>
 
-                                    <label class="sp-mode-opt" style="margin-top:12px">
+                                    <label class="sp-mode-opt" style="margin-top:var(--sp-size-12)">
                                         <span>界面字号</span>
                                         <!-- Keep the scale controls together when this setting row wraps in a narrow panel. -->
                                         <span class="sp-uiscale-controls">
@@ -3662,7 +3649,7 @@ function injectModal() {
                                             <button type="button" id="sp-uiscale-plus" class="sp-uiscale-btn">＋</button>
                                         </span>
                                     </label>
-                                    <p class="sp-cfg-hint" style="margin-top:2px">整套面板字号按此百分比缩放，<b>独立于酒馆「字体缩放」</b>。每档 5%，范围 80%–130%，默认 100%。</p>
+                                    <p class="sp-cfg-hint" style="margin-top:var(--sp-size-2)">整套面板字号按此百分比缩放，<b>独立于酒馆「字体缩放」</b>。每档 5%，范围 80%–130%，默认 100%。</p>
 
                                     <hr class="sp-mem-divider sp-settings-display-divider">
                                     <label class="sp-cfg-group">界面字体</label>
@@ -3670,7 +3657,7 @@ function injectModal() {
                                     <input id="sp-cfg-font-url" class="sp-input" type="url"
                                            placeholder="字体 CSS URL，如 https://fontsapi.zeoseven.com/xxx/main/result.css"
                                            value="${escapeAttr(getSettings().uiFontUrl ?? '')}">
-                                    <div class="sp-mode-opt" style="margin-top:8px; gap:8px">
+                                    <div class="sp-mode-opt" style="margin-top:var(--sp-size-8); gap:var(--sp-size-8)">
                                         <button type="button" id="sp-font-apply" class="sp-fetch-btn">${icon("check")} 应用</button>
                                         <button type="button" id="sp-font-reset" class="sp-fetch-btn" title="恢复成构画自带的默认字体">${icon("rotate-2")} 恢复默认</button>
                                     </div>
@@ -3699,39 +3686,51 @@ function injectModal() {
                                 <summary class="sp-settings-section-title">提示词与标签</summary>
                                 <div class="sp-settings-section-body">
                                     <details class="sp-settings-subsection sp-prompt-jailbreak"><summary>破限提示词</summary>
-                                        <p class="sp-cfg-hint">白鳥系列文字模型请求共用；留空使用内置默认，恢复默认清空自定义。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
-                                        <textarea id="sp-jailbreak-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="白鳥系列共用；留空使用内置默认。"></textarea>
-                                        <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-jailbreak-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-jailbreak-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        <div class="sp-prompt-body">
+                                            <p class="sp-cfg-hint">白鳥系列文字模型请求共用；留空使用内置默认，恢复默认清空自定义。支持 <code>{{char}}</code> / <code>{{user}}</code> 占位符。</p>
+                                            <textarea id="sp-jailbreak-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="白鳥系列共用；留空使用内置默认。"></textarea>
+                                            <div class="sp-config-actions"><button id="sp-jailbreak-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-jailbreak-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        </div>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-menu-images"><summary>菜单 · 生图提示词</summary>
-                                        <p class="sp-cfg-hint">用于菜单中每道菜的成品构成描述；留空使用默认，已有菜单不自动重写。</p>
-                                        <textarea id="sp-daily-menu-image-rules" class="sp-input sp-theater-cfg-textarea" placeholder="留空使用内置默认规则。"></textarea>
-                                        <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-daily-menu-image-rules-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-daily-menu-image-rules-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        <div class="sp-prompt-body">
+                                            <p class="sp-cfg-hint">用于菜单中每道菜的成品构成描述；留空使用默认，已有菜单不自动重写。</p>
+                                            <textarea id="sp-daily-menu-image-rules" class="sp-input sp-theater-cfg-textarea" placeholder="留空使用内置默认规则。"></textarea>
+                                            <div class="sp-config-actions"><button id="sp-daily-menu-image-rules-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-daily-menu-image-rules-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        </div>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-tags"><summary>标签清洗</summary>
-                                        <p class="sp-cfg-hint">白鳥系列插件全部共享</p>
-                                        <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
-                                        <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
+                                        <div class="sp-prompt-body">
+                                            <p class="sp-cfg-hint">白鳥系列插件全部共享</p>
+                                            <div class="sp-mode-opt sp-tag-opt"><span>保留包裹符</span><input id="sp-mem-keeptags" class="sp-input sp-tag-input" type="text" placeholder="content" value=""></div>
+                                            <div class="sp-mode-opt sp-tag-opt"><span>剔除包裹符</span><input id="sp-mem-extratags" class="sp-input sp-tag-input" type="text" placeholder="think,reasoning" value=""></div>
+                                        </div>
                                     </details>
                                     <details class="sp-settings-subsection sp-prompt-storyclock"><summary>时间戳提示词</summary>
-                                        <p class="sp-cfg-hint" id="sp-storyclock-coordination">${storyClockStatusCopy(storyClockController.refresh())}</p>
-                                        <p class="sp-cfg-hint"><strong>全部内容均可编辑</strong>；留空＝用内置完整默认（默认词随插件更新走）。删除 SDC 标签或机器合同可能导致时间戳无法识别，风险由你承担。务必让两端各带 date、weekday、time；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
-                                        <textarea id="sp-storyclock-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝用内置完整默认强制词。"></textarea>
-                                        <div style="display:flex; gap:8px; margin-top:6px"><button id="sp-storyclock-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-storyclock-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        <div class="sp-prompt-body">
+                                            <p class="sp-cfg-hint" id="sp-storyclock-coordination">${storyClockStatusCopy(storyClockController.refresh())}</p>
+                                            <p class="sp-cfg-hint"><strong>全部内容均可编辑</strong>；留空＝用内置完整默认（默认词随插件更新走）。删除 SDC 标签或机器合同可能导致时间戳无法识别，风险由你承担。务必让两端各带 date、weekday、time；旧无星期标记仍兼容读取，但不会从现实年份补星期。</p>
+                                            <textarea id="sp-storyclock-prompt" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝用内置完整默认强制词。"></textarea>
+                                            <div class="sp-config-actions"><button id="sp-storyclock-prompt-load" class="sp-mem-btn" type="button">载入默认再改</button><button id="sp-storyclock-prompt-reset" class="sp-mem-btn" type="button">恢复默认</button></div>
+                                        </div>
                                     </details>
                                     <details id="sp-space-section" class="sp-settings-subsection sp-prompt-space"><summary>间 · 人格 / 说话风格</summary>
-                                        <p class="sp-cfg-hint">「间」用于文字聊天，可在这里选择人格来源。</p>
-                                        <label class="sp-mode-opt"><input type="checkbox" id="sp-space-use-character-persona"><span>使用当前角色人设</span></label>
-                                        <p class="sp-cfg-hint">开启后以AI人物性格、说话习惯和思考方式作为聊天人格；只写直接回复，不插入动作、神态或场景旁白。多人卡按点名或话题选择口吻，可标名换人。关闭后使用默认顾问或下方自定义语气。</p>
-                                        <div id="sp-space-persona-editor">
-                                            <label class="sp-cfg-label">顾问人格 / 说话风格</label>
-                                            <textarea id="sp-space-persona" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝使用内置顾问语气；填写后替换顾问语气。支持 {{char}} / {{user}}。"></textarea>
-                                            <p class="sp-cfg-hint">只作用于「间」的顾问模式，不影响面正式稿生成。</p>
+                                        <div class="sp-prompt-body">
+                                            <p class="sp-cfg-hint">「间」用于文字聊天，可在这里选择人格来源。</p>
+                                            <label class="sp-mode-opt"><input type="checkbox" id="sp-space-use-character-persona"><span>使用当前角色人设</span></label>
+                                            <p class="sp-cfg-hint">开启后以AI人物性格、说话习惯和思考方式作为聊天人格；只写直接回复，不插入动作、神态或场景旁白。多人卡按点名或话题选择口吻，可标名换人。关闭后使用默认顾问或下方自定义语气。</p>
+                                            <div id="sp-space-persona-editor">
+                                                <label class="sp-cfg-label">顾问人格 / 说话风格</label>
+                                                <textarea id="sp-space-persona" class="sp-input sp-theater-cfg-textarea" placeholder="留空＝使用内置顾问语气；填写后替换顾问语气。支持 {{char}} / {{user}}。"></textarea>
+                                                <p class="sp-cfg-hint">只作用于「间」的顾问模式，不影响面正式稿生成。</p>
+                                            </div>
                                         </div>
                                     </details>
                                     <details id="sp-theater-section" class="sp-settings-subsection sp-prompt-theater-write"><summary>棱 · 写作提示词</summary>
-                                        <label class="sp-cfg-label">写作提示词（文风 + 范文）</label>
-                                        <textarea id="sp-theater-style" class="sp-input sp-theater-cfg-textarea" placeholder="指定文体基调、节奏、感官描写要求，禁套路化开头结尾；也可直接贴 1-2 段你认可的文笔让 AI 模仿其笔触…"></textarea>
+                                        <div class="sp-prompt-body">
+                                            <label class="sp-cfg-label">写作提示词（文风 + 范文）</label>
+                                            <textarea id="sp-theater-style" class="sp-input sp-theater-cfg-textarea" placeholder="指定文体基调、节奏、感官描写要求，禁套路化开头结尾；也可直接贴 1-2 段你认可的文笔让 AI 模仿其笔触…"></textarea>
+                                        </div>
                                     </details>
                                 </div>
                             </details>
@@ -3929,7 +3928,7 @@ function injectModal() {
 
                     <div class="sp-main">
                         <div class="sp-body" id="sp-body">
-                            <div class="sp-empty">${icon("calendar")}<p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>
+                            <div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div></div>
                         </div>
 
                         <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
@@ -3967,7 +3966,7 @@ function injectModal() {
                                         <button type="button" id="sp-space-add-page" class="sp-action-menu-item">${icon("plus")}新增窗口</button>
                                     </div>
                                 </div>
-                                <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊剧情设定，或请我生成可应用的点／线／轴日期／历法／面方案…"></textarea>
+                                <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊点什么？"></textarea>
                                 <button id="sp-space-send" class="sp-icon-btn" title="发送">${icon("send")}</button>
                             </div>
                         </div>
@@ -4016,7 +4015,7 @@ function injectModal() {
     // （applyTheme 同步它的主题类）。display:contents 不产生布局盒子，fixed 语义
     // 仍由 .sp-sheet 承担；host 无 transform/filter，内部 position:fixed 相对视口不变。
     root.innerHTML = `
-        <link rel="stylesheet" href="${EXT_BASE}style.css">
+        <link rel="stylesheet" href="${STYLESHEET_URL}">
         <div class="sp-root sp-${currentTheme}" style="display:contents">${html}</div>`;
     document.documentElement.appendChild(host);
 
@@ -4033,7 +4032,6 @@ function injectModal() {
         updateFeedbackSlot.appendChild(pluginUpdatesView.feedback);
     });
 
-    if (cfg.key) $in('#sp-cfg-key').val(maskKey(cfg.key)).data('real', cfg.key);
 
     // 排除卡只允许操作设置；捕获阶段拦下残留业务 DOM，避免任何旧页面按钮先于委托门控执行。
     _spShadow.addEventListener('click', event => {
@@ -4106,6 +4104,7 @@ function injectModal() {
     bindLinesHistoryUi($linesWrap);
     $in('#sp-body').on('click', '#sp-gen-schedule-now, .sp-refresh-schedule', onRegenClick);
     $in('#sp-body').on('click', '.sp-open-daily-menu', openDailyMenuDialog);
+    $in('#sp-body').on('click', '.sp-open-wardrobe', openWardrobeDialog);
     // 点视图头部 📌：固定/取消固定当前 char（只在 char 视角出现）。名字取按钮 data-name，兜底 charViewName。
     $in('#sp-body').on('click', '.sp-point-pin-char', function () {
         onCharPinToggle($(this).attr('data-name'));
@@ -4502,8 +4501,6 @@ function injectModal() {
         this._autoSaveHintTimer = setTimeout(() => $msg.text(''), 2000);
         if (settingsOpen) toggleSettings();
     });
-    $in('#sp-key-toggle').on('click',    toggleKeyVisibility);
-    $in('#sp-fetch-models').on('click',  fetchModels);
     $in('#sp-diagnostic-export').on('click', function () {
         void shareRecentDiagnosticTrace({
             copyText: copyPlainText,
@@ -4596,6 +4593,11 @@ function injectModal() {
             if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
         }
         refreshInlineWindow(true);
+    });
+    $in('#sp-user-name-blur-enabled').on('change', function () {
+        getSettings().userNameBlurEnabled = this.checked;
+        saveSettingsDebounced();
+        syncUserNameMask();
     });
     // 标注池·显隐开关（AI 楼）：只控这只读回显框显/隐，与注入 ledgerInject 解耦（关它注入照旧、只是不回显）。
     $in('#sp-ledger-inline-enabled').on('change', function () {
@@ -4779,35 +4781,6 @@ function injectModal() {
         saveSettingsDebounced();
         coordinateRuntime?.feature?.scanButtons();
     });
-    // Inline model list: pick an item → write to input + refresh active highlight
-    $in('#sp-model-list-items').on('click', '.sp-model-list-item', function () {
-        const model = $(this).attr('data-model');
-        $in('#sp-cfg-model').val(model);
-        $in('#sp-cfg-model').trigger('change');
-        syncPresetState();
-        $inAll('.sp-model-list-item').removeClass('sp-model-list-item-active');
-        $(this).addClass('sp-model-list-item-active');
-    });
-    // Inline model list: live-filter as user types
-    $in('#sp-model-list-search').on('input', function () {
-        renderModelList(_cachedModels, $(this).val());
-    });
-    $in('#sp-cfg-key')
-        .on('focus', () => { const r = $in('#sp-cfg-key').data('real'); if (r) $in('#sp-cfg-key').val(r); })
-        .on('input', function () { const value = this.value.trim(); $in('#sp-cfg-key').data('real', value); getSettings().apiKey = value; saveSettingsDebounced(); syncPresetState(); })
-        .on('blur', function () { const r = $in('#sp-cfg-key').val().trim(); $in('#sp-cfg-key').data('real', r).val(r ? maskKey(r) : ''); getSettings().apiKey = r; saveSettingsDebounced(); syncPresetState(); });
-    $in('#sp-cfg-url').on('input change', function () { getSettings().apiUrl = this.value.trim().replace(/\/$/, ''); saveSettingsDebounced(); syncPresetState(); });
-    $in('#sp-cfg-model').on('input change', function () { getSettings().apiModel = this.value.trim(); saveSettingsDebounced(); syncPresetState(); });
-    $in('#sp-cfg-exclude').on('input change', function () { getSettings().apiExcludeParams = parseExcludeParams(this.value); saveSettingsDebounced(); syncPresetState(); });
-    // JSON 草稿逐字输入不落盘；完成编辑后只保存有效值，错误保留在框内并由预设状态行提示。
-    $in('#sp-cfg-additional').on('input', syncPresetState).on('change', function () {
-        syncPresetState();
-        try { parseAdditionalParams(this.value); } catch { return; }
-        getSettings().apiAdditionalParams = this.value.trim();
-        saveSettingsDebounced();
-    });
-    $in('#sp-cfg-timeout').on('input change', function () { const raw = String(this.value ?? '').trim(); const n = Number(raw); syncPresetState(); if (!raw || !Number.isInteger(n) || n < 5 || n > 600) return; getSettings().apiTimeoutSec = n; saveSettingsDebounced(); });
-    $in('#sp-cfg-stream').on('change', function () { getSettings().apiStream = this.checked; saveSettingsDebounced(); syncPresetState(); });
     $in('#sp-lines-interval').on('input change', function () { const n = Number(this.value); if (!Number.isInteger(n) || n < 1) return; saveLinesInterval(n); this.value = String(n); });
 
     $in('#sp-body').on('click', '.sp-tab', function () {
@@ -4942,6 +4915,7 @@ let _taDrawerOpen = false;
 function updateTaTriggerLabel() {
     const label = (currentView === 'char' && charViewName) ? charViewName : 'TA';
     $in('#sp-ta-trigger .sp-ta-label').text(label);
+    $in('#sp-ta-trigger').toggleClass('sp-ta-default-label', label === 'TA');
 }
 
 function renderTaDrawerHtml() {
@@ -5174,6 +5148,8 @@ function openSidebarView(view) {
         $inAll('.sp-sub-btn').removeClass('sp-view-active');
         $inAll(`.sp-sub-btn[data-view="${currentView}"]`).addClass('sp-view-active');
         updateTaTriggerLabel();   // 回点视图：TA▾ 标签跟随当前视角（char 显名 / user 回落 TA）
+        // 首开可能早于CHAT_CHANGED；闲置时从当前存档补装本视角缓存，不接管生成或编辑。
+        if (!pointState.isGenerating && !manualEditing.point) pointState.cachedSchedule = loadCachedForCurrentChat();
         // 生成在途/切走再切回：从状态重建正文（镜像 线/面/棱），别露上次残留或僵尸转圈
         if (pointState.isGenerating) setBody(loadingHtml('正在规划', 'sp-abort-generate'));
         else if (pointState.cachedSchedule) setBody(pointState.cachedSchedule);
@@ -5233,6 +5209,7 @@ function openSchedule(targetView = null) {
     if (showLegacyChatReturn()) return;
     resetPanelToScheduleHome();   // 先归位到点首页（清所有子视图 mode/wrap），作为恢复的干净基线
     renderDailyMenuCard();
+    renderWardrobeCard();
     if (targetView) {
         openSidebarView(targetView);
         checkMemoryMigrationNotice();
@@ -5248,6 +5225,7 @@ function openSchedule(targetView = null) {
             return;
         }
     }
+    if (!pointState.isGenerating && !manualEditing.point) pointState.cachedSchedule = loadCachedForCurrentChat();
     if (pointState.isGenerating) {
         setBody(`<div class="sp-loading"><div class="sp-spinner"></div><p class="sp-loading-text">正在规划中…</p><button class="sp-abort-btn" id="sp-abort-generate">${icon("player-stop")}中止生成</button></div>`);
     } else if (pointState.cachedSchedule) {
@@ -5263,10 +5241,11 @@ function openSchedule(targetView = null) {
 function openQuickReplyShortcut(key) {
     const shortcut = QUICK_REPLY_SHORTCUTS.find(item => item.key === key);
     if (!shortcut) return;
-    if (shortcut.mode === 'daily-menu') {
+    if (shortcut.mode === 'daily-menu' || shortcut.mode === 'wardrobe') {
         if (currentCharacterExcluded()) { ensureExcludedCharacterSettingsOnly(); return; }
         if (!pluginEnabled()) { showToast('构画已关闭', null, 'info'); return; }
-        openDailyMenuDialog();
+        if (shortcut.mode === 'wardrobe') openWardrobeDialog();
+        else openDailyMenuDialog();
         return;
     }
     if (shortcut.mode !== 'settings' && shortcut.mode !== 'memory' && currentCharacterExcluded()) {
@@ -5312,14 +5291,14 @@ function openQuickReplyShortcut(key) {
 function showEmptyGenerate() {
     setBody(`<div class="sp-empty">
         ${icon("calendar")}
-        <button class="sp-gen-btn" id="sp-gen-now">生成点</button>
-        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button>
+        <div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span>
+        <button class="sp-gen-btn" id="sp-gen-now">生成点</button></div>
     </div>`);
     $in('#sp-gen-now').on('click', triggerGenerate);
 }
 
 function pointScheduleEmptyHtml() {
-    return `<div class="sp-empty">${icon("calendar")}<p>还没有点</p><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button></div>`;
+    return `<div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div></div>`;
 }
 
 function showPanel() {
@@ -5336,6 +5315,7 @@ function showPanel() {
     setTimeout(() => {
         positionPanel();
         syncMobileViewport();
+        refreshUserNameMask();
     }, 0);
 }
 
@@ -5388,8 +5368,8 @@ function openDailyMenuDialog() {
     overlay.setAttribute('aria-labelledby', 'sp-daily-menu-dialog-title');
     overlay.innerHTML = `<section class="sp-dialog-sheet sp-daily-menu-sheet">
         <header class="sp-daily-menu-dialog-head">
-            <h2 id="sp-daily-menu-dialog-title">今日菜单</h2>
-            <button class="sp-daily-menu-dialog-close" type="button" data-daily-menu-close aria-label="关闭今日菜单" title="关闭">${icon("x")}</button>
+            <h2 id="sp-daily-menu-dialog-title">今天吃点啥</h2>
+            <button class="sp-daily-menu-dialog-close" type="button" data-daily-menu-close aria-label="关闭今天吃点啥" title="关闭">${icon("x")}</button>
         </header>
         <div id="sp-daily-menu-content" class="sp-daily-menu-content"></div>
     </section>`;
@@ -5438,6 +5418,76 @@ function bindDailyMenuDialogEvents() {
         if (event.key !== 'Escape') return;
         const overlay = event.target.closest?.('#sp-daily-menu-dialog');
         if (overlay) { disposeDailyMenuImages(overlay); overlay.remove(); }
+    });
+}
+
+function renderWardrobeCard({ busy = wardrobeController?.busy?.() || false, index = null } = {}) {
+    const host = _spDialogShadow?.querySelector('#sp-wardrobe-content');
+    if (!host) return;
+    renderWardrobeView(host, readStore(keyDesc('wardrobe', 'user', '')), { escapeHtml, busy, controller: wardrobeImageController, index });
+}
+
+function openWardrobeDialog() {
+    if (!_spDialogShadow || _spDialogShadow.querySelector('#sp-wardrobe-dialog')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'sp-wardrobe-dialog';
+    const forcedTheme = (getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : '';
+    overlay.className = `sp-dialog-overlay sp-wardrobe-overlay sp-root sp-${currentTheme}${forcedTheme}`;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'sp-wardrobe-dialog-title');
+    overlay.innerHTML = `<section class="sp-dialog-sheet sp-wardrobe-sheet">
+        <header class="sp-wardrobe-dialog-head">
+            <h2 id="sp-wardrobe-dialog-title">今天穿点啥</h2>
+            <button class="sp-wardrobe-dialog-close" type="button" data-wardrobe-close aria-label="关闭今天穿点啥" title="关闭">${icon("x")}</button>
+        </header>
+        <div id="sp-wardrobe-content" class="sp-wardrobe-content"></div>
+    </section>`;
+    _spDialogShadow.querySelector('#sp-dialog-overlay-host')?.appendChild(overlay);
+    renderWardrobeCard();
+    overlay.querySelector('[data-wardrobe-close]')?.focus();
+}
+
+function bindWardrobeDialogEvents() {
+    const host = _spDialogShadow?.querySelector('#sp-dialog-overlay-host');
+    if (!host) return;
+    host.addEventListener('click', event => {
+        const close = event.target.closest?.('[data-wardrobe-close]');
+        const overlay = event.target.closest?.('#sp-wardrobe-dialog');
+        if (close || (overlay && event.target === overlay)) {
+            disposeWardrobeImages(overlay);
+            overlay?.remove();
+            return;
+        }
+        const imageToggle = event.target.closest?.('.sp-wardrobe-image-toggle, .sp-wardrobe-description');
+        if (imageToggle && overlay) {
+            if (imageToggle.classList.contains('sp-wardrobe-description') && (_spDialogShadow.getSelection?.() || window.getSelection())?.toString()) return;
+            const drawer = imageToggle.closest('.sp-wardrobe-image');
+            const toggle = drawer.querySelector('.sp-wardrobe-image-toggle');
+            setWardrobeImageExpanded(drawer, toggle.getAttribute('aria-expanded') !== 'true');
+            refreshWardrobeImageDrawer(drawer, readStore(keyDesc('wardrobe', 'user', '')), wardrobeImageController, escapeHtml);
+            return;
+        }
+        const imageAction = event.target.closest?.('.sp-wardrobe-image-generate, .sp-wardrobe-image-cancel');
+        if (imageAction && overlay) {
+            const index = Number(imageAction.closest('.sp-wardrobe-image').dataset.wardrobeImageIndex);
+            if (imageAction.classList.contains('sp-wardrobe-image-cancel')) wardrobeImageController.cancel(readStore(keyDesc('wardrobe', 'user', '')), index);
+            else {
+                setWardrobeImageExpanded(imageAction.closest('.sp-wardrobe-image'), true);
+                void wardrobeImageController.run(index);
+            }
+            return;
+        }
+        const action = event.target.closest?.('.sp-wardrobe-generate, .sp-wardrobe-cancel');
+        if (!action || !event.target.closest?.('#sp-wardrobe-dialog')) return;
+        if (action.classList.contains('sp-wardrobe-cancel')) wardrobeController?.cancel('user-cancel');
+        else void wardrobeController?.run();
+    });
+    host.addEventListener('error', event => showWardrobeImageError(event.target), true);
+    host.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        const overlay = event.target.closest?.('#sp-wardrobe-dialog');
+        if (overlay) { disposeWardrobeImages(overlay); overlay.remove(); }
     });
 }
 
@@ -5729,7 +5779,7 @@ function spConfirm({ title, body, note, confirmText = '确定', cancelText = '�
         $ov.find('.sp-confirm-cancel').on('click', () => finish(false));
         $ov.on('click', function (e) { if (e.target === this) finish(false); });
         // 独立弹窗宿主不随 #sp-modal-root 隐藏；空宿主 pointer-events:none，实际遮罩自行开启交互。
-        $ov.addClass(`sp-root sp-${currentTheme}`);
+        $ov.addClass(`sp-root sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`);
         _spDialogShadow.appendChild($ov[0]);
         _activeSpConfirmCancel = cancel;
         eventSource.on(event_types.CHAT_CHANGED, onExternalClose);
@@ -5782,7 +5832,7 @@ function showStoreConflictDialog(mig) {
     $ov.find('[data-choice="cloud"]').on('click', () => finish('cloud'));
     $ov.find('[data-choice="local"]').on('click', () => finish('local'));
     $ov.on('click', function (e) { if (e.target === this) finish('defer'); });
-    $ov.addClass(`sp-root sp-${currentTheme}`);
+    $ov.addClass(`sp-root sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`);
     _spDialogShadow.appendChild($ov[0]);
     _activeStoreConflictFinish = finish;
     eventSource.on(event_types.CHAT_CHANGED, onExternalClose);
@@ -7208,14 +7258,14 @@ function injectToST(text) {
 // 做法：调用期间临时把 'regex' 塞进 disabledExtensions，getRegexedString 开头即
 // 短路返回原文（engine.js），markdown / 引号包裹 / 净化等其余步骤照跑，渲染与主
 // 聊天一致。调用是同步的、随即在 finally 还原，不落盘、不触发保存、对别处无副作用。
-function renderAiMessageHtml(text) {
+function renderAiMessageHtml(text, sanitizerOverrides = {}) {
     const ctx = getContext();
     if (typeof ctx?.messageFormatting === 'function') {
         const de = extension_settings?.disabledExtensions;
         const guardRegex = Array.isArray(de) && !de.includes('regex');
         if (guardRegex) de.push('regex');
         try {
-            return ctx.messageFormatting(String(text ?? ''), '', false, false, null, {}, false);
+            return ctx.messageFormatting(String(text ?? ''), '', false, false, null, sanitizerOverrides, false);
         } catch (err) {
             console.warn('[7dayscal] messageFormatting failed, falling back to plain', safeDiagnosticLog('generation', 'parse', err));
         } finally {
@@ -7346,7 +7396,8 @@ function loadCachedLinesForCurrentChat() {
 
 const STORAGE_KIND_LABELS = {
     'schedule'     : '点（待办）',
-    'daily-menu'   : '点·今日菜单',
+    'daily-menu'   : '点·今天吃点啥',
+    'wardrobe'     : '点·衣橱',
     'outline'      : '面（大纲）',
     'lines'        : '线（伏笔）',
     'creative-chat': '旧面讨论（只读资料）',
@@ -7535,12 +7586,12 @@ function mountPortableImportOverlay() {
     const overlay = document.createElement('div');
     overlay.id = 'sp-portable-import-overlay';
     const overlayTheme = `sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`;
-    overlay.innerHTML = `<div class="sp-root sp-progress-card ${overlayTheme}" role="dialog" aria-modal="true" style="position:relative;z-index:auto;width:min(420px,calc(100vw - 32px));padding:22px;border-radius:16px;background-color:var(--sp-sheet-bg-legacy);background-image:linear-gradient(var(--sp-sheet-bg),var(--sp-sheet-bg));color:var(--sp-on-surface);box-shadow:0 20px 70px #000b;font-family:var(--sp-font);font-size:var(--sp-fs-100)">
-        <div style="font-size:var(--sp-fs-115);font-weight:700;margin-bottom:10px">正在导入所选模块</div>
-        <div data-sp-portable-status style="font-size:var(--sp-fs-88);line-height:1.65;opacity:.86">正在应用所选模块并更新界面…</div>
-        <button class="sp-btn" data-sp-portable-close type="button" hidden style="margin-top:18px;width:100%;min-height:42px">关闭</button>
+    overlay.className = 'sp-progress-overlay';
+    overlay.innerHTML = `<div class="sp-root sp-progress-card sp-dialog-sheet ${overlayTheme}" role="dialog" aria-modal="true">
+        <div class="sp-dialog-head">正在导入所选模块</div>
+        <div data-sp-portable-status class="sp-dialog-body">正在应用所选模块并更新界面…</div>
+        <button class="sp-dialog-button sp-dialog-button-primary" data-sp-portable-close type="button" hidden>关闭</button>
     </div>`;
-    Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeItems: 'center', padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))', background: '#000b', boxSizing: 'border-box', touchAction: 'none' });
     const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
     for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.addEventListener(name, block, true);
     document.documentElement.appendChild(overlay);
@@ -7597,6 +7648,7 @@ function refreshPortableImportedModules(selectedModules) {
             setBody(pointState.cachedSchedule || pointScheduleEmptyHtml());
         }
         renderDailyMenuCard();
+        renderWardrobeCard();
     }
     if (selected.has('lines')) {
         linesFeature.clearAllSwipe(getContext().chatId);
@@ -7702,7 +7754,7 @@ async function renderStorageUsage() {
     const $body = $in('#sp-storage-body');
     if (!$body.length) return;
     if (currentCharacterExcluded()) {
-        $body.html('<div class="sp-cfg-hint" style="padding:4px 0">当前角色卡已排除；不会读取或改动这段单聊的构画数据。</div>');
+        $body.html('<div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">当前角色卡已排除；不会读取或改动这段单聊的构画数据。</div>');
         $in('#sp-storage-mode-card').prop('hidden', true);
         return;
     }
@@ -7712,7 +7764,7 @@ async function renderStorageUsage() {
     // ① 本聊天 chat_metadata
     let chatHtml;
     if (!store.hasStore() && !store.ownKeyBytes('sp-memory') && !store.ownKeyBytes('sp-theater') && !store.ownKeyBytes('sp-ledger')) {
-        chatHtml = `<div class="sp-cfg-hint" style="padding:4px 0">当前聊天暂无构画数据</div>`;
+        chatHtml = `<div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">当前聊天暂无构画数据</div>`;
     } else {
         const usage = store.usageByKind();
         const rows = [];
@@ -7736,7 +7788,7 @@ async function renderStorageUsage() {
                 `<button class="sp-storage-del sp-mini-btn sp-mini-btn-danger" data-scope="ownkey" data-key="${key}">清空</button>`,
             ));
         }
-        chatHtml = rows.length ? rows.join('') : `<div class="sp-cfg-hint" style="padding:4px 0">当前聊天暂无构画数据</div>`;
+        chatHtml = rows.length ? rows.join('') : `<div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">当前聊天暂无构画数据</div>`;
     }
 
     // ③ 本机缓存（localStorage：棱草稿 + UI 位置），先算好（同步）
@@ -7750,13 +7802,13 @@ async function renderStorageUsage() {
         </div>
         <div class="sp-storage-group">
             <div class="sp-storage-group-head">收藏 · 坐标（全局存服务端）</div>
-            <div id="sp-storage-anchor-rows"><div class="sp-cfg-hint" style="padding:4px 0">统计中…</div></div>
+            <div id="sp-storage-anchor-rows"><div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">统计中…</div></div>
         </div>
         <div class="sp-storage-group">
             <div class="sp-storage-group-head">本机缓存（localStorage，仅本浏览器）</div>
             ${storageRow('棱草稿 + 界面位置', fmt(localBytes),
                 localBytes ? `<button class="sp-storage-del sp-mini-btn" data-scope="local">清理</button>` : '')}
-            <div class="sp-cfg-hint" style="padding:2px 0 0">仅清本机的草稿与界面位置，不影响已存服务端的点线面间与收藏。</div>
+            <div class="sp-cfg-hint" style="padding:var(--sp-size-2) 0 0">仅清本机的草稿与界面位置，不影响已存服务端的点线面间与收藏。</div>
         </div>
     `);
 
@@ -7769,10 +7821,10 @@ async function renderStorageUsage() {
             cnt
                 ? storageRow(`共 ${cnt} 条收藏`, `约 ${coordinateRuntime.feature.formatBytes(bytes)}（按收藏内容估算）`,
                     `<button class="sp-storage-del sp-mini-btn sp-mini-btn-danger" data-scope="anchor">清空</button>`)
-                : `<div class="sp-cfg-hint" style="padding:4px 0">暂无收藏</div>`
+                : `<div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">暂无收藏</div>`
         );
     } catch {
-        $in('#sp-storage-anchor-rows').html(`<div class="sp-cfg-hint" style="padding:4px 0">统计失败（服务器不可达？）</div>`);
+        $in('#sp-storage-anchor-rows').html(`<div class="sp-cfg-hint" style="padding:var(--sp-size-4) 0">统计失败（服务器不可达？）</div>`);
     }
 }
 
@@ -7807,7 +7859,10 @@ function refreshAlmanacAfterStoreClear() {
 
 function invalidateKindTasksForStoreClear(kind) {
     traceDiagnosticEvent('abort-boundary', { module: kind, chatId: getContext?.()?.chatId ?? null, chatRevision: pointTaskOwners.currentChatRevision(), boundaryEpoch: chatBoundaryEpoch, abortReason: 'store-clear', status: 'dispatch' });
-    if (kind === 'daily-menu') {
+    if (kind === 'wardrobe') {
+        wardrobeController?.cancel('store-clear');
+        wardrobeImageController.cancelAll();
+    } else if (kind === 'daily-menu') {
         dailyMenuController?.cancel('store-clear');
     } else if (kind === 'schedule') {
         pointState.scheduleAbortController?.abort('store-clear'); pointState.scheduleAbortController = null;
@@ -7826,6 +7881,7 @@ function invalidateKindTasksForStoreClear(kind) {
 
 // 清完某 kind 数据后，若对应视图正开着就重渲染成空态；点视图另清内存缓存。
 function refreshEditorsAfterStoreClear(kind) {
+    if (kind === 'wardrobe') renderWardrobeCard();
     if (kind === 'daily-menu') renderDailyMenuCard();
     if (kind === 'schedule') {
         pointState.cachedSchedule = null;
@@ -8199,79 +8255,19 @@ async function deleteAlmanacItem(id) {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
-// Inline model list state — cached models from last fetch. Not persisted
-// across page reloads (matches original <select> behavior — user re-fetches
-// if they refresh). Lives only while the tab is open.
-let _cachedModels = [];
-
-function renderModelList(models, filter = '') {
-    _cachedModels = Array.isArray(models) ? models : [];
-    $in('#sp-model-list-count').text(`已加载 ${_cachedModels.length} 个模型`);
-    const q = filter.trim().toLowerCase();
-    const shown = q ? _cachedModels.filter(m => m.toLowerCase().includes(q)) : _cachedModels;
-    const current = ($in('#sp-cfg-model').val() || '').trim();
-    if (!shown.length) {
-        $in('#sp-model-list-items').html(`<div class="sp-model-list-empty">${q ? '无匹配项' : '暂无模型'}</div>`);
-        return;
-    }
-    // Cap the initial render at 200 items with a "show more" tail for MASSIVE lists;
-    // in practice most APIs return <200 so this is defensive.
-    const html = shown.map(m =>
-        `<button type="button" class="sp-model-list-item${m === current ? ' sp-model-list-item-active' : ''}" data-model="${escapeAttr(m)}">${escapeHtml(m)}</button>`
-    ).join('');
-    $in('#sp-model-list-items').html(html);
-}
-
-async function fetchModels() {
-    try { parseAdditionalParams($in('#sp-cfg-additional').val()); }
-    catch (error) { showToast(error.message, null, true); return; }
-    const rawUrl = $in('#sp-cfg-url').val().trim();
-    const key = ($in('#sp-cfg-key').data('real') || $in('#sp-cfg-key').val()).trim();
-    if (!rawUrl || !key) { showToast('请先填写 URL 和 Key', null, true); return; }
-    const url = normalizeApiUrl(rawUrl);
-    const ctx = getContext();
-
-    const $btn = $in('#sp-fetch-models');
-    $btn.prop('disabled', true).html(`${icon("loader-2", "sp-icon-spin")}`);
+async function fetchApiEditorModels(cfg) {
+    parseAdditionalParams(cfg.spAdditionalParams);
+    if (!cfg.url || !cfg.key) throw new Error('请先填写 URL 和 Key。');
+    let status = 0;
     try {
-        // Same proxy strategy as generation: go through ST's /status endpoint
-        // which supports listing OpenAI-compatible models via a POST body.
-        const res = await fetch('/api/backends/chat-completions/status', {
-            method : 'POST',
-            headers: ctx.getRequestHeaders(),
-            body   : JSON.stringify({
-                chat_completion_source: 'openai',
-                reverse_proxy         : url,
-                proxy_password        : key,
-            }),
-        });
-        if (!res.ok) { const error = new Error(`模型列表接口返回 HTTP ${res.status}`); error.status = res.status; throw error; }
-        const data = await res.json();
-        if (data?.error) throw makeDiagnosticError('unknown', { phase: 'request' });
-        const models = (data.data || data.models || [])
-            .map(m => (typeof m === 'string' ? m : m.id))
-            .filter(Boolean).sort();
-        if (!models.length) throw new Error('接口未返回任何模型');
-
-        // Inline model list — no popup, no z-index chaos. Render directly into
-        // the settings body's <details> section so any browser/WebView that can
-        // render <button> can render this. Fixes "popup appears behind plugin"
-        // reports from in-app browsers (WeChat/QQ WebView, etc.) that don't
-        // give <select> the native fullscreen picker treatment.
-        renderModelList(models);
-        // Auto-expand so user sees the result of their action
-        $in('#sp-model-list-section').attr('open', 'open').show();
-        showToast(`已加载 ${models.length} 个模型`);
-    } catch (err) {
-        const status = Number(err?.status || 0);
-        const message = status === 401 || status === 403
-            ? '模型列表读取失败：接口拒绝访问，请检查 URL 和 Key。'
-            : status === 404 ? '模型列表读取失败：接口地址不可用，请检查 URL。'
-                : /接口未返回任何模型/.test(String(err?.message || '')) ? '接口没有返回模型，请检查模型服务。'
-                    : '模型列表读取失败，请稍后重试。';
-        showToast(message, null, true);
-    } finally {
-        $btn.prop('disabled', false).html(`${icon("list")}`);
+        const res = await fetch('/api/backends/chat-completions/status', { method: 'POST', headers: getContext().getRequestHeaders(), body: JSON.stringify({ chat_completion_source: 'openai', reverse_proxy: normalizeApiUrl(cfg.url), proxy_password: cfg.key }) });
+        status = res.status;
+        if (!res.ok) throw new Error('request');
+        const data = await res.json(); if (data?.error) throw new Error('request');
+        const models = (data.data || data.models || []).map(m => typeof m === 'string' ? m : m?.id).filter(value => typeof value === 'string' && value).sort();
+        if (!models.length) throw new Error('empty'); return models;
+    } catch (error) {
+        throw new Error(status === 401 || status === 403 ? '模型列表读取失败：请检查 URL 和 Key。' : status === 404 ? '模型列表读取失败：请检查 URL。' : error.message === 'empty' ? '接口没有返回模型，请检查模型服务。' : '模型列表读取失败，请稍后重试。');
     }
 }
 
@@ -8360,6 +8356,7 @@ function renderMemorySection() {
     $in('#sp-space-persona').val(typeof s.spacePersona === 'string' ? s.spacePersona : '');   // 间·人格覆盖：同为全局设置，须在按源 early-return 前回填
     $in('#sp-space-use-character-persona').prop('checked', s.spaceUseCharacterPersona === true);
     $in('#sp-space-persona-editor').toggle(s.spaceUseCharacterPersona !== true);
+    refreshUserNameMask();
     if (currentCharacterExcluded()) {
         $in('#sp-mem-internal').show();
         $in('#sp-mem-qqj-status, #sp-mem-bbb-status, #sp-mem-anima-status, #sp-mem-database-status').hide();
@@ -8376,8 +8373,8 @@ function renderMemorySection() {
         const result = qianQianJieMemoryAccess.status();
         const ok = result.status === 'ready';
         $in('#sp-mem-qqj-status').show().html(ok
-            ? `${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} 千千结只读接口已就绪（生成时读取当前聊天的正式记忆）`
-            : `${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(qianQianJieMemoryDiagnostic(result))}`);
+            ? `${icon("circle-check", "", "style=\"color:var(--sp-success)\"")} 千千结只读接口已就绪（生成时读取当前聊天的正式记忆）`
+            : `${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} ${escapeHtml(qianQianJieMemoryDiagnostic(result))}`);
         return;
     }
     $in('#sp-mem-qqj-status').hide();
@@ -8392,15 +8389,15 @@ function renderMemorySection() {
             try {
                 cov = api.getInjectedHistory()?.coverage;
             } catch {
-                $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 柏宝书读取状态失败，无法确认覆盖情况`);
+                $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} 柏宝书读取状态失败，无法确认覆盖情况`);
                 return;
             }
             let coverageMsg = '柏宝书已就绪';
             if (cov?.complete === false) coverageMsg += `（缺 ${cov.missingAiFloors?.length ?? '?'} 楼摘要）`;
             else coverageMsg += '（覆盖完整）';
-            $in('#sp-mem-bbb-status').html(`${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} ${escapeHtml(coverageMsg)}`);
+            $in('#sp-mem-bbb-status').html(`${icon("circle-check", "", "style=\"color:var(--sp-success)\"")} ${escapeHtml(coverageMsg)}`);
         } else {
-            $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 检测不到柏宝书 API：请确认已安装并把柏宝书更新到最新版（旧版无读取接口）；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
+            $in('#sp-mem-bbb-status').html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} 检测不到柏宝书 API：请确认已安装并把柏宝书更新到最新版（旧版无读取接口）；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
         }
         return;
     }
@@ -8423,12 +8420,12 @@ function renderMemorySection() {
             if (!databaseMemoryUiRequestIsCurrent(identity, databaseUiRevision)) return;
             const ok = result.status === 'ready';
             $in('#sp-mem-database-status').html(ok
-                ? `${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`
-                : `${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`);
+                ? `${icon("circle-check", "", "style=\"color:var(--sp-success)\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`
+                : `${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} ${escapeHtml(databaseMemoryDiagnostic(result))}`);
         }).catch(error => {
             if (!databaseMemoryUiRequestIsCurrent(identity, databaseUiRevision)) return;
             const bookName = identity.selectedName || getDatabasePrimaryWorldbookName(ctx);
-            $in('#sp-mem-database-status').html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} ${escapeHtml(databaseMemoryDiagnostic({ status: 'processing-failed', bookName, targetMode: identity.selectedName ? 'explicit' : 'primary', error }))}`);
+            $in('#sp-mem-database-status').html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} ${escapeHtml(databaseMemoryDiagnostic({ status: 'processing-failed', bookName, targetMode: identity.selectedName ? 'explicit' : 'primary', error }))}`);
         });
         return;
     }
@@ -8451,18 +8448,18 @@ async function renderAnimaStatus() {
     if (currentCharacterExcluded()) return;
     const th = globalThis.TavernHelper;
     if (!th || typeof th.getChatWorldbookName !== 'function' || typeof th.getWorldbook !== 'function') {
-        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 检测不到酒馆助手(TavernHelper)：请确认已安装并启用「酒馆助手」与「Anima 记忆系统」；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
+        $st.html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} 检测不到酒馆助手(TavernHelper)：请确认已安装并启用「酒馆助手」与「Anima 记忆系统」；点 / 线 / 面 / 间 生成时不会注入历史记忆`);
         return;
     }
     $st.html(`${icon("loader-2", "sp-icon-spin")} 正在读取 Anima 摘要…`);
     let wbName = null;
     try { wbName = await th.getChatWorldbookName('current'); } catch {
-        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} Anima 世界书读取失败，请重试。`);
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} Anima 世界书读取失败，请重试。`);
         return;
     }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;   // await 期间用户切走了源或排除了当前卡
     if (!wbName) {
-        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 当前聊天没有绑定世界书，读不到 Anima 摘要`);
+        $st.html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} 当前聊天没有绑定世界书，读不到 Anima 摘要`);
         return;
     }
     let count = 0;
@@ -8473,14 +8470,14 @@ async function renderAnimaStatus() {
             if (e?.extra?.createdBy === 'anima_summary' && Array.isArray(e.extra.history)) count += e.extra.history.length;
         }
     } catch {
-        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} Anima 世界书读取失败，请重试。`);
+        if (!currentCharacterExcluded() && getSettings().useAnima) $st.html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} Anima 世界书读取失败，请重试。`);
         return;
     }
     if (currentCharacterExcluded() || !getSettings().useAnima) return;
     if (count > 0) {
-        $st.html(`${icon("circle-check", "", "style=\"color:var(--cardhub-accent,#7c9)\"")} Anima 已就绪（世界书「${escapeHtml(wbName)}」读到 ${count} 段摘要）`);
+        $st.html(`${icon("circle-check", "", "style=\"color:var(--sp-success)\"")} Anima 已就绪（世界书「${escapeHtml(wbName)}」读到 ${count} 段摘要）`);
     } else {
-        $st.html(`${icon("alert-triangle", "", "style=\"color:#e0a54e\"")} 世界书「${escapeHtml(wbName)}」里没有 Anima 摘要（anima_summary）——请先让 Anima 跑出摘要`);
+        $st.html(`${icon("alert-triangle", "", "style=\"color:var(--sp-warn)\"")} 世界书「${escapeHtml(wbName)}」里没有 Anima 摘要（anima_summary）——请先让 Anima 跑出摘要`);
     }
 }
 
@@ -8535,7 +8532,7 @@ function refreshWrapperInputs() {
     const value = getWrapperSettings();
     for (const [selector, key] of [['#sp-mem-keeptags', 'keepTags'], ['#sp-mem-extratags', 'extraTags']]) {
         const input = $in(selector)[0];
-        if (input && !input.matches?.(':focus')) input.value = value[key];
+        if (input && !input.matches?.(':focus')) { input.value = value[key]; refreshUserNameMask(input); }
     }
 }
 
@@ -9198,368 +9195,69 @@ function showWiEntryFull(entry) {
     $in('.sp-sheet').append($overlay);
 }
 
-function toggleKeyVisibility() {
-    const $el = $in('#sp-cfg-key'), button = inEl('#sp-key-toggle');
-    if ($el.attr('type') === 'password') {
-        $el.attr('type', 'text').val($el.data('real') || $el.val());
-        setIcon(button, 'eye-off');
-    } else {
-        const r = $el.val(); $el.data('real', r).attr('type', 'password').val(maskKey(r));
-        setIcon(button, 'eye');
-    }
-    const label = $el.attr('type') === 'password' ? '显示密钥' : '隐藏密钥';
-    $(button).attr({ title: label, 'aria-label': label });
-}
-
-// ─── API 存储快切：UI 事件 + 下拉渲染 ────────────────────────────────────────
-// 从当前输入框读出这一套 API 配置（含未点保存的改动、Key 取 data('real') 真值）。
-function readApiInputs() {
-    const $k = $in('#sp-cfg-key');
-    const rawTimeout = String($in('#sp-cfg-timeout').val() ?? '').trim();
-    const timeout = Number(rawTimeout);
-    const timeoutValid = rawTimeout !== '' && Number.isInteger(timeout) && timeout >= 5 && timeout <= 600;
-    return {
-        url          : $in('#sp-cfg-url').val().trim().replace(/\/$/, ''),
-        key          : ($k.data('real') || $k.val() || '').trim(),
-        model        : $in('#sp-cfg-model').val().trim(),
-        excludeParams: parseExcludeParams($in('#sp-cfg-exclude').val()),
-        spAdditionalParams: String($in('#sp-cfg-additional').val() ?? '').trim(),
-        timeoutSec   : timeoutValid ? timeout : null,
-        timeoutValid,
-        stream       : $in('#sp-cfg-stream').is(':checked'),
-    };
-}
-
-function apiPresetSnapshotKey(cfg) {
-    return JSON.stringify({
-        url: cfg?.url || '', key: cfg?.key || '', model: cfg?.model || '',
-        excludeParams: Array.isArray(cfg?.excludeParams) ? cfg.excludeParams : [],
-        spAdditionalParams: String(cfg?.spAdditionalParams || '').trim(),
-        timeoutSec: Number.isInteger(Number(cfg?.timeoutSec)) ? Number(cfg.timeoutSec) : null, stream: cfg?.stream === true,
-    });
-}
-
-function activeApiPreset() {
-    const id = getSettings().apiPresetActiveId || '';
-    return id ? loadApiPresets().find(p => p.id === id) || null : null;
-}
-
-function apiInputsDirty() {
-    const p = activeApiPreset();
-    return !!p && apiPresetSnapshotKey(readApiInputs()) !== apiPresetSnapshotKey(p);
-}
-
-function apiInputsSaveable(cfg) {
-    return !apiInputsError(cfg);
-}
-
-function apiInputsError(cfg) {
-    try { parseAdditionalParams(cfg?.spAdditionalParams); } catch (error) { return error.message; }
-    return cfg?.timeoutValid !== false && Number.isInteger(Number(cfg?.timeoutSec)) && Number(cfg.timeoutSec) >= 5 && Number(cfg.timeoutSec) <= 600
-        ? '' : '请求超时需填写 5–600 秒';
-}
-
-function saveCurrentAsPreset() {
-    const cur = readApiInputs();
-    if (!apiInputsSaveable(cur)) { showPresetHint(`${apiInputsError(cur)}，未保存预设`); return null; }
-    if (!cur.url && !cur.key) { showPresetHint('先填 API 再保存预设'); return null; }
-    const name = autoPresetName(cur.url);
-    upsertApiPreset(name, cur, null);
-    renderApiPresetList();
-    renderUtilityPresetList();
-    showPresetHint(`已存为预设「${name}」`);
-    return name;
-}
-
-// 把一套预设填回输入框。Key 走 maskKey 遮罩 + data('real') 存真值。
-function fillApiInputs(p) {
-    $in('#sp-cfg-url').val(p.url || '');
-    const $k = $in('#sp-cfg-key');
-    if (p.key) $k.data('real', p.key).val(maskKey(p.key)).attr('type', 'password');
-    else       $k.data('real', '').val('');
-    $in('#sp-cfg-model').val(p.model || '');
-    $in('#sp-cfg-exclude').val((Array.isArray(p.excludeParams) ? p.excludeParams : []).join('\n'));
-    $in('#sp-cfg-additional').val(p.spAdditionalParams || '');
-    $in('#sp-cfg-timeout').val(p.timeoutSec || 180);
-    $in('#sp-cfg-stream').prop('checked', p.stream === true);
-}
-
-// 渲染内联预设列表：在流内展开，非原生 <select> 弹窗——与「模型列表」同一套内联思路，
-// 避开 WebView（微信/QQ 内置浏览器等）里 select 弹层被插件盖住/弹不出的老问题。
 function renderApiPresetList() {
-    const $list = $in('#sp-preset-list');
-    if (!$list.length) return;
-    const list = loadApiPresets();
-    const activeId = getSettings().apiPresetActiveId || '';
-    $list.html(list.length
-        ? list.map(p => `<div class="sp-preset-item-row" data-id="${escapeAttr(p.id)}"><button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button><button type="button" class="sp-preset-rename" data-id="${escapeAttr(p.id)}" title="仅修改这条预设的名称">${icon("pencil")}</button></div>`).join('')
-        : `<div class="sp-preset-empty">暂无预设，填好 API 后点右侧＋存一个</div>`);
-    $in('#sp-preset-del').prop('disabled', !activeId);
-    syncPresetLabel();
-    syncPresetState();
-    renderTheaterPresetList();
+    const list = apiEditorActions.list(), s = getSettings(), activeId = s.apiPresetActiveId || '';
+    const rows = (selected, follow) => `<button type="button" class="sp-preset-item${!selected ? ' sp-preset-item-active' : ''}" data-id="">${follow}</button>` + list.map(p => `<button type="button" class="sp-preset-item${p.id === selected ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name || '未命名')}</button>`).join('');
+    $in('#sp-preset-list').html(rows(activeId, '主配置'));
+    $in('#sp-preset-label').text(list.find(p => p.id === activeId)?.name || '主配置');
+    $in('#sp-util-preset-list').html(rows(s.utilityPresetId || '', '跟随内容 API'));
+    const utility = list.find(p => p.id === s.utilityPresetId);
+    $in('#sp-util-preset-label').text(utility ? utility.url && utility.key ? utility.name : `${utility.name}（未配置完整，跟随内容 API）` : '跟随内容 API');
+    $in('#sp-theater-preset-list').html(rows(s.theaterPresetId || '', '跟随内容 API'));
+    const theater = list.find(p => p.id === s.theaterPresetId);
+    $in('#sp-theater-preset-label').text(theater ? theater.url && theater.key ? theater.name : `${theater.name}（未配置完整，跟随内容 API）` : '跟随内容 API');
+    const ready = !!(loadCfg().url && loadCfg().key);
+    $in('#sp-api-status').toggleClass('sp-notice-ok', ready).toggleClass('sp-notice-warn', !ready).html(`${icon(ready ? 'circle-check' : 'alert-triangle')}${ready ? '已配置独立 API，后台生成不影响聊天' : '未配置内容 API：可编辑主配置，或新增 API 后选择'}`);
 }
-
-// 「假框」显示当前选中预设名（无原生 select，直接按 activeId 回显）
-function syncPresetLabel() {
-    const $lb = $in('#sp-preset-label');
-    if (!$lb.length) return;
-    const p = loadApiPresets().find(x => x.id === (getSettings().apiPresetActiveId || ''));
-    $lb.text(p ? p.name : '选择预设…');
-}
-
-function showPresetHint(msg) {
-    const $h = $in('#sp-preset-hint');
-    if (!$h.length) return;
-    $h.text(msg).show();
-    clearTimeout(showPresetHint._t);
-    showPresetHint._t = setTimeout(() => $h.fadeOut(200), 2600);
-}
-
-function syncPresetState() {
-    const $btn = $in('#sp-preset-update');
-    const $state = $in('#sp-preset-sync-state');
-    if (!$btn.length) return;
-    const p = activeApiPreset();
-    const error = apiInputsError(readApiInputs());
-    if (p) {
-        const dirty = apiInputsDirty();
-        const valid = apiInputsSaveable(readApiInputs());
-        $btn.text(`更新「${p.name}」`).prop('disabled', !dirty || !valid);
-        $state.text(error || (dirty ? '尚未更新到预设' : '已与预设同步')).toggle(!valid || !!dirty);
-    } else {
-        const valid = apiInputsSaveable(readApiInputs());
-        $btn.text('另存为新预设').prop('disabled', !valid);
-        $state.text(error).toggle(!valid);
-    }
-}
-
-async function confirmPresetSwitch(nextPreset) {
-    const current = activeApiPreset();
-    if (!current || !apiInputsDirty()) return 'switch';
-    const choice = await customDialog.choose({
-        title: '当前预设有未保存改动',
-        body: `要如何切换到「${nextPreset.name}」？`,
-        choices: [
-            { value: 'save', label: '保存并切换', primary: true },
-            { value: 'switch', label: '直接切换' },
-            { value: 'cancel', label: '取消' },
-        ],
-    });
-    if (choice === 'save') {
-        const currentCfg = readApiInputs();
-        if (!apiInputsSaveable(currentCfg)) { showPresetHint(`${apiInputsError(currentCfg)}，未保存预设`); return 'cancel'; }
-        upsertApiPreset(current.name, currentCfg, current.id);
-    }
-    return choice || 'cancel';
-}
-
+function renderUtilityPresetList() { renderApiPresetList(); }
+function renderTheaterPresetList() { renderApiPresetList(); }
+function showPresetHint(message) { $in('#sp-preset-hint').text(message).show(); }
 function bindApiPresetEvents() {
-    // 点假框 → 就地展开/收起内联预设列表（在流内，非原生弹窗）
-    $in('#sp-preset-box').on('click', function (e) {
-        e.preventDefault();
-        $in('#sp-preset-list').slideToggle(120);
-        $(this).toggleClass('sp-preset-box-open');
-    });
-    // 选某预设 → 填入输入框并立即应用，收起列表
-    $in('#sp-preset-list').on('click', '.sp-preset-item', async function () {
-        const id = $(this).attr('data-id');
-        const p = loadApiPresets().find(x => x.id === id);
-        if (!p || p.id === (getSettings().apiPresetActiveId || '')) return;
-        try { parseAdditionalParams(p.spAdditionalParams); }
-        catch (error) { showPresetHint(error.message); return; }
-        const decision = await confirmPresetSwitch(p);
-        if (decision === 'cancel') return;
-        getSettings().apiPresetActiveId = id;
-        $in('#sp-preset-list').slideUp(120);
-        $in('#sp-preset-box').removeClass('sp-preset-box-open');
-        if (!p) return;
-        fillApiInputs(p);
-        saveCfg(readApiInputs());
-        renderApiPresetList();
-        syncPresetState();
-        showPresetHint(`已填入并应用「${p.name}」`);
-    });
-
-    // 编辑一条预设（内联，无弹窗）：点 ✎ 只改名字，不选择预设，也不覆盖当前 API 草稿。
-    const commitPresetEdit = ($row) => {
-        const $inp = $row.find('.sp-preset-rename-input');
-        if (!$inp.length) return;
-        const id = $row.attr('data-id');
-        const p = loadApiPresets().find(x => x.id === id);
-        const name = $inp.val().trim() || (p ? p.name : '');
-        renameApiPreset(id, name);
-        renderApiPresetList();       // 回到按钮态（名字/模型已更新）
-        renderUtilityPresetList();   // 机械预设列表同名同步
-        showPresetHint(`已改名为「${name}」`);
-    };
-    $in('#sp-preset-list').on('click', '.sp-preset-rename', function (e) {
-        e.preventDefault(); e.stopPropagation();
-        const id = $(this).attr('data-id');
-        const p = loadApiPresets().find(x => x.id === id);
-        if (!p) return;
-        const $row = $(this).closest('.sp-preset-item-row');
-        $row.addClass('sp-preset-item-row-edit').html(
-            `<input type="text" class="sp-input sp-preset-rename-input" value="${escapeAttr(p.name)}" maxlength="40" spellcheck="false">` +
-            `<button type="button" class="sp-preset-rename-ok" title="保存预设名称">${icon("check")}</button>`
-        );
-        $row.find('.sp-preset-rename-input').trigger('focus').trigger('select');
-        showPresetHint(`编辑「${p.name}」名称；当前 API 输入不会改变`);
-    });
-    $in('#sp-preset-list').on('click', '.sp-preset-rename-ok', function (e) {
-        e.preventDefault(); e.stopPropagation();
-        commitPresetEdit($(this).closest('.sp-preset-item-row'));
-    });
-    $in('#sp-preset-list').on('keydown', '.sp-preset-rename-input', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); commitPresetEdit($(this).closest('.sp-preset-item-row')); }
-        else if (e.key === 'Escape') { e.preventDefault(); renderApiPresetList(); }
-    });
-
-    // ＋新增 → 把当前输入框这套存成新预设，名字先按 URL 域名自动生成（同名自动加序号）；
-    // 存好后可在列表里点 ✎ 就地改名。覆盖内容仍是「删掉重存」。零弹窗。
-    $in('#sp-preset-save').on('click', function () {
-        saveCurrentAsPreset();
-    });
-
-    $in('#sp-preset-update').on('click', function () {
-        const p = activeApiPreset();
-        const cur = readApiInputs();
-        if (p) {
-            if (!apiInputsSaveable(cur)) { showPresetHint(`${apiInputsError(cur)}，未更新预设`); return; }
-            upsertApiPreset(p.name, cur, p.id);
-            renderApiPresetList();
-            renderUtilityPresetList();
-            showPresetHint(`已更新预设「${p.name}」`);
-        } else {
-            saveCurrentAsPreset();
-        }
-    });
-
-    // 删除当前选中预设 —— 内联二次确认（图标变红勾，再点才删；3 秒无操作复原），零弹窗
-    let delArmed = false, delTimer = null;
-    $in('#sp-preset-del').on('click', function () {
-        const id = getSettings().apiPresetActiveId;
-        if (!id) return;
-        const $btn = $(this);
-        if (!delArmed) {
-            delArmed = true;
-            setIcon(this, 'check');
-            $btn.css('color', '#e06c6c').attr('title', '再点一次确认删除');
-            showPresetHint('再点一次垃圾桶确认删除');
-            delTimer = setTimeout(() => {
-                delArmed = false; setIcon(this, 'trash');
-                $btn.css('color', '').attr('title', '删除当前选中的预设');
-            }, 3000);
-            return;
-        }
-        clearTimeout(delTimer); delArmed = false;
-        setIcon(this, 'trash'); $btn.css('color', '').attr('title', '删除当前选中的预设');
-        const p = loadApiPresets().find(x => x.id === id);
-        if (getSettings().utilityPresetId === id) getSettings().utilityPresetId = '';   // 删掉的正是机械预设 → 退回不分流
-        deleteApiPreset(id);
-        renderApiPresetList();
-        renderUtilityPresetList();
-        showPresetHint(p ? `已删除「${p.name}」` : '已删除');
-    });
-
-    // ── 机械任务预设：点假框展开候选（含「跟随主 API」项）；选一项即时生效落盘，无需保存 ──
-    $in('#sp-util-preset-box').on('click', function (e) {
-        e.preventDefault();
-        $in('#sp-util-preset-list').slideToggle(120);
-        $(this).toggleClass('sp-preset-box-open');
-    });
-    $in('#sp-util-preset-list').on('click', '.sp-preset-item', function () {
-        const id = $(this).attr('data-id') || '';   // 空 = 跟随主 API（不分流）
-        getSettings().utilityPresetId = id;
-        saveSettingsDebounced();
-        renderUtilityPresetList();
-        $in('#sp-util-preset-list').slideUp(120);
-        $in('#sp-util-preset-box').removeClass('sp-preset-box-open');
-    });
-    $in('#sp-theater-preset-box').on('click', function (e) {
-        e.preventDefault();
-        $in('#sp-theater-preset-list').slideToggle(120);
-        $(this).toggleClass('sp-preset-box-open');
-    });
-    $in('#sp-theater-preset-list').on('click', '.sp-preset-item', function () {
-        getSettings().theaterPresetId = $(this).attr('data-id') || '';
-        saveSettingsDebounced();
-        renderTheaterPresetList();
-        $in('#sp-theater-preset-list').slideUp(120);
-        $in('#sp-theater-preset-box').removeClass('sp-preset-box-open');
-    });
+    for (const [role, prefix] of [['content', 'sp'], ['utility', 'sp-util'], ['theater', 'sp-theater']]) {
+        $in(`#${prefix}-preset-box`).on('click', function (event) { event.preventDefault(); $in(`#${prefix}-preset-list`).slideToggle(120); $(this).toggleClass('sp-preset-box-open'); });
+        $in(`#${prefix}-preset-list`).on('click', '.sp-preset-item', async function () {
+            try { await apiEditorActions.select(role, $(this).attr('data-id') || ''); $in(`#${prefix}-preset-list`).slideUp(120); $in(`#${prefix}-preset-box`).removeClass('sp-preset-box-open'); renderApiPresetList(); }
+            catch (error) { showPresetHint(error?.message || '保存 API 选择失败。'); }
+        });
+        $in(`#sp-api-edit-${role}`).on('click', () => { void openApiPresetEditor({ dialog: customDialog, actions: apiEditorActions, role, parseExcludeParams, fetchModels: fetchApiEditorModels, onSaved: renderApiPresetList }).catch(() => {}); });
+    }
+    $in('#sp-api-new').on('click', () => { void openApiPresetEditor({ dialog: customDialog, actions: apiEditorActions, parseExcludeParams, fetchModels: fetchApiEditorModels, onSaved: renderApiPresetList }).catch(() => {}); });
 }
 
-function renderTheaterPresetList() {
-    const $list = $in('#sp-theater-preset-list');
-    if (!$list.length) return;
-    const list = loadApiPresets();
-    const id = getSettings().theaterPresetId || '';
-    const selected = list.find(p => p.id === id);
-    const activeId = selected ? id : '';
-    $list.html(`<button type="button" class="sp-preset-item${!activeId ? ' sp-preset-item-active' : ''}" data-id="">跟随内容 API</button>` + list.map(p => `<button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button>`).join(''));
-    $in('#sp-theater-preset-label').text(selected
-        ? selected.url && selected.key ? selected.name : `${selected.name}（未配置完整，跟随内容 API）`
-        : '跟随内容 API');
+function syncPrimaryTextColor(theme) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeQuoteColor').trim();
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const root = _spShadow?.querySelector('.sp-root');
+    const surface = root ? getComputedStyle(root).getPropertyValue('--sp-sheet-bg').trim() : '';
+    context.fillStyle = surface || (theme === 'night' ? '#272829' : '#FAF9F6');
+    context.fillRect(0, 0, 1, 1);
+    context.fillStyle = raw || (theme === 'night' ? '#A8A49E' : '#457892');
+    context.fillRect(0, 0, 1, 1);
+    const value = primaryTextColor([...context.getImageData(0, 0, 1, 1).data].slice(0, 3));
+    const style = document.documentElement.style;
+    if (style.getPropertyValue('--sp-on-auto-primary') !== value) style.setProperty('--sp-on-auto-primary', value);
 }
 
-// 机械任务预设：内联候选列表 =「跟随主 API（不分流）」+ 每个已存预设。选中项高亮。
-function renderUtilityPresetList() {
-    const $list = $in('#sp-util-preset-list');
-    if (!$list.length) return;
-    const list = loadApiPresets();
-    const activeId = getSettings().utilityPresetId || '';
-    const follow = `<button type="button" class="sp-preset-item${!activeId ? ' sp-preset-item-active' : ''}" data-id="">跟随主 API（不分流）</button>`;
-    const items = list.map(p => `<button type="button" class="sp-preset-item${p.id === activeId ? ' sp-preset-item-active' : ''}" data-id="${escapeAttr(p.id)}">${escapeHtml(p.name)}</button>`).join('');
-    $list.html(follow + items);
-    syncUtilityPresetLabel();
-}
-
-// 「假框」显示当前机械预设名；id 指向的预设不存在（被删）→ 清 id 并回显「跟随主 API」
-function syncUtilityPresetLabel() {
-    const $lb = $in('#sp-util-preset-label');
-    if (!$lb.length) return;
-    const id = getSettings().utilityPresetId || '';
-    const p = id ? loadApiPresets().find(x => x.id === id) : null;
-    if (id && !p) { getSettings().utilityPresetId = ''; }   // 悬空 id 自愈
-    $lb.text(p ? `机械任务 → ${p.name}` : '跟随主 API（不分流）');
-}
-
-// 按 URL 域名生成预设名；无 URL 用「预设」。撞已有名自动加 -2/-3…
-function autoPresetName(url) {
-    let base = '';
-    try { base = url ? new URL(url).hostname.replace(/^www\./, '') : ''; } catch { base = ''; }
-    if (!base) base = '预设';
-    const names = new Set(loadApiPresets().map(p => p.name));
-    if (!names.has(base)) return base;
-    for (let i = 2; ; i++) { const n = `${base}-${i}`; if (!names.has(n)) return n; }
+function syncInlineTheme(theme = detectSTTheme()) {
+    document.querySelectorAll('.sp-inline-box').forEach(root => syncUiTheme(root, theme));
+    syncVectorGlyphTheme(document, theme);
 }
 
 function applyTheme(theme) {
     currentTheme = theme;
     const forced = (getSettings().themeMode || 'auto') !== 'auto';
-    const $modal = $(`#${MODAL_ID}`);
-    const $fab   = $(`#${FAB_ID} .sp-fab-btn`);
-    const $toast = $('#sp-toast-wrap');   // 同 $modal 走一套：让 toast 的 --sp-*-legacy 底板令牌随主题就位
-    $modal.removeClass('sp-night sp-day sp-forced-day sp-forced-night').addClass(`sp-${theme}`);
-    $fab.removeClass('sp-night sp-day sp-forced-day sp-forced-night').addClass(`sp-${theme}`);
-    $toast.removeClass('sp-night sp-day sp-forced-day sp-forced-night').addClass(`sp-${theme}`);
-    if (forced) {
-        $modal.addClass(`sp-forced-${theme}`);
-        $fab.addClass(`sp-forced-${theme}`);
-        $toast.addClass(`sp-forced-${theme}`);
+    const roots = document.querySelectorAll(`#${MODAL_ID}, #${FAB_ID} .sp-fab-btn, #sp-toast-wrap, .sp-progress-card`);
+    for (const root of roots) syncUiTheme(root, theme, forced);
+    for (const scope of [_spShadow, _spDialogShadow]) {
+        scope?.querySelectorAll('.sp-root').forEach(root => syncUiTheme(root, theme, forced));
     }
-    // Shadow 内 wrapper 同步主题类：.sp-night/.sp-day 色板与 .sp-forced-* 强制覆盖在
-    // shadow 内靠 wrapper 匹配（host 的类不穿边界），不换则 `--sp-*-legacy` 回退丢失、
-    // `.sp-night .sp-xxx` 类后代选择器失配。
-    const wrapper = _spShadow?.querySelector('.sp-root');
-    if (wrapper) {
-        wrapper.classList.remove('sp-night', 'sp-day', 'sp-forced-day', 'sp-forced-night');
-        wrapper.classList.add(`sp-${theme}`);
-        if (forced) wrapper.classList.add(`sp-forced-${theme}`);
-    }
-    syncVectorGlyphTheme(document, theme, forced);
+    syncPrimaryTextColor(theme);
+    syncInlineTheme();
     coordinateRuntime?.feature?.onThemeChanged?.(theme);
+    refreshUserNameMask();
 }
 
 // ─── Theme mode toggle (day / night / auto) ─────────────────────────────────
@@ -9871,7 +9569,9 @@ function showToast(msg, onClick, isError = false) {
         // 视觉参数交给美化插件统一；但失败破例覆盖 timeOut，保证告警停留够久（可靠性 > 风格统一）。
         const opts = onClick ? { onclick: onClick } : {};
         if (isFailure || isInfo) { opts.timeOut = holdMs; opts.extendedTimeOut = holdMs; }
-        (isFailure ? tr.error : isInfo ? tr.info : tr.success)(msg, '', opts);
+        const toast = (isFailure ? tr.error : isInfo ? tr.info : tr.success)(msg, '', opts);
+        const element = toast?.[0] || toast;
+        if (element?.setAttribute) { element.setAttribute('data-sp-user-name-surface', 'toast'); refreshUserNameMask(); }
         return;
     }
     const $t = $(`<div class="sp-toast${isFailure ? ' sp-toast-error' : isInfo ? ' sp-toast-info' : ''}">

@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS = {
     themeMode: 'auto',   // 'auto' | 'day' | 'night' — 'auto' follows ST theme; day/night force
     uiScale: 1.0,        // 界面字号缩放倍率：--sp-scale 的持久值（设置里 −/＋ 步进，默认 1.0＝100%），脱钩酒馆 Font Scale
     adultBlurEnabled: true, // 成人点线默认模糊（纯显示偏好）
+    userNameBlurEnabled: false, // 构画内 user 名字打码（纯显示偏好）
     uiFontUrl   : 'https://fontsapi.zeoseven.com/387/main/result.css',  // 字体 CSS(@font-face) 的 URL：经动态 <link> 引入。默认＝zeoseven 387 有爱圆体(Nowar Rounded TW Wc)，unicode-range 分片、移动端友好。留空=不加载网络字体、只用系统栈
     uiFontFamily: 'Nowar Rounded TW Wc',                                // 生效字体 family 名：写进 --sp-font-user。须与 uiFontUrl 那份 CSS 里 @font-face 声明的 font-family 完全一致，否则加载了也不生效
     notifyMode: 'lite',  // 通知提醒档：'off'=全静音 / 'lite'(默认)=仅你手动生成·刷新时提示 / 'full'=另在后台自动改动点线面历时提示（真改动才弹）
@@ -52,13 +53,13 @@ export const DEFAULT_SETTINGS = {
     dashedKeepCount: 15,
     outlineInject: false,       // 大纲自动注入：开启后每 N 楼独立判定剧情推进到哪个节点，把当前/下个节点隐形注入主楼 AI。多判定 API 调用，默认关 opt-in
     outlineJudgeInterval: 3,    // 大纲推进判定节奏：每几条 AI 回复跑一次推进判定（独立于线的 linesInterval，不耦合）
-    almanacInlineEnabled: true, // 历·日程块：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是今天头和往后六天格；只读，独立于线主开关；默认开，关掉即不注入聊天
+    almanacInlineEnabled: true, // 轴楼内事项：展示最近五条事项及日期范围，逐项展开说明；只读，独立于线主开关；默认开，关掉即不显示轴事项
     linesInlineEnabled  : true, // 线·楼内块：最新 AI 楼底部展示活跃线块（只读展示，独立于线主开关 linesEnabled）；默认开，关掉只隐藏楼内块、不影响线的推进与隐形注入
     scheduleInlineEnabled: true, // 点·楼内日程条：最新 AI 楼底部挂一块折叠条——标题条仿线块，点开是每天一格（周X+日期+天气+待办数，可点开看当天事件）；只读，反映当前视角的点，默认开
     ledgerInlineEnabled : true, // 标注池·楼内框开关：AI 楼挂「标注池」（活跃暗历条目 + 打捞/更新/锁定/归档操作）；与注入 ledgerInject 解耦、与用户楼召回(recallInlineEnabled)各自独立；默认开
     recallInlineEnabled : true, // 召回·楼内框开关：用户楼挂「召回」框（本回合注入回显·丰富版：类型+标题+起始+推测应至状态）；与 AI 楼标注池独立、与注入解耦；默认开
     inlineRenderEnabled : true, // 楼内渲染框·主开关：关掉则整框不渲（点/线/轴/标注池/召回子开关一并失效）；默认开。子开关只在主开关开时才起作用
-    // 楼内仪表盘固定为今头 + 历/点/线三区，不提供自定义排序。
+    // 楼内组合沿轴、标注池、点、线的固定顺序，当前日期只留外层摘要，不提供自定义排序。
     // 楼内统一框·渲染深度：按最近 N 个 AI 楼确定窗口，窗口覆盖其间用户楼；最新 AI/用户楼读活态，其余读快照。
     // 0 或缺 = 跟随酒馆助手 render_depth（读不到再退 INLINE_RENDER_DEPTH_FALLBACK）。默认 0=跟随。
     inlineRenderDepth: 0,

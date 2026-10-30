@@ -123,14 +123,18 @@ test('custom弹窗挂载DOM内容、确认返回值并清理原管理器订阅',
     constructor() { this[0] = { appendChild: node => { mounted = node; } }; this.children = new Map(); this.handlers = {}; }
     find(key) { if (!this.children.has(key)) this.children.set(key, new Query()); return this.children.get(key); }
     on(type, handler) { this.handlers[type] = handler; return this; }
+    prop(name, value) { if (typeof name === 'object') { Object.assign(this[0], name); return this; } if (arguments.length === 1) return this[0][name]; this[0][name] = value; return this; }
     addClass() { return this; } empty() { return this; } html() { return this; }
     remove() { removed++; return this; } trigger() { return this; }
   }
   const manager = createDialogManager({ $: () => (overlay = new Query()), mount: { appendChild() {} }, removeOverlay() {}, subscribeContextChange() { subscriptions++; return () => subscriptions--; } });
   assert.equal(typeof manager.custom, 'function', '当前弹窗管理器尚未支持公告DOM内容');
   const content = { tagName: 'DIV' };
-  const pending = manager.custom({ title: '公告', content, submit: () => true, cancelText: '' });
+  let complete;
+  const pending = manager.custom({ title: '公告', content, submit: () => new Promise(resolve => { complete = resolve; }), cancelText: '' });
   assert.equal(mounted, content); assert.equal(subscriptions, 1);
-  await overlay.find('.sp-dialog-submit').handlers.click(); assert.equal(await pending, true);
+  const confirm = overlay.find('.sp-dialog-submit'), submitting = confirm.handlers.click();
+  assert.equal(confirm.prop('disabled'), true, '等待提交时按钮真实禁用'); assert.equal(subscriptions, 1);
+  complete(true); await submitting; assert.equal(await pending, true);
   assert.equal(subscriptions, 0); assert.equal(removed, 1); assert.equal(manager.cancelActive(), false);
 });

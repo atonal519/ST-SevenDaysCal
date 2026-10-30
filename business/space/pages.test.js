@@ -46,7 +46,10 @@ test('发送固定页、在途新增第二页保留页列表，公共背景顺�
  assert.deepEqual(f.stored().pages,['1','2']);assert.equal(f.repo.history().at(-1).pageId,'1');assert.equal(shown.at(-1)[3].pageId,'1');
  f.repo.replace(target,[...f.repo.history(),{role:'assistant',content:outline('第二页卡'),pageId:'2',expectedWidgetKind:'outline_widget',outlineRawToken:'formal'}]);
  const messages=await ctx.buildMessages({target,userMsg:'把上一张卡改短些',historySnapshot:f.repo.history(),pageId:'1',pages:f.repo.pages()});
- assert.match(messages[0].content,/第一页卡/);assert.doesNotMatch(messages[0].content,/第二页卡/);
+ const apiHistory=messages.slice(1).map(item=>item.content).join('\n');
+ assert.match(apiHistory,/第一页卡/);assert.match(apiHistory,/第二页卡/);
+ assert.ok(apiHistory.indexOf('第一页卡') < apiHistory.indexOf('第二页卡'));
+ assert.match(apiHistory,/历史卡片候选｜应用状态以当前正式资料为准/);
  assert.match(messages[0].content,/当前.*窗口.?1/);assert.equal(messages.slice(1,-1).length, f.repo.history().length);
  assert.ok(messages.every(x=>!('pageId' in x)));assert.match(messages.at(-2).content,/窗口.?2/);
 });
@@ -59,7 +62,7 @@ test('便携旧数组与双页候选往返仅标消息只读，保留页配置',
  }
 });
 
-test('页内没有合法相关候选时回指公共历史，不被无效、只读或其它卡型挡住', async () => {
+test('页内回指请求交给同次模型理解，并保留完整候选历史', async () => {
     const { classifySpaceIntent } = await import('./context.js');
     const candidate = title => `<outline_widget>Beat: 当前|${title}|关系|主线|结果\nScene: 核对消息</outline_widget>`;
     const publicCard = { role: 'assistant', content: candidate('公共面卡'), pageId: '2', expectedWidgetKind: 'outline_widget', outlineRawToken: 'formal' };
@@ -70,14 +73,13 @@ test('页内没有合法相关候选时回指公共历史，不被无效、只�
         { role: 'assistant', content: '其它卡型', expectedWidgetKind: 'line_widget', pageId: '1' },
     ]) {
         const intent = classifySpaceIntent(request, [publicCard, local], { pageId: '1' });
-        assert.equal(intent.action, 'write');
-        assert.equal(intent.sourceWidget.historyIndex, 0);
-        assert.match(intent.sourceWidget.body, /公共面卡/);
+        assert.equal(intent.action, 'semantic-route');
+        assert.deepEqual(intent.allowedWidgetKinds, ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
     }
     const local = { ...publicCard, pageId: '1', content: candidate('本页面卡') };
     const intent = classifySpaceIntent(request, [publicCard, local, publicCard], { pageId: '1' });
-    assert.equal(intent.sourceWidget.historyIndex, 1);
-    assert.match(intent.sourceWidget.body, /本页面卡/);
+    assert.equal(intent.action, 'semantic-route');
+    assert.deepEqual(intent.allowedWidgetKinds, ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
 });
 
 test('导入替换及数据管理清除后重置临时页草稿，不把窗口2草稿带到窗口1', async () => {

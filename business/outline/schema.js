@@ -11,17 +11,19 @@ const outlineAnchorKind = value => {
     return null;
 };
 const completeOutlineStructure = kinds => kinds.includes('beat') && kinds.includes('scene');
+// Only unambiguous structural labels enter this side-channel.  Ordinary prose
+// such as "记者问：" or "时间：" remains part of the current Scene.
+const OUTLINE_METADATA_HEADER_RX = /^(?:[【\[]\s*(?:人物卡|角色卡|关系卡|场景卡|伏笔卡|状态卡|状态栏)\s*[】\]]|(?:character|characters|relationship|affection|status)(?:[_-][a-z][\w-]*)*\s*[:=])$/iu;
 
-export function parseOutline(raw) {
-    const source = String(raw || '');
-    const widget = /<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i.exec(source);
-    const content = stripRecordWrappers(widget ? widget[1] : source, outlineAnchorKind, completeOutlineStructure);
+function parseOutlineBlock(raw, structured = false) {
+    const content = stripRecordWrappers(raw, outlineAnchorKind, completeOutlineStructure);
     const lines = content.split('\n');
     const firstField = lines.find(line => cleanOutlineLine(line));
-    const structured = Boolean(widget) || outlineAnchorKind(firstField) === 'beat' && lines.some(line => outlineAnchorKind(line) === 'scene');
+    const isStructured = structured || outlineAnchorKind(firstField) === 'beat' && lines.some(line => outlineAnchorKind(line) === 'scene');
     const beats = [];
     let current = null;
     let field = '';
+    let inMetadataBlock = false;
     for (const rawLine of lines) {
         const text = cleanOutlineLine(rawLine);
         if (!text) continue;
@@ -39,21 +41,38 @@ export function parseOutline(raw) {
                 think: '',
             };
             field = '';
+            inMetadataBlock = false;
         } else if (/^Scene\s*[:：]/i.test(text) && current) {
             current.scene = text.replace(/^Scene\s*[:：]\s*/i, '').trim();
             field = 'scene';
+            inMetadataBlock = false;
         } else if (/^Subtext\s*[:：]/i.test(text) && current) {
             current.subtext = text.replace(/^Subtext\s*[:：]\s*/i, '').trim();
             field = 'subtext';
+            inMetadataBlock = false;
         } else if (/^Think\s*[:：]/i.test(text) && current) {
             current.think = text.replace(/^Think\s*[:：]\s*/i, '').trim();
             field = 'think';
-        } else if (structured && current && ['scene', 'subtext', 'think'].includes(field)) {
+            inMetadataBlock = false;
+        } else if (isStructured && current && OUTLINE_METADATA_HEADER_RX.test(text)) {
+            inMetadataBlock = true;
+        } else if (isStructured && current && inMetadataBlock) {
+            continue;
+        } else if (isStructured && current && ['scene', 'subtext', 'think'].includes(field)) {
             current[field] = [current[field], text].filter(Boolean).join('\n');
         }
     }
     if (current) beats.push(current);
     return beats;
+}
+
+export function parseOutline(raw) {
+    const source = String(raw || '');
+    const widgets = [...source.matchAll(/<outline_widget[^>]*>([\s\S]*?)<\/outline_widget\s*>/gi)];
+    if (!widgets.length) return parseOutlineBlock(source);
+    // Parse each wrapper independently.  Joining bodies first would let a Beat
+    // from one wrapper absorb a Scene from another wrapper.
+    return widgets.flatMap(match => parseOutlineBlock(match[1], true));
 }
 
 export function isCompleteOutlineBeat(beat) {
@@ -79,40 +98,59 @@ export function normalizeOutlineResponse(raw) {
 
 import { normalizeEditableText } from '../utils/text-edit.js';
 
+function outlineContentRanges(source) {
+    const widgets = [...source.matchAll(/<outline_widget[^>]*>([\s\S]*?)<\/outline_widget\s*>/gi)];
+    if (!widgets.length) return [{ contentStart: 0, contentEnd: source.length, content: source }];
+    return widgets.map(match => {
+        const contentStart = match.index + match[0].indexOf(match[1]);
+        return { contentStart, contentEnd: contentStart + match[1].length, content: match[1] };
+    });
+}
+
+function outlineBeatLineIndexes(content) {
+    return content.split('\n').flatMap((line, index) => outlineAnchorKind(line) === 'beat' ? [index] : []);
+}
+
 // 仅替换指定 Beat 的 Scene 行；不重新序列化，因而保留未知字段与原始包装。
 export function editOutlineScene(raw, index, value) {
-    const source = String(raw || ''); const widget = /<outline_widget\b[^>]*>([\s\S]*?)<\/outline_widget\s*>/i.exec(source); const before = widget ? source.slice(0, widget.index + widget[0].indexOf(widget[1])) : ''; const after = widget ? source.slice(widget.index + widget[0].indexOf(widget[1]) + widget[1].length) : ''; const content = widget ? widget[1] : source; const lines = content.split('\n'); const starts = [];
-    lines.forEach((line, lineIndex) => { if (/^\s*(?:[#>*-]\s*)*Beat\s*[:：]/i.test(line)) starts.push(lineIndex); });
-    const start = starts[Number(index)], end = starts[Number(index) + 1] ?? lines.length;
+    const source = String(raw || '');
+    let remaining = Number(index); let range = null; let starts = null;
+    for (const candidate of outlineContentRanges(source)) {
+        const candidateStarts = outlineBeatLineIndexes(candidate.content);
+        if (remaining < candidateStarts.length) { range = candidate; starts = candidateStarts; break; }
+        remaining -= candidateStarts.length;
+    }
+    if (!range) return { ok: false, reason: 'not-found', raw };
+    const content = range.content; const lines = content.split('\n');
+    const start = starts[remaining], end = starts[remaining + 1] ?? lines.length;
     if (start == null) return { ok: false, reason: 'not-found', raw };
     const normalized = normalizeEditableText(value); let scene = -1, insert = end;
     for (let i = start + 1; i < end; i++) {
-        if (/^\s*Scene\s*[:：]/i.test(lines[i])) scene = i;
-        else if (insert === end && /^\s*(?:Subtext|Think)\s*[:：]/i.test(lines[i])) insert = i;
+        const kind = outlineAnchorKind(lines[i]);
+        if (kind === 'scene') scene = i;
+        else if (insert === end && (kind === 'subtext' || kind === 'think')) insert = i;
     }
-    if (scene >= 0) { if (normalized) lines[scene] = lines[scene].replace(/^(\s*)Scene\s*[:：].*$/i, `$1Scene: ${normalized}`); else lines.splice(scene, 1); }
+    if (scene >= 0) { if (normalized) lines[scene] = `${lines[scene].match(/^\s*/)[0]}Scene: ${normalized}`; else lines.splice(scene, 1); }
     else if (normalized) lines.splice(insert, 0, `Scene: ${normalized}`);
-    return { ok: true, raw: widget ? before + lines.join('\n') + after : lines.join('\n'), value: normalized };
+    return { ok: true, raw: source.slice(0, range.contentStart) + lines.join('\n') + source.slice(range.contentEnd), value: normalized };
 }
 
 export function deleteOutlineBeatFromRaw(raw, index) {
     const source = String(raw || '');
-    const widget = /<outline_widget[^>]*>([\s\S]*?)<\/outline_widget>/i.exec(source);
-    const contentStart = widget ? widget.index + widget[0].indexOf(widget[1]) : 0;
-    const content = widget ? widget[1] : source;
-    const contentEnd = contentStart + content.length;
-    const starts = [];
-    let offset = 0;
-    for (const match of content.matchAll(/.*(?:\n|$)/g)) {
-        const line = match[0];
-        if (!line) continue;
-        const text = line.replace(/\r?\n$/, '').trim().replace(/^[>#*\-\s]+/, '').replace(/\*+/g, '');
-        if (/^Beat\s*[:：]/i.test(text)) starts.push(contentStart + offset);
-        offset += line.length;
+    if (!Number.isInteger(index) || index < 0) return null;
+    let remaining = index; let removeStart = null; let removeEnd = null;
+    for (const range of outlineContentRanges(source)) {
+        const starts = outlineBeatLineIndexes(range.content);
+        if (remaining >= starts.length) { remaining -= starts.length; continue; }
+        const lines = range.content.split('\n');
+        const startLine = starts[remaining]; const endLine = starts[remaining + 1] ?? lines.length;
+        const offset = lines.slice(0, startLine).reduce((total, line) => total + line.length + 1, 0);
+        const endOffset = lines.slice(0, endLine).reduce((total, line) => total + line.length + 1, 0);
+        removeStart = range.contentStart + offset;
+        removeEnd = Math.min(range.contentStart + endOffset, range.contentEnd);
+        break;
     }
-    if (!Number.isInteger(index) || index < 0 || index >= starts.length) return null;
-    const removeStart = starts[index];
-    const removeEnd = index + 1 < starts.length ? starts[index + 1] : contentEnd;
+    if (removeStart == null) return null;
     return source.slice(0, removeStart) + source.slice(removeEnd);
 }
 

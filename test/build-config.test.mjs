@@ -10,6 +10,7 @@ test('host imports resolve in an independent checkout without the installed ST d
     try {
         const filename = path.join(directory, 'rolldown.config.mjs');
         await fs.copyFile(new URL('../rolldown.config.mjs', import.meta.url), filename);
+        await fs.copyFile(new URL('../style.css', import.meta.url), path.join(directory, 'style.css'));
         const { default: config } = await import(pathToFileURL(filename));
         const resolve = config.plugins[0].resolveId;
         for (const [importer, source, expected] of [

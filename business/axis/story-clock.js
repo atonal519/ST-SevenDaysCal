@@ -168,11 +168,17 @@ function parseStoryClockMetaValue(raw, calendarOverride = null) {
     const time = dirtyStructuredTime ? null : parseStoryTime(structuredTime || value, { structured: !!structuredTime });
     return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, year: date?.year ?? null, eraLabel: date?.eraLabel ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
+// Literal format examples contain no time metadata; leave real incomplete/duplicate markers visible to validation.
+const CLOCK_TEMPLATE_VALUE = /^\s*[|｜]?\s*date\s*[=＝:]\s*(?:…+|\.{3})\s*[|｜]\s*weekday\s*[=＝:]\s*(?:周x|…+|\.{3})\s*[|｜]\s*time\s*[=＝:]\s*(?:…+|\.{3})\s*$/i;
+function storyClockMarkers(text, namespace, edge) {
+    return [...text.matchAll(new RegExp(`<!--\\s*${namespace}-${edge}\\s+([\\s\\S]*?)\\s*-->`, 'ig'))]
+        .filter(match => !CLOCK_TEMPLATE_VALUE.test(match[1]));
+}
 export function parseStoryClock(message, calendarOverride = null) {
     const text = String(message || '');
     const candidates = CLOCK_NAMESPACES.map(namespace => {
-        const starts = [...text.matchAll(new RegExp(`<!--\\s*${namespace}-start\\s+([\\s\\S]*?)\\s*-->`, 'ig'))];
-        const ends = [...text.matchAll(new RegExp(`<!--\\s*${namespace}-end\\s+([\\s\\S]*?)\\s*-->`, 'ig'))];
+        const starts = storyClockMarkers(text, namespace, 'start');
+        const ends = storyClockMarkers(text, namespace, 'end');
         if (!starts.length && !ends.length) return null;
         const start = starts[0]; const end = ends[0];
         const startMeta = start ? parseStoryClockMetaValue(start[1], calendarOverride) : null; const endMeta = end ? parseStoryClockMetaValue(end[1], calendarOverride) : null;
@@ -189,8 +195,8 @@ export function storyClockNarrativeBody(message) {
     const text = String(message || '');
     const parsed = parseStoryClock(text);
     const namespace = parsed.namespace ?? 'SDC';
-    const start = new RegExp(`<!--\\s*${namespace}-start\\s+[\\s\\S]*?\\s*-->`, 'i').exec(text);
-    const end = new RegExp(`<!--\\s*${namespace}-end\\s+[\\s\\S]*?\\s*-->`, 'i').exec(text);
+    const start = storyClockMarkers(text, namespace, 'start')[0];
+    const end = storyClockMarkers(text, namespace, 'end')[0];
     return start && end && end.index >= start.index + start[0].length
         ? text.slice(start.index + start[0].length, end.index)
         : text;

@@ -142,7 +142,7 @@ export function renderLedgerEditor() {
                 <label class="sp-led-field sp-led-field-sm"><span>周期天数 <small>仅周期</small></span><input type="number" id="sp-led-f-cyc" min="1" max="366" value="${e.周期长度 || ''}"></label>
             </div>
             ${startBlock}
-            <p class="sp-cfg-hint" style="opacity:.7">保存后此条会<b>上锁</b>，AI 判定车不再自动改动它（可在行上点锁图标解锁）。</p>
+            <p class="sp-cfg-hint">保存后此条会<b>上锁</b>，AI 判定车不再自动改动它（可在行上点锁图标解锁）。</p>
         </div>
         <div class="sp-alm-editor-actions">
             <button class="sp-mini-btn sp-led-editor-cancel">取消</button>

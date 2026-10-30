@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQianQianJieMemoryAccess, QIANQIANJIE_BRIDGE_KEY } from './qianqianjie.js';
+import { createQianQianJieMemoryAccess, QIANQIANJIE_BRIDGE_KEY, qianQianJieMemoryDiagnostic } from './qianqianjie.js';
 
 function promptSnapshot(overrides = {}) {
     return {
@@ -191,8 +191,12 @@ test('qianqianjie reports synchronous and asynchronous prompt failures without f
         const result = await fixture.access.result();
         assert.equal(result.status, 'read-failed');
         assert.equal(result.text, '');
-        assert.equal(result.message, 'prompt-read-failed');
+        assert.equal(result.message, '千千结记忆读取失败：prompt-read-failed');
+        assert.equal(qianQianJieMemoryDiagnostic(result), '千千结记忆读取失败：prompt-read-failed');
         assertNoLegacyReads(fixture);
+    }
+    for (const status of ['read-failed', 'error']) {
+        assert.equal(qianQianJieMemoryDiagnostic({ status, message: 'raw-prompt-failure' }), '千千结记忆读取失败：raw-prompt-failure');
     }
 });
 

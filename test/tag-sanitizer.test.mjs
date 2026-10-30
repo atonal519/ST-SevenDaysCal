@@ -5,10 +5,9 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { normalizeTagRules } from '../utils/tag-names.js';
-import { stripTags } from '../memory.js';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
 import { sanitizeGenerationContextText } from '../runtime/generation-context.js';
-import { getSharedBodyWrappers, updateSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
+import { getSharedBodyWrappers, updateSharedBodyWrappers, sanitizeStoryBody as stripTags } from '../utils/shared-body-wrappers.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexSource = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -73,7 +72,7 @@ test('paired literal cleaning keeps XML rescue separate and drops whole draft ra
 });
 
 test('settings input and change persist normalized wrapper syntax and refill the field', () => {
-    const region = productionRegion('function sanitizeTagList(raw) {', "$in('#sp-custom-prompt')");
+    const region = productionRegion('function sanitizeTagList(raw) {', "    bindTagField('#sp-mem-keeptags'");
     const handlers = {};
     const extensionSettings = { 'schedule-planner': { extraTags: '' } };
     const settings = getSharedBodyWrappers(extensionSettings);
@@ -104,6 +103,7 @@ test('settings input and change persist normalized wrapper syntax and refill the
     const rendered = { '#sp-mem-keeptags': { value: '', matches: () => true }, '#sp-mem-extratags': { value: '', matches: () => false } };
     vm.runInNewContext(`${readback}\nrefreshWrapperInputs();`, {
         getWrapperSettings: () => settings,
+        refreshUserNameMask() {},
         $in: selector => [rendered[selector]],
     });
     assert.equal(rendered['#sp-mem-extratags'].value, '[draft]...[/draft],think');

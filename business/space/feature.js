@@ -25,7 +25,7 @@ export function createSpaceFeature(env = {}) {
     });
     const context = createSpaceContext(env.contextEnv);
     const renderer = createSpaceRenderer(env.renderEnv);
-    const ui = createSpaceUi({ ...env.ui, captureIdentity, isCurrentIdentity: isCurrent, onPageChanged: () => renderFailure() });
+    const ui = createSpaceUi({ ...env.ui, widgetParsers: env.renderEnv, captureIdentity, isCurrentIdentity: isCurrent, onPageChanged: () => renderFailure() });
     const failureNotes = createPanelFailureStore({ escapeHtml: env.escapeHtml });
     const failureKey = (target, pageId = ui.activePageId()) => JSON.stringify([String(target?.chatId || ''), Number(target?.chatRevision) || 0, pageId]);
     const renderFailure = () => ui.setFailureHtml?.(failureNotes.html('space-chat', failureKey(repository.capture())));
@@ -39,6 +39,7 @@ export function createSpaceFeature(env = {}) {
         openSettings: env.openSettings,
         temperature: env.temperature,
         ui,
+        widgetParsers: env.renderEnv,
     });
     const chatUi = Object.create(chat);
     Object.defineProperties(chatUi, {

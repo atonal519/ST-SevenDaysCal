@@ -1,12 +1,16 @@
 import { daysInMonth, isGregorian, weekdayFor } from '../calendar/date.js';
 import { daysBetweenCalendarDates } from './full-ordinal.js';
+import { ledgerEntryWithinCutoff } from '../ledger/date.js';
 
 // 仅读取历条目、历法和本楼日期；同月日才补齐本楼已知纪年，不借现实年份。
 export function createPhoneCalendarSource(env) {
-    return () => {
+    return ({ expectedChatId, includeSchedules = false } = {}) => {
         if (!env.enabled()) return null;
-        const items = env.items(); if (!Array.isArray(items)) return null;
-        const calendar = env.calendar(), context = env.context();
+        const context = env.context(), chatId = context.chatId ?? context.getCurrentChatId?.();
+        if (expectedChatId !== undefined && expectedChatId !== chatId) return null;
+        const items = env.items(), ledgerEntries = includeSchedules ? env.entries?.() : null;
+        if (!Array.isArray(items) && !(Array.isArray(ledgerEntries) && ledgerEntries.length)) return null;
+        const calendar = env.calendar();
         let meta = null;
         for (let i = context.chat.length - 1; i >= 0; i--) {
             const message = context.chat[i];
@@ -21,12 +25,13 @@ export function createPhoneCalendarSource(env) {
         const weekdayReference = calibration
             ? { year: today.year ?? null, month: calibration.refMonth, day: calibration.refDay, weekday: calibration.weekday }
             : (!pinned || sameDate) && meta ? { ...today, weekday: meta.weekdayIndex } : null;
-        return { calendar, items, today, weekdayReference };
+        return { calendar, items, today, weekdayReference,
+            ledgerEntries: Array.isArray(ledgerEntries) ? ledgerEntries : [], ledgerCutoff: includeSchedules ? env.floorContext?.() : undefined };
     };
 }
 
-// 手机只拿历的显示投影；不返回存储引用、规划或刻度，不调用生成与保存入口。
-export function createPhoneCalendarApi({ read, formatDate } = {}) {
+// 月历只投影年度日期；短信另取截止范围内的刻度副本，不调用生成与保存入口。
+export function createPhoneCalendarApi({ read, formatDate, selectSchedules, dueInfo, daysSince } = {}) {
     const monthDays = (cal, month, year) => year == null ? Number(cal.months[month - 1]?.days || 0) : daysInMonth(cal, month, year);
     const ordinal = (date, cal) => cal.months.slice(0, date.month - 1).reduce((sum, _, i) => sum + monthDays(cal, i + 1, date.year), date.day);
     const yearLength = (cal, year) => cal.months.reduce((sum, _, i) => sum + monthDays(cal, i + 1, year), 0);
@@ -37,14 +42,30 @@ export function createPhoneCalendarApi({ read, formatDate } = {}) {
         const year = `${date.eraLabel || cal.era || ''}${date.year != null ? `${date.year}年` : ''}`;
         return part === 'year' ? year : `${part === 'monthDay' ? '' : year}${cal.months[date.month - 1].name}${date.day}日`;
     };
-    function source() {
-        const state = read?.();
-        if (!state?.calendar?.months?.length || !Array.isArray(state.items)) return null;
+    function source(options) {
+        const state = read?.(options);
+        if (!state?.calendar?.months?.length || !Array.isArray(state.items) && !options?.includeSchedules) return null;
         const cal = state.calendar;
-        const items = state.items.filter(item => ['festival', 'anniversary'].includes(item?.type) && String(item.name || '').trim() && validDay({ month: item.month, day: item.day, year: null }, cal));
+        const items = (Array.isArray(state.items) ? state.items : []).filter(item => ['festival', 'birthday', 'anniversary', 'custom'].includes(item?.type) && String(item.name || '').trim() && validDay({ month: item.month, day: item.day, year: null }, cal));
         return { ...state, items, today: state.today && validDay(state.today, cal) ? state.today : null };
     }
     const itemView = (item, cal) => ({ id: String(item.id || `${item.type}:${item.month}:${item.day}:${item.name}`), name: String(item.name), type: item.type, date: String(item.displayDate || label({ month: item.month, day: item.day }, cal, 'monthDay')), days: Math.max(1, Number(item.days) || 1), note: String(item.note || '') });
+    const anchorView = anchor => anchor ? { floor: anchor.楼层 ?? null, date: structuredClone(anchor.历日期 ?? null), ...(anchor.来源指纹 ? { sourceId: String(anchor.来源指纹) } : {}) } : null;
+    function schedulesFor(state, query) {
+        const cutoff = state.ledgerCutoff;
+        if (!Number.isInteger(cutoff?.floor)) return [];
+        const entries = (state.ledgerEntries || []).filter(entry => entry && ['持续状态', '约定待办', '周期'].includes(entry.类型)
+            && entry.状态 === '活跃' && entry.静音 !== true && !['待确认', '来源已删除'].includes(entry.来源状态)
+            && ledgerEntryWithinCutoff(entry, cutoff.floor));
+        const picked = entries.length ? selectSchedules?.(entries, String(query), cutoff) || [] : [];
+        return picked.map(entry => {
+            const due = dueInfo?.(entry, cutoff);
+            return { id: String(entry.id || ''), reason: String(entry.事由 || ''), type: entry.类型, status: entry.状态, currentState: String(entry.现状 || ''),
+                startedAt: anchorView(entry.起始锚), observedAt: anchorView(entry.现状锚), dueAt: anchorView(entry.到期锚),
+                cycleDays: entry.周期长度 == null ? null : Number(entry.周期长度), relatedPeople: (entry.牵扯 || []).map(String),
+                elapsedDays: daysSince?.(entry, cutoff) ?? null, dueInfo: due ? { days: due.天数, overdue: due.过期 } : null };
+        });
+    }
     function elapsed(item, date, cal) {
         const start = { year: date.year ?? null, month: item.month, day: item.day };
         if (!validDay(start, cal)) return null;
@@ -93,8 +114,8 @@ export function createPhoneCalendarApi({ read, formatDate } = {}) {
                 }),
             };
         },
-        getPhoneCalendarContext({ query = '' } = {}) {
-            const state = source(); if (!state) return null;
+        getPhoneCalendarContext({ query = '', expectedChatId, includeSchedules = false } = {}) {
+            const state = source({ expectedChatId, includeSchedules: includeSchedules === true }); if (!state) return null;
             const { calendar: cal, today } = state;
             const events = state.items.flatMap(item => {
                 const d = today ? until(item, today, cal) : null;
@@ -103,7 +124,9 @@ export function createPhoneCalendarApi({ read, formatDate } = {}) {
                 const ongoing = d === 0 && Math.max(1, Number(item.days) || 1) > 1;
                 return [{ ...itemView(item, cal), when: d == null ? '' : ongoing ? '进行中' : d === 0 ? '今天' : `${d}天后`, order: ongoing ? -1 : d ?? Infinity }];
             }).sort((a, b) => a.order - b.order).map(({ order, ...item }) => item);
-            return events.length ? { today: today ? label(today, cal) : '', events } : null;
+            const schedules = includeSchedules === true ? schedulesFor(state, query) : [];
+            return events.length || schedules.length ? { today: today ? label(today, cal) : '', events,
+                ...(schedules.length ? { schedules, scheduleAsOf: { floor: state.ledgerCutoff.floor, date: structuredClone(state.ledgerCutoff.date ?? null) } } : {}) } : null;
         },
     });
 }

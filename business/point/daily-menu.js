@@ -55,7 +55,7 @@ export function parseDailyMenu(raw) {
             continue;
         }
         imageFor = null;
-        const heading = line.match(/^(?:title|标题|今日菜单|菜单主题)\s*[:：]\s*(.+)$/i);
+        const heading = line.match(/^(?:title|标题|今日菜单|今天吃点啥|菜单主题)\s*[:：]\s*(.+)$/i);
         if (heading && !result.title) {
             result.title = cleanCell(heading[1]);
             continue;
@@ -73,7 +73,7 @@ export function parseDailyMenu(raw) {
         imageFor = { name: cells[0], category: cells[1], description: cells.slice(2).join(' | ') };
         result.items.push(imageFor);
     }
-    result.title ||= '今日菜单';
+    result.title ||= '今天吃点啥';
     return result;
 }
 
@@ -89,7 +89,7 @@ export function renderDailyMenuHtml(menu, { escapeHtml = value => String(value),
     const action = busy
         ? '<button class="sp-gen-btn sp-daily-menu-cancel" type="button">取消生成</button>'
         : `<button class="sp-gen-btn sp-daily-menu-generate" type="button">${items.length ? '换一份' : '生成菜单'}</button>`;
-    return `<section class="sp-daily-menu-card" aria-label="今日菜单"><div class="sp-daily-menu-header"><strong>今日菜单</strong>${date}</div>${items.length ? `<h3>${escapeHtml(String(menu?.title || '今日菜单'))}</h3>${introHtml}` : ''}${body}${action}</section>`;
+    return `<section class="sp-daily-menu-card" aria-label="今天吃点啥"><div class="sp-daily-menu-header"><strong>今天吃点啥</strong>${date}</div>${items.length ? `<h3>${escapeHtml(String(menu?.title || '今天吃点啥'))}</h3>${introHtml}` : ''}${body}${action}</section>`;
 }
 
 export function createDailyMenuController(env) {

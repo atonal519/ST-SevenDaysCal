@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindStoryClock, parseStoryClock, completeStoryClock } from './story-clock.js';
+import { bindStoryClock, parseStoryClock, completeStoryClock, storyClockNarrativeBody } from './story-clock.js';
 import { _cnToNumber } from '../../utils/cn-date.js';
 
 const gregorian = { kind: 'gregorian', months: [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31].map(days => ({ days })) };
@@ -65,4 +65,31 @@ test('recognized Chinese years preserve date bounds and the complete-clock contr
     assert.equal(completeStoryClock(parseStoryClock(start + '正文' + end)), true);
     assert.equal(completeStoryClock(parseStoryClock(start + marker('天历七百四十三年11月30日', 'end', '25:00'))), false);
     assert.equal(completeStoryClock(parseStoryClock(start + start + end)), false);
+});
+
+
+test('草稿中的纯占位格式例不覆盖正文真实跨午夜时间戳，正文截取用同一真实对', () => {
+    const template = '<draft>格式检查：<!-- SDC-start | date=… | weekday=周X | time=… -->示例正文<!-- SDC-end | date=… | weekday=周X | time=… --></draft>';
+    const start = '<!-- SDC-start | date=2025-05-15 | weekday=周四 | time=23:56 -->';
+    const end = '<!-- SDC-end | date=2025-05-16 | weekday=周五 | time=00:20 -->';
+    const raw = '<content>' + template + start + '真正的正文' + end + '</content>';
+    const clock = parseStoryClock(raw);
+    assert.equal(completeStoryClock(clock), true);
+    assert.equal(clock.duplicate, false);
+    assert.equal(clock.startMeta.day, 15);
+    assert.equal(clock.endMeta.day, 16);
+    assert.equal(clock.endMeta.time, '0:20');
+    assert.equal(storyClockNarrativeBody(raw), '真正的正文');
+    for (const weekday of ['…', '...']) {
+        const actualShape = raw.replaceAll('weekday=周X', `weekday=${weekday}`);
+        assert.equal(completeStoryClock(parseStoryClock(actualShape)), true);
+        assert.equal(storyClockNarrativeBody(actualShape), '真正的正文');
+    }
+    const asciiTemplate = template.replaceAll('…', '...').replaceAll('周X', '...');
+    assert.equal(completeStoryClock(parseStoryClock(asciiTemplate + start + '正文' + end)), true);
+    assert.equal(completeStoryClock(parseStoryClock(template.replaceAll('周X', '周四') + start + '正文' + end)), false);
+    assert.equal(completeStoryClock(parseStoryClock(template)), false);
+    assert.equal(completeStoryClock(parseStoryClock(template + start + start + '正文' + end)), false);
+    const malformed = '<!-- SDC-start | date=2025-05-15 | weekday=周四 | time=未知 -->';
+    assert.equal(completeStoryClock(parseStoryClock(malformed + start + '正文' + end)), false);
 });

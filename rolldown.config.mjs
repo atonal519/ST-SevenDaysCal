@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -17,6 +19,11 @@ const hostModules = [
 
 export default {
     input: path.join(pluginRoot, 'index.js'),
+    transform: {
+        define: {
+            __GOUHUA_STYLESHEET_REVISION__: JSON.stringify(createHash('sha256').update(readFileSync(path.join(pluginRoot, 'style.css'))).digest('hex').slice(0, 12)),
+        },
+    },
     external: hostModules,
     makeAbsoluteExternalsRelative: false,
     plugins: [{

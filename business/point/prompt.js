@@ -27,7 +27,7 @@ export function buildPrompt(userName, charName, perspective = 'user', pinned = n
 【成人选材 Ticket（仅本轮有效）】
 K = 本轮新建事件数（不含锁定事件）。锁定事件不附 Ticket 或 AdultProof；新 Event 按最终输出顺序使用前 K 张 Ticket，从 1 连续编号，不能跳票、重排或凑成人：
 ${(adultContext.tickets || []).map(ticket => `${ticket.id}｜${ticket.pool === 'nsfw' ? 'NSFW' : 'SFW'}${ticket.selection ? `｜素材：${ticket.selection}` : ''}`).join('\n')}
-NSFW 票只适用于明确成年且自愿的虚构角色；对应 Event 必须落实具体行为、主动方、明确回应与当场影响，并紧邻完整「AdultProof: kind=sexual-contact; action=原文子串; response=原文子串; impact=原文子串」。SFW 票不得成人化，紧邻「AdultProof: NONE」。这里“兑现”只指 description／线头动态是否写出该 NSFW 素材，与故事时间是否已经发生无关；点本来就是未来规划，未来规划不等于未兑现，Day 2、Day 3、Future 不得因此写 NONE。三个原文子串必须来自该 Event 的 description 或线头动态，不得引用 title；不得输出 Adult 行或其他票。拒绝、沉默、回忆、计划、假设、比较、普通亲昵、留宿、洗澡按摩、单纯裸体、事后照料不得作为 NSFW 票内容。
+${adultContext.mode === 'mixed' ? '混合模式的成人比例只是情境适合时的选材倾向，不是最低数量。缺少当前关系或情境依据时可全部为普通事件；NSFW票提供的素材可以不采用，仍保留对应Ticket并写AdultProof: NONE。只有实际采用成人素材时才按下列合同写proof。\n采用的 ' : ''}NSFW 票只适用于明确成年且自愿的虚构角色；对应 Event 必须落实具体行为、主动方、明确回应与当场影响，并紧邻完整「AdultProof: kind=sexual-contact; action=原文子串; response=原文子串; impact=原文子串」。SFW 票不得成人化，紧邻「AdultProof: NONE」。这里“兑现”只指 description／线头动态是否写出该 NSFW 素材，与故事时间是否已经发生无关；点本来就是未来规划，未来规划不等于未兑现，Day 2、Day 3、Future 不得因此写 NONE。三个原文子串必须来自该 Event 的 description 或线头动态，不得引用 title；不得输出 Adult 行或其他票。拒绝、沉默、回忆、计划、假设、比较、普通亲昵、留宿、洗澡按摩、单纯裸体、事后照料不得作为 NSFW 票内容。
 成人票不得跨越接触前、互动进行中、事后三个阶段中的多个区间；成人点仍须有明确成年、自愿和当前剧情证据。
 ` : '';
     const eventTemplate = adultContext?.mode && adultContext.mode !== 'off'

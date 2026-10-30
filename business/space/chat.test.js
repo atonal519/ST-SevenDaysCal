@@ -5,6 +5,58 @@ import { createSpaceChat } from './chat.js';
 import { createSpaceContext } from './context.js';
 import { createSpaceRepository } from './repository.js';
 import { createSpaceIdentity } from './identity.js';
+import { createSpaceRenderer } from './render.js';
+import { parseCompleteOutline } from '../outline/schema.js';
+
+test('面口语请求经实际发送保存和渲染只应用完整节点，格式重发沿用面合同', async () => {
+    let stored = null;
+    const registrations = [], requests = [];
+    const target = createSpaceIdentity({ chatId: 'outline-flow', historyKey: { kind: 'space-chat', view: 'user', charName: '' } });
+    const repository = createSpaceRepository({
+        captureIdentity: () => target, isCurrent: () => true,
+        readStore: () => stored,
+        writeStore: (_key, value) => { stored = value; return true; },
+    });
+    repository.load();
+    const context = createSpaceContext({
+        context: () => ({ name1: '用户', name2: '角色' }),
+        readMemory: async () => '【关系卡】\n关系阶段：观察期',
+        readOutlineDraftSnapshot: () => ({ raw: '' }), rawToken: () => 'outline-empty-baseline',
+    });
+    const renderer = createSpaceRenderer();
+    const chat = createSpaceChat({
+        repository, loadConfig: () => ({ url: 'fixture', key: 'fixture' }),
+        buildMessages: context.buildMessages,
+        postCompletion: async ({ messages }) => {
+            requests.push(messages);
+            assert.equal(messages.expectedWidgetKind, undefined);
+            assert.deepEqual(messages.allowedWidgetKinds, ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
+            assert.match(messages[0].content, /每个节点都要有 Beat 与 Scene/);
+            return `<outline_widget>\nBeat: 明日|残稿|事件|支线|待确认\n</outline_widget>
+<outline_widget>\nBeat: 后日|核对来信|调查|主线|来源待核实\nScene: 两人核对信件来源，保留尚未作出的选择\n【关系卡】\n关系阶段：观察期\n</outline_widget>\n额外的结束说明`;
+        },
+        ui: {
+            appendMessage(role, content, index, policy) {
+                if (role !== 'ai') return;
+                const rendered = renderer.message(role, content, index, widget => { registrations.push(widget); return 'outline'; }, policy);
+                assert.match(rendered.widgetCards, /应用到面/);
+                assert.doesNotMatch(rendered.widgetCards, /无法应用|额外的结束说明|观察期|残稿/);
+            },
+        },
+    });
+    for (const question of ['面卡 生大纲卡', '再生一次格式错了']) {
+        assert.equal((await chat.send(question)).status, 'updated');
+        const saved = stored.messages.at(-1);
+        assert.equal(saved.expectedWidgetKind, 'outline_widget');
+        assert.equal(parseCompleteOutline(saved.content).length, 1);
+        assert.equal(parseCompleteOutline(saved.content)[0].title, '核对来信');
+        assert.doesNotMatch(saved.content, /观察期|结束说明|残稿/);
+    }
+    assert.equal(requests.length, 2);
+    assert.equal(registrations.length, 2);
+    assert.equal(registrations[0].body, stored.messages[1].content);
+    assert.equal(registrations[1].body, stored.messages[3].content);
+});
 
 test('间超过20条历史完整保存并经正式上下文与客户端发送，本轮只追加一次回复', async t => {
     const host = 'data:text/javascript,' + encodeURIComponent(`
@@ -72,7 +124,7 @@ test('间超过20条历史完整保存并经正式上下文与客户端发送，
     ]);
     const sent = requests[0].messages.slice(1);
     const expected = original.map(({ role, content }) => ({ role, content }));
-    expected[1].content = '收到备忘。【此前回复含线卡片候选（不代表已应用）】';
+    expected[1].content = '【历史卡片候选｜应用状态以当前正式资料为准】\n收到备忘。<line_widget>旧候选正文</line_widget>';
     assert.deepEqual(sent, [...expected, { role: 'user', content: question }]);
     assert.deepEqual(rendered.map(([role, , index]) => [role, index]), [['user', 24], ['ai', 25]]);
     assert.equal(redraws.length, 0);
@@ -124,7 +176,7 @@ test('间讨论的呈现异常保留已本地应用的回复', async () => {
     assert.equal(roots.get('A').messages.at(-1).content, '已生成回复');
 });
 
-test('间在历史和首次显示中沿用本轮卡片白名单', async () => {
+test('间在历史和首次显示中沿用实际卡片类型白名单', async () => {
     const roots = new Map([['A', []]]);
     const rendered = [];
     const repository = createSpaceRepository({
@@ -132,16 +184,17 @@ test('间在历史和首次显示中沿用本轮卡片白名单', async () => {
         isCurrent: () => true, readStore: () => roots.get('A'), writeStore: (_key, value) => { roots.set('A', value); return true; },
     });
     const messages = [];
-    Object.defineProperty(messages, 'allowedWidgetKinds', { value: ['outline_widget'], enumerable: false });
+    Object.defineProperty(messages, 'allowedWidgetKinds', { value: ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'], enumerable: false });
     Object.defineProperty(messages, 'outlineRawToken', { value: 'formal-token', enumerable: false });
     const chat = createSpaceChat({
         repository, loadConfig: () => ({ url: 'u', key: 'k' }), buildMessages: async () => messages,
-        postCompletion: async () => '<outline_widget>候选</outline_widget>',
+        postCompletion: async () => '<outline_widget>Beat: 明日|候选|关系|主线|结果\nScene: 候选场景</outline_widget>',
         ui: { appendMessage: (...args) => rendered.push(args), beginThinking: () => ({}), endThinking() {} },
     });
     assert.equal((await chat.send('帮我整理当前面')).status, 'updated');
     const stored = roots.get('A').messages.at(-1);
     assert.deepEqual(stored.allowedWidgetKinds, ['outline_widget']);
+    assert.equal(stored.expectedWidgetKind, 'outline_widget');
     assert.equal(stored.outlineRawToken, 'formal-token');
     const aiRender = rendered.find(args => args[0] === 'ai');
     assert.deepEqual(aiRender[3].allowedWidgetKinds, ['outline_widget']);

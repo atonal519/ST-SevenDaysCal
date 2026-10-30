@@ -152,10 +152,11 @@ export function firstPointEventBlock(raw) {
     const src = String(raw || '');
     const m = src.match(/<schedule_widget[^>]*>([\s\S]*?)<\/schedule_widget>/i);
     const inner = m ? m[1] : src;
-    const block = pointEventBlocksFromInner(inner)[0];
-    if (!block) return null;
-    const text = block.join('\n').trim();
-    return parsePointEventRecord(text) ? text : null;
+    for (const block of pointEventBlocksFromInner(inner)) {
+        const text = block.join('\n').trim();
+        if (isCompletePointEvent(parsePointEventRecord(text))) return text;
+    }
+    return null;
 }
 
 // 用与解析器完全相同的 Event 边界替换整块，避免旧续行残留。
@@ -368,10 +369,10 @@ export function bindPointAdultTickets(raw, mode = 'off', calendar = null) {
     const tickets = new Map(ticketed.map(event => [event, planById.get(event.ticketId)]));
     events.forEach(event => {
         const ticket = tickets.get(event);
-        const trustedNsfwTicket = Boolean(ticket?.adult);
+        const trustedNsfwTicket = normalized === 'dominant' && Boolean(ticket?.adult);
         event.pin = false;
-        // Adult 只由本地票据与正文核验得出；忽略模型自报的 Adult，同时保留旧有正文识别兼容。
-        event.adult = Boolean(trustedNsfwTicket || verifyPointAdultProof(event, event.adultProof) || verifyPointAdultContent(event));
+        // mixed可不采用成人素材，票型本身不决定标记；沿原结构证据和正文识别。
+        event.adult = Boolean(trustedNsfwTicket || verifyPointAdultProof(event, event.adultProof, { nsfwTicket: normalized === 'mixed' && Boolean(ticket?.adult) }) || verifyPointAdultContent(event));
         delete event.ticketId;
         delete event.adultProof;
     });

@@ -7,7 +7,7 @@ export const PORTABLE_CHAT_VERSION = 1;
 export const PORTABLE_CHAT_MAX_BYTES = 8 * 1024 * 1024;
 
 export const PORTABLE_MODULES = Object.freeze([
-    Object.freeze({ id: 'points', label: '点（全部人物、固定/最近人物）' }),
+    Object.freeze({ id: 'points', label: '点（全部人物、菜单/衣橱、固定/最近人物）' }),
     Object.freeze({ id: 'lines', label: '线（含虚线）' }),
     Object.freeze({ id: 'outline', label: '面（含旧面讨论）' }),
     Object.freeze({ id: 'space', label: '间（含面候选）' }),
@@ -22,7 +22,7 @@ const SPACE_WIDGET_RX = /<(?:schedule_widget|line_widget|almanac_widget|era_widg
 const PERSISTENT_ROOT_KEYS = Object.freeze(['sp-store', 'sp-memory', 'sp-theater', 'sp-ledger']);
 
 const KEY_MATCHERS = Object.freeze({
-    points: key => key === 'schedule-user' || key.startsWith('schedule-char-') || key === 'daily-menu-user' || key === 'charnames-recent' || key === 'char-pins',
+    points: key => key === 'schedule-user' || key.startsWith('schedule-char-') || key === 'daily-menu-user' || key === 'wardrobe-user' || key === 'charnames-recent' || key === 'char-pins',
     lines: key => key === 'lines-user' || key === 'dashed-user',
     outline: key => key === 'outline-user' || key.startsWith('outline-char-') || key === 'creative-chat-user' || key.startsWith('creative-chat-char-'),
     space: key => key === 'space-chat-user',

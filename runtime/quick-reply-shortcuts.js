@@ -14,7 +14,8 @@ export const QUICK_REPLY_SHORTCUTS = Object.freeze([
     { key: 'coordinate', label: '坐标', view: 'anchor' },
     { key: 'settings', label: '设置', mode: 'settings' },
     { key: 'memory', label: '记忆', mode: 'memory' },
-    { key: 'daily-menu', label: '今日菜单', mode: 'daily-menu' },
+    { key: 'daily-menu', label: '吃啥', mode: 'daily-menu' },
+    { key: 'wardrobe', label: '穿啥', mode: 'wardrobe' },
 ]);
 
 const byKey = new Map(QUICK_REPLY_SHORTCUTS.map(shortcut => [shortcut.key, shortcut]));
@@ -72,6 +73,8 @@ export function createQuickReplyShortcutSync({ getApi, notify = () => {} }) {
 
         const expected = new Map(QUICK_REPLY_SHORTCUTS.map(item => [item.label, quickReplyShortcutMessage(item.key)]));
         const existingOwned = new Set();
+        const oldMenu = (set.qrList ?? []).filter(qr => qr.label === '今日菜单' && qr.message === quickReplyShortcutMessage('daily-menu') && !qr.automationId);
+        if (oldMenu.length) existingOwned.add('今日菜单');
         for (const qr of set.qrList ?? []) {
             const message = expected.get(qr.label);
             if (message !== undefined && qr.message === message && !qr.automationId) {
@@ -92,6 +95,27 @@ export function createQuickReplyShortcutSync({ getApi, notify = () => {} }) {
         if (!existingOwned.size && !createdHere) {
             notify('快捷入口同步暂停：同名 Quick Reply 组无法确认归属，请先改组名', true);
             return;
+        }
+
+        // 只迁移旧菜单的确切自有入口；原生更新保留ID及用户改过的按钮设置。
+        if (oldMenu.length) {
+            if (oldMenu.some(qr => !Number.isInteger(qr.id)) && (set.qrList ?? []).filter(qr => qr.label === '今日菜单').length > 1) {
+                notify('快捷入口同步暂停：旧菜单按钮无法唯一确认，请先整理同名按钮', true);
+                return;
+            }
+            const menuLabel = byKey.get('daily-menu').label;
+            let duplicateStart = 0;
+            if (!existingOwned.has(menuLabel)) {
+                const qr = oldMenu[0];
+                api.updateQuickReply(QUICK_REPLY_SHORTCUT_SET, Number.isInteger(qr.id) ? qr.id : qr.label, {
+                    newLabel: menuLabel,
+                    ...(qr.title === '打开构画「今日菜单」' ? { title: `打开构画「${menuLabel}」` } : {}),
+                });
+                existingOwned.add(menuLabel);
+                duplicateStart = 1;
+            }
+            for (const qr of oldMenu.slice(duplicateStart)) api.deleteQuickReply(QUICK_REPLY_SHORTCUT_SET, Number.isInteger(qr.id) ? qr.id : qr.label);
+            existingOwned.delete('今日菜单');
         }
 
         for (const item of QUICK_REPLY_SHORTCUTS) {

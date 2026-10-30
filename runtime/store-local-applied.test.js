@@ -400,8 +400,8 @@ if (!requestSignal.aborted || menuAbortResult?.status !== 'cancelled') throw new
 if (menuContext.chatMetadata['sp-store'].data['daily-menu-user'] !== beforeMenu) throw new Error('plugin total gate allowed menu write after cancellation');
 if (typeof seam.readStore !== 'function') throw new Error('production read seam missing');
 const scheduleWithMenu = seam.renderSchedule('not a calendar', 'UI probe');
-const menuButtonIndex = scheduleWithMenu.indexOf('sp-open-daily-menu'); const refreshButtonIndex = scheduleWithMenu.indexOf('sp-refresh-schedule');
-if (refreshButtonIndex < 0 || menuButtonIndex < refreshButtonIndex || !scheduleWithMenu.includes('aria-label="今日菜单"')) throw new Error('real schedule renderer omitted or misplaced menu entry');
+const menuButtonIndex = scheduleWithMenu.indexOf('sp-open-daily-menu'); const wardrobeButtonIndex = scheduleWithMenu.indexOf('sp-open-wardrobe'); const refreshButtonIndex = scheduleWithMenu.indexOf('sp-refresh-schedule');
+if (menuButtonIndex < 0 || wardrobeButtonIndex <= menuButtonIndex || refreshButtonIndex <= wardrobeButtonIndex || !scheduleWithMenu.includes('aria-label="今天吃点啥"')) throw new Error('real schedule renderer omitted or misplaced menu/wardrobe/refresh entries');
 if (!seam.pointScheduleEmptyHtml().includes('sp-open-daily-menu')) throw new Error('real point empty state omitted menu entry');
 let popup = null; const menuContent = { innerHTML: '' }; const uiHandlers = {};
 const closeButton = { focus() { this.focused = true; } };

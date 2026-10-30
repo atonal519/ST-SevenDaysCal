@@ -1,6 +1,5 @@
 import { icon } from '../../utils/icons.js';
-import { extractWidgets, spaceMessagePlainText, spacePageId } from './schema.js';
-import { normalizeOutlineResponse } from '../outline/schema.js';
+import { resolveSpaceWidgets, spaceMessagePlainText, spacePageId } from './schema.js';
 
 export function createSpaceUi(host = {}) {
     const query = host.query || (() => null);
@@ -91,9 +90,9 @@ export function createSpaceUi(host = {}) {
         for (let index = history.length - 1; index >= 0; index -= 1) {
             const message = history[index];
             if (message?.role !== 'assistant' || message.portableReadonly === true || spacePageId(message) !== activePage) continue;
-            if ((message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget'))
-                && typeof message.outlineRawToken === 'string' && message.outlineRawToken
-                && normalizeOutlineResponse(message.content)) return index;
+            const resolved = resolveSpaceWidgets(message.content, message, host.widgetParsers || {});
+            if (!resolved.ambiguous && resolved.widgets.some(widget => widget.kind === 'outline_widget')
+                && typeof message.outlineRawToken === 'string' && message.outlineRawToken) return index;
         }
         return -1;
     };
@@ -104,8 +103,8 @@ export function createSpaceUi(host = {}) {
         const latestOutline = latestOutlineCandidateIndex(history);
         history.forEach((message, index) => {
             if (spacePageId(message) !== activePage) return;
-            const hasOutlineCandidate = message.expectedWidgetKind === 'outline_widget' || message.allowedWidgetKinds?.includes?.('outline_widget')
-                || extractWidgets(message.content).widgets.some(widget => widget.kind === 'outline_widget');
+            const resolved = resolveSpaceWidgets(message.content, message, host.widgetParsers || {});
+            const hasOutlineCandidate = !resolved.ambiguous && resolved.widgets.some(widget => widget.kind === 'outline_widget');
             appendMessage(message.role === 'assistant' ? 'ai' : message.role, message.content, index, {
                 pageId: spacePageId(message),
                 pointBaselines: message.pointBaselines,

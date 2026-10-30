@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
+import { getSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexSource = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -102,6 +103,7 @@ test('generation history carries real mesids only for internal memory exclusion,
     const region = productionFunctions('function buildRecentGenerationHistory(ctx, historyLimit, opts = {}) {', 'function outlineWorldInfoTriggerText(history) {');
     const context = evaluateFunctionRegion(region, 'buildGenerationHistoryContext', {
         getSettings: () => ({ keepTags: '', extraTags: '' }),
+        getWrapperSettings: () => getSharedBodyWrappers({}),
         selectVisibleChatHistory,
         substituteParams: value => value,
         sanitizeGenerationContextText: value => String(value).replace(/<erase>[\s\S]*?<\/erase>/g, ''),
@@ -130,6 +132,7 @@ test('discussion recent-floor ids are computed from the exact sanitized visible 
     const region = productionFunctions('function buildRecentChatEntries(ctx, floorCount = 6, perMessageChars = 2500) {', 'function worldInfoMaxContext(ctx) {');
     const helpers = evaluateFunctionRegion(region, '({ buildRecentChatEntries, getRecentVisibleFloorIds })', {
         getSettings: () => ({ keepTags: '', extraTags: '' }),
+        getWrapperSettings: () => getSharedBodyWrappers({}),
         selectVisibleChatHistory,
         memory: { stripTags: value => String(value).replace(/<erase>[\s\S]*?<\/erase>/g, '') },
     });
@@ -209,16 +212,14 @@ test('buildMessages passes internal recent ids to memory but returns only API ro
     assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-2))), { role: 'assistant', content: 'recent floor' });
 });
 
-test('creative outline memory read uses the matching recent-six visible floor ids', async () => {
-    const region = productionFunctions('async function readCreativeChatMemory({ ctx, userMsg, signal, selection, excludeMesIds = [] }) {', 'async function composeCreativeChatMessages(');
+test('间的记忆接口传递本轮查询与匹配的近期六楼排除ID', async () => {
+    const region = productionFunctions('readMemory: (ctx, query) =>', '        readRecent:');
     let options;
-    const read = evaluateFunctionRegion(region, 'readCreativeChatMemory', {
-        memoryPreCheckConfirm: async () => true,
-        creativeChatMemorySelectionCurrent: () => true,
+    const ports = evaluateFunctionRegion('', `({${region}})`, {
         getMemText: async opts => { options = opts; return 'builtin'; },
-        outlineChatMemoryError: message => new Error(message),
+        getRecentVisibleFloorIds: (_ctx, count) => { assert.equal(count, 6); return [12, 14, 15, 16, 17, 18]; },
     });
-    const result = await read({ ctx: {}, userMsg: '讨论', selection: { source: 'builtin' }, excludeMesIds: [12, 14, 15, 16, 17, 18] });
-    assert.equal(result.text, 'builtin');
+    const result = await ports.readMemory({}, '讨论');
+    assert.equal(result, 'builtin');
     assert.deepEqual(JSON.parse(JSON.stringify(options)), { query: '讨论', excludeMesIds: [12, 14, 15, 16, 17, 18] });
 });

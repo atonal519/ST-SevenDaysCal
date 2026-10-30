@@ -17,12 +17,8 @@ const adultBlurEnabled = () => env?.settings?.().adultBlurEnabled !== false;
 const adultToggle = adult => adult ? '<span class="sp-point-adult-badge">18+</span>' : '';
 const sensitive = (html, adult) => adult && adultBlurEnabled() ? `<span class="sp-adult-sensitive" tabindex="0" role="button" aria-label="显示成人内容" title="显示成人内容"><span aria-hidden="true">${html}</span></span>` : html;
 
-// 点类型元数据：icon 使用共享 Tabler Outline 图名，cls 保留业务类型配色。
-export const TYPE_META = {
-    main  : { icon: 'bolt',      label: '明线', cls: 'sp-type-world'     },
-    hidden: { icon: 'eye-off', label: '暗线', cls: 'sp-type-major'     },
-    bond  : { icon: 'heart',     label: '红线', cls: 'sp-type-character' },
-};
+import { TYPE_META } from './presentation.js';
+export { TYPE_META } from './presentation.js';
 
 export const SP_JUMP_HINT_POINT = `<div class="sp-jump-hint">想新增或调整点？去「间」说明人物与目标，例如“把下周的约定整理成可应用到点的方案”：<button type="button" class="sp-jump-link">去间提出要求 →</button></div>`;
 
@@ -98,8 +94,11 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         <span class="${chipCls}">${escapeHtml(userName)}</span>
         <span class="sp-schedule-label">的点</span>
         ${pinBtn}
-        <button class="sp-panel-refresh sp-refresh-schedule${refreshBusy}" title="${axisState._almSyncingPoint ? '点正在同步中，稍候…' : '重新生成点'}">${icon("refresh")}</button>
-        <button class="sp-panel-refresh sp-open-daily-menu" title="今日菜单" aria-label="今日菜单">${icon("tools-kitchen-2")}</button>
+        <span class="sp-point-tools">
+            <button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button>
+            <button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button>
+            <button class="sp-panel-refresh sp-refresh-schedule${refreshBusy}" title="${axisState._almSyncingPoint ? '点正在同步中，稍候…' : '重新生成点'}">${icon("refresh")}</button>
+        </span>
     </div>` + SP_JUMP_HINT_POINT;
 
     // Parse failed (AI leaked prompt / malformed output) — still render header

@@ -34,9 +34,18 @@ function createHost() {
             save(sets.get(setName));
             return qr;
         },
+        updateQuickReply(setName, label, { newLabel, ...props } = {}) {
+            const set = sets.get(setName);
+            const qr = set.qrList.find(qr => Number.isInteger(label) ? qr.id === label : qr.label === label);
+            if (!qr) throw new Error('missing QR');
+            if (newLabel !== undefined) qr.label = newLabel;
+            Object.assign(qr, props);
+            save(set);
+            return qr;
+        },
         deleteQuickReply(setName, label) {
             const set = sets.get(setName);
-            set.qrList = set.qrList.filter(qr => qr.label !== label);
+            set.qrList = set.qrList.filter(qr => Number.isInteger(label) ? qr.id !== label : qr.label !== label);
             save(set);
         },
         addGlobalSet(name) { active.add(name); },
@@ -59,12 +68,14 @@ function createHost() {
     return api;
 }
 
-test('quick reply shortcut catalog has thirteen unique stable entry keys', () => {
-    assert.equal(QUICK_REPLY_SHORTCUTS.length, 13);
-    assert.equal(new Set(QUICK_REPLY_SHORTCUTS.map(item => item.key)).size, 13);
-    assert.equal(new Set(QUICK_REPLY_SHORTCUTS.map(item => item.label)).size, 13);
+test('quick reply shortcut catalog has fourteen unique stable entry keys', () => {
+    assert.equal(QUICK_REPLY_SHORTCUTS.length, 14);
+    assert.equal(new Set(QUICK_REPLY_SHORTCUTS.map(item => item.key)).size, 14);
+    assert.equal(new Set(QUICK_REPLY_SHORTCUTS.map(item => item.label)).size, 14);
     assert.equal(QUICK_REPLY_SHORTCUTS.find(item => item.key === 'axis-calendar').sheet, 'calendar');
     assert.equal(QUICK_REPLY_SHORTCUTS.find(item => item.key === 'lines-dashed').view, 'lines');
+    assert.deepEqual(QUICK_REPLY_SHORTCUTS.find(item => item.key === 'wardrobe'), { key: 'wardrobe', label: '穿啥', mode: 'wardrobe' });
+    assert.equal(QUICK_REPLY_SHORTCUTS.find(item => item.key === 'daily-menu').label, '吃啥');
 });
 
 test('empty defaults create nothing; selected entries persist, execute the command, and preserve manual QR', async () => {
@@ -98,16 +109,17 @@ test('empty defaults create nothing; selected entries persist, execute the comma
     }
 
     // Model the native Quick Reply execution path: button message -> parser command callback.
-    const menuButton = set.qrList.find(qr => qr.label === '今日菜单');
+    const menuButton = set.qrList.find(qr => qr.label === '吃啥');
     const commandResult = await parserCommand.callback({}, menuButton.message.slice(1 + QUICK_REPLY_SHORTCUT_COMMAND.length));
     assert.equal(commandResult, '');
-    assert.deepEqual(opened, ['daily-menu']);
+    assert.equal(await parserCommand.callback({}, 'wardrobe'), '');
+    assert.deepEqual(opened, ['daily-menu', 'wardrobe']);
     assert.equal(await parserCommand.callback({}, 'unknown-key'), '');
     assert.equal(errors.length, 1);
 
     api.reload();
     set = api.getSetByName(QUICK_REPLY_SHORTCUT_SET);
-    assert.deepEqual(set.qrList.map(qr => qr.label).sort(), ['今日菜单', '点', '轴 · 日历']);
+    assert.deepEqual(set.qrList.map(qr => qr.label).sort(), ['吃啥', '点', '轴 · 日历']);
 
     set.qrList.push({ label: '手工按钮', message: '/help', automationId: '' });
     await sync(['point']);
@@ -212,4 +224,30 @@ test('rapid preference changes reconcile in order to the last selected state', a
     await Promise.all([sync(['point']), sync(['outline']), sync([])]);
     assert.equal(api.getSetByName(QUICK_REPLY_SHORTCUT_SET), undefined);
     assert.equal(api.active.has(QUICK_REPLY_SHORTCUT_SET), false);
+});
+
+test('旧菜单owned QR原位改短名，保ID、消息、用户设置且不重复',async()=>{
+    const api=createHost();
+    const original={id:42,label:'今日菜单',message:quickReplyShortcutMessage('daily-menu'),automationId:'',title:'用户自定提示',icon:'utensils',showLabel:false,isHidden:true,executeOnUser:true};
+    api.addManualSet(QUICK_REPLY_SHORTCUT_SET,[original,{id:99,label:'手工',message:'/help'}],false);
+    const sync=createQuickReplyShortcutSync({getApi:()=>api});
+    await sync(['daily-menu','wardrobe']);await sync(['daily-menu','wardrobe']);
+    const list=api.getSetByName(QUICK_REPLY_SHORTCUT_SET).qrList;
+    assert.deepEqual(list.find(qr=>qr.id===42),{...original,label:'吃啥'});
+    assert.equal(list.filter(qr=>qr.message===quickReplyShortcutMessage('daily-menu')).length,1);
+    assert.equal(list.filter(qr=>qr.label==='穿啥').length,1);
+    assert.equal(list.find(qr=>qr.id===99).message,'/help');
+});
+test('已有新旧owned只去旧重复，同名手工冲突不改旧菜单',async()=>{
+    const old={id:1,label:'今日菜单',message:quickReplyShortcutMessage('daily-menu'),automationId:''};
+    const current={id:2,label:'吃啥',message:quickReplyShortcutMessage('daily-menu'),automationId:''};
+    const api=createHost();api.addManualSet(QUICK_REPLY_SHORTCUT_SET,[old,current,{id:3,label:'今日菜单',message:'/help'}]);
+    await createQuickReplyShortcutSync({getApi:()=>api})(['daily-menu']);
+    assert.deepEqual(api.getSetByName(QUICK_REPLY_SHORTCUT_SET).qrList,[current,{id:3,label:'今日菜单',message:'/help'}]);
+    const collision=createHost();const manual={id:3,label:'吃啥',message:'/help'};collision.addManualSet(QUICK_REPLY_SHORTCUT_SET,[old,manual]);
+    await createQuickReplyShortcutSync({getApi:()=>collision})(['daily-menu']);
+    assert.deepEqual(collision.getSetByName(QUICK_REPLY_SHORTCUT_SET).qrList,[old,manual]);
+    const automated=createHost();automated.addManualSet(QUICK_REPLY_SHORTCUT_SET,[{...old,automationId:'manual-flow'}]);
+    await createQuickReplyShortcutSync({getApi:()=>automated})(['daily-menu']);
+    assert.deepEqual(automated.getSetByName(QUICK_REPLY_SHORTCUT_SET).qrList,[{...old,automationId:'manual-flow'}]);
 });

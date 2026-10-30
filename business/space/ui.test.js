@@ -124,3 +124,28 @@ test('双页面候选按所属窗口判最新，保留真实公共索引与应�
     ui.switchPage('2');
     assert.deepEqual(ui.widgetEntries().map(({ historyIndex, readOnly, outlineRawToken }) => [historyIndex, readOnly, outlineRawToken]), [[1, false, 'formal']]);
 });
+
+test('历史重绘不会因额外未开放面卡锁住合法点卡', () => {
+    const history = [{
+        role: 'assistant', pageId: '1', expectedWidgetKind: 'schedule_widget', allowedWidgetKinds: ['schedule_widget'],
+        pointBaselines: [], content: '<schedule_widget>Event: main|有效点|说明|明天||||</schedule_widget>\n<outline_widget>Beat: 明日|额外|关系|主线|结果\nScene: 额外面</outline_widget>',
+    }];
+    const node = { empty() {}, attr() { return this; }, prop() { return this; }, val() { return ''; } };
+    const fakeNode = () => ({ addClass() { return this; }, attr() { return this; }, html() { return this; }, append() { return this; }, appendTo() { return this; } });
+    const ui = createSpaceUi({ query: () => node, $: fakeNode, element: () => ({ scrollTop: 0, scrollHeight: 0 }) });
+    ui.bindControllers({ chat: { history: () => history }, repository: { pages: () => ['1'] }, renderer: createSpaceRenderer() });
+    ui.renderHistory(history);
+    assert.deepEqual(ui.widgetEntries().map(({ kind, readOnly }) => [kind, readOnly]), [['schedule_widget', false]]);
+});
+
+
+test('点候选沿点页面类型class取色，保留三类标签与应用行为', () => {
+    const renderer = createSpaceRenderer();
+    for (const [type, cls, label] of [['main', 'sp-type-world', '明线'], ['hidden', 'sp-type-major', '暗线'], ['bond', 'sp-type-character', '红线']]) {
+        const html = renderer.widgetCard('schedule_widget', `<schedule_widget>Event: ${type}|候选|说明|明天||||</schedule_widget>`, 'w1');
+        assert.match(html, new RegExp(`sp-space-widget-badge ${cls}`));
+        assert.match(html, new RegExp(label));
+        assert.match(html, /sp-space-widget-apply/);
+        assert.doesNotMatch(html, /style="[^"]*(?:color|background)/);
+    }
+});

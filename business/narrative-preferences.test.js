@@ -78,6 +78,7 @@ test('space card generation reads the current character preference through its c
 test('semantic-route applies point/line preferences only if it chooses those cards', async () => {
     const preferencesByCharacter = { card: { ...preferences('meso'), narrativePace: 'fast' } };
     const ctx = { name1: '用户', name2: '角色', characterId: 'card' };
+    const base = { userName: '用户', charName: '角色', preferences: preferencesByCharacter.card };
     const feature = createSpaceContext({
         context: () => ctx,
         preferences: current => preferencesByCharacter[current.characterId],
@@ -91,27 +92,35 @@ test('semantic-route applies point/line preferences only if it chooses those car
     assert.match(routed, /普通讨论不套用卡片的剧情偏好/);
     assert.match(routed, /快：压缩无关键变化的过渡，让有据事件实质推进，过渡可自然跨日或数日/);
     assert.equal(routed.split('【剧情推进幅度】').length - 1, 1);
-    for (const kind of ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget']) assert.match(routed, new RegExp(`<${kind}>`));
-    assert.doesNotMatch(routed, /【面草稿】|<outline_widget>/);
+    for (const kind of ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']) assert.match(routed, new RegExp(`<${kind}>`));
     assert.match(routed, /中观：观察已有组织/);
     assert.match(routed, /剧情倾向·优先级/);
+    assert.equal(routed.split('【点／线／面创作偏好（条件适用）】').length - 1, 1);
+    assert.equal(routed.split('【叙事尺度·观察焦点】').length - 1, 1);
+    assert.equal(routed.split('【剧情推进幅度】').length - 1, 1);
+    assert.match(routed, /推进幅度仅在线卡中采用，点、面、轴日期、历法及讨论不采用/);
 
     const discussion = '我只是想了解线的未来可能性，不要输出卡片';
-    assert.equal(classifySpaceIntent(discussion).action, 'discuss');
+    assert.equal(classifySpaceIntent(discussion).action, 'semantic-route');
+    assert.deepEqual(classifySpaceIntent(discussion).allowedWidgetKinds, ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
     const discussed = (await build(discussion))[0].content;
-    assert.match(discussed, /普通讨论或只读查询/);
-    assert.doesNotMatch(discussed, /剧情倾向·优先级|叙事尺度·观察焦点/);
+    assert.match(discussed, /本轮输出模式：语义路由/);
+    assert.match(discussed, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
 
     for (const [request, kind] of [['给我做一个点卡片', 'schedule_widget'], ['给我生成一条线卡片', 'line_widget']]) {
-        assert.equal(classifySpaceIntent(request).kind, kind);
+        assert.equal(classifySpaceIntent(request).kind, null);
         const explicit = (await build(request))[0].content;
         assert.match(explicit, /叙事尺度·观察焦点/);
         assert.match(explicit, /剧情倾向·优先级/);
-        assert.doesNotMatch(explicit, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
+        assert.match(explicit, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
     }
 
-    const almanac = (await build('给我出个轴卡片'))[0].content;
-    assert.doesNotMatch(almanac, /叙事尺度·观察焦点|剧情倾向·优先级/);
+    const almanac = buildSpaceChatSystemPrompt({ ...base, intent: { action: 'write', kind: 'almanac_widget' } });
+    assert.match(almanac, /<almanac_widget>/);
+    assert.doesNotMatch(almanac, /【点／线／面创作偏好（条件适用）】|【叙事尺度·观察焦点】|【剧情推进幅度】/);
+    const era = buildSpaceChatSystemPrompt({ ...base, intent: { action: 'write', kind: 'era_widget' } });
+    assert.match(era, /<era_widget>/);
+    assert.doesNotMatch(era, /【点／线／面创作偏好（条件适用）】|【叙事尺度·观察焦点】|【剧情推进幅度】/);
 
     const semanticFace = buildSpaceChatSystemPrompt({
         userName: '用户', charName: '角色', preferences: preferencesByCharacter.card,
@@ -122,7 +131,7 @@ test('semantic-route applies point/line preferences only if it chooses those car
         intent: { action: 'semantic-route', kind: null }, requestedMaterials: { outline: false },
     });
     assert.match(semanticFace, /<outline_widget>/);
-    assert.doesNotMatch(semanticUnrelated, /<outline_widget>|【面草稿】/);
+    assert.match(semanticUnrelated, /<outline_widget>|【面草稿】/);
 });
 
 test('outline host injection keeps current and future material and respects both switches', () => {

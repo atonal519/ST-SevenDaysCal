@@ -3,12 +3,18 @@ import assert from 'node:assert/strict';
 import { createPointController, pointScheduleNeedsDateSync, splitAbortController } from './controller.js';
 import { editPointDescription, editPointFields } from './mutations.js';
 import { allocatePointAdultPools, parsePointAdultProof, pointTicketPlan, verifyPointAdultContent, verifyPointAdultProof } from './adult.js';
-import { bindPointAdultTickets, mergePinnedPoints, numberedPointList, parseCalendar, parsePointEventRecord, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
+import { bindPointAdultTickets, firstPointEventBlock, mergePinnedPoints, numberedPointList, parseCalendar, parsePointEventRecord, replacePointEventBlock, stripPointAdultMetadata, validateGeneratedCalendar } from './parse.js';
 import { createPointWidgetActions } from './widget.js';
 import { buildPrompt } from './prompt.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 import { buildDailyMenuPrompt, createDailyMenuController, parseDailyMenu, renderDailyMenuHtml } from './daily-menu.js';
 import { __portableChatDataTestSeams, buildPortableChatPackage, createPortableImportPlan, parsePortableChatPackage } from '../../runtime/portable-chat-data.js';
+
+test('firstPointEventBlock skips an invalid first event and keeps the first complete event', () => {
+    const raw = '<schedule_widget>Event: main|缺时间|说明||||\nEvent: main|合法|完整说明|明天||||</schedule_widget>';
+    const block = firstPointEventBlock(raw);
+    assert.match(block, /Event: main\|合法\|完整说明\|明天/);
+});
 
 test('daily menu prompt and parser support a compact optional intro and keep valid partial rows', () => {
     const prompt = buildDailyMenuPrompt({ storyDate: null, previousMenu: { items: [{ name: '旧菜' }, { name: '旧汤' }] } });
@@ -48,6 +54,9 @@ test('daily menu prompt and parser support a compact optional intro and keep val
     assert.deepEqual(legacy, { title: '旧主题', items: [{ name: '旧菜', category: '主菜', description: '旧说明' }] });
     assert.equal(parseDailyMenu('Title: alias\n简介：一段说明 😺\nDish: 菜 | 主菜 | 说明').intro, '一段说明 😺');
     assert.equal(parseDailyMenu('无菜单').items.length, 0);
+    assert.equal(parseDailyMenu('今日菜单：旧自定主题\nDish: 菜 | 主菜 | 说明').title,'旧自定主题');
+    assert.equal(parseDailyMenu('今天吃点啥：新自定主题\nDish: 菜 | 主菜 | 说明').title,'新自定主题');
+    assert.equal(parseDailyMenu('Dish: 菜 | 主菜 | 说明').title,'今天吃点啥');
 });
 
 test('daily menu renderer escapes model content', () => {
@@ -242,13 +251,13 @@ test('point adult pools use independent 0/30/70 prefixes and tickets', () => {
     assert.equal(pointTicketPlan('mixed', 14).at(-1).id, 'POINT-TICKET-14');
 });
 
-test('mixed 与 dominant 都直接信任 NSFW Ticket，SFW 与 off 仍保持普通', () => {
+test('dominant仍信任NSFW票，mixed不因未采用的成人票误标普通事件', () => {
     const raw = `<calendar_widget>\nDay: 1\n${Array.from({ length: 11 }, (_, i) => `Event: main|中性${i + 1}|普通安排|早|地点|记录\nTicket: POINT-TICKET-${i + 1}${i % 2 ? '\nAdultProof: NONE' : ''}`).join('\n')}\n</calendar_widget>`;
     const dominant = bindPointAdultTickets(raw, 'dominant');
     assert.equal((dominant.match(/Adult: true/g) || []).length, 8);
     assert.doesNotMatch(dominant, /POINT-TICKET|AdultProof/);
     const mixed = bindPointAdultTickets(raw, 'mixed');
-    assert.equal((mixed.match(/Adult: true/g) || []).length, 3);
+    assert.equal((mixed.match(/Adult: true/g) || []).length, 0);
     assert.doesNotMatch(mixed, /POINT-TICKET|AdultProof/);
     const off = bindPointAdultTickets(raw, 'off');
     assert.doesNotMatch(off, /Adult: true/);
@@ -372,7 +381,7 @@ test('point adult proof ignores only punctuation and whitespace while preserving
     ]) assert.equal(verifyPointAdultProof(event, parsePointAdultProof(changed)), false, changed);
 });
 
-test('四张 NSFW Ticket 经权威绑定均写入 Adult', () => {
+test('mixed保留有效正文与proof，但不因票误标损坏的引文', () => {
     const fixtures = new Map([
         [2, ['Event: bond|虚构成人场景甲|成年角色甲用手抚弄角色乙的性器。角色乙明确表示同意并主动回应，双方的亲密关系发生变化。|20:00|虚构测试室甲|测试观察员记录匿名状态。', 'AdultProof: kind=sexual-manual; action=用手抚弄角色乙的性器; response=角色乙明确表示同意并主动回应; impact=双方的亲密关系发生变化']],
         [6, ['Event: bond|虚构成人场景乙|成年角色甲用手抚弄角色乙的性器，在双方再次确认同意后继续手部刺激。角色乙主动配合，双方关系发生变化。|21:00|虚构测试室乙|测试观察员记录匿名状态。', 'AdultProof: kind=sexual-manual; action=用手抚弄角色乙的性器后继续手部刺激; response=角色乙主动配合; impact=双方关系发生变化']],
@@ -391,7 +400,7 @@ test('四张 NSFW Ticket 经权威绑定均写入 Adult', () => {
     assert.equal(verifyPointAdultContent(parsedInput[8]), true, 'Ticket 9 保持由正文交合兜底命中');
     const stored = bindPointAdultTickets(raw, 'mixed');
     const adultTitles = parseCalendar(stored).days[0].events.filter(event => event.adult).map(event => event.title);
-    assert.deepEqual(adultTitles, ['虚构成人场景甲', '虚构成人场景乙', '虚构成人场景丙', '虚构成人场景丁']);
+    assert.deepEqual(adultTitles, ['虚构成人场景甲', '虚构成人场景丙', '虚构成人场景丁']);
     assert.doesNotMatch(stored, /POINT-TICKET|AdultProof/);
 });
 
@@ -435,13 +444,13 @@ test('四份结构化 proof 按 NSFW Ticket 信任并只标记对应事件', () 
     assert.equal(parseCalendar(bindPointAdultTickets(sfwRaw, 'mixed')).days[0].events[0].adult, false, 'SFW Ticket 不因暧昧结构 proof 放行');
 });
 
-test('09:01 全 NONE 与缺失损坏 proof 不影响本地 NSFW Ticket 权威分类', () => {
+test('mixed普通规划在NONE或损坏proof下均不因成人票误标', () => {
     const makeBlocks = proofFor => Array.from({ length: 14 }, (_, offset) => {
         const ticket = offset + 1;
         return `Event: bond|09:01规划${ticket}|角色与同伴继续安排未来关系推进|待定|住处|同伴记录后续方向\nTicket: POINT-TICKET-${ticket}${proofFor(ticket)}`;
     }).join('\n');
     const allNone = `<calendar_widget>\nDay: 1\n${makeBlocks(() => '\nAdultProof: NONE')}\n</calendar_widget>`;
-    const expected = ['09:01规划2', '09:01规划6', '09:01规划9', '09:01规划12'];
+    const expected = [];
     const allNoneStored = bindPointAdultTickets(allNone, 'mixed');
     assert.deepEqual(parseCalendar(allNoneStored).days[0].events.filter(event => event.adult).map(event => event.title), expected);
     assert.doesNotMatch(allNoneStored, /POINT-TICKET|AdultProof/);
@@ -474,7 +483,7 @@ test('proof verifier 仍拒绝非成人进入、亲昵、照料、计划回忆�
     }
 });
 
-test('proof verifier 检查三段反证，但 NSFW Ticket 绑定仍保持权威', () => {
+test('proof verifier 检查三段反证，mixed不以票覆盖证据', () => {
     const desc = '角色抚摸对方性器。对方主动回应。双方确认这只是医疗检查并且不含性意味。';
     const proofLine = 'AdultProof: kind=sexual-contact; action=角色抚摸对方性器; response=对方主动回应; impact=双方确认这只是医疗检查并且不含性意味';
     const event = { desc, npcAction: '' };
@@ -483,10 +492,10 @@ test('proof verifier 检查三段反证，但 NSFW Ticket 绑定仍保持权威'
 
     const raw = `<calendar_widget>\nDay: 1\nEvent: main|普通安排|角色整理行程|白天|书房|同伴记录\nTicket: POINT-TICKET-1\nAdultProof: NONE\nDay: 2\nEvent: main|医疗检查|${desc}|下午|诊室|同伴整理记录\nTicket: POINT-TICKET-2\n${proofLine}\n</calendar_widget>`;
     const events = parseCalendar(bindPointAdultTickets(raw, 'mixed')).days.flatMap(day => day.events);
-    assert.deepEqual(events.map(item => item.adult), [false, true]);
+    assert.deepEqual(events.map(item => item.adult), [false, false]);
 });
 
-test('proof verifier 保持硬拒绝优先，但 NSFW Ticket 绑定仍保持权威', () => {
+test('proof verifier 保持硬拒绝优先，mixed不以票覆盖证据', () => {
     const desc = '角色抚摸对方性器。对方先默许，随后明确拒绝并要求停止。双方关系发生变化。';
     const proofLine = 'AdultProof: kind=sexual-contact; action=角色抚摸对方性器; response=对方先默许，随后明确拒绝并要求停止; impact=双方关系发生变化';
     const event = { desc, npcAction: '' };
@@ -495,7 +504,7 @@ test('proof verifier 保持硬拒绝优先，但 NSFW Ticket 绑定仍保持权�
 
     const raw = `<calendar_widget>\nDay: 1\nEvent: main|普通安排|角色整理行程|白天|书房|同伴记录\nTicket: POINT-TICKET-1\nAdultProof: NONE\nDay: 2\nEvent: bond|拒绝停止|${desc}|夜间|客房|同伴离开\nTicket: POINT-TICKET-2\n${proofLine}\n</calendar_widget>`;
     const events = parseCalendar(bindPointAdultTickets(raw, 'mixed')).days.flatMap(day => day.events);
-    assert.deepEqual(events.map(item => item.adult), [false, true]);
+    assert.deepEqual(events.map(item => item.adult), [false, false]);
 });
 
 test('完成进入结构化兼容严格绑定 NSFW Ticket，SFW Ticket 不被 proof 成人化', () => {
@@ -527,14 +536,14 @@ test('reviewer 生产反例要求 proof 动作引文本身命中动作族', () =
     assert.equal(verifyPointAdultProof(event, proof, { nsfwTicket: true }), false);
 });
 
-test('proof verifier 拒绝完成进入房间，NSFW Ticket 绑定仍保持权威', () => {
+test('mixed不把技术作业的NSFW票标为成人', () => {
     const raw = '<calendar_widget>\nDay: 1\nEvent: main|普通安排|角色整理行程|白天|书房|同伴记录\nTicket: POINT-TICKET-1\nAdultProof: NONE\nDay: 2\nEvent: main|设备与机房|技术员将测试探针插入接口，随后完成进入机房。协作者主动回应检修指令，双方确认设备按计划上线。|下午|数据中心|值班员整理工具\nTicket: POINT-TICKET-2\nAdultProof: kind=sexual-contact; action=技术员将测试探针插入接口随后完成进入机房; response=协作者主动回应检修指令; impact=双方确认设备按计划上线\n</calendar_widget>';
     const event = parseCalendar(raw).days[1].events[0];
     assert.equal(verifyPointAdultProof(event, event.adultProof, { nsfwTicket: true }), false);
-    assert.match(bindPointAdultTickets(raw, 'mixed'), /Adult: true/);
+    assert.doesNotMatch(bindPointAdultTickets(raw, 'mixed'), /Adult: true/);
 });
 
-test('医疗训练正文兜底保持 false，mixed NSFW 权威而 dominant SFW 保持普通', () => {
+test('医疗训练在mixed和原dominant SFW识别均保持普通', () => {
     const medicalEvent = 'Event: main|医疗训练|医生将导管插入阴道模型完成训练。助手主动回应操作指令，两人共同完成释放，随后归档数据。|白天|训练室|同伴整理器材';
     assert.equal(verifyPointAdultContent(parsePointEventRecord(medicalEvent)), false);
 
@@ -543,12 +552,12 @@ test('医疗训练正文兜底保持 false，mixed NSFW 权威而 dominant SFW �
 
     const ticketed = `<calendar_widget>\nDay: 1\nEvent: main|普通安排|角色整理日程|上午|书房|同伴记录\nTicket: POINT-TICKET-1\n${medicalEvent}\nTicket: POINT-TICKET-2\n</calendar_widget>`;
     const mixedEvents = parseCalendar(bindPointAdultTickets(ticketed, 'mixed')).days[0].events;
-    assert.equal(mixedEvents.find(event => event.title === '医疗训练').adult, true, 'mixed 的第二张 NSFW Ticket 直接权威标记');
+    assert.equal(mixedEvents.find(event => event.title === '医疗训练').adult, false, 'mixed票不能覆盖医疗训练证据');
     const dominantEvents = parseCalendar(bindPointAdultTickets(ticketed, 'dominant')).days[0].events;
     assert.equal(dominantEvents.find(event => event.title === '医疗训练').adult, false, 'dominant 的第二张 SFW Ticket 仍按正文校验');
 });
 
-test('精确医疗 proof verifier 取消，绑定时仅 NSFW Ticket 权威标记', () => {
+test('精确医疗 proof verifier 取消，mixed不以票覆盖证据', () => {
     const desc = '医生将导管插入阴道模型完成训练。对方主动回应操作指令，双方合作关系发生变化。';
     const proofLine = 'AdultProof: kind=sexual-contact; action=医生将导管插入阴道模型完成训练; response=对方主动回应操作指令; impact=双方合作关系发生变化';
     const event = { desc, npcAction: '' };
@@ -559,7 +568,7 @@ test('精确医疗 proof verifier 取消，绑定时仅 NSFW Ticket 权威标记
 
     const raw = `<calendar_widget>\nDay: 1\nEvent: main|SFW 医疗训练|${desc}|上午|教学室|护士整理教具\nTicket: POINT-TICKET-1\n${proofLine}\nEvent: main|NSFW 医疗训练|${desc}|下午|教学室|护士整理教具\nTicket: POINT-TICKET-2\n${proofLine}\n</calendar_widget>`;
     const storedEvents = parseCalendar(bindPointAdultTickets(raw, 'mixed')).days[0].events;
-    assert.deepEqual(storedEvents.map(item => item.adult), [false, true]);
+    assert.deepEqual(storedEvents.map(item => item.adult), [false, false]);
 
     assert.equal(verifyPointAdultContent({ desc: '医生与伴侣解衣交合，对方主动回应，关系发生变化。', npcAction: '' }), true, '单独医生身份不得取消明确真实成人行为');
 });
@@ -583,7 +592,7 @@ test('教学提及性交被取消，模型室内真实 manual 行为不被误伤
     assert.deepEqual(events.map(item => item.adult), [false, true]);
 });
 
-test('检查治疗与双向教学由 verifier 取消，NSFW Ticket 绑定仍权威', () => {
+test('mixed取消医疗教学反证，保留训练结束后真实行为', () => {
     const negatives = [
         ['治疗检查', '医生在治疗中触摸患者乳房完成检查，对方主动回应检查要求，双方医患关系发生变化。', '医生在治疗中触摸患者乳房完成检查', '对方主动回应检查要求', '双方医患关系发生变化'],
         ['教学手法', '医生在课堂教学中向对方讲解抚弄性器的方法，对方主动回应教学问题，双方合作关系发生变化。', '医生在课堂教学中向对方讲解抚弄性器的方法', '对方主动回应教学问题', '双方合作关系发生变化'],
@@ -603,7 +612,7 @@ test('检查治疗与双向教学由 verifier 取消，NSFW Ticket 绑定仍权�
     blocks.push(`Event: bond|模型室真实行为|${actualDesc}|夜间|模型室|同伴已经离开\nTicket: POINT-TICKET-4\n${actualProof}`);
     const raw = `<calendar_widget>\nDay: 1\n${blocks.join('\n')}\n</calendar_widget>`;
     const events = parseCalendar(bindPointAdultTickets(raw, 'mixed')).days[0].events;
-    assert.deepEqual(events.map(item => item.adult), [false, true, false, true]);
+    assert.deepEqual(events.map(item => item.adult), [false, false, false, true]);
 });
 
 test('治疗室和检查室仅表示地点时不取消真实成人行为', () => {
@@ -708,32 +717,32 @@ test('mixed/dominant 保留 NSFW Ticket 权威，off 与 SFW 保留正文兼容'
     assert.doesNotMatch(offStored, /POINT-TICKET|AdultProof/);
 });
 
-test('边境酒馆三条完整事件均由第二张 NSFW Ticket 权威标记', () => {
+test('mixed区分边境酒馆的真实行为、普通照料与补给', () => {
     const cases = [
         ['<calendar_widget>\nDay: 1\nEvent: main|深夜·卡列布的私语与索取|卡列布在北境旅店二层客房抚弄对方性器，对方自愿回应并主动迎合，双方节奏随之改变|深夜|北境旅店二层客房|对方握住卡列布手腕后主动拉近距离，呼吸与动作同步\nTicket: POINT-TICKET-1\nDay: 2\nEvent: main|深夜·卡列布的私语与索取|卡列布抚弄性器，对方自愿回应，关系发生变化|午夜|北境旅店二层客房|对方主动迎合并调整姿势\nTicket: POINT-TICKET-2\nAdultProof: kind=sexual-manual; action=抚弄性器; response=对方自愿回应; impact=关系发生变化\nDay: 3\nEvent: main|深夜·卡列布的私语与索取|两人清晨整理衣物并重新确认边界|清晨|北境旅店二层客房|卡列布记录后续安排\nTicket: POINT-TICKET-3\nFuture:\nEvent: main|深夜·卡列布的私语与索取|两人约定再次见面|数日后|北境旅店前厅|对方留下联络暗号\nTicket: POINT-TICKET-4\n</calendar_widget>', true],
         ['<calendar_widget>\nDay: 1\nEvent: main|暴风雪夜的事后温存与关系深化|暴风雪封住了北境旅店，两人在壁炉旁完成照料并确认这段温存不含性意味|夜间|北境旅店壁炉厅|对方替卡列布换药并把水杯放到手边\nTicket: POINT-TICKET-1\nDay: 2\nEvent: main|暴风雪夜的事后温存与关系深化|两人完成照料并喂水，明确不含性意味，关系发生变化|深夜|北境旅店壁炉厅|对方沉默地检查伤口和炉火\nTicket: POINT-TICKET-2\nAdultProof: kind=sexual-manual; action=抚弄性器; response=对方自愿回应; impact=关系发生变化\nDay: 3\nEvent: main|暴风雪夜的事后温存与关系深化|暴风雪减弱后双方收拾药品|清晨|北境旅店侧室|对方将剩余药品分类\nTicket: POINT-TICKET-3\nFuture:\nEvent: main|暴风雪夜的事后温存与关系深化|两人讨论离店路线|两日后|北境旅店门廊|对方查看雪线\nTicket: POINT-TICKET-4\n</calendar_widget>', false],
         ['<calendar_widget>\nDay: 1\nEvent: main|霜降祭后·物资危机与补给决策|霜降祭后的仓库盘点显示粮药不足，角色和同伴决定优先保障伤员|上午|霜降祭旧仓库|同伴清点箱册并标出缺口\nTicket: POINT-TICKET-1\nDay: 2\nEvent: main|霜降祭后·物资危机与补给决策|角色进入北门仓库与对方同意合作，采购补给，关系发生变化|午后|北门仓库与集市|对方核对商单并安排骡车装运\nTicket: POINT-TICKET-2\nAdultProof: kind=sexual-manual; action=进入仓库; response=对方同意合作; impact=关系发生变化\nDay: 3\nEvent: main|霜降祭后·物资危机与补给决策|补给抵达后角色按轻重缓急分发物资|傍晚|霜降祭临时营地|同伴登记领取者并封存余量\nTicket: POINT-TICKET-3\nFuture:\nEvent: main|霜降祭后·物资危机与补给决策|下一批药材预计从南路运来|三日后|南路驿站|商队传回延误消息\nTicket: POINT-TICKET-4\n</calendar_widget>', false],
     ];
-    for (const [raw] of cases) {
+    for (const [raw, expected] of cases) {
         assert.equal(validateGeneratedCalendar(raw, null, { generated: false, adultMode: 'mixed' }).ok, true);
         const stored = bindPointAdultTickets(raw, 'mixed');
-        assert.equal(/Adult: true/.test(stored), true, raw);
+        assert.equal(/Adult: true/.test(stored), expected);
         assert.doesNotMatch(stored, /AdultProof|POINT-TICKET/);
     }
 });
 
-test('指定备份三条 Event 的第二张 NSFW Ticket 均保持权威', () => {
+test('mixed保留备份真实行为识别，不误标照料和补给', () => {
     const makeRaw = event => `<calendar_widget>\nDay: 1\nEvent: main|常规盘点|蘅芜记录酒馆当日消耗并安排值守|午后|无名酒馆·柜台|修尔把木柴码放到壁炉旁。|false\nTicket: POINT-TICKET-1\nDay: 2\n${event}\nTicket: POINT-TICKET-2\nDay: 3\nEvent: main|夜间收尾|蘅芜关好门窗并确认库存|深夜|无名酒馆·大堂|卡列布检查门闩。|false\nTicket: POINT-TICKET-3\nFuture:\nEvent: main|后续安排|商队等待天气好转后出发|三日后|南路驿站|车夫清点货箱。|false\nTicket: POINT-TICKET-4\n</calendar_widget>`;
     const source = [
         ['Event: bond|深夜·卡列布的私语与索取|凌晨，蘅芜被卡列布从背后环住腰的力道弄醒。流浪剑客以"外面有狼嚎"为由挤进她的被窝，呼吸灼热地贴在她耳后。蘅芜感知到他混杂着不安全感和占有欲的情绪波动，没有拒绝。两人在修尔于隔壁沉睡的间隙中拥吻，卡列布的手从睡衣下摆探入，沿着蘅芜腰线缓慢向下，蘅芜用尾巴缠住他的手腕引导节奏。卡列布在确认蘅芜没有推拒后将其翻过身，从正面进入，两人保持缓慢而深入的节奏完成交合。事后卡列布将脸埋在蘅芜颈窝，低声说了句"别让那个半身人睡太近"，蘅芜拍了拍他后颈以示安抚，关系从单纯的交易性床伴向带有独占倾向的依恋又迈进了一步。|01:30-02:20|无名酒馆·老板房|修尔在隔壁通铺的翻身声在交合过程中传入老板房，但并未醒来；火蜥蜴幼崽在柜台下因感应到魔力波动而轻微躁动，发出一声含硫磺的打嗝。|false', 'AdultProof: kind=sexual-penetration; action=完成交合; response=尾巴缠住他的手腕引导节奏; impact=关系从单纯的交易性床伴向带有独占倾向的依恋又迈进了一步', true],
         ['Event: bond|暴风雪夜的事后温存与关系深化|深夜客流散去后，蘅芜在后厨清洗最后一批碗碟时因长时间高强度劳动而体力不支，修尔无声接过她手中的抹布，并端来一杯温热的蜂蜜水。蘅芜靠在他肩上休息时，半兽人少年笨拙地将一条干毛巾披在她肩上，小心翼翼地用指尖避开她的尾巴根。这种不含性意味的纯粹照料让蘅芜罕见地展露了疲惫与柔软的一面，她没有像往常那样用调情或金钱来回应，而是安静地闭上眼靠了片刻。修尔在这种无声的允许中获得了远比肉体交合更深的满足感，他的狼耳彻底放松下来，对蘅芜的依恋从"庇护者"进一步固化为"值得守护的人"。|23:00-23:45|无名酒馆·后厨|卡列布在大堂假装擦拭剑鞘，实际上一直透过厨房门框注视着这一幕，他没有打断，但在事后蘅芜回到老板房时，他以沉默的姿态占据了床的右侧——属于他的"位置"，默认了这种三人之间心照不宣的共处格局。|false', 'AdultProof: kind=sexual-manual; action=完成照料; response=安静地闭上眼靠了片刻; impact=依恋从庇护者进一步固化为值得守护的人', false],
         ['Event: main|霜降祭后·物资危机与补给决策|免费供汤一夜后，酒馆库存将面临严重消耗。蘅芜需在霜降月16日清点残余物资，并决定是再次派遣修尔与卡列布前往已趋于混乱的科塔镇黑市冒险采购，还是就地取材让修尔在雪林深处猎取大型猎物。|霜降月16日 08:00-12:00|无名酒馆·地下室储藏室|修尔可能主动提出独自前往雪林深处狩猎以避开科塔镇方向可能存在的追兵；卡列布则倾向于两人同行前往黑市以获取面粉等无法猎取的必需品。|false', 'AdultProof: kind=sexual-manual; action=进入黑市; response=两人同行前往黑市; impact=关系发生变化', false],
     ];
-    for (const [event, proof] of source) {
+    for (const [event, proof, expected] of source) {
         const raw = makeRaw(event).replace('Ticket: POINT-TICKET-2\nDay: 3', `Ticket: POINT-TICKET-2\n${proof}\nDay: 3`);
         assert.equal(validateGeneratedCalendar(raw, null, { generated: false, adultMode: 'mixed' }).ok, true);
         const stored = bindPointAdultTickets(raw, 'mixed');
-        assert.equal(/Adult: true/.test(stored), true);
+        assert.equal(/Adult: true/.test(stored), expected);
         assert.doesNotMatch(stored, /AdultProof|POINT-TICKET/);
     }
 });
@@ -815,14 +824,14 @@ test('点成人排除矩阵通过无权威票 verifier/bind 保持普通点', ()
     }
 });
 
-test('point proof 仅在紧邻 Ticket 时解析，但不影响 NSFW Ticket 权威绑定', () => {
+test('mixed仅使用有效相邻proof，不以票掩盖分离proof', () => {
     const base = '<calendar_widget>\nDay: 1\nEvent: main|一|描述|早|地|动\nTicket: POINT-TICKET-1\nDay: 2\nEvent: main|二|卡列布抚弄性器，对方自愿回应，关系发生变化|午|地|动\nTicket: POINT-TICKET-2\nAdultProof: kind=sexual-manual; action=抚弄性器; response=对方自愿回应; impact=关系发生变化\nDay: 3\nEvent: main|三|描述|晚|地|动\nFuture:\nEvent: main|四|描述|夜|地|动\n</calendar_widget>';
     const stored = bindPointAdultTickets(base, 'mixed');
     assert.doesNotMatch(stored, /POINT-TICKET|AdultProof/);
     assert.match(stored, /Adult: true/);
     const separated = base.replace('Ticket: POINT-TICKET-2\nAdultProof:', 'Ticket: POINT-TICKET-2\n说明：中间插入\nAdultProof:');
     assert.equal(parseCalendar(separated).days[1].events[0].adult, false);
-    assert.match(bindPointAdultTickets(separated, 'mixed'), /Adult: true/);
+    assert.doesNotMatch(bindPointAdultTickets(separated, 'mixed'), /Adult: true/);
     const duplicated = base.replace('Day: 3', 'AdultProof: junk\nAdultProof: kind=sexual-manual; action=抚弄性器; response=对方自愿回应; impact=关系发生变化\nDay: 3');
     assert.doesNotMatch(bindPointAdultTickets(duplicated, 'mixed'), /AdultProof/);
 });
@@ -1151,4 +1160,18 @@ test('point manual and auto apply a late response after participant A→B', asyn
         assert.equal(harness.effects.renders, 1, mode);
         assert.equal(harness.effects.cached, 1, mode);
     }
+});
+
+
+test('mixed可完整保存全普通新场景，票ID校验仍保持', () => {
+    let ticket = 0;
+    const sections = [["Day: 1|晴|20℃",3],["Day: 2|晴|20℃",3],["Day: 3|晴|20℃",3],["Future:",5]];
+    const raw = '<calendar_widget>\n' + sections.map(([heading,count]) => heading+'\n'+Array.from({length:count},()=>`Event: main|普通事项${++ticket}|角色在新城市整理资料并了解尚未认识的邻居|白天|图书馆|管理员提供开放时间\nTicket: POINT-TICKET-${ticket}\nAdultProof: NONE`).join('\n')).join('\n')+'\n</calendar_widget>';
+    assert.equal(validateGeneratedCalendar(raw,null,{generated:true,adultMode:'mixed'}).ok,true);
+    const stored = parseCalendar(bindPointAdultTickets(raw,'mixed'));
+    assert.equal(stored.days.reduce((n,day)=>n+day.events.length,0)+stored.future.events.length,14);
+    assert.ok([...stored.days.flatMap(day=>day.events),...stored.future.events].every(event=>!event.adult));
+    assert.equal(validateGeneratedCalendar(raw.replace('POINT-TICKET-2','POINT-TICKET-1'),null,{generated:true,adultMode:'mixed'}).ok,false);
+    const prompt = buildPrompt('用户','角色','user',[],null,{mode:'mixed',tickets:pointTicketPlan('mixed',14)});
+    assert.match(prompt,/可全部为普通事件/);
 });

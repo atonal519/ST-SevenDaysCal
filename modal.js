@@ -56,6 +56,7 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
         $overlay.on('keydown', event => {
             if (event.key !== 'Escape') return;
             event.preventDefault();
+            event.stopPropagation?.();
             externalClose();
         });
         $overlay.addClass(String(getRootClass() || ''));
@@ -163,10 +164,10 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
             let submitting = false;
             const runSubmit = async () => {
                 if (submitting || session.isDone()) return;
-                submitting = true; $overlay.find('.sp-dialog-input-error').empty();
+                submitting = true; $overlay.find('.sp-dialog-submit').prop('disabled', true); $overlay.find('.sp-dialog-input-error').empty();
                 try { const value = await submit(); session.finish(value ?? true); }
                 catch (error) {
-                    submitting = false;
+                    submitting = false; $overlay.find('.sp-dialog-submit').prop('disabled', false);
                     $overlay.find('.sp-dialog-input-error').html(`${icon("alert-triangle")} ${escapeHtml('操作失败，请重试。')}`);
                 }
             };

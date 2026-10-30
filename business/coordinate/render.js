@@ -47,7 +47,13 @@ export function createCoordinateRenderer({ repository, setBody, captureRender, g
         if (accepted === false) return null;
         setState?.({ level: 'full', itemId });
         const host = queryRoot?.querySelector?.('#sp-anchor-full-host') || documentRef?.querySelector?.('#sp-anchor-full-host');
-        if (host) { const shadow = host.shadowRoot || host.attachShadow?.({ mode: 'open' }); if (shadow) { const night = theme === 'night'; const fg = night ? '#D8D9DA' : '#27323A'; const bg = night ? '#272829' : 'var(--sp-sheet-bg-legacy, #FAF9F6)'; const link = night ? '#A8A49E' : '#457892'; shadow.innerHTML = `<style>:host{all:initial;display:block}.sp-anchor-snap{display:block;color:${fg};background:${bg};padding:16px 18px !important;margin:0 !important;border:none !important;border-radius:10px;font-family:var(--sp-font,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif);font-size:var(--sp-fs-75,12px);line-height:1.6;word-break:break-word}.sp-anchor-snap img{max-width:100%;height:auto}.sp-anchor-snap a{color:${link}}.sp-anchor-snap q:before,.sp-anchor-snap q:after{content:''}</style><div class="mes_text sp-anchor-snap">${item.html || ''}</div>`; } }
+        if (host) {
+            const shadow = host.shadowRoot || host.attachShadow?.({ mode: 'open' });
+            if (shadow) {
+                // 收藏 HTML 保持原样；只让默认阅读壳继承外层主题、用户字体与插件缩放。
+                shadow.innerHTML = `<style>:host{all:initial;display:block}.sp-anchor-snap{display:block;color:var(--sp-on-surface);background:var(--sp-sheet-bg);padding:var(--sp-size-16) var(--sp-size-18) !important;margin:0 !important;border:none !important;border-radius:var(--sp-size-10);font-family:var(--sp-font);font-size:var(--sp-text-caption);line-height:var(--sp-lh-reading);letter-spacing:normal;word-spacing:normal;text-indent:0;text-align:left;word-break:break-word}.sp-anchor-snap img{max-width:100%;height:auto}.sp-anchor-snap a{color:var(--sp-primary)}.sp-anchor-snap q:before,.sp-anchor-snap q:after{content:''}</style><div class="mes_text sp-anchor-snap">${item.html || ''}</div>`;
+            }
+        }
         return item;
     }
     async function render(renderRequest = captureRender?.()) { const s = current(); if (s.level === 'full' && s.itemId) return full(s.itemId, null, null, renderRequest); if (s.level === 'items' && s.chatId != null) return items(s.chatId, renderRequest); if (s.level === 'chats') return chats(s.charName, renderRequest); if (s.level === 'tags') return tags(renderRequest); return chars(renderRequest); }

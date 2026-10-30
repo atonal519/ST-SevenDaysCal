@@ -61,6 +61,7 @@ export function createSpaceChat(env = {}) {
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
                 ...(Array.isArray(messages?.allowedWidgetKinds) ? { allowedWidgetKinds: messages.allowedWidgetKinds } : {}),
+                ...(env.widgetParsers ? { widgetParsers: env.widgetParsers } : {}),
                 ...(messages?.outlineRawToken && (messages?.expectedWidgetKind === 'outline_widget' || messages?.allowedWidgetKinds?.includes?.('outline_widget')) ? { outlineRawToken: messages.outlineRawToken } : {}),
             };
             if (!repository.replace(target, appendSpaceAssistant(appended.history, reply, widgetContext))) {

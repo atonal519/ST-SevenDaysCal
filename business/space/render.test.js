@@ -4,6 +4,21 @@ import { createSpaceRenderer } from './render.js';
 import { firstPointEventBlock, parsePointEventRecord, isCompletePointEvent } from '../point/parse.js';
 import { parseLineCard } from '../lines/schema.js';
 
+test('完整裸字段回收成卡片后不再重复显示原始字段文本', () => {
+    const renderer = createSpaceRenderer();
+    const policy = { allowedWidgetKinds: ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'] };
+    for (const raw of [
+        'Event: main|核对旧信|核对已有线索|明天下午|书店|',
+        '<outline_widget>Beat: 坏||||</outline_widget>\nEvent: main|核对旧信|核对已有线索|明天下午|书店|',
+    ]) {
+        const registrations = [];
+        const result = renderer.message('ai', raw, 1, widget => { registrations.push(widget); return 'point'; }, policy);
+        assert.equal(registrations.length, 1);
+        assert.equal(result.contentHtml, '');
+        assert.match(result.widgetCards, /选择人物并应用/);
+    }
+});
+
 const pointBody = '<schedule_widget>Event: main|约定|双方交换信息|周五||||</schedule_widget>';
 const lineBody = '<line_widget>Line: 暗号|延展|近日|world|false|false\nDesc: 旧信号再次出现\nNext: 两人核对发送者</line_widget>';
 
@@ -81,4 +96,50 @@ test('普通讨论没有卡片白名单时不增加空状态卡片', () => {
     const discussion = renderer.message('ai', '这段关系的发展看起来合理。', 1, () => 'unused', { allowedWidgetKinds: [] });
     assert.match(discussion.contentHtml, /这段关系的发展看起来合理/);
     assert.equal(discussion.widgetCards, '');
+});
+
+test('all5 自然路由只注册唯一合法卡型，混合合法卡型不注册', () => {
+    const registrations = [];
+    const renderer = createSpaceRenderer();
+    const policy = { allowedWidgetKinds: ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'] };
+    const single = renderer.message('ai', `${pointBody}\n<schedule_widget>Event: main|坏|说明||||</schedule_widget>\n<line_widget>Line: 额外|延展|近日|world|false|false</line_widget>`, 0, widget => { registrations.push(widget); return 'p'; }, policy);
+    assert.equal(registrations.length, 1);
+    assert.match(single.widgetCards, /应用时选择人物/);
+
+    registrations.length = 0;
+    const mixed = renderer.message('ai', `${pointBody}\n${lineBody}`, 1, widget => { registrations.push(widget); return 'x'; }, policy);
+    assert.equal(registrations.length, 0);
+    assert.match(mixed.widgetCards, /多种可应用卡片/);
+});
+
+test('all5 全坏结构保留原文反馈但不注册，普通文字不增加状态卡', () => {
+    let registrations = 0;
+    const renderer = createSpaceRenderer();
+    const policy = { allowedWidgetKinds: ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget'] };
+    const bad = renderer.message('ai', '<schedule_widget>Event: main|缺时间|说明||||</schedule_widget>', 0, () => { registrations += 1; return 'x'; }, policy);
+    assert.equal(registrations, 0);
+    assert.match(bad.widgetCards, /结构化内容/);
+    assert.match(bad.widgetCards, /缺时间/);
+    const plain = renderer.message('ai', '这只是普通讨论。', 1, () => { registrations += 1; return 'y'; }, policy);
+    assert.equal(plain.widgetCards, '');
+});
+
+test('面草稿预览使用原生列表编号，不重复输出编号文字', () => {
+    const renderer = createSpaceRenderer();
+    const raw = `<outline_widget>
+Beat: 明日|港口交涉|main|暗线|达成共识
+Scene: 两人在港口碰面并交换情报
+Subtext: 彼此试探
+Think: 保留余地
+Beat: 后日|回到住处|main|暗线|留下线索
+Scene: 角色整理带回的文件
+Subtext: 发现异常
+Think: 暂不声张
+</outline_widget>`;
+    const result = renderer.message('ai', raw, 0, () => 'outline', {
+        expectedWidgetKind: 'outline_widget', allowedWidgetKinds: ['outline_widget'],
+    });
+    assert.match(result.widgetCards, /<ol class="sp-space-outline-preview">/);
+    assert.match(result.widgetCards, /<strong>港口交涉<\/strong>/);
+    assert.doesNotMatch(result.widgetCards, /<strong>1\.\s*港口交涉<\/strong>/);
 });

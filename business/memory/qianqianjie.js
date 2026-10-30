@@ -219,7 +219,10 @@ export function qianQianJieMemoryDiagnostic(result) {
         case 'cancelled': return '本次千千结记忆读取已取消';
         case 'timed-out': return '等待千千结记忆超时';
         case 'read-failed':
-        case 'error': return result?.message ? `千千结记忆读取失败：${result.message}` : '千千结记忆读取失败';
+        case 'error': {
+            const message = result?.message ? String(result.message) : '';
+            return message.startsWith('千千结记忆读取失败') ? message : message ? `千千结记忆读取失败：${message}` : '千千结记忆读取失败';
+        }
         default: return result?.message || '千千结记忆状态未知';
     }
 }
