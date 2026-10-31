@@ -2378,6 +2378,7 @@ jQuery(async () => {
         ledgerCaptureCounter = 0;
         ledgerLastJudgedMsgId = lastSeen;
         ledgerJudgeCounter = 0;
+        ledgerRegeneratedMsgId = -1;
         currentView = 'user';
         charViewName = null;
         outlineMode = false;
@@ -2556,6 +2557,16 @@ jQuery(async () => {
     _stListeners.genStart = (genType, _opts, dryRun) => {
         refreshStoryClockInjection();
         linesFeature.onGenerationStarted({ genType, dryRun });
+        if (dryRun || genType === 'quiet') return;
+        finishLedgerRegeneration();
+        const chat = getContext().chat;
+        const last = Array.isArray(chat) ? chat.length - 1 : -1;
+        if (genType === 'regenerate' && ledgerNarrativeMessage(chat?.[last])) {
+            ledgerRegeneratedMsgId = last;
+            // 同一 AI 楼的替换不贡献新楼计数；END 早于 CMR 时也保留已见楼号。
+            ledgerLastCapturedMsgId = Math.max(ledgerLastCapturedMsgId, last);
+            ledgerLastJudgedMsgId = Math.max(ledgerLastJudgedMsgId, last);
+        }
     };
     eventSource.on(event_types.GENERATION_STARTED, _stListeners.genStart);
     if (_stListeners.streamTok) eventSource.removeListener?.(event_types.STREAM_TOKEN_RECEIVED, _stListeners.streamTok);
@@ -2564,9 +2575,11 @@ jQuery(async () => {
     if (_stListeners.genEnd) eventSource.removeListener?.(event_types.GENERATION_ENDED, _stListeners.genEnd);
     if (_stListeners.genStopped) eventSource.removeListener?.(event_types.GENERATION_STOPPED, _stListeners.genStopped);
     _stListeners.genEnd = () => {
+        finishLedgerRegeneration();
         linesFeature.onGenerationEnded({ stopped: false });
     };
     _stListeners.genStopped = () => {
+        finishLedgerRegeneration();
         linesFeature.onGenerationEnded({ stopped: true });
     };
     eventSource.on(event_types.GENERATION_ENDED, _stListeners.genEnd);
@@ -2985,6 +2998,7 @@ let   ledgerAutomationQueue  = Promise.resolve();
 let   ledgerAutomationEpoch  = 0;
 let   ledgerCaptureQueued    = false;
 let   ledgerJudgeQueued      = false;
+let   ledgerRegeneratedMsgId = -1;
 function enqueueLedgerAutomation(task) {
     const epoch = ledgerAutomationEpoch;
     const queued = ledgerAutomationQueue.catch(() => {}).then(() => epoch === ledgerAutomationEpoch ? task() : { status: 'cancelled', reason: 'superseded' });
@@ -2997,13 +3011,23 @@ function invalidateLedgerAutomationQueue() {
     ledgerCaptureQueued = false;
     ledgerJudgeQueued = false;
 }
-function rewindLedgerAutomationAfterDeletion() {
-    const latest = ledgerLatestAiFloorId();
-    ledgerLastCapturedMsgId = Math.min(ledgerLastCapturedMsgId, latest - 1);
-    ledgerLastJudgedMsgId = Math.min(ledgerLastJudgedMsgId, latest - 1);
-    ledgerCaptureCounter = Math.min(ledgerCaptureCounter, Math.max(0, getLedgerCaptureInterval() - 1));
-    ledgerJudgeCounter = Math.min(ledgerJudgeCounter, Math.max(0, getLedgerJudgeInterval() - 1));
+function rewindLedgerAutomationAfterDeletion(messageId) {
+    const replacingLastAi = ledgerRegeneratedMsgId >= 0 && messageId === ledgerRegeneratedMsgId && getContext().chat?.length === ledgerRegeneratedMsgId;
+    if (!replacingLastAi) {
+        ledgerRegeneratedMsgId = -1;
+        const latest = ledgerLatestAiFloorId();
+        ledgerLastCapturedMsgId = Math.min(ledgerLastCapturedMsgId, latest - 1);
+        ledgerLastJudgedMsgId = Math.min(ledgerLastJudgedMsgId, latest - 1);
+        ledgerCaptureCounter = Math.min(ledgerCaptureCounter, Math.max(0, getLedgerCaptureInterval() - 1));
+        ledgerJudgeCounter = Math.min(ledgerJudgeCounter, Math.max(0, getLedgerJudgeInterval() - 1));
+    }
     invalidateLedgerAutomationQueue();
+}
+function finishLedgerRegeneration() {
+    const floor = ledgerRegeneratedMsgId;
+    ledgerRegeneratedMsgId = -1;
+    // 旧 AI 已删除、替代回复尚未落地就中止时，下一条回复仍应按新楼计数。
+    if (floor >= 0 && !ledgerNarrativeMessage(getContext().chat?.[floor])) rewindLedgerAutomationAfterDeletion();
 }
 
 // 历·API 兜底判定的间隔（缺省/非法 → 3；≥1）。抄 getOutlineJudgeInterval。
