@@ -40,7 +40,7 @@ function precheckHarness(result, { confirmed = true } = {}) {
     return { ...funcs, titles };
 }
 
-function buildHarness({ getMemText, settings = { useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false }, qianQianJieGenerationSnapshotCurrent = () => false }) {
+function buildHarness({ getMemText, confirm = async () => true, settings = { useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false }, qianQianJieGenerationSnapshotCurrent = () => false }) {
     const historyBuilder = evaluate(indexHistory, 'buildGenerationHistoryContext', {
         getSettings: () => ({ keepTags: '', extraTags: '' }),
         getWrapperSettings: () => getSharedBodyWrappers({}),
@@ -63,56 +63,56 @@ function buildHarness({ getMemText, settings = { useDatabase: true, useAnima: fa
             && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source),
         qianQianJieGenerationSnapshotCurrent,
         makeDiagnosticError: () => stale,
-        getMemText,
+        getMemText, spConfirm: confirm, DOMException,
     });
 }
 
-test('QQJ prequel and recall from the production snapshot reach the final shared message once without a second read', async () => {
-    const ctx = { chatId: 'chat-a', characters: [{ avatar: 'character-a.png' }], characterId: 0, userAvatar: 'persona-a.png', chat: [] };
+test('QQJ preflight defers topic reading until the actual generation question is known', async () => {
+    const ctx = { chatId: 'chat-a', characters: [{ avatar: 'character-a.png' }], characterId: 0, userAvatar: 'persona-a.png', chat: [{ is_user: false, mes: '近期在书店整理来信。' }] };
     const participant = { chatId: 'chat-a', characterId: 0, characterKey: 'character-a.png', personaKey: 'persona-a.png', userName: '用户', charName: '角色' };
     const hostIdentity = { hostChatId: 'chat-a', characterLocator: 'character-a.png', personaLocator: 'persona-a.png' };
-    const promptParts = {
-        prequel: '【用户导入的过去经历资料】\n可信前情边界\n【前情片段 1】过去经历内容',
-        recall: '<qqj_recalled_context>\n当前召回内容\n</qqj_recalled_context>',
-    };
-    let snapshotReads = 0;
+    const reads = []; let promptReads = 0;
     const bridge = {
         schemaVersion: 1, kind: 'qqj-public-memory-bridge',
-        getPromptSnapshot() {
-            snapshotReads++;
-            return { status: 'ready', identity: hostIdentity, prequel: { text: promptParts.prequel }, recall: { text: promptParts.recall } };
-        },
+        getStatus: () => ({ status: 'ready', identity: hostIdentity }),
+        getPeopleSnapshot: () => ({ status: 'ready', identity: hostIdentity, people: { status: 'ready', items: [{ entityId: 'u', displayName: '用户', specialRole: 'user' }, { entityId: 'c', displayName: '角色', specialRole: 'char' }] } }),
+        getPromptSnapshot() { promptReads++; return { status: 'ready', identity: hostIdentity, prequel: { text: '' }, recall: { text: '无关的旧召回' } }; },
+        readContext: async options => { reads.push(options); return { status: 'ready', identity: hostIdentity, routerText: options.query.includes('灯塔') ? '过去在灯塔约定来年重逢。' : '另一段往事', actors: [] }; },
     };
-    const access = createQianQianJieMemoryAccess({
-        globalRef: { [QIANQIANJIE_BRIDGE_KEY]: bridge }, contextProvider: () => ctx,
-        participantIdentityProvider: () => participant, isSelected: () => true,
-        writeCache: () => ({ ok: true, commitState: 'confirmed' }),
-    });
-    const titles = [];
-    const productionPrecheck = evaluate(memorySetup, '({ memoryPreCheckConfirm, qianQianJieGenerationSnapshotCurrent })', {
-        QQJ_MEMORY_SNAPSHOT_VERSION: 1, memorySourceEpoch: 1,
+    const access = createQianQianJieMemoryAccess({ globalRef: { [QIANQIANJIE_BRIDGE_KEY]: bridge }, contextProvider: () => ctx, participantIdentityProvider: () => participant, sourceEpochProvider: () => 1, isSelected: () => true });
+    const production = evaluate(memorySetup, '({ memoryPreCheckConfirm, qianQianJieGenerationSnapshotCurrent })', {
+        QQJ_MEMORY_SNAPSHOT_VERSION: 2, memorySourceEpoch: 1,
         getSettings: () => ({ useQianQianJie: true }), getContext: () => ctx,
         captureParticipantIdentity: () => participant, sameParticipantIdentity: () => true,
         captureQianQianJieHostIdentity: () => hostIdentity, sameQianQianJieHostIdentity: () => true,
         qianQianJieMemoryAccess: access, qianQianJieMemoryDiagnostic: () => '记忆读取失败',
-        spConfirm: async options => { titles.push(options.title); return true; },
+        spConfirm: async () => { throw new Error('preflight must not ask based on unrelated recall'); },
     });
     const operationToken = Symbol('generation');
-    const preflight = await productionPrecheck.memoryPreCheckConfirm({ operationToken, contextSnapshot: ctx, participantIdentity: participant });
+    const preflight = await production.memoryPreCheckConfirm({ operationToken, contextSnapshot: ctx, participantIdentity: participant });
     assert.equal(preflight.proceed, true);
-    assert.deepEqual(titles, [], 'usable prequel/recall does not open the empty-material confirmation');
-    assert.equal(snapshotReads, 1);
+    assert.equal(promptReads, 0, 'latest prepared recall is not read');
+    assert.equal(reads.length, 0, 'preflight does not read with an empty topic');
+    const build = buildHarness({ getMemText: options => access.text(options), settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: production.qianQianJieGenerationSnapshotCurrent });
+    const messages = await build(ctx, '过去灯塔的约定是什么？', '用户', '角色', 3, { memoryOperationToken: operationToken, memorySnapshot: preflight.memorySnapshot });
+    const text = messages.map(message => message.content).join('\n');
+    assert.equal(reads.length, 1); assert.ok(reads[0].query.includes('灯塔')); assert.ok(reads[0].query.includes('书店'));
+    assert.equal(text.split('过去在灯塔约定来年重逢。').length - 1, 1);
+    assert.ok(!text.includes('无关的旧召回')); assert.equal(promptReads, 0);
+});
 
-    const build = buildHarness({
-        getMemText: async () => { throw new Error('preflight snapshot must prevent a second memory read'); },
-        settings: { useQianQianJie: true },
-        qianQianJieGenerationSnapshotCurrent: productionPrecheck.qianQianJieGenerationSnapshotCurrent,
-    });
-    const messages = await build(ctx, '继续创作', '用户', '角色', 3, { memoryOperationToken: operationToken, memorySnapshot: preflight.memorySnapshot });
-    const finalInput = messages.map(message => message.content).join('\n');
-    assert.equal(finalInput.split(promptParts.prequel).length - 1, 1);
-    assert.equal(finalInput.split(promptParts.recall).length - 1, 1);
-    assert.equal(snapshotReads, 1, 'final input uses the already-read preflight snapshot');
+test('QQJ topic-empty fallback confirms once, keeps six recent floors and does not reread', async () => {
+    const chat = Array.from({ length: 7 }, (_, i) => ({ is_user: false, mes: `可见剧情${i}` }));
+    const ctx = { chat, characters: {}, characterId: 0 }; let reads = 0, confirmations = 0;
+    const build = buildHarness({ getMemText: async () => { reads++; return ''; }, confirm: async () => { confirmations++; return true; }, settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: () => true });
+    const messages = await build(ctx, '未命中的往事', '用户', '角色', 3, { memorySnapshot: { source: 'qianqianjie', status: 'read-required' } });
+    assert.equal(reads, 1); assert.equal(confirmations, 1); assert.equal(messages.filter(message => message.role === 'assistant').length, 6);
+    assert.ok(!messages.map(message => message.content).join('\n').includes('可见剧情0'));
+});
+
+test('cancelling QQJ empty-topic fallback stops message construction', async () => {
+    const build = buildHarness({ getMemText: async () => '', confirm: async () => false, settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: () => true });
+    await assert.rejects(build({ chat: [], characters: {} }, '旧剧情', '用户', '角色', 3, { memorySnapshot: { source: 'qianqianjie', status: 'read-required' } }), error => error.name === 'AbortError');
 });
 
 test('database preflight distinguishes confirmed empty fallback from ready-then-read failure', async () => {
@@ -300,5 +300,39 @@ test('世界书设置列表在全失败或部分失败时提示异常，并保�
         assert.match(list[0].innerHTML, /有世界书未能读取，当前列表可能不完整/);
         assert.doesNotMatch(list[0].innerHTML, /当前角色没有关联 \/ 全局启用的世界书/);
         if (entries.length) assert.match(list[0].innerHTML, /成功正文|已有条目/);
+    }
+});
+
+
+test('QQJ direct reader receives the cutoff and no newer recent-body material', async () => {
+    let passed, historyLength;
+    const read = evaluate(externalReadRegion, '_getMemTextRaw', {
+        getSettings: () => ({ useQianQianJie: true }), getContext: () => ({ chat: [{ mes: '已确认旧事' }, { mes: '截止楼' }, { mes: '未来正文' }] }),
+        buildGenerationHistoryContext: ctx => { historyLength = ctx.chat.length; return { history: ctx.chat.map(message => ({ content: message.mes })) }; },
+        qianQianJieMemoryAccess: { result: async options => { passed = options; return { status: 'ready', text: '旧记忆' }; } },
+        DOMException, makeDiagnosticError: () => new Error('read error'), safeDiagnosticLog: () => ({}), console: { warn() {} },
+    });
+    assert.equal(await read({ query: '截止前发生了什么', maxFloor: 1 }), '旧记忆');
+    assert.equal(historyLength, 2); assert.equal(passed.maxFloor, 1); assert.ok(passed.recentText.includes('截止楼')); assert.ok(!passed.recentText.includes('未来正文'));
+});
+
+test('cancelled direct QQJ read propagates AbortError rather than empty material', async () => {
+    const read = evaluate(externalReadRegion, '_getMemTextRaw', { getSettings: () => ({ useQianQianJie: true }), getContext: () => ({ chat: [] }), buildGenerationHistoryContext: () => ({ history: [] }), qianQianJieMemoryAccess: { result: async () => ({ status: 'cancelled', text: '' }) }, DOMException, makeDiagnosticError: () => new Error('wrong read error'), safeDiagnosticLog: () => ({}), console: { warn() {} } });
+    await assert.rejects(read({ query: '旧事' }), error => error.name === 'AbortError');
+});
+
+
+test('explicit includeMemory false skips QQJ topic reading and empty confirmation even with a snapshot', async () => {
+    const build = buildHarness({ getMemText: async () => { throw new Error('memory must stay excluded'); }, confirm: async () => { throw new Error('no empty-memory dialog'); }, settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: () => { throw new Error('unused memory snapshot'); } });
+    const messages = await build({ chat: [], characters: {} }, '只处理菜单', '用户', '角色', 3, { includeMemory: false, memorySnapshot: { source: 'qianqianjie', status: 'read-required' } });
+    assert.ok(messages.some(message => message.content === '只处理菜单'));
+});
+
+
+test('QQJ empty-result fallback preserves explicit zero and nondefault recent-history limits', async () => {
+    for (const limit of [0, 2, 4]) {
+        const build = buildHarness({ getMemText: async () => '', confirm: async () => true, settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: () => true });
+        const messages = await build({ chat: Array.from({ length: 8 }, (_, i) => ({ is_user: false, mes: `剧情${i}` })), characters: {} }, '未知往事', '用户', '角色', limit, { memorySnapshot: { source: 'qianqianjie', status: 'read-required' } });
+        assert.equal(messages.filter(message => message.role === 'assistant').length, limit);
     }
 });

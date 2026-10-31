@@ -156,3 +156,16 @@ test('语义路由的历法编辑合同保留所有未提及字段，不依赖�
     const messages = await context.buildMessages({ target: {}, userMsg: '把雨月改成32天，其他照旧', historySnapshot: [] });
     assert.match(messages[0].content, /编辑已有历法时.*未提及.*月份.*天数.*顺序.*样式.*纪年.*保留.*完整/);
 });
+
+
+test('千千结取材保留间的前一话题以理解历史剧情追问，其他源仍只收本轮问题', async () => {
+    for (const selected of [true, false]) {
+        let query;
+        const context = createSpaceContext({ context: () => ({}), settings: () => ({ useQianQianJie: selected }), readMemory: async (_ctx, value) => { query = value; return '灯塔往事'; } });
+        await context.buildMessages({ target: {}, userMsg: '后来呢？', historySnapshot: [{ role: 'user', content: '讲讲从前灯塔的约定' }, { role: 'assistant', content: '这里可能有模型推测' }, { role: 'user', content: '后来呢？' }] });
+        assert.ok(query.endsWith('后来呢？'));
+        assert.equal(query.includes('灯塔的约定'), selected);
+        assert.ok(!query.includes('模型推测'));
+        assert.equal(query.split('后来呢？').length - 1, 1);
+    }
+});

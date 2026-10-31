@@ -12,7 +12,7 @@ export function createTheaterStoryContext({ getContext, buildWorldInfoContext, r
         const excludeMesIds = getRecentMesIds?.(ctx) || [];
         let worldInfoPromise;
         try { worldInfoPromise = Promise.resolve(buildWorldInfoContext(ctx)).catch(() => ''); } catch { worldInfoPromise = Promise.resolve(''); }
-        const memoryPromise = Promise.resolve().then(() => getMemText({ excludeMesIds }))
+        const memoryPromise = Promise.resolve().then(() => getMemText({ excludeMesIds, ...(owner?.input ? { query: owner.input } : {}), ...(owner?.controller?.signal ? { signal: owner.controller.signal } : {}) }))
             .then(value => ({ value }), error => ({ error }));
         const recentContext = await recentPromise;
         let wiContext = '';

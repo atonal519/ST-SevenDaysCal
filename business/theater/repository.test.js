@@ -22,6 +22,14 @@ test('theater story context freezes card/recent inputs before launching shared W
     assert.match(context.sysBlocks.join('\n'), /标注已验证摘要与尚未摘要的近期正文/);
 });
 
+test('theater memory query uses the frozen requested story and cancellation signal', async () => {
+    const controller = new AbortController(); const owner = { input: '想重访过去灯塔的约定', controller }; let passed;
+    const build = createTheaterStoryContext({ getContext: () => ({ chatId: 'c', chat: [] }), readCardExtras: () => ({}), getRecentMesIds: () => [1, 2], getMemText: async options => { passed = options; return '灯塔旧事'; }, owners: { isValid: () => true } });
+    const context = await build(owner);
+    assert.deepEqual(passed, { excludeMesIds: [1, 2], query: owner.input, signal: controller.signal });
+    assert.ok(context.sysBlocks.join('\n').includes('灯塔旧事'));
+});
+
 test('theater story context does not convert a failed selected memory read into an empty summary', async () => {
     const failure = Object.assign(new Error('selected memory read failed'), { diagnosticCode: 'memory-read' });
     const build = createTheaterStoryContext({

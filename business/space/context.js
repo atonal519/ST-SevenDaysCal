@@ -112,14 +112,17 @@ export function createSpaceContext(env = {}) {
         const settings = env.settings?.() || {};
         const faqText = buildSpaceHelpText(settings);
         const characterData = env.readCharacterData?.(ctx) || '';
-        const memText = await env.readMemory?.(ctx, message) || '';
+        const historyMessages = stripWidgetsForApi(historySnapshot, { preserveCandidates: true });
+        const lastHistory = historyMessages.at(-1);
+        if (lastHistory?.role === 'user' && String(lastHistory.content ?? '').trim() === message.trim()) historyMessages.pop();
+        const memoryQuery = settings.useQianQianJie
+            ? [...historyMessages.slice(-4).filter(item => item.role === 'user').map(item => String(item.content || '')), message].filter(Boolean).join('\n')
+            : message;
+        const memText = await env.readMemory?.(ctx, memoryQuery) || '';
         const recentCtx = await env.readRecent?.(ctx) || '';
         const { personaDesc = '', authorNote = '' } = env.readCardExtras?.(ctx) || {};
         const useCharacterPersona = settings.spaceUseCharacterPersona === true;
         const personaOverride = useCharacterPersona ? '' : String(settings.spacePersona || '').trim();
-        const historyMessages = stripWidgetsForApi(historySnapshot, { preserveCandidates: true });
-        const lastHistory = historyMessages.at(-1);
-        if (lastHistory?.role === 'user' && String(lastHistory.content ?? '').trim() === message.trim()) historyMessages.pop();
         const titleSupplementText = [message, ...historyMessages.map(item => String(item?.content ?? '')), outlineRaw, pointList, lineList, ledgerList, memText, recentCtx, personaDesc, characterData, authorNote, almanacText, calDescText, storyDate, materialText, personaOverride].filter(Boolean).join('\n\n');
         const wiContext = await env.readWorldInfo?.(ctx, message, historySnapshot.slice(0, -1), titleSupplementText) || '';
         const system = buildSpaceChatSystemPrompt({ userName, charName, personaDesc, characterData, authorNote, storyDate, outlineRaw, wiContext, memText, recentCtx, pointList, lineList, ledgerList, almanacText, calDescText: calDescForContract, materialText, requestedMaterials: requested, faqText, personaOverride, useCharacterPersona, preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' }, intent });
