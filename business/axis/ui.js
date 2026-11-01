@@ -44,7 +44,7 @@ export function formatStoryClockMeta(meta, escape = value => String(value ?? '')
         if (custom) {
             return escape(['日期待确认', m?.weekdayText || '', m?.time || ''].filter(Boolean).join(' '));
         }
-        return escape(m?.raw || '');
+        return escape(m?.structured ? [m.dateText || '日期待确认', m.weekdayText || '', m.time || ''].filter(Boolean).join(' ') : m?.raw || '');
     }
     const date = m.month != null && m.day != null ? formatCalendarDate(m, calendar, monthName) : '';
     const weekday = m.weekdayText || '';
@@ -53,8 +53,8 @@ export function formatStoryClockMeta(meta, escape = value => String(value ?? '')
     return escape(human || m.raw || '');
 }
 
-// 楼内小时间条的纯组装 seam：index.js 仍负责挑最新楼/解析旧 stamp，本函数只统一最终月名显示。
-export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = null, stampDate = null, rawStamp = '', calendar = null, monthName = (_cal, month) => `${month}月`, escapeHtml = value => String(value ?? ''), tip = '' } = {}) {
+// 楼内小时间条只消费统一解析的 meta，并按该楼历法格式化；不再另解析日期。
+export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = null, rawStamp = '', calendar = null, monthName = (_cal, month) => `${month}月`, escapeHtml = value => String(value ?? ''), tip = '' } = {}) {
     const today = (dateText, weekday = '', title = '') => `<span class="sp-dash-sum-today"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(dateText)}${weekday ? ` ${escapeHtml(weekday)}` : ''}</span>`;
     const dateText = value => formatCalendarDate(value, calendar, monthName);
     const fallbackWeekday = anchorWeekday || '星期未记录';
@@ -64,11 +64,13 @@ export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = n
         const timeHtml = clockMeta.time ? `<span class="sp-dash-sum-time">${escapeHtml(clockMeta.time)}</span>` : '';
         return { todayHtml: today(dateText(clockMeta), weekday, tip), timeHtml };
     }
-    if (stampDate?.month != null && stampDate?.day != null) {
-        const timeHtml = stampDate.time ? `<span class="sp-dash-sum-time">${escapeHtml(stampDate.time)}</span>` : '';
-        return { todayHtml: today(dateText(stampDate), '星期未记录', tip), timeHtml };
+    const custom = calendar && calendar.kind !== 'gregorian' && calendar.id !== 'default-gregorian';
+    if (custom) return fallback;
+    if (clockMeta?.structured) {
+        const timeHtml = clockMeta.time ? `<span class="sp-dash-sum-time">${escapeHtml(clockMeta.time)}</span>` : '';
+        return { todayHtml: today(clockMeta.dateText || '日期待确认', clockMeta.weekdayText || '', tip), timeHtml };
     }
-    if (rawStamp) return { todayHtml: today(String(rawStamp), '', tip), timeHtml: '' };
+    if (clockMeta?.raw || rawStamp) return { todayHtml: today(String(clockMeta?.raw || rawStamp), '', tip), timeHtml: '' };
     return fallback;
 }
 

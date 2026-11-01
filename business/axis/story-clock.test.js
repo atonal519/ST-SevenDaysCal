@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindStoryClock, parseStoryClock, completeStoryClock, storyClockNarrativeBody } from './story-clock.js';
+import { bindStoryClock, parseStoryClock, parseJudgedDate, completeStoryClock, storyClockNarrativeBody } from './story-clock.js';
 import { _cnToNumber } from '../../utils/cn-date.js';
 
 const gregorian = { kind: 'gregorian', months: [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31].map(days => ({ days })) };
@@ -14,6 +14,64 @@ bindStoryClock({
     },
 });
 const marker = (date, edge = 'start', time = '06:00') => `<!-- SDC-${edge} | date=${date} | weekday=周一 | time=${time} -->`;
+
+test('structured dates use one era and numeral grammar independent of label length', () => {
+    for (const eraLabel of ['历', '太初历', '北域联盟共同纪元', '第三远征纪元', '第２远征纪元']) {
+        for (const date of [`${eraLabel}三千四百一十二年四月初八`, `${eraLabel}３４１２年４月０８日`, `${eraLabel}叁仟肆佰壹拾贰年肆月初捌`, `${eraLabel}三四一二年四月八日`, `${eraLabel}3412年四月8日`, `${eraLabel}三千四百一十二年4月初八`]) {
+            const clock = parseStoryClock(marker(date) + '正文' + marker(date, 'end'));
+            assert.deepEqual(clock.startMeta.date, { month: 4, day: 8, year: 3412, eraLabel }, date);
+            assert.equal(clock.startMeta.dateText, date);
+            assert.equal(clock.startMeta.structured, true);
+            assert.equal(completeStoryClock(clock), true);
+        }
+    }
+    for (const date of ['太初历二〇二六年4月初八', '太初历二零二六年四月8日', '太初历贰零贰陆年肆月捌日', '太初历2〇二６年四月初八']) assert.deepEqual(parseStoryClock(marker(date)).startMeta.date, { month: 4, day: 8, year: 2026, eraLabel: '太初历' }, date);
+});
+
+test('formal month names win over numeric aliases and calendar year semantics remain distinct', () => {
+    const calendar = { kind: 'custom', months: [{ name: '四月', days: 20 }, { name: '月影之月', days: 35 }] };
+    assert.deepEqual(parseStoryClock(marker('太初历三千四百一十二年四月初八'), calendar).startMeta.date, { month: 1, day: 8, year: 3412, eraLabel: '太初历' });
+    assert.deepEqual(parseStoryClock(marker('太初历3412年月影之月三十五日'), calendar).startMeta.date, { month: 2, day: 35, year: 3412, eraLabel: '太初历' });
+    assert.equal(parseStoryClock(marker('太初历3412年雾月初八'), calendar).startMeta.date, null);
+    assert.equal(parseStoryClock(marker('公历标记2025年2月29日'), { ...gregorian, title: '公历标记' }).startMeta.date, null);
+    assert.deepEqual(parseStoryClock(marker('纪元标记2025年2月29日'), { ...gregorian, era: '纪元标记' }).startMeta.date, { month: 2, day: 29, year: 2025, eraLabel: '纪元标记' });
+    assert.deepEqual(parseStoryClock(marker('743-11-30')).startMeta.date, { month: 11, day: 30, year: 743 });
+    for (const date of ['0-11-30', '10000-11-30']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
+    for (const date of ['太初历0年4月8日', '太初历10000年4月8日', '太初历十千年4月8日', '太初历三千四百一十二年13月8日', '太初历三千四百一十二年4月31日']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
+});
+
+test('legacy compact clocks share validated dates without broadening free text era recognition', () => {
+    for (const date of ['2026-04-08', '2026-04-08T09:00:00', '4月8日', '4/8']) {
+        const clock = parseStoryClock(`<!-- SDC-start ${date} 周六 09:00 -->`);
+        assert.equal(clock.startMeta.month, 4, date);
+        assert.equal(clock.startMeta.day, 8, date);
+        assert.equal(clock.startMeta.weekdayText, '周六', date);
+        assert.equal(clock.startMeta.time, date.includes('T') ? '9:00:00' : '9:00', date);
+    }
+    assert.deepEqual(parseJudgedDate('天历三千四百一十二年四月初八'), { month: 4, day: 8, year: 3412, eraLabel: '天历' });
+    assert.deepEqual(parseJudgedDate('【太初历】三千四百一十二年四月初八'), { month: 4, day: 8, year: 3412, eraLabel: '太初历' });
+    assert.equal(parseJudgedDate('太初历三千四百一十二年四月初八'), null, '旧自由文本仍需已登记或明确括号的长纪年');
+    for (const date of ['太初历3412年 四月初八', '太初历10000年 四月初八', '10000年 四月初八', '天历10000年 四月初八']) {
+        assert.equal(parseStoryClock(`<!-- SDC-start ${date} 周六 09:00 -->`).startMeta.date, null, date);
+        assert.equal(parseJudgedDate(date), null, date);
+    }
+    assert.equal(parseJudgedDate('截至三年四月初八'), null);
+    assert.equal(parseJudgedDate('2025年2月29日'), null);
+    for (const date of ['2月30日', '2026-04-08坏尾巴', '他走到4月8日街口']) assert.equal(parseStoryClock(`<!-- SDC-start ${date} 周六 09:00 -->`).startMeta.date, null, date);
+    assert.equal(parseStoryClock(marker('太初历三千四百一十二年雾月初八'), named).startMeta.date, null);
+});
+
+test('invalid structured dates retain display fields without becoming date anchors', () => {
+    const clock = parseStoryClock(marker('太初历三千四百一十二年四月三十一日'));
+    assert.equal(clock.startMeta.date, null);
+    assert.equal(clock.startMeta.dateText, '太初历三千四百一十二年四月三十一日');
+    assert.equal(clock.startMeta.weekdayText, '周一');
+    assert.equal(clock.startMeta.time, '6:00');
+    assert.equal(clock.startMeta.valid, false);
+    assert.equal(clock.startMeta.complete, false);
+    assert.equal(parseStoryClock(marker('太初历三千四百一十二年四月初八', 'start', '24:99')).startMeta.time, null);
+    assert.equal(parseStoryClock(marker('太初历三千四百一十二年四月初八'), { resolved: false }).startMeta.date, null);
+});
 
 test('the reported Chinese era timestamp retains its date, weekday and time', () => {
     const clock = parseStoryClock('<!-- SDC-start | date=天历七百四十三年11月30日 | weekday=周一 | time=06:00 -->');

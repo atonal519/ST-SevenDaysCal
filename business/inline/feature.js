@@ -36,7 +36,6 @@ export function createInlineFeature(env = {}) {
     const parseCalendar = env.parseCalendar;
     const weatherGlyph = env.weatherGlyph;
     const calHasEra = env.calHasEra;
-    const validRealDate = env.validRealDate;
     const formatStoryClockHeadParts = env.formatStoryClockHeadParts;
     const storyClockEnabled = env.storyClockEnabled;
     const latestStoryClock = env.latestStoryClock;
@@ -183,36 +182,17 @@ export function createInlineFeature(env = {}) {
     // （子开关只管展开面板里那几个区显不显，日期/天气来自剧情锚点+点数据，与显示开关无关）。
     // chips 则跟着子开关走：只给「开着且有内容」的区计数（关掉的区不该在摘要里冒计数）。
     // flat=true：整框只剩这一条（点线历都关但有日期）→ 用 <div> 包、无折叠箭头、不可展开。
-    // 时间戳·窄条抬戳：最新楼扫到戳时，戳「抬」成当天身份（end 优先）——
-    //   数字戳（2024-10-08 15:10 / 10月8日 …）→ 解析成规整「年月日 周几」，把「时」挪到天气之后；
-    //   古风/无法解析（谷雨亥时 / 霜月初三）→ 原样抬（无周几）；完全无戳/关/历史楼 → 锚点兜底日期。
-    //   星期沿已确认结构戳或该楼锚点，不猜未知星期。
-    //   与展开区 storyClockBarHtml（带标签+起→止）互补。
-    // 从戳原文抠数字日期/时刻。返回 {year?,month,day,time?}；抠不出数字日期 → null（交回原样抬）。
-    function stampDate(stamp) {
-        const s = String(stamp || '');
-        let year = null, month = null, day = null, time = '';
-        let m;
-        if ((m = s.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/))) {
-            year = +m[1]; month = +m[2]; day = +m[3];
-        } else if ((m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?/))) {
-            month = +m[1]; day = +m[2];
-        }
-        if (!month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null;   // 非数字日期 → 原样抬
-        if (year != null && !validRealDate(year, month, day)) return null;                  // 严格拒绝 Date 自动归一化日期
-        if ((m = s.match(/(\d{1,2})\s*[:：]\s*(\d{2})/)))   time = `${+m[1]}:${m[2]}`;
-        else if ((m = s.match(/(\d{1,2})\s*[时點点]/)))     time = `${+m[1]}时`;
-        return { year, month, day, time };
-    }
+    // 时间戳元数据由 story-clock 一次解析；日期/星期/时刻交显示层按该楼历法组装。
+    // 无戳或关闭时回锚点；无法解析的旧自由文本保原显示，不猜未知星期。
     // 组窄条「今 …」那截：自定义历法只信通过当前月序/日数校验的结构化戳；
     // 越界或无精确日期时回退已确认锚点，不能把 raw/公历数字回退冒充成今天。
     function clockHeadParts(isLatest, a, anchorWd, floorClock = null, calendarOverride = undefined) {
         const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;
         const format = (options = {}) => {
             const parts = formatStoryClockHeadParts({ anchor: a, anchorWeekday: anchorWd, calendar: renderCalendar, monthName: calMonthName, escapeHtml, ...options });
-            const date = options.clockMeta || options.stampDate || a;
+            const date = options.clockMeta?.valid ? options.clockMeta : a;
             const displayedEra = String(date?.eraLabel || (renderCalendar?.displayStyle === 'classical' ? renderCalendar?.era : '') || '').trim();
-            if (calHasEra(renderCalendar) && renderCalendar.era !== displayedEra && !String(options.rawStamp || '').includes(renderCalendar.era)) parts.todayHtml += `<span class="sp-dash-sum-era">${escapeHtml(renderCalendar.era)}</span>`;
+            if (calHasEra(renderCalendar) && renderCalendar.era !== displayedEra && !parts.todayHtml.includes(escapeHtml(renderCalendar.era))) parts.todayHtml += `<span class="sp-dash-sum-era">${escapeHtml(renderCalendar.era)}</span>`;
             return parts;
         };
         const fallback = format();
@@ -224,18 +204,9 @@ export function createInlineFeature(env = {}) {
         const stamp = clk && (clk.end || clk.start);
         if (!stamp) return fallback;
         const tip = '时间戳·主楼 AI 每楼隐形打点读回';
-        const clockMeta = clk?.endMeta?.valid ? clk.endMeta : (clk?.startMeta?.valid ? clk.startMeta : null);
-        if (clockMeta) {
-            const weekdayText = clockMeta.weekdayIndex == null ? (anchorWd || '星期未记录') : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
-            return format({ clockMeta: { ...clockMeta, weekdayText }, tip });
-        }
-        const customCalendar = renderCalendar
-            && renderCalendar.kind !== 'gregorian'
-            && renderCalendar.id !== 'default-gregorian';
-        if (customCalendar) return fallback;
-        const p = stampDate(stamp);
-        if (!p) return format({ rawStamp: stamp, tip });   // 古风/无法解析 → 原样抬
-        return format({ stampDate: p, tip });
+        const clockMeta = clk?.endMeta?.valid ? clk.endMeta : (clk?.startMeta?.valid ? clk.startMeta : (clk?.endMeta || clk?.startMeta));
+        const weekdayText = clockMeta?.weekdayIndex == null ? null : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
+        return format({ clockMeta: clockMeta ? { ...clockMeta, ...(weekdayText ? { weekdayText } : {}) } : null, rawStamp: stamp, tip });
     }
     function dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined, ledgerOn = false) {
         const renderCalendar = calendarOverride === undefined ? loadCalDesc() : calendarOverride;

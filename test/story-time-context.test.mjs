@@ -51,14 +51,47 @@ function productionStoryClock() {
     });
 }
 
-function productionStoryClockFormatter() {
+function productionStoryClockFormatter(name = 'formatStoryClockMeta') {
     const uiSource = fs.readFileSync(path.join(repo, 'business/axis/ui.js'), 'utf8');
     const begin = uiSource.indexOf('function displayMonthName');
     const finish = uiSource.indexOf('export function calendarSummary', begin);
     assert.ok(begin >= 0 && finish > begin, 'production story-clock formatter region exists');
     const formatterRegion = uiSource.slice(begin, finish).replaceAll('export function ', 'function ');
-    return vm.runInNewContext(`${formatterRegion}\nformatStoryClockMeta`, {});
+    return vm.runInNewContext(`${formatterRegion}\n${name}`, {});
 }
+
+test('unconfirmed structured fields display without machine keys and custom fallback keeps its own weekday', () => {
+    const formatMeta = productionStoryClockFormatter();
+    const formatHead = productionStoryClockFormatter('formatStoryClockHeadParts');
+    const meta = { valid: false, structured: true, raw: '| date=太初历3412年4月31日 | weekday=周六 | time=09:00', dateText: '太初历3412年4月31日', weekdayText: '周六', time: '9:00' };
+    assert.equal(formatMeta(meta), '太初历3412年4月31日 周六 9:00');
+    const parts = formatHead({ anchor: { month: 4, day: 8 }, anchorWeekday: '周二', clockMeta: meta });
+    assert.match(parts.todayHtml, /太初历3412年4月31日 周六/);
+    assert.match(parts.timeHtml, />9:00</);
+    assert.doesNotMatch(parts.todayHtml + parts.timeHtml, /date=|weekday=|time=|\|/);
+    const custom = { kind: 'custom', months: [{ name: '霜月', days: 30 }] };
+    const fallback = formatHead({ anchor: { month: 1, day: 8 }, anchorWeekday: '周二', clockMeta: meta, calendar: custom, monthName: (cal, m) => cal.months[m - 1].name });
+    assert.match(fallback.todayHtml, /霜月8日 周二/);
+    assert.doesNotMatch(fallback.todayHtml, /周六|太初历|date=|weekday=|time=/);
+    assert.equal(fallback.timeHtml, '');
+    assert.equal(formatMeta({ ...meta, structured: false, raw: '谷雨亥时' }), '谷雨亥时', '旧非结构化原文仍保留');
+});
+
+test('a clock with weekday and time but no date stays unconfirmed without exposing field keys', () => {
+    const parser = productionStoryClock();
+    const clock = parser.latestStoryClock({ chat: [{ mes: '<!-- SDC-end | weekday=周六 | time=09:00 -->', is_user: false }] });
+    const meta = clock.endMeta;
+    assert.equal(meta.valid, false);
+    assert.equal(meta.date, null);
+    assert.equal(meta.structured, true);
+    assert.equal(meta.dateText, null);
+    const formatMeta = productionStoryClockFormatter();
+    assert.equal(formatMeta(meta), '日期待确认 周六 9:00');
+    const head = productionStoryClockFormatter('formatStoryClockHeadParts')({ anchor: { month: 4, day: 8 }, anchorWeekday: '周二', clockMeta: meta });
+    assert.match(head.todayHtml, /日期待确认 周六/);
+    assert.match(head.timeHtml, />9:00</);
+    assert.doesNotMatch(head.todayHtml + head.timeHtml, /date=|weekday=|time=|\|/);
+});
 
 function productionAlmanacText(date) {
     const sourceText = fs.readFileSync(path.join(repo, 'business/axis/inject.js'), 'utf8');

@@ -10,103 +10,83 @@ function parseStoryWeekday(text) {
     if (m[1]) return ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 })[m[1]];
     return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(m[2].toLowerCase());
 }
-function parseStoryDate(text, calendarOverride = null) {
+const STORY_NUMERAL = '[0-9０-９零〇一二两兩三四五六七八九十百千廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟万萬亿億]+';
+const STORY_DIGITS = /^[0-9零〇一二两兩三四五六七八九壹贰貳叁參叄肆伍陆陸柒捌玖]+$/;
+const escapePattern = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function storyNumber(value) {
+    const token = normalizeCnDateDigits(value).trim().replace(/^初/, '');
+    if (/^\d+$/.test(token)) return Number(token);
+    // 数字只在年月日词元里归一；纪年标签和正式月名保持原文。
+    if (STORY_DIGITS.test(token)) return Number([...token].map(ch => /\d/.test(ch) ? ch : _cnToNumber(ch)).join(''));
+    return _cnToNumber(token);
+}
+function storyYear(value, calendar, structured) {
+    const text = String(value).trim();
+    const labels = [...new Set([calendar?.title, calendar?.era].map(x => String(x || '').trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+    const numberPattern = new RegExp(`^(?:元|${STORY_NUMERAL})$`);
+    let eraLabel = ''; let number = text; let explicit = false;
+    const known = labels.find(label => text.startsWith(label) && numberPattern.test(text.slice(label.length).trim()));
+    if (known) { eraLabel = known; number = text.slice(known.length).trim(); }
+    else {
+        const bracket = /^【([^】]+)】\s*(.*)$/.exec(text);
+        if (bracket) { eraLabel = bracket[1]; number = bracket[2]; explicit = true; }
+        else {
+            const parts = new RegExp(`^(.*?)(元|${STORY_NUMERAL})$`).exec(text);
+            if (!parts) return null;
+            eraLabel = parts[1].trim(); number = parts[2];
+        }
+    }
+    if (/[<>【】{}|｜,，;；\n]/.test(eraLabel)) return null;
+    if (!structured && eraLabel && !known && !explicit) {
+        // 旧自由文本仍要求明确短年号；不把叙述连接词当纪年。
+        if (/^(?:截至|来到|來到|后来|後來|我们|我們|此时|此時|时至|時至)$/.test(eraLabel)) return null;
+        if (!/^[\u3400-\u9fff]{2}$/.test(eraLabel)) return null;
+    }
+    const year = storyNumber(number);
+    if (!Number.isInteger(year) || year < 1 || year > 9999) return null;
+    return { year, eraLabel, absoluteYear: !eraLabel || eraLabel === String(calendar?.title || '').trim() };
+}
+function parseStoryDate(text, calendarOverride = null, { structured = false } = {}) {
     if (calendarOverride?.resolved === false) return null;
-    const s = normalizeCnDateDigits(text);
+    const s = String(text || '').trim();
     const calendar = calendarOverride?.resolved === true ? calendarOverride.calendar : calendarOverride || deps.loadCalendar();
-    if (/<\/?bbs_end\s*>/i.test(s)) return null;
-    // 显式数字纪年一旦出现但越界，不能降级成“无年”的月日，避免 0/10000 年被静默吞掉。
-    if (/(?:^|[\s|｜,，=＝])\d{1,}\s*年\s*(?:正|冬|腊|臘|\d{1,2}|[零〇一二两兩三四五六七八九十廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟]+)\s*月/.test(s)) {
-        const explicit = s.match(/(?:^|[\s|｜,，=＝])(\d{1,})\s*年/);
-        if (explicit && (+explicit[1] < 1 || +explicit[1] > 9999)) return null;
-    }
-    const cn = '[零〇一二两兩三四五六七八九十百千廿卄卅卌壹贰貳叁參叄肆伍陆陸柒捌玖拾佰仟]+';
-    const toNumber = value => { const primary = deps.cnToNumber ? deps.cnToNumber(value) : null; return primary == null || Number.isNaN(Number(primary)) ? _cnToNumber(value) : primary; };
-    const cnYear = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])(${cn})\\s*年`));
-    if (cnYear && (!Number.isInteger(toNumber(cnYear[1])) || toNumber(cnYear[1]) < 1 || toNumber(cnYear[1]) > 9999)) return null;
-    const valid = (month, day, year = null, eraLabel = null, skipGregorianDateValidation = !!eraLabel) => {
-        const md = deps.validMonthDay({ month, day }, calendar);
-        if (!md) return null;
-        if (year != null && (!Number.isInteger(year) || year < 1 || year > 9999)) return null;
-        const cal = calendar;
-        const gregorian = cal == null || cal === deps.defaultCalendar || cal.kind === 'gregorian' || cal.id === 'default-gregorian' || (!cal.kind && !cal.id);
-        if (year != null && !skipGregorianDateValidation && gregorian && typeof deps.validRealDate === 'function' && !deps.validRealDate(year, month, day)) return null;
-        return { ...md, ...(year != null ? { year } : {}), ...(eraLabel ? { eraLabel } : {}) };
-    };
-    let m = s.match(/(?:^|[\s|｜,，])(\d{4})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
-    if (m) return valid(+m[2], +m[3], +m[1]);
-    m = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])(${cn})\\s*年\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-    if (m) { const year = toNumber(m[1]); const month = _CN_MONTH_ALIAS[m[2]] ?? toNumber(m[2]); const day = m[3].startsWith('初') ? toNumber(m[3].slice(1)) : toNumber(m[3]); if (year != null && month != null && day != null) return valid(month, day, year); }
-    // 显式故事纪年：保留年号原文；边界只允许字段分隔符，避免吞正文中的任意“某某年”。
-    // 机器字段中的无界定符年号采用严格短 token（两字）；较长年号必须显式用【年号】界定。
-    const configuredPrefixes = [];
-    for (const [kind, value] of [['title', calendar?.title], ['era', calendar?.era]]) {
-        const label = String(value || '').trim(); if (!label) continue;
-        const existing = configuredPrefixes.find(item => item.label === label);
-        if (existing) { if (kind === 'title') existing.kind = 'title'; }
-        else configuredPrefixes.push({ label, kind });
-    }
-    configuredPrefixes.sort((a, b) => b.label.length - a.label.length);
-    for (const { label } of configuredPrefixes) {
-        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const explicitYear = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])${escaped}(\\d+)\\s*年`));
-        if (explicitYear && (+explicitYear[1] < 1 || +explicitYear[1] > 9999)) return null;
-    }
-    for (const { label, kind } of configuredPrefixes) {
-        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const prefix = `(?:^|[\\s|｜,，=＝])${escaped}`;
-        let match = s.match(new RegExp(`${prefix}(\\d{1,4}|${cn})\\s*年\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-        if (match) {
-            const year = /^\d{1,4}$/.test(match[1]) ? +match[1] : toNumber(match[1]);
-            const month = _CN_MONTH_ALIAS[match[2]] ?? toNumber(match[2]); const day = match[3].startsWith('初') ? toNumber(match[3].slice(1)) : toNumber(match[3]);
-            if (year != null && month != null && day != null) return valid(month, day, year, label, kind !== 'title');
-        }
-        for (const { index, name } of (calendar?.months || []).map((month, index) => ({ index, name: String(month?.name || '').trim() })).filter(item => item.name).sort((a, b) => b.name.length - a.name.length)) {
-            const monthName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            match = s.match(new RegExp(`${prefix}(\\d{1,4}|${cn})\\s*年\\s*${monthName}\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-            if (!match) continue;
-            const year = /^\d{1,4}$/.test(match[1]) ? +match[1] : toNumber(match[1]); const day = match[2].startsWith('初') ? toNumber(match[2].slice(1)) : toNumber(match[2]);
-            if (year != null && day != null) return valid(index + 1, day, year, label, kind !== 'title');
-        }
-    }
-    const eraYear = `(?:(?:【([^】]{1,20})】)|([\\u3400-\\u9fff]{2}))(\\d{1,4}|${cn})\\s*年`;
-    m = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])${eraYear}\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-    if (m) {
-        const eraLabel = m[1] || m[2] || null; const year = /^\d{1,4}$/.test(m[3]) ? +m[3] : toNumber(m[3]);
-        // 无界定符的短年号仅在字段起点作为紧凑 token 使用；常见叙述连接词
-        // 即使恰好两字也不能被当作年号，长/不确定标签应使用【年号】语法。
-        if (eraLabel && !m[1] && /^(?:截至|来到|來到|后来|後來|我们|我們|此时|此時|时至|時至)$/.test(eraLabel)) return null;
-        const month = _CN_MONTH_ALIAS[m[4]] ?? toNumber(m[4]); const day = m[5].startsWith('初') ? toNumber(m[5].slice(1)) : toNumber(m[5]);
-        if (year != null && month != null && day != null) return valid(month, day, year, eraLabel);
-    }
-    // 自定义正式命名月也允许完整纪年；月名只能来自当前 calendar.months allowlist。
+    if (!s || /<\/?bbs_end\s*>/i.test(s)) return null;
     const descriptors = (calendar?.months || []).map((month, index) => ({ index, name: String(month?.name || '').trim() })).filter(x => x.name).sort((a, b) => b.name.length - a.name.length);
-    for (const { index, name } of descriptors) {
-        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const cm = s.match(new RegExp(`(?:^|[\\s|｜,，=＝])(?:(?:【([^】]{1,20})】)|([\\u3400-\\u9fff]{2}))?(\\d{1,4}|${cn})\\s*年\\s*${escaped}\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-        if (!cm) continue;
-        const year = /^\\d{1,4}$/.test(cm[3]) ? +cm[3] : toNumber(cm[3]); const day = cm[4].startsWith('初') ? toNumber(cm[4].slice(1)) : toNumber(cm[4]);
-        const value = valid(index + 1, day, year, cm[1] || cm[2] || null); if (value) return value;
+    // 正式月名是当前历法的原子词元，优先于“四月”等数字月别名。
+    const monthPattern = [...descriptors.map(x => escapePattern(x.name)), `(?:正|冬|腊|臘|${STORY_NUMERAL})\\s*月`].join('|');
+    const end = structured ? '\\s*$' : '(?=$|[Tt\\s|｜,，]|周|週|星期|礼拜|禮拜)';
+    const chinese = new RegExp(`^(?:([^\\n|｜,，;；]+?)\\s*年\\s*)?(${monthPattern})\\s*(?:第\\s*)?(初?${STORY_NUMERAL})\\s*日?${end}`);
+    const digits = '[0-9０-９]';
+    const yearWidth = structured ? '+' : '{4}'; // 明确字段按数值校验；旧自由文本保四位 ISO 入口边界。
+    const numeric = new RegExp(`^(?:(${digits}${yearWidth})\\s*[-/.]\\s*)?(${digits}{1,2})\\s*[-/.]\\s*(${digits}{1,2})(?:[Tt]\\d{1,2}:\\d{2}(?::\\d{2})?(?:[Zz]|[+-]\\d{2}:?\\d{2})?)?${end}`);
+    const validate = (month, day, yearPart = null) => {
+        const md = deps.validMonthDay({ month, day }, calendar); if (!md) return null;
+        const gregorian = calendar == null || calendar === deps.defaultCalendar || calendar.kind === 'gregorian' || calendar.id === 'default-gregorian' || (!calendar.kind && !calendar.id);
+        if (yearPart && gregorian && yearPart.absoluteYear && typeof deps.validRealDate === 'function' && !deps.validRealDate(yearPart.year, month, day)) return null;
+        return { ...md, ...(yearPart ? { year: yearPart.year } : {}), ...(yearPart?.eraLabel ? { eraLabel: yearPart.eraLabel } : {}) };
+    };
+    const parseCandidate = candidate => {
+        let match = numeric.exec(candidate);
+        if (match) {
+            const year = match[1] == null ? null : storyYear(match[1], calendar, structured);
+            if (match[1] != null && !year) return null;
+            return validate(storyNumber(match[2]), storyNumber(match[3]), year);
+        }
+        match = chinese.exec(candidate); if (!match) return undefined;
+        const year = match[1] == null ? null : storyYear(match[1], calendar, structured);
+        if (match[1] != null && !year) return year;
+        const formalMonth = descriptors.find(x => x.name === match[2]);
+        const monthWord = match[2].replace(/\s*月$/, '');
+        const month = formalMonth ? formalMonth.index + 1 : (_CN_MONTH_ALIAS[monthWord] ?? storyNumber(monthWord));
+        return validate(month, storyNumber(match[3]), year);
+    };
+    if (structured) return parseCandidate(s) || null;
+    // 旧 compact 戳和日期判定只从原有分隔边界找候选，仍交同一词元/校验流程。
+    const starts = [0, ...[...s.matchAll(/[\s|｜,，=＝]+/g)].map(match => match.index + match[0].length)];
+    for (const start of starts) {
+        const parsed = parseCandidate(s.slice(start));
+        if (parsed !== undefined) return parsed;
     }
-    const cal = calendar;
-    const monthDescriptors = (cal?.months || [])
-        .map((month, index) => ({ index, name: String(month?.name || '').trim() }))
-        .filter(month => month.name)
-        .sort((a, b) => b.name.length - a.name.length);
-    for (const { index, name } of monthDescriptors) {
-        const re = new RegExp('(?:^|[\\s|｜,，=＝])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:第\\s*)?(初' + cn + '|\\d{1,2}|' + cn + ')\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)');
-        const hit = re.exec(s); if (!hit) continue;
-        const day = /^\d+$/.test(hit[1]) ? +hit[1] : toNumber(hit[1].replace(/^初/, ''));
-        if (day != null) return deps.validMonthDay({ month: index + 1, day }, cal);
-    }
-    m = s.match(new RegExp(`(?:^|[\\s|｜,，])(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?`));
-    if (m) { const month = _CN_MONTH_ALIAS[m[1]] ?? toNumber(m[1]); const day = m[2].startsWith('初') ? toNumber(m[2].slice(1)) : toNumber(m[2]); if (month != null && day != null) return valid(month, day); }
-    m = s.match(new RegExp(`(?:^|[\\s|｜,，])(\\d{1,4})\\s*年\\s*(正|冬|腊|臘|\\d{1,2}|${cn})\\s*月\\s*(初(?:${cn})|\\d{1,2}|${cn})\\s*日?(?=$|[\\s|｜,，]|周|週|星期|礼拜|禮拜)`));
-    if (m) { const month = _CN_MONTH_ALIAS[m[2]] ?? toNumber(m[2]); const day = m[3].startsWith('初') ? toNumber(m[3].slice(1)) : toNumber(m[3]); if (month != null && day != null) return valid(month, day, +m[1]); }
-    m = s.match(/(?:^|[\s|｜,，])(?:\d{1,4}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
-    if (m) return valid(+m[1], +m[2]);
-    m = s.match(/(?:^|[\s|｜,，])(\d{1,2})[-/.](\d{1,2})(?=$|[Tt\s|｜,，]|周|週|星期|礼拜|禮拜)/);
-    if (m) return valid(+m[1], +m[2]);
     return null;
 }
 function parseStoryTime(raw, { structured = false } = {}) {
@@ -155,18 +135,19 @@ function parseStoryTime(raw, { structured = false } = {}) {
 }
 function parseStoryClockMetaValue(raw, calendarOverride = null) {
     const value = String(raw || '').trim();
-    const field = name => new RegExp(`(?:^|[|｜,，;；\\n])\\s*(?:${name})\\s*[=＝:]\\s*([^|｜,，;；\\n}]+)`, 'i').exec(value)?.[1]?.trim();
+    const field = name => new RegExp(`(?:^|[|｜,，;；\\n])\\s*(?:${name})\\s*[=＝:]\\s*([^|｜,，;；\\n}]*)`, 'i').exec(value)?.[1]?.trim();
     const structuredDate = field('date');
     const structuredWeekday = field('weekday|星期');
     const structuredTime = field('time');
-    const date = parseStoryDate(structuredDate || value, calendarOverride);
+    const structured = structuredDate != null || structuredWeekday != null || structuredTime != null;
+    const date = structured ? (structuredDate ? parseStoryDate(structuredDate, calendarOverride, { structured: true }) : null) : parseStoryDate(value, calendarOverride);
     const weekdayIndex = /^[一二三四五六日天]$/.test(String(structuredWeekday || '').trim())
         ? ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 })[String(structuredWeekday).trim()]
         : parseStoryWeekday(structuredWeekday || value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
     const dirtyStructuredTime = structuredTime && /(?:^|\s)[^=＝:|｜,，;；\n]+\s*(?:[=＝]|:(?=\s*[^\d]))/.test(structuredTime);
     const time = dirtyStructuredTime ? null : parseStoryTime(structuredTime || value, { structured: !!structuredTime });
-    return { raw: value, date, month: date?.month ?? null, day: date?.day ?? null, year: date?.year ?? null, eraLabel: date?.eraLabel ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
+    return { raw: value, structured, dateText: structuredDate ?? null, date, month: date?.month ?? null, day: date?.day ?? null, year: date?.year ?? null, eraLabel: date?.eraLabel ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
 }
 // Literal format examples contain no time metadata; leave real incomplete/duplicate markers visible to validation.
 const CLOCK_TEMPLATE_VALUE = /^\s*[|｜]?\s*date\s*[=＝:]\s*(?:…+|\.{3})\s*[|｜]\s*weekday\s*[=＝:]\s*(?:周x|…+|\.{3})\s*[|｜]\s*time\s*[=＝:]\s*(?:…+|\.{3})\s*$/i;
