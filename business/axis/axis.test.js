@@ -19,7 +19,7 @@ test('axis toolbar production contract has shared wide/narrow action dispatcher'
 
 test('axis CSS keeps editor action and time-travel fixes scoped', () => {
     assert.match(css, /\.sp-alm-editor-actions > button\s*\{[^}]*border-radius:\s*var\(--sp-size-8\)/);
-    assert.match(css, /--sp-size-8:\s*calc\(8px \* var\(--sp-scale\)\)/);
+    assert.match(css, /--sp-size-8:\s*7\.6px/);
     assert.match(css, /\.sp-alm-time-travel,\s*\.sp-alm-time-travel-stop\s*\{\s*white-space:\s*nowrap;/);
 });
 

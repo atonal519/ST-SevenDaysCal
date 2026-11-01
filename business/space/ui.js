@@ -1,4 +1,5 @@
 import { icon } from '../../utils/icons.js';
+import { positionActionMenu, clearActionMenuPlacement } from '../utils/action-menu.js';
 import { resolveSpaceWidgets, spaceMessagePlainText, spacePageId } from './schema.js';
 
 export function createSpaceUi(host = {}) {
@@ -196,6 +197,8 @@ export function createSpaceUi(host = {}) {
             host.closeActionMenus?.();
             host.$(menu).toggleClass('sp-action-menu-open', open).find('.sp-action-menu-list').prop('hidden', !open);
             host.$(this).attr('aria-expanded', String(open));
+            if (open) positionActionMenu(menu);
+            else clearActionMenuPlacement(menu);
             syncPages();
         });
         $root.on('click.spSpaceFeature', '#sp-space-add-page', event => {

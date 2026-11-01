@@ -1,5 +1,5 @@
 /* Tabler Outline keeps one stroke family in Shadow roots and host integration slots. */
-.sp-icon { display: inline-block; width: 1em; height: 1em; flex-shrink: 0; vertical-align: -0.125em; }
+.sp-icon { font-size: var(--sp-icon-size, var(--sp-icon-base, 15.2px)); display: inline-block; width: 1em; height: 1em; flex-shrink: 0; vertical-align: -0.125em; }
 .sp-icon-spin { animation: sp-icon-spin 1s linear infinite; }
 @keyframes sp-icon-spin { to { transform: rotate(360deg); } }
 
@@ -32,8 +32,22 @@ q::after {
     --sp-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
                     Menlo, Consolas, "Roboto Mono", monospace;
 
+    /* SVG 固定为原 95% 的角色大小；文字仍独立缩放。 */
+    --sp-icon-micro: 9.12px;
+    --sp-icon-tiny: 9.728px;
+    --sp-icon-label: 10.944px;
+    --sp-icon-caption: 11.856px;
+    --sp-icon-body: 12.464px;
+    --sp-icon-subtitle: 13.68px;
+    --sp-icon-heading: 14.44px;
+    --sp-icon-base: 15.2px;
+    --sp-icon-title: 15.96px;
+    --sp-icon-large: 17.48px;
+    --sp-icon-display: 27.36px;
+    --sp-icon-empty: 30.4px;
+
     /* —— 字号令牌：px 基准 × 单一缩放变量，脱钩酒馆全局 Font Scale ——
-       旧数值键沿用模板接口，按下方文字角色取值。改 --sp-scale 即整体缩放（设置里 −/＋）。 */
+       旧数值键沿用模板接口，按下方文字角色取值。--sp-scale 只缩放文字（设置里 −/＋）。 */
     --sp-scale : 1;
     /* 同一角色共用字号；旧数值名称保留给已有模板，避免跨入口细碎分叉。 */
     --sp-text-micro: calc(9.6px * var(--sp-scale));
@@ -49,55 +63,55 @@ q::after {
     --sp-lh-prose: 1.65;
     --sp-tracking-label: 0.02em;
 
-    /* 尺寸仍取构画现有基准；间距、控件外框与圆角只随 --sp-scale 同步。 */
-    --sp-size-2: calc(2px * var(--sp-scale));
-    --sp-size-3: calc(3px * var(--sp-scale));
-    --sp-size-4: calc(4px * var(--sp-scale));
-    --sp-size-5: calc(5px * var(--sp-scale));
-    --sp-size-6: calc(6px * var(--sp-scale));
-    --sp-size-7: calc(7px * var(--sp-scale));
-    --sp-size-8: calc(8px * var(--sp-scale));
-    --sp-size-9: calc(9px * var(--sp-scale));
-    --sp-size-10: calc(10px * var(--sp-scale));
-    --sp-size-11: calc(11px * var(--sp-scale));
-    --sp-size-12: calc(12px * var(--sp-scale));
-    --sp-size-13: calc(13px * var(--sp-scale));
-    --sp-size-14: calc(14px * var(--sp-scale));
-    --sp-size-15: calc(15px * var(--sp-scale));
-    --sp-size-16: calc(16px * var(--sp-scale));
-    --sp-size-17: calc(17px * var(--sp-scale));
-    --sp-size-18: calc(18px * var(--sp-scale));
-    --sp-size-20: calc(20px * var(--sp-scale));
-    --sp-size-22: calc(22px * var(--sp-scale));
-    --sp-size-23: calc(23px * var(--sp-scale));
-    --sp-size-24: calc(24px * var(--sp-scale));
-    --sp-size-26: calc(26px * var(--sp-scale));
-    --sp-size-28: calc(28px * var(--sp-scale));
-    --sp-size-30: calc(30px * var(--sp-scale));
-    --sp-size-32: calc(32px * var(--sp-scale));
-    --sp-size-34: calc(34px * var(--sp-scale));
-    --sp-size-36: calc(36px * var(--sp-scale));
-    --sp-size-38: calc(38px * var(--sp-scale));
-    --sp-size-40: calc(40px * var(--sp-scale));
-    --sp-size-42: calc(42px * var(--sp-scale));
-    --sp-size-44: calc(44px * var(--sp-scale));
-    --sp-size-46: calc(46px * var(--sp-scale));
-    --sp-size-50: calc(50px * var(--sp-scale));
-    --sp-size-52: calc(52px * var(--sp-scale));
-    --sp-size-60: calc(60px * var(--sp-scale));
-    --sp-size-62: calc(62px * var(--sp-scale));
-    --sp-size-64: calc(64px * var(--sp-scale));
-    --sp-size-70: calc(70px * var(--sp-scale));
-    --sp-size-74: calc(74px * var(--sp-scale));
-    --sp-size-78: calc(78px * var(--sp-scale));
-    --sp-size-80: calc(80px * var(--sp-scale));
-    --sp-size-90: calc(90px * var(--sp-scale));
-    --sp-size-120: calc(120px * var(--sp-scale));
-    --sp-size-132: calc(132px * var(--sp-scale));
-    --sp-size-140: calc(140px * var(--sp-scale));
-    --sp-size-150: calc(150px * var(--sp-scale));
-    --sp-size-160: calc(160px * var(--sp-scale));
-    --sp-size-180: calc(180px * var(--sp-scale));
+    /* 非文字尺寸固定为原 uiScale=95% 的几何基准；原固定 px 不变。 */
+    --sp-size-2: 1.9px;
+    --sp-size-3: 2.85px;
+    --sp-size-4: 3.8px;
+    --sp-size-5: 4.75px;
+    --sp-size-6: 5.7px;
+    --sp-size-7: 6.65px;
+    --sp-size-8: 7.6px;
+    --sp-size-9: 8.55px;
+    --sp-size-10: 9.5px;
+    --sp-size-11: 10.45px;
+    --sp-size-12: 11.4px;
+    --sp-size-13: 12.35px;
+    --sp-size-14: 13.3px;
+    --sp-size-15: 14.25px;
+    --sp-size-16: 15.2px;
+    --sp-size-17: 16.15px;
+    --sp-size-18: 17.1px;
+    --sp-size-20: 19px;
+    --sp-size-22: 20.9px;
+    --sp-size-23: 21.85px;
+    --sp-size-24: 22.8px;
+    --sp-size-26: 24.7px;
+    --sp-size-28: 26.6px;
+    --sp-size-30: 28.5px;
+    --sp-size-32: 30.4px;
+    --sp-size-34: 32.3px;
+    --sp-size-36: 34.2px;
+    --sp-size-38: 36.1px;
+    --sp-size-40: 38px;
+    --sp-size-42: 39.9px;
+    --sp-size-44: 41.8px;
+    --sp-size-46: 43.7px;
+    --sp-size-50: 47.5px;
+    --sp-size-52: 49.4px;
+    --sp-size-60: 57px;
+    --sp-size-62: 58.9px;
+    --sp-size-64: 60.8px;
+    --sp-size-70: 66.5px;
+    --sp-size-74: 70.3px;
+    --sp-size-78: 74.1px;
+    --sp-size-80: 76px;
+    --sp-size-90: 85.5px;
+    --sp-size-120: 114px;
+    --sp-size-132: 125.4px;
+    --sp-size-140: 133px;
+    --sp-size-150: 142.5px;
+    --sp-size-160: 152px;
+    --sp-size-180: 171px;
 
     --sp-point-main: #4fc3f7;
     --sp-point-hidden: #b08968;
@@ -143,12 +157,12 @@ q::after {
     --sp-fs-180: calc(28.8px  * var(--sp-scale));
     --sp-fs-200: calc(32px    * var(--sp-scale));
 
-    /* —— 控件尺寸令牌：图标按钮方框随插件字号同步缩放。—— */
-    --sp-btn-22: calc(22px * var(--sp-scale));
+    /* —— 控件尺寸令牌：控件几何固定为原 95% 基准，文字倍率不改其外框。—— */
+    --sp-btn-22: 20.9px;
 
     /* —— 自绘点选控件尺寸令牌：checkbox/radio 自画（appearance:none）后的字形方框边长，
-       随插件自身缩放走、脱钩酒馆 Font Scale。toggle 拨杆宽＝此值 × 1.8。 —— */
-    --sp-ctrl: calc(16px * var(--sp-scale));
+       固定原 95% 基准、脱钩文字倍率。toggle 拨杆宽＝此值 × 1.8。 —— */
+    --sp-ctrl: 15.2px;
 
     /* —— 动效令牌：统一交互过渡的时长与缓动。
        三档时长：fast＝点选态反馈（hover/active/色变）；base＝一般属性过渡；enter＝入场/较大位移。
@@ -315,7 +329,7 @@ q::after {
 .sp-recall-box,
 .sp-anchor-btn,
 .sp-toast {
-    font-size: var(--sp-fs-100);
+    --sp-icon-size: var(--sp-icon-base); font-size: var(--sp-fs-100);
 }
 
 /* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
@@ -469,22 +483,22 @@ q::after {
 }
 .sp-side-tab .sp-tab-glyph {
     font-family: var(--sp-font-mono);
-    font-size: var(--sp-fs-100);
+    --sp-icon-size: var(--sp-icon-base); font-size: var(--sp-fs-100);
     line-height: 1;
     color                : var(--sp-subtle);
     transition: color 140ms ease;
 }
 /* 几何图标统一走内联 SVG（currentColor 跟随主题/激活态），尺寸一致 */
 .sp-side-tab .sp-tab-glyph .sp-tab-svg {
-    width : 1.35em;
-    height         : 1.35em;
+    width : 20.52px;
+    height         : 20.52px;
         display : block;
 }
 /* Chinese vertical text on tab labels — book-spine style */
 .sp-side-tab .sp-tab-label {
     writing-mode: vertical-rl;
     text-orientation: upright;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     font-weight    : 600;
     letter-spacing: 0.32em;
     line-height: 1;
@@ -555,7 +569,7 @@ q::after {
 }
 .sp-content-title {
     flex          : 0 1 auto;
-    font-size: var(--sp-fs-105);
+    --sp-icon-size: var(--sp-icon-title); font-size: var(--sp-fs-105);
     font-weight: 500;
     color        : var(--sp-on-surface);
     letter-spacing: 0.01em;
@@ -583,7 +597,7 @@ q::after {
     background   : transparent;
     color                : var(--sp-subtle);
     cursor       : pointer;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     opacity : 0.6;
     transition     : opacity 0.12s, color 0.12s, background 0.12s;
 }
@@ -607,7 +621,7 @@ q::after {
     border-radius: var(--sp-size-10);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     line-height: var(--sp-lh-reading);
     letter-spacing: 0.01em;
     white-space  : normal;
@@ -638,11 +652,11 @@ q::after {
     line-height  : 1.5;
 }
 .sp-intro-key > .sp-icon {
-    flex: 0 0 1.4em;
-    margin-top: 0.18em;
+    flex: 0 0 16.053632px;
+    margin-top: 2.0640384px;
     text-align : center;
     color                : var(--sp-subtle);
-    font-size    : 0.92em;
+    font-size    : 11.46688px;
 }
 .sp-intro-key > b { flex: 0 0 auto; font-weight: 600; white-space: nowrap; }
 .sp-intro-key > span { color: var(--sp-subtle); }
@@ -661,7 +675,7 @@ q::after {
     color                : var(--sp-subtle);
     padding: var(--sp-size-5) var(--sp-size-11);
     font-family: var(--sp-font-mono);
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight    : 600;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -679,16 +693,16 @@ q::after {
 
 /* ─── TA▾ 固定槽下拉抽屉 ─────────────────────────────────────────────────────
    换人入口（已与刷新解耦）。wrap 提供定位上下文让抽屉溢出 sub-toggle 的 overflow:hidden；
-   抽屉绝对定位挂在触发器下方，尺寸随 --sp-scale 令牌走，视觉沿用 sub-toggle 的描边/圆角语言。 */
+   抽屉绝对定位挂在触发器下方，几何固定为原95%，文字随字号令牌走，视觉沿用 sub-toggle 的描边/圆角语言。 */
 .sp-sub-toggle-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 .sp-ta-trigger { display: inline-flex; align-items: center; gap: var(--sp-size-4); }
-.sp-ta-caret { font-size: var(--sp-fs-62); transition: transform 140ms ease; }
+.sp-ta-caret { --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-icon-tiny); transition: transform 140ms ease; }
 .sp-ta-caret-slot {
     display: inline-flex;
     align-items: center;
-    flex: 0 0 var(--sp-fs-62);
-    width: var(--sp-fs-62);
-    height: var(--sp-fs-62);
+    flex: 0 0 var(--sp-icon-tiny);
+    width: var(--sp-icon-tiny);
+    height: var(--sp-icon-tiny);
     position: relative;
 }
 /* 默认 TA 按大写字面中心对齐；零高槽锚在文字基线，不增加按钮高度。 */
@@ -698,13 +712,13 @@ q::after {
     position: absolute;
     left: 0;
     font-size: inherit;
-    width: var(--sp-fs-62);
-    height: var(--sp-fs-62);
-    bottom: calc((0.7em - var(--sp-fs-62)) / 2);
+    width: var(--sp-icon-tiny);
+    height: var(--sp-icon-tiny);
+    bottom: calc((0.7em - var(--sp-icon-tiny)) / 2);
 }
 @supports (height: 1cap) {
     .sp-ta-trigger.sp-ta-default-label .sp-ta-caret {
-        bottom: calc((1cap - var(--sp-fs-62)) / 2);
+        bottom: calc((1cap - var(--sp-icon-tiny)) / 2);
     }
 }
 .sp-ta-trigger.sp-ta-open .sp-ta-caret { transform: rotate(180deg); }
@@ -751,7 +765,7 @@ q::after {
 .sp-ta-slot-name {
     flex       : 1;
     min-width     : 0;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     color        : var(--sp-on-surface);
     overflow      : hidden;
     text-overflow : ellipsis;
@@ -769,7 +783,7 @@ q::after {
     border        : 0;
     border-radius: var(--sp-size-4);
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     cursor       : pointer;
     transition: color 120ms ease, background 120ms ease;
 }
@@ -785,7 +799,7 @@ q::after {
     border-top  : 1px solid var(--sp-divider);
     border-radius: 0 0 var(--sp-size-4) var(--sp-size-4);
     color        : var(--sp-primary);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     cursor       : pointer;
     -webkit-tap-highlight-color: transparent;
     transition: background 120ms ease;
@@ -838,7 +852,7 @@ q::after {
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     transition     : background 0.15s, color 0.15s;
 }
 .sp-icon-btn:disabled { color: var(--sp-subtle); opacity: 0.45; cursor: default; }
@@ -857,7 +871,7 @@ q::after {
 .sp-mini-btn, .sp-theater-card-actions button {
     padding: var(--sp-size-3) var(--sp-size-10);
     border-radius: var(--sp-size-5);
-    font-size: var(--sp-text-label);
+    --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-text-label);
 }
 .sp-icon-btn, .sp-panel-refresh { padding: 0; flex-shrink: 0; box-sizing: border-box; line-height: 1; }
 .sp-input, .sp-preset-box, .sp-preset-label, .sp-dialog-input,
@@ -915,10 +929,10 @@ q::after {
     text-overflow : ellipsis;
     white-space   : nowrap;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     font-family   : var(--sp-font);
 }
-.sp-preset-caret { flex: none; color: var(--sp-subtle); font-size: var(--sp-fs-70); opacity: 0.7; transition: transform 0.15s; }
+.sp-preset-caret { flex: none; color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-icon-label); opacity: 0.7; transition: transform 0.15s; }
 .sp-preset-box-open .sp-preset-caret { transform: rotate(180deg); }
 /* 内联预设列表：在流内展开（非原生弹层），几何与「模型列表」一致 */
 .sp-preset-list {
@@ -947,7 +961,7 @@ q::after {
     border       : 1px solid transparent;
     border-radius: var(--sp-size-6);
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-84);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-84);
     font-family   : var(--sp-font);
     cursor       : pointer;
     word-break     : break-all;
@@ -960,7 +974,7 @@ q::after {
     border-color: var(--sp-primary);
     color        : var(--sp-primary);
 }
-.sp-preset-empty { padding: var(--sp-size-10); color: var(--sp-subtle); font-size: var(--sp-fs-80); text-align: center; }
+.sp-preset-empty { padding: var(--sp-size-10); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); text-align: center; }
 
 /* 预设列表项：可选名字 + 右侧改名笔（内联改名，无弹窗） */
 .sp-preset-item-row { display: flex; align-items: center; gap: var(--sp-size-4); }
@@ -971,19 +985,19 @@ q::after {
     display       : flex; align-items: center; justify-content: center;
     border        : 1px solid transparent; border-radius: var(--sp-size-6);
     background    : transparent; color: var(--sp-subtle);
-    cursor        : pointer; font-size: var(--sp-fs-72);
+    cursor        : pointer; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72);
     opacity        : 0.55;
     transition     : opacity 0.12s, color 0.12s, background 0.12s;
 }
 .sp-preset-rename:hover:not(:disabled) { opacity: 1; color: var(--sp-primary); background: var(--sp-hover-bg); }
-.sp-preset-rename-input { flex: 1; width: auto; min-width: 0; margin: 0; padding: var(--sp-size-7) var(--sp-size-9); font-size: var(--sp-fs-84); }
+.sp-preset-rename-input { flex: 1; width: auto; min-width: 0; margin: 0; padding: var(--sp-size-7) var(--sp-size-9); --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-84); }
 .sp-preset-rename-ok {
     flex-shrink  : 0;
     width: var(--sp-size-28); height: var(--sp-size-28);
     display       : flex; align-items: center; justify-content: center;
     border        : 1px solid var(--sp-primary); border-radius: var(--sp-size-6);
     background    : var(--sp-primary); color: var(--sp-on-primary);
-    cursor        : pointer; font-size: var(--sp-fs-72);
+    cursor        : pointer; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72);
 }
 .sp-preset-rename-ok:hover:not(:disabled) { filter: brightness(1.08); }
 
@@ -996,7 +1010,7 @@ q::after {
     cursor       : pointer;
     color                : var(--sp-subtle);
     transition     : color 0.15s, border-color 0.15s;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
 }
 .sp-fetch-btn:hover:not(:disabled)    { color: var(--sp-on-surface); border-color: var(--sp-primary); }
 .sp-fetch-btn:disabled { opacity: 0.5; cursor: default; }
@@ -1024,7 +1038,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap        : var(--sp-size-8);
     padding    : var(--sp-size-8) var(--sp-size-11);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     color                : var(--sp-subtle);
     cursor       : pointer;
     user-select : none;
@@ -1034,7 +1048,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-model-list-summary::-webkit-details-marker { display: none; }
 .sp-model-list-summary:hover:not(:disabled) { background: var(--sp-hover-bg); }
 .sp-model-list-chevron {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     transition     : transform 0.15s;
 }
 .sp-model-list-section[open] .sp-model-list-chevron { transform: rotate(90deg); }
@@ -1046,7 +1060,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-top  : 1px solid var(--sp-divider);
 }
 .sp-model-list-search {
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
 }
 .sp-model-list-items {
     display     : flex;
@@ -1069,7 +1083,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid transparent;
     border-radius: var(--sp-size-6);
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-family   : var(--sp-font);
     cursor       : pointer;
     word-break     : break-all;
@@ -1086,7 +1100,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-14);
     text-align : center;
     color                : var(--sp-subtle);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
 }
 
 
@@ -1096,7 +1110,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap: var(--sp-size-7);
     padding: var(--sp-size-8) var(--sp-size-11);
     border-radius: var(--sp-size-8);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     line-height  : 1.5;
 }
 .sp-notice-ok {
@@ -1137,14 +1151,14 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-settings-title {
     flex       : 1;
-    font-size  : var(--sp-fs-95);
+    --sp-icon-size: var(--sp-icon-heading); font-size  : var(--sp-fs-95);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     display     : flex;
     align-items : center;
     gap: var(--sp-size-7);
 }
-.sp-settings-title .sp-icon { color: var(--sp-subtle); font-size: var(--sp-fs-85); }
+.sp-settings-title .sp-icon { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-icon-body); }
 
 .sp-settings-body {
     flex       : 1;
@@ -1186,7 +1200,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     padding: var(--sp-size-11) var(--sp-settings-inline-indent);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     cursor       : pointer;
@@ -1203,7 +1217,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
     background-color: currentColor;
     mask: url('./assets/chevron-right.svg') center / contain no-repeat;
-    font-size     : var(--sp-fs-58);
+    --sp-icon-size: var(--sp-icon-micro); font-size     : var(--sp-icon-micro);
     line-height: 1;
     color                : var(--sp-subtle);
     transition: transform 0.18s;
@@ -1259,12 +1273,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     max-width: 100%;
     flex-wrap: wrap;
 }
-.sp-update-status,.sp-update-notice-button { display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-size-5);min-height:var(--sp-size-26);padding:var(--sp-size-4) var(--sp-size-7);border:1px solid var(--sp-divider);border-radius:var(--sp-size-6);background:var(--sp-surface);color:var(--sp-on-surface);font-size:var(--sp-fs-75);line-height:1.2;white-space:nowrap;cursor:pointer; }
+.sp-update-status,.sp-update-notice-button { display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-size-5);min-height:var(--sp-size-26);padding:var(--sp-size-4) var(--sp-size-7);border:1px solid var(--sp-divider);border-radius:var(--sp-size-6);background:var(--sp-surface);color:var(--sp-on-surface);--sp-icon-size: var(--sp-icon-caption); font-size:var(--sp-fs-75);line-height:1.2;white-space:nowrap;cursor:pointer; }
 .sp-update-status[data-state="available"]::before { content:"";width:var(--sp-size-5);height:var(--sp-size-5);border-radius:50%;background:var(--sp-primary);flex:0 0 auto; }
 .sp-update-status:hover:not(:disabled),.sp-update-notice-button:hover:not(:disabled) { border-color:var(--sp-primary); }
 .sp-update-status:focus-visible,.sp-update-notice-button:focus-visible { outline:2px solid var(--sp-primary);outline-offset:2px; }
 .sp-update-status:disabled { opacity:.6;cursor:default; }
-.sp-update-feedback { margin:1px 0 0;color:var(--sp-on-surface);font-size:var(--sp-fs-75);line-height:1.5;overflow-wrap:anywhere; }
+.sp-update-feedback { margin:1px 0 0;color:var(--sp-on-surface);--sp-icon-size: var(--sp-icon-caption); font-size:var(--sp-fs-75);line-height:1.5;overflow-wrap:anywhere; }
 
 /* ─── Settings layers (五组收纳盒) ───────────────────────────────────────────── */
 .sp-settings-layer:not(:last-child) { border-bottom: none; }
@@ -1273,7 +1287,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap: var(--sp-size-9);
     padding: var(--sp-size-13) var(--sp-size-16);
-    font-size    : var(--sp-fs-90);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size    : var(--sp-fs-90);
     font-weight   : 700;
     letter-spacing: 0.04em;
     color        : var(--sp-on-surface);
@@ -1292,7 +1306,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
     background-color: currentColor;
     mask: url('./assets/chevron-right.svg') center / contain no-repeat;
-    font-size     : var(--sp-fs-58);
+    --sp-icon-size: var(--sp-icon-micro); font-size     : var(--sp-icon-micro);
     line-height: 1;
     color                : var(--sp-subtle);
     transition: transform 0.18s;
@@ -1318,7 +1332,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-8) var(--sp-size-12);
     cursor       : pointer;
     color                : var(--sp-subtle);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-weight    : 600;
 }
 .sp-settings-subsection > :not(summary) { margin-left: var(--sp-size-12); margin-right: var(--sp-size-12); }
@@ -1331,7 +1345,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-left: 0;
     margin-right: 0;
     color                : var(--sp-subtle);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-weight    : 600;
 }
 .sp-settings-subsection-static > :not(.sp-settings-subsection-title) {
@@ -1429,7 +1443,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : inline-flex;
     align-items : center;
     justify-content: center;
-    font-size     : var(--sp-fs-58);
+    --sp-icon-size: var(--sp-icon-micro); font-size     : var(--sp-icon-micro);
     line-height: 1;
     color                : var(--sp-subtle);
     transition: transform 0.18s;
@@ -1505,14 +1519,14 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     gap: var(--sp-size-6);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
     cursor       : pointer;
     user-select : none;
     font-weight: 500;
 }
 .sp-wi-count {
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     margin-left : auto;
 
@@ -1533,7 +1547,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     cursor       : pointer;
     user-select : none;
     list-style  : none;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-weight    : 600;
     color        : var(--sp-on-surface);
 }
@@ -1544,7 +1558,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     height: 1em;
     background-color: currentColor;
     mask: url('./assets/chevron-right.svg') center / contain no-repeat;
-    font-size    : var(--sp-fs-90);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size    : var(--sp-icon-subtitle);
     color                : var(--sp-subtle);
     transition     : transform 0.15s;
     line-height: 1;
@@ -1555,7 +1569,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-wi-exclude-drawer-title { flex: 1 1 auto; min-width: 0; }
 .sp-wi-exclude-drawer-count {
     flex-shrink  : 0;
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     font-weight: 400;
     color                : var(--sp-subtle);
 
@@ -1584,7 +1598,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: var(--sp-size-8);
     cursor       : pointer;
     user-select : none;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
 }
 .sp-wi-exclude-row:hover:not(:disabled) { border-color: var(--sp-surface-high); background: var(--sp-hover-bg); }
@@ -1612,13 +1626,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items: baseline;
     gap: var(--sp-size-8);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     padding: var(--sp-size-2) var(--sp-size-2) var(--sp-size-4);
 }
 .sp-wi-scope-count {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     font-weight: 400;
     color                : var(--sp-subtle);
 
@@ -1634,7 +1648,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items  : center;   /* was baseline — checkbox baseline offset looks bad */
     gap          : var(--sp-size-8);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     font-weight   : 700;
     color        : var(--sp-primary);
     letter-spacing : 0.06em;
@@ -1654,7 +1668,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background-color: currentColor;
     mask: url('./assets/chevron-right.svg') center / contain no-repeat;
     display: inline-block;
-    font-size    : var(--sp-fs-90);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size    : var(--sp-icon-subtitle);
     color                : var(--sp-subtle);
     transition     : transform 0.15s;
     line-height: 1;
@@ -1680,7 +1694,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin       : 0;
 }
 .sp-wi-group-count {
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight: 400;
     color                : var(--sp-subtle);
 
@@ -1722,7 +1736,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     cursor       : pointer;
 }
 .sp-wi-label {
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     font-weight: 500;
     color        : var(--sp-on-surface);
     line-height: 1.35;
@@ -1739,7 +1753,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding-left: var(--sp-size-23);   /* align under label, past checkbox */
 }
 .sp-wi-preview {
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color                : var(--sp-subtle);
     line-height: var(--sp-lh-body);
     flex       : 1;
@@ -1767,7 +1781,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     transition   : background 0.15s, color 0.15s, border-color 0.15s;
 }
 .sp-wi-view-btn:hover:not(:disabled) {
@@ -1818,7 +1832,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width     : 0;
 }
 .sp-wi-fullview-source {
-    font-size  : var(--sp-fs-65);
+    --sp-icon-size: var(--sp-icon-tiny); font-size  : var(--sp-fs-65);
     font-weight   : 700;
     color        : var(--sp-primary);
     letter-spacing : 0.06em;
@@ -1827,7 +1841,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity      : 0.8;
 }
 .sp-wi-fullview-label {
-    font-size  : var(--sp-fs-92);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-92);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     line-height: 1.35;
@@ -1837,7 +1851,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex       : 1;
     overflow-y : auto;
     padding: var(--sp-size-12) var(--sp-size-14) var(--sp-size-14);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     line-height    : var(--sp-lh-prose);
     color        : var(--sp-on-surface);
     white-space: pre-wrap;
@@ -1849,7 +1863,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-wi-fullview-body::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: var(--sp-size-2); }
 
 /* ─── Interval / mode selector ───────────────────────────────────────────────── */
-.sp-interval-input  { width: var(--sp-size-46) !important; text-align: center; font-size: var(--sp-fs-78) !important; padding: var(--sp-size-4) var(--sp-size-6) !important; }
+.sp-interval-input  { width: var(--sp-size-46) !important; text-align: center; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78) !important; padding: var(--sp-size-4) var(--sp-size-6) !important; }
 /* UI 字号缩放：−/＋ 步进（改 --sp-scale，独立于酒馆 Font Scale） */
 .sp-uiscale-btn {
     min-width: 0;
@@ -1858,7 +1872,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: var(--sp-size-6);
     background   : transparent;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-90);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size    : var(--sp-fs-90);
     line-height: 1.4;
     cursor       : pointer;
 
@@ -1867,7 +1881,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     box-sizing: border-box;
 }
 .sp-uiscale-btn:hover:not(:disabled) { background: var(--sp-hover-bg, rgba(127,127,127,0.12)); }
-.sp-uiscale-val { display: inline-block; min-width: 0; text-align: center; font-size: var(--sp-fs-78);
+.sp-uiscale-val { display: inline-block; min-width: 0; text-align: center; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78);
     width: var(--sp-size-44);
     flex: 0 1 auto;
 }
@@ -1890,7 +1904,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width     : 0;
     text-align : left;
     font-family: var(--sp-font-mono);
-    font-size   : var(--sp-fs-78) !important;
+    --sp-icon-size: var(--sp-icon-caption); font-size   : var(--sp-fs-78) !important;
 }
 /* Advanced API drawer — exclude params / timeout / stream */
 .sp-adv-api {
@@ -1900,7 +1914,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-adv-api-summary {
     padding: var(--sp-size-8) var(--sp-size-11);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     color                : var(--sp-subtle);
     cursor       : pointer;
     user-select : none;
@@ -1915,7 +1929,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     resize     : vertical;
     text-align : left;
     font-family: var(--sp-font-mono);
-    font-size   : var(--sp-fs-78) !important;
+    --sp-icon-size: var(--sp-icon-caption); font-size   : var(--sp-fs-78) !important;
 }
 
 .sp-mode-row        { display: flex; flex-direction: column; gap: var(--sp-size-8); }
@@ -1928,7 +1942,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     flex-wrap   : wrap;
     gap: var(--sp-size-5);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
     cursor       : pointer;
     line-height: var(--sp-lh-reading);
@@ -2021,7 +2035,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 分组小标题（「AI 楼」/「用户楼」）：占满一行强制断行，把两组开关分层。 */
 .sp-subtoggle-label {
     flex-basis : 100%;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight    : 600;
     opacity      : 0.5;
     margin       : 0;
@@ -2034,7 +2048,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-8);
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     font-family   : var(--sp-font);
     outline      : none;
     box-sizing   : border-box;
@@ -2050,7 +2064,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     cursor       : pointer;
     color                : var(--sp-subtle);
     transition     : color 0.15s, border-color 0.15s;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
 }
 .sp-eye-btn:hover:not(:disabled) { color: var(--sp-on-surface); border-color: var(--sp-primary); }
 .sp-save-btn {
@@ -2061,12 +2075,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     border         : none;
     border-radius: var(--sp-size-8);
     cursor       : pointer;
-    font-size    : var(--sp-fs-83);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-83);
     font-weight: 500;
     transition   : opacity 0.15s;
 }
 .sp-save-btn:hover:not(:disabled) { opacity: 0.88; }
-.sp-cfg-msg { font-size: var(--sp-fs-78); color: var(--sp-subtle); align-self: center; }
+.sp-cfg-msg { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); color: var(--sp-subtle); align-self: center; }
 
 /* ─── Body ───────────────────────────────────────────────────────────────────── */
 .sp-body {
@@ -2092,7 +2106,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background    : var(--sp-chip-bg);
     color        : var(--sp-primary);
     font-weight    : 600;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     padding: var(--sp-size-2) var(--sp-size-9);
     border-radius: 99px;
 
@@ -2105,7 +2119,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background    : var(--sp-chip-char-bg);
     color         : var(--sp-char-color);
     font-weight    : 600;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     padding: var(--sp-size-2) var(--sp-size-9);
     border-radius: 99px;
 
@@ -2114,13 +2128,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     overflow-wrap: anywhere;
     box-sizing: border-box;
 }
-.sp-schedule-label { color: var(--sp-subtle); font-size: var(--sp-fs-85);
+.sp-schedule-label { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-85);
     flex-shrink: 0;
     white-space: nowrap;
 }
 .sp-outline-title {
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-88);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-88);
     font-weight    : 600;
 }
 
@@ -2141,7 +2155,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     transition     : background 0.15s, color 0.15s;
 }
 .sp-panel-refresh:hover:not(:disabled) { background: var(--sp-surface-high); color: var(--sp-on-surface); }
@@ -2192,8 +2206,8 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-tab:hover:not(:disabled)      { background: var(--sp-hover-bg); color: var(--sp-on-surface); }
 .sp-tab-active     { background: var(--sp-chip-bg) !important; color: var(--sp-primary) !important; border-color: var(--sp-primary) !important; }
-.sp-tab-num        { font-family: var(--sp-font-mono); font-size: var(--sp-fs-65); font-weight: 500; line-height: 1; white-space: nowrap; }
-.sp-tab-wd         { font-size: var(--sp-fs-60); opacity: 0.8; line-height: 1; }
+.sp-tab-num        { font-family: var(--sp-font-mono); --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-65); font-weight: 500; line-height: 1; white-space: nowrap; }
+.sp-tab-wd         { --sp-icon-size: var(--sp-icon-micro); font-size: var(--sp-fs-60); opacity: 0.8; line-height: 1; }
 
 /* ─── Days sliding track ─────────────────────────────────────────────────────── */
 .sp-days-wrap  { flex: 1; overflow: hidden; min-height: 0; }
@@ -2230,11 +2244,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-5) var(--sp-size-10);
     border-radius: var(--sp-size-8);
     background   : var(--sp-hover-bg);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     color                : var(--sp-subtle);
     min-width     : 0;
 }
-.sp-day-weather-icon { font-size: var(--sp-fs-95); line-height: 1; flex-shrink: 0; }
+.sp-day-weather-icon { --sp-icon-size: var(--sp-icon-heading); font-size: var(--sp-fs-95); line-height: 1; flex-shrink: 0; }
 .sp-day-weather-txt  { color: var(--sp-on-surface); overflow-wrap: anywhere; min-width: 0; }
 .sp-day-weather-temp { margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
@@ -2253,7 +2267,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-3);
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight    : 600;
     flex-shrink  : 0;
 }
@@ -2270,7 +2284,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background: color-mix(in oklab, var(--sp-point-color) 13%, transparent);
     border-color: var(--sp-point-color);
 }
-.sp-point-adult-badge { display: inline-flex; align-items: center; padding: 1px var(--sp-size-4); border-radius: var(--sp-size-3); font-size: var(--sp-fs-62); font-weight: 700; color: #8a6500; background: #f4d77a; line-height: 1.1; }
+.sp-point-adult-badge { display: inline-flex; align-items: center; padding: 1px var(--sp-size-4); border-radius: var(--sp-size-3); --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-62); font-weight: 700; color: #8a6500; background: #f4d77a; line-height: 1.1; }
 .sp-adult-sensitive { display: inline; filter: blur(5px); opacity: 0.62; user-select: none; cursor: pointer; transition: filter 0.15s ease, opacity 0.15s ease; }
 .sp-adult-revealed .sp-adult-sensitive { filter: none; opacity: 1; user-select: text; }
 @media (prefers-reduced-motion: reduce) { .sp-adult-sensitive { transition: none; } }
@@ -2278,15 +2292,15 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-event.sp-event-pinned.sp-type-major     { border-left-color: var(--sp-point-hidden-locked); }
 .sp-event.sp-event-pinned.sp-type-character { border-left-color: var(--sp-point-bond-locked); }
 
-.sp-event-title { font-size: var(--sp-fs-88); font-weight: 500; color: var(--sp-on-surface); line-height: 1.35; }
-.sp-event-time  { font-family: var(--sp-font-mono); font-size: var(--sp-fs-73); color: var(--sp-subtle); min-width: 0; overflow-wrap: anywhere; }
-.sp-event-desc  { font-size: var(--sp-fs-82); color: var(--sp-on-surface); opacity: 0.8; line-height: var(--sp-lh-body); margin: var(--sp-size-3) 0 var(--sp-size-5); }
+.sp-event-title { --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-88); font-weight: 500; color: var(--sp-on-surface); line-height: 1.35; }
+.sp-event-time  { font-family: var(--sp-font-mono); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-73); color: var(--sp-subtle); min-width: 0; overflow-wrap: anywhere; }
+.sp-event-desc  { --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-82); color: var(--sp-on-surface); opacity: 0.8; line-height: var(--sp-lh-body); margin: var(--sp-size-3) 0 var(--sp-size-5); }
 .sp-event-meta  { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-size-8); margin-top: var(--sp-size-2); }
 .sp-event-loc   {
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-3);
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color                : var(--sp-subtle);
     background   : var(--sp-hover-bg);
     border-radius: 99px;
@@ -2297,7 +2311,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-4);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     line-height: 1.4;
     font-style: italic;
@@ -2322,7 +2336,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     animation    : sp-spin 0.75s linear infinite;
 }
 @keyframes sp-spin { to { transform: rotate(360deg); } }
-.sp-loading-text { color: var(--sp-subtle); font-size: var(--sp-fs-88); margin: 0; font-weight: 300; }
+.sp-loading-text { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-88); margin: 0; font-weight: 300; }
 .sp-abort-btn {
     margin-top: var(--sp-size-4);
     padding: var(--sp-size-4) var(--sp-size-14);
@@ -2330,7 +2344,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: 99px;
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     cursor       : pointer;
     display     : flex;
     align-items : center;
@@ -2346,15 +2360,15 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap: var(--sp-size-10);
     padding: var(--sp-size-50) var(--sp-size-20);
     color          : var(--sp-error);
-    font-size  : var(--sp-fs-88);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-88);
     text-align : center;
     flex       : 1;
 }
-.sp-error .sp-icon { font-size: var(--sp-fs-180); opacity: 0.8; }
+.sp-error .sp-icon { --sp-icon-size: var(--sp-icon-display); font-size: var(--sp-icon-display); opacity: 0.8; }
 .sp-empty .sp-open-daily-menu .sp-icon,
 .sp-error .sp-open-daily-menu .sp-icon,
 .sp-empty .sp-open-wardrobe .sp-icon,
-.sp-error .sp-open-wardrobe .sp-icon { font-size: var(--sp-fs-80); opacity: 1; }
+.sp-error .sp-open-wardrobe .sp-icon { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-icon-caption); opacity: 1; }
 
 .sp-empty {
     display     : flex;
@@ -2366,8 +2380,8 @@ select.sp-input { appearance: none; cursor: pointer; }
     color                : var(--sp-subtle);
     flex       : 1;
 }
-.sp-empty .sp-icon { font-size: var(--sp-fs-200); opacity: 0.35; }
-.sp-empty p { font-size: var(--sp-fs-85); margin: 0; }
+.sp-empty .sp-icon { --sp-icon-size: var(--sp-icon-empty); font-size: var(--sp-icon-empty); opacity: 0.35; }
+.sp-empty p { --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-85); margin: 0; }
 
 .sp-daily-menu-card,
 .sp-wardrobe-card {
@@ -2378,25 +2392,25 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : var(--sp-on-surface);
 }
 .sp-daily-menu-header,
-.sp-wardrobe-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-size-8); color: var(--sp-subtle); font-size: var(--sp-fs-80); }
+.sp-wardrobe-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-size-8); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); }
 .sp-daily-menu-header strong,
 .sp-wardrobe-header strong { font-weight: 500; }
 .sp-daily-menu-date,
 .sp-wardrobe-date { overflow-wrap: anywhere; text-align: right; }
 .sp-daily-menu-card h3,
-.sp-wardrobe-card h3 { margin: var(--sp-size-7) 0 var(--sp-size-10); font-size: var(--sp-fs-88); font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.sp-wardrobe-card h3 { margin: var(--sp-size-7) 0 var(--sp-size-10); --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-88); font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
 .sp-daily-menu-intro,
-.sp-wardrobe-intro { margin: calc(-1 * var(--sp-size-4)) 0 var(--sp-size-10); color: var(--sp-subtle); font-size: var(--sp-fs-85); font-style: italic; font-weight: 400; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-wardrobe-intro { margin: calc(-1 * var(--sp-size-4)) 0 var(--sp-size-10); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-85); font-style: italic; font-weight: 400; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sp-daily-menu-items,
 .sp-wardrobe-items { display: grid; gap: var(--sp-size-8); }
 .sp-daily-menu-item,
 .sp-wardrobe-item { min-width: 0; padding-top: var(--sp-size-7); border-top: 1px solid var(--sp-divider); overflow-wrap: anywhere; }
 .sp-daily-menu-item strong,
-.sp-wardrobe-item strong { font-size: var(--sp-fs-88); font-weight: 500; }
+.sp-wardrobe-item strong { --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-88); font-weight: 500; }
 .sp-daily-menu-category,
-.sp-wardrobe-category { margin-left: var(--sp-size-7); color: var(--sp-subtle); font-size: var(--sp-fs-75); }
+.sp-wardrobe-category { margin-left: var(--sp-size-7); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); }
 .sp-daily-menu-item p,
-.sp-wardrobe-item p { margin: var(--sp-size-4) 0 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); white-space: pre-wrap; }
+.sp-wardrobe-item p { margin: var(--sp-size-4) 0 0; color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); white-space: pre-wrap; }
 .sp-daily-menu-description,
 .sp-wardrobe-description { cursor: pointer; }
 /* 衣橱只预览重点，完整场景与着装仍留在正文节点和存档中。 */
@@ -2408,7 +2422,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-daily-menu-image-tools,
 .sp-wardrobe-image-tools { display: flex; flex: 0 0 auto; gap: var(--sp-size-8); }
 .sp-daily-menu-image-pill,
-.sp-wardrobe-image-pill { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: var(--sp-size-40); height: var(--sp-size-26); padding: var(--sp-size-3) var(--sp-size-5); border: 1px solid var(--sp-divider); border-radius: 999px; background: transparent; color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.3; white-space: nowrap; cursor: pointer; outline: none; }
+.sp-wardrobe-image-pill { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: var(--sp-size-40); height: var(--sp-size-26); padding: var(--sp-size-3) var(--sp-size-5); border: 1px solid var(--sp-divider); border-radius: 999px; background: transparent; color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); line-height: 1.3; white-space: nowrap; cursor: pointer; outline: none; }
 .sp-daily-menu-image-toggle,
 .sp-wardrobe-image-toggle { width: var(--sp-size-52); }
 .sp-daily-menu-image-pill:hover:not(:disabled),
@@ -2418,7 +2432,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-daily-menu-image-pill[aria-expanded="true"], .sp-daily-menu-image-cancel,
 .sp-wardrobe-image-pill[aria-expanded="true"], .sp-wardrobe-image-cancel { color: var(--sp-primary); border-color: var(--sp-primary); }
 .sp-daily-menu-image-body,
-.sp-wardrobe-image-body { height: 0; padding: 0; overflow: hidden; font-size: var(--sp-fs-80); transition: height 220ms ease; }
+.sp-wardrobe-image-body { height: 0; padding: 0; overflow: hidden; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); transition: height 220ms ease; }
 .sp-daily-menu-image-inner,
 .sp-wardrobe-image-inner { display: flow-root; }
 .sp-daily-menu-image-body [hidden],
@@ -2432,7 +2446,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-daily-menu-image-picture,
 .sp-wardrobe-image-picture { display: block; width: 100%; height: auto; max-height: 360px; object-fit: contain; border-radius: var(--sp-size-7); }
 .sp-daily-menu-empty,
-.sp-wardrobe-empty { margin: var(--sp-size-10) 0; color: var(--sp-subtle); font-size: var(--sp-fs-80); }
+.sp-wardrobe-empty { margin: var(--sp-size-10) 0; color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); }
 .sp-daily-menu-card .sp-gen-btn,
 .sp-wardrobe-card .sp-gen-btn { margin-top: var(--sp-size-10); }
 
@@ -2462,7 +2476,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width     : 0;
     margin       : 0;
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-88);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-88);
     font-weight: 500;
     line-height: 1.4;
     overflow-wrap: anywhere;
@@ -2510,24 +2524,25 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-raw pre { font-family: var(--sp-font-mono); }
 .sp-raw {
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     line-height: 1.7;
     white-space: pre-wrap;
     padding: var(--sp-size-16);
 }
 
 /* ─── Debug ──────────────────────────────────────────────────────────────────── */
-.sp-debug         { padding: var(--sp-size-10) var(--sp-size-16); font-size: var(--sp-fs-75); color: var(--sp-subtle); }
+.sp-debug         { padding: var(--sp-size-10) var(--sp-size-16); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-subtle); }
 .sp-debug summary { cursor: pointer; padding: var(--sp-size-4) 0; }
 .sp-debug-raw { font-family: var(--sp-font-mono);
     margin: var(--sp-size-6) 0 0; padding: var(--sp-size-8); background: var(--sp-surface); border-radius: var(--sp-size-6);
-    white-space: pre-wrap; word-break: break-all; font-size: var(--sp-fs-72);
+    white-space: pre-wrap; word-break: break-all; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72);
     max-height: 200px; overflow-y: auto; color: var(--sp-on-surface); opacity: 0.65;
 }
 
 /* ─── Resize handle ──────────────────────────────────────────────────────────── */
 .sp-resize-handle {
-    --sp-resize-handle-size: var(--sp-size-18);
+    --sp-icon-size: 0px; /* 保留旧隐藏 SVG；可见把手由下方伪元素弧线绘制。 */
+    --sp-resize-handle-size: 18px;
     position      : absolute;
         bottom  : 0;
     right        : 0;
@@ -2595,7 +2610,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : var(--sp-on-surface);
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-8);   /* 跟插件主流小圆角一致（原 12px 大圆角与整体设计不搭） */
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     box-shadow : 0 3px 12px rgba(0,0,0,0.35);
     pointer-events : auto;
     opacity        : 0;
@@ -2642,7 +2657,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size     : var(--sp-fs-115);
+    --sp-icon-size: var(--sp-icon-large); font-size     : var(--sp-fs-115);
     box-shadow    : 0 4px 14px rgba(0,0,0,0.4);
     /* 半透明常态：不挡楼内阅读；hover / 生成中 / 完成态再恢复到清晰（见下）。 */
     opacity  : 0.45;
@@ -2665,8 +2680,8 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-fab-btn.sp-btn-generating,
 .sp-fab-btn.sp-fab-busy,
 .sp-fab-btn.sp-btn-done { opacity: 1; }
-/* 内联图标继承按钮字色，随现有字号缩放；所有挂载层共用。 */
-.sp-pen-icon { width: 1em; height: 1em; display: block; }
+/* FAB 保36px；笔图标固定原95%的17.48px。 */
+.sp-pen-icon { width: var(--sp-icon-large); height: var(--sp-icon-large); display: block; }
 #sp_open_wand .sp-menu-icon { width: 20px; height: 20px; flex: 0 0 20px; display: flex; align-items: center; justify-content: center; align-self: center; }
 #sp_open_wand .sp-menu-pen-icon { width: 18px; height: 18px; display: block; }
 
@@ -2775,7 +2790,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     flex       : 1;
 }
 .sp-char-picker-hint {
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     color        : var(--sp-on-surface);
     margin       : 0;
     display     : flex;
@@ -2796,7 +2811,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap: var(--sp-size-6);
     margin: calc(-1 * var(--sp-size-2)) 0 0;
 }
-.sp-char-recent-label { font-size: var(--sp-fs-75); color: var(--sp-subtle); }
+.sp-char-recent-label { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-subtle); }
 .sp-char-recent-chip {
     padding: var(--sp-size-3) var(--sp-size-11);
     background   : var(--sp-sheet-bg);
@@ -2804,13 +2819,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: 99px;
     cursor       : pointer;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     font-family   : var(--sp-font);
     transition   : border-color 0.15s, color 0.15s;
 }
 .sp-char-recent-chip:hover:not(:disabled) { border-color: var(--sp-primary); color: var(--sp-primary); }
 .sp-char-picker-sub {
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color                : var(--sp-subtle);
     margin: calc(-1 * var(--sp-size-4)) 0 0;
 }
@@ -2824,7 +2839,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border         : none;
     border-radius: 99px;
     cursor       : pointer;
-    font-size  : var(--sp-fs-88);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-88);
     font-weight: 500;
     transition   : opacity 0.15s, transform 0.1s;
 }
@@ -2895,7 +2910,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-panel-failure-hint {
     margin       : 0;
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     line-height  : 1.5;
     overflow-wrap: anywhere;
     box-sizing   : border-box;
@@ -2935,7 +2950,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 /* 头部小徽标：比 .sp-beat-type 再小一号 */
 .sp-beat-badge {
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     font-weight   : 700;
     padding: 1px var(--sp-size-6);
     border-radius: 99px;
@@ -2978,7 +2993,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background    : var(--sp-chip-bg);
     color        : var(--sp-primary);
     border-radius: 50%;
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     font-weight   : 700;
     display     : flex;
     align-items : center;
@@ -2987,7 +3002,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-beat-time {
     font-family: var(--sp-font-mono);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     min-width     : 0;
     flex       : 0 1 9em;
@@ -2998,7 +3013,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 线卡日期位于首行；长日期优先收缩并省略，绝不挤掉右侧操作。 */
 .sp-line-when {
     font-family: var(--sp-font-mono);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     margin: 0 var(--sp-size-2);
     line-height: 1.35;
@@ -3009,7 +3024,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     white-space   : nowrap;
 }
 .sp-beat-type {
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight    : 600;
     padding: var(--sp-size-2) var(--sp-size-7);
     border-radius: 99px;
@@ -3052,6 +3067,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-line-card .sp-beat-type {
     flex-basis: auto;
+    flex-shrink: 0;
     max-width : 8em;
 }
 .sp-line-card .sp-beat-time {
@@ -3068,8 +3084,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-height : var(--sp-btn-22);
     line-height: 1;
 }
-/* 主页菜单钮保留 32px 点击面积，但不让它把默认首行撑高；负值封顶 -5px，
-   80% 小字号时首行宁可保留 22px，也不让按钮向下悬出后盖住标题。 */
+/* 恢复原95%菜单外框；仅保留这一套原行盒补偿，日期/阶段与操作仍在同一首行。 */
 .sp-line-card > .sp-beat-head > .sp-beat-actions {
     margin-block: clamp(calc(-1 * var(--sp-size-5)), calc((var(--sp-btn-22) - var(--sp-size-32)) / 2), 0px);
 }
@@ -3118,7 +3133,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity     : 0.28;
 }
 .sp-beat-line {
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight: 500;
     padding      : var(--sp-size-2) var(--sp-size-7);
     border-radius: 99px;
@@ -3136,7 +3151,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display: inline-block;
     max-width    : 100%;
     box-sizing   : border-box;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight: 500;
     padding: var(--sp-size-2) var(--sp-size-7);
     border-radius: 99px;
@@ -3150,7 +3165,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-beat-head > .sp-seq-badge,
 .sp-beat-head > .sp-line-stall-tag { flex-shrink: 0; }
 .sp-beat-title {
-    font-size  : var(--sp-fs-95);
+    --sp-icon-size: var(--sp-icon-heading); font-size  : var(--sp-fs-95);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     line-height: 1.4;
@@ -3207,7 +3222,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: 99px;
     background   : color-mix(in oklab, var(--sp-line-cue-accent) 16%, transparent);
     color        : color-mix(in oklab, var(--sp-line-cue-accent) 62%, var(--sp-on-surface));
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     line-height: 1.35;
     overflow-wrap: anywhere;
 }
@@ -3218,14 +3233,14 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-line-cue-tone-grape { --sp-line-cue-accent: #8a70b3; }
 .sp-line-cue-tone-peach { --sp-line-cue-accent: #b56f5a; }
 .sp-beat-outcome {
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     color        : var(--sp-on-surface);
     opacity   : 0.75;
     line-height  : 1.5;
     margin-bottom: var(--sp-size-5);
 }
 .sp-beat-scene {
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     color        : var(--sp-on-surface);
     line-height  : var(--sp-lh-prose);
     margin-bottom: var(--sp-size-6);
@@ -3246,7 +3261,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-left  : none;
 }
 .sp-beat-subtext {
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-style: italic;
     color                : var(--sp-subtle);
     margin: var(--sp-size-5) 0 var(--sp-size-4);
@@ -3257,7 +3272,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-beat-think          { margin-top: var(--sp-size-4); }
 .sp-beat-think summary  {
     cursor       : pointer;
-    font-size  : var(--sp-fs-73);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-73);
     color                : var(--sp-subtle);
     padding: var(--sp-size-2) 0;
     user-select : none;
@@ -3266,7 +3281,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-beat-think summary:hover:not(:disabled) { color: var(--sp-on-surface); }
 .sp-beat-think p {
     margin: var(--sp-size-6) 0 0;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     line-height: var(--sp-lh-prose);
     color                : var(--sp-subtle);
 }
@@ -3288,7 +3303,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 /* 点/线卡片序号徽标——与「间」聊天"改第 N 条"编号一致 */
 .sp-seq-badge {
-    font-size    : var(--sp-text-label);
+    --sp-icon-size: var(--sp-icon-label); font-size    : var(--sp-text-label);
     font-weight   : 700;
     color                : var(--sp-subtle);
     background   : var(--sp-hover-bg);
@@ -3302,7 +3317,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 .sp-space-pages { display: flex; flex: 0 0 auto; gap: var(--sp-size-6); padding: var(--sp-size-6) var(--sp-size-10); border-bottom: 1px solid var(--sp-divider); }
 .sp-space-pages[hidden] { display: none; }
-.sp-space-pages button { border: 1px solid transparent; border-radius: var(--sp-size-6); padding: var(--sp-size-5) var(--sp-size-10); background: transparent; color: var(--sp-subtle); font: inherit; font-size: var(--sp-fs-78); cursor: pointer; }
+.sp-space-pages button { border: 1px solid transparent; border-radius: var(--sp-size-6); padding: var(--sp-size-5) var(--sp-size-10); background: transparent; color: var(--sp-subtle); font: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); cursor: pointer; }
 .sp-space-pages button[aria-selected="true"] { background: var(--sp-hover-bg); color: var(--sp-primary); border-color: var(--sp-divider); }
 .sp-space-pages button:focus-visible, .sp-space-more-menu button:focus-visible { outline: 2px solid var(--sp-primary); outline-offset: 2px; }
 .sp-space-more-menu { flex: 0 0 auto; }
@@ -3336,7 +3351,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 @media (min-width: 641px) {
     .sp-chat-input-row { padding-inline: var(--sp-size-6); gap: var(--sp-size-4); }
 }
-.sp-chat-input-row .sp-input { flex: 1; font-size: var(--sp-fs-82); padding: var(--sp-size-5) var(--sp-size-10); }
+.sp-chat-input-row .sp-input { flex: 1; --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-82); padding: var(--sp-size-5) var(--sp-size-10); }
 /* 聊天输入框自增高：单行起步，随内容长高（autoGrowTextarea 设 height），
    到 max-height 封顶后转内部滚动，不再撑破面板。 */
 .sp-chat-input-ta {
@@ -3368,7 +3383,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-chat-msg-wrap-system { align-self: center;     align-items: center; }
 
 .sp-chat-msg {
-    font-size: var(--sp-fs-81);
+    --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-81);
     line-height  : var(--sp-lh-body);
     padding      : var(--sp-size-5) var(--sp-size-9);
     border-radius: var(--sp-size-8);
@@ -3491,7 +3506,7 @@ select.sp-input { appearance: none; cursor: pointer; }
    surface tokens (which have to stay usable for panels/cards). */
 .sp-chat-msg-user   { background: var(--sp-chat-user-bg); color: var(--sp-on-surface); }
 .sp-chat-msg-ai     { background: var(--sp-chat-ai-bg);   color: var(--sp-on-surface); }
-.sp-chat-msg-system { font-size: var(--sp-fs-72); color: var(--sp-subtle); font-style: italic; display: block; background: transparent; padding: 0; }
+.sp-chat-msg-system { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); color: var(--sp-subtle); font-style: italic; display: block; background: transparent; padding: 0; }
 /* Bare bubbles (no wrap) — used for transient "…" thinking indicator.
    Give them their own alignment so they still sit in the correct column. */
 #sp-space-msgs  > .sp-chat-msg.sp-chat-msg-ai { align-self: flex-start; max-width: 90%; }
@@ -3542,7 +3557,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-3) var(--sp-size-6);
     color                : var(--sp-subtle);
     cursor       : pointer;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height: 1;
     border-radius: var(--sp-size-4);
     transition : color 0.12s, background 0.12s;
@@ -3595,7 +3610,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-chat-msg-actions .sp-chat-msg-edit-cancel {
     padding: var(--sp-size-3) var(--sp-size-10);
     border-radius: 99px;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     font-weight: 500;
     cursor       : pointer;
     border         : none;
@@ -3627,7 +3642,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     flex-shrink  : 0;
     opacity        : 0;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
@@ -3675,7 +3690,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap: var(--sp-size-6);
     padding: var(--sp-size-7) var(--sp-size-10);
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color                : var(--sp-subtle);
     cursor       : pointer;
     user-select : none;
@@ -3688,7 +3703,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     height: 1em;
     background-color: currentColor;
     mask: url('./assets/chevron-right.svg') center / contain no-repeat;
-    font-size      : var(--sp-fs-60);
+    --sp-icon-size: var(--sp-icon-micro); font-size      : var(--sp-icon-micro);
     transition     : transform 0.15s;
     display: inline-block;
 }
@@ -3700,7 +3715,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin       : 0;
     padding: var(--sp-size-8) var(--sp-size-10);
     font-family: var(--sp-font-mono);
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color        : var(--sp-on-surface);
     background     : rgba(0,0,0,0.25);
     max-height     : 260px;
@@ -3723,7 +3738,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: var(--sp-size-4);
     background   : transparent;
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     cursor       : pointer;
     transition     : color 0.15s, border-color 0.15s;
 }
@@ -3731,11 +3746,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-diagnostics-copy-btn:disabled { cursor: default; opacity: 0.45; }
 
 /* ─── cfg-hint (shared) ──────────────────────────────────────────────────────── */
-.sp-cfg-hint { font-size: var(--sp-fs-75); color: var(--sp-subtle); margin: 0 0 var(--sp-size-2); }
+.sp-cfg-hint { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-subtle); margin: 0 0 var(--sp-size-2); }
 /* 表单小标题：显式给正文色，别继承酒馆主题里对比过低的默认色 */
 .sp-cfg-label {
         display : block;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-weight: 500;
     color        : var(--sp-on-surface);
     margin: var(--sp-size-6) 0 var(--sp-size-4);
@@ -3743,7 +3758,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* 设置分节内的子组标题：比字段 label 更醒目，配 sp-mem-divider 划分不同设置组 */
 .sp-cfg-group {
         display : block;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     letter-spacing: 0.02em;
@@ -3768,7 +3783,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border-radius: var(--sp-size-8);
     overflow      : hidden;
     font-family   : var(--sp-font);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
     background    : rgba(128,128,128,0.07);
     border        : 1px solid rgba(128,128,128,0.15);
@@ -3786,14 +3801,14 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-inline-summary::-webkit-details-marker { display: none; }
 .sp-inline-summary:hover:not(:disabled) { opacity: 1; }
 .sp-inline-title {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     font-weight   : 700;
     letter-spacing : 0.06em;
     text-transform: uppercase;
     opacity : 0.6;
 }
 .sp-inline-count {
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     color                : var(--sp-subtle);
 }
 .sp-inline-body {
@@ -3813,7 +3828,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-bottom: var(--sp-size-3);
 }
 .sp-inline-stage {
-    font-size  : var(--sp-fs-65);
+    --sp-icon-size: var(--sp-icon-tiny); font-size  : var(--sp-fs-65);
     font-weight   : 700;
     letter-spacing: 0.02em;
     /* color set via inline style (STAGE_COLORS) */
@@ -3825,7 +3840,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     line-height: 1.35;
 }
 .sp-inline-type {
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     padding: 1px var(--sp-size-5);
     border-radius: 99px;
     background   : rgba(128,128,128,0.13);
@@ -3841,7 +3856,7 @@ select.sp-input { appearance: none; cursor: pointer; }
    （已在上方定义），此处只补行容器、内联滑块与标注池的锁定/归档钮。 */
 .sp-ledger-inline-body,
 .sp-recall-body {
-    max-height: calc(240px * var(--sp-scale));   /* 内联滑块：条目多了框内滚，别撑爆整层楼 */
+    max-height: 228px;   /* 固定原95%滑块上限；条目多时仍在框内滚动。 */
     overflow-y : auto;
     overflow-x: hidden;
 }
@@ -3880,7 +3895,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     flex-shrink  : 0;
     opacity        : 0.55;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
@@ -3906,28 +3921,28 @@ select.sp-input { appearance: none; cursor: pointer; }
     white-space   : nowrap;
 }
 .sp-inline-when {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     opacity  : 0.45;
     margin-left: var(--sp-size-2);
 }
 .sp-inline-line > .sp-inline-head { margin-bottom: var(--sp-size-5); }
-.sp-inline-line .sp-line-cue-chip { font-size: var(--sp-fs-58); }
+.sp-inline-line .sp-line-cue-chip { --sp-icon-size: var(--sp-icon-micro); font-size: var(--sp-fs-58); }
 .sp-inline-line .sp-inline-name { margin-bottom: var(--sp-size-5); }
 .sp-inline-name {
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-weight    : 600;
     line-height: 1.35;
     letter-spacing: -0.01em;
 }
 .sp-inline-desc {
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height: var(--sp-lh-body);
     margin-top: var(--sp-size-3);
     opacity : 0.6;
 }
 .sp-inline-empty {
     padding: var(--sp-size-6) var(--sp-size-10);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     opacity   : 0.35;
 }
 
@@ -3938,7 +3953,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     padding: 1px var(--sp-size-6);
     border-radius: 99px;
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     font-weight    : 600;
     letter-spacing: 0.05em;
     background   : rgba(180,180,180,0.14);
@@ -3946,7 +3961,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid rgba(180,180,180,0.22);
     flex-shrink  : 0;
 }
-.sp-inline-stall { font-size: var(--sp-fs-58); padding: 0 var(--sp-size-5); }
+.sp-inline-stall { --sp-icon-size: var(--sp-icon-micro); font-size: var(--sp-fs-58); padding: 0 var(--sp-size-5); }
 
 /* Stalled cards: subtle desaturation overlay so LLM's "no-progress" state reads visually */
 .sp-line-stall .sp-beat-title,
@@ -3964,13 +3979,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-top: var(--sp-size-6);
     padding: var(--sp-size-5) var(--sp-size-8);
     border-radius: var(--sp-size-6);
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     line-height  : 1.5;
     background   : rgba(128,128,128,0.08);
     border-left  : 2px solid rgba(128,128,128,0.3);
 }
 .sp-line-next-tag {
-    font-size  : var(--sp-fs-66);
+    --sp-icon-size: var(--sp-icon-tiny); font-size  : var(--sp-fs-66);
     font-weight   : 700;
     letter-spacing: 0.02em;
     flex-shrink  : 0;
@@ -4001,10 +4016,10 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-inline-next {
     margin-top: var(--sp-size-4);
     padding: var(--sp-size-3) var(--sp-size-6);
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     line-height  : 1.45;
 }
-.sp-inline-next .sp-line-next-tag { font-size: var(--sp-fs-60); }
+.sp-inline-next .sp-line-next-tag { --sp-icon-size: var(--sp-icon-micro); font-size: var(--sp-fs-60); }
 
 
 
@@ -4044,19 +4059,19 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap          : var(--sp-size-10);
 }
 .sp-confirm-head {
-    font-size  : var(--sp-fs-95);
+    --sp-icon-size: var(--sp-icon-heading); font-size  : var(--sp-fs-95);
     font-weight    : 600;
     color        : var(--sp-on-surface);
 }
 .sp-confirm-body {
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     line-height: var(--sp-lh-prose);
     color        : var(--sp-on-surface);
     white-space: pre-wrap;
     word-break    : break-word;
 }
 .sp-confirm-note {
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color                : var(--sp-subtle);
     line-height: var(--sp-lh-body);
     padding: var(--sp-size-8) var(--sp-size-10);
@@ -4075,7 +4090,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-6) var(--sp-size-16);
     border-radius: var(--sp-size-8);
     border         : none;
-    font-size    : var(--sp-fs-83);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-83);
     cursor       : pointer;
     font-weight: 500;
     transition   : opacity 0.15s;
@@ -4122,7 +4137,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-dialog-sheet-custom { max-height:calc(100dvh - 40px);overflow:hidden;box-sizing:border-box; }
 .sp-dialog-custom { min-height:0;overflow-y:auto;overscroll-behavior:contain; }
 .sp-dialog-sheet-custom > :not(.sp-dialog-custom) { flex:0 0 auto; }
-.sp-update-notice { min-width:0;max-width:70ch;white-space:normal;overflow-wrap:anywhere;color:var(--sp-on-surface);font-size:var(--sp-fs-85);line-height:var(--sp-lh-prose); }
+.sp-update-notice { min-width:0;max-width:70ch;white-space:normal;overflow-wrap:anywhere;color:var(--sp-on-surface);--sp-icon-size: var(--sp-icon-body); font-size:var(--sp-fs-85);line-height:var(--sp-lh-prose); }
 .sp-update-notice > :first-child { margin-top:0; }
 .sp-update-notice > :last-child { margin-bottom:0; }
 .sp-update-notice h1,.sp-update-notice h2,.sp-update-notice h3 { line-height:1.35;margin:1.2em 0 .5em;font-size:1.1em; }
@@ -4157,7 +4172,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width     : 0;
     gap: var(--sp-size-6);
 }
-.sp-dialog-editor-fields .sp-dialog-field > span { font-size: var(--sp-fs-92); }
+.sp-dialog-editor-fields .sp-dialog-field > span { --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-92); }
 .sp-dialog-editor-fields .sp-dialog-divider {
     height        : 1px;
     margin: var(--sp-size-14) 0;
@@ -4170,19 +4185,19 @@ select.sp-input { appearance: none; cursor: pointer; }
     }
 }
 .sp-dialog-head {
-    font-size  : var(--sp-fs-95);
+    --sp-icon-size: var(--sp-icon-heading); font-size  : var(--sp-fs-95);
     font-weight    : 600;
     color        : var(--sp-on-surface);
 }
 .sp-dialog-body {
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     line-height: var(--sp-lh-prose);
     color        : var(--sp-on-surface);
     white-space: pre-wrap;
     word-break    : break-word;
 }
 .sp-dialog-note {
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color                : var(--sp-subtle);
     line-height : var(--sp-lh-body);
     padding: var(--sp-size-8) var(--sp-size-10);
@@ -4201,7 +4216,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     padding: var(--sp-size-6) var(--sp-size-16);
     border-radius: var(--sp-size-8);
     border         : none;
-    font-size    : var(--sp-fs-83);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-83);
     cursor       : pointer;
     font-weight: 500;
     transition   : opacity 0.15s;
@@ -4225,12 +4240,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-8);
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     font-family   : var(--sp-font);
     outline      : none;
 }
 .sp-dialog-input:focus { border-color: var(--sp-primary); }
-.sp-dialog-input-error { min-height: 1em; color: var(--sp-on-surface); font-size: var(--sp-fs-72); line-height: 1.4; }
+.sp-dialog-input-error { min-height: 1em; color: var(--sp-on-surface); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); line-height: 1.4; }
 .sp-dialog-input-error .sp-icon { color: var(--sp-subtle); margin-right: var(--sp-size-3); }
 .sp-dialog-multi-list {
     display              : grid;
@@ -4246,7 +4261,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     gap: var(--sp-size-6);
     min-width     : 0;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     cursor       : pointer;
 }
 .sp-dialog-multi-option span { min-width: 0; overflow-wrap: anywhere; }
@@ -4261,7 +4276,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-8);
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-family   : var(--sp-font);
     line-height  : 1.5;
     outline      : none;
@@ -4283,7 +4298,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background   : transparent;
     color                : var(--sp-subtle);
     font-family   : var(--sp-font);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     cursor       : pointer;
     overflow-wrap: anywhere;
 }
@@ -4314,7 +4329,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background   : transparent;
     color        : var(--sp-on-surface);
     font-family   : var(--sp-font);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     line-height  : 1.5;
     text-align : left;
     cursor       : pointer;
@@ -4324,7 +4339,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-dialog-async-list .sp-dialog-single-selected { background: color-mix(in oklab, var(--sp-primary) 12%, transparent); }
 .sp-dialog-async-list .sp-dialog-single-selected .sp-icon { color: var(--sp-primary); }
 .sp-dialog-async-loading,
-.sp-dialog-async-empty { color: var(--sp-subtle); font-size: var(--sp-fs-75); line-height: 1.5; }
+.sp-dialog-async-empty { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); line-height: 1.5; }
 @media (max-width: 420px) {
     .sp-dialog-multi-list { grid-template-columns: 1fr; }
     .sp-dialog-single-list:not(.sp-dialog-async-list) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4345,7 +4360,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: space-between;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     padding: var(--sp-size-3) var(--sp-size-6);
 }
 .sp-mem-stat-k { color: var(--sp-subtle); }
@@ -4358,7 +4373,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     background : rgba(220,155,155,0.10);
     border     : 1px solid rgba(220,155,155,0.28);
     border-radius: var(--sp-size-6);
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color      : var(--sp-caution);
     line-height  : 1.5;
 }
@@ -4378,7 +4393,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-top: var(--sp-size-8);
     background   : var(--sp-sheet-bg);
 }
-.sp-mem-progress-label { font-size: var(--sp-fs-78); color: var(--sp-subtle); }
+.sp-mem-progress-label { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); color: var(--sp-subtle); }
 .sp-mem-progress-bar {
     width          : 100%;
     height: var(--sp-size-5);
@@ -4407,7 +4422,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-6);
     color        : var(--sp-on-surface);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     cursor       : pointer;
     transition   : background 0.12s, color 0.12s, border-color 0.12s;
 }
@@ -4429,7 +4444,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-storage-group { margin-bottom: var(--sp-size-12); }
 .sp-storage-group:last-child { margin-bottom: 0; }
 .sp-storage-group-head {
-    font-size   : var(--sp-fs-74);
+    --sp-icon-size: var(--sp-icon-label); font-size   : var(--sp-fs-74);
     font-weight    : 600;
     color                : var(--sp-subtle);
     padding: var(--sp-size-2) 0 var(--sp-size-4);
@@ -4441,7 +4456,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap: var(--sp-size-8);
     padding: var(--sp-size-4) 0;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     color        : var(--sp-on-surface);
 
     flex-wrap: wrap;
@@ -4460,7 +4475,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-5);
     color        : var(--sp-on-surface);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     cursor       : pointer;
     transition   : background 0.12s, color 0.12s, border-color 0.12s;
 }
@@ -4510,7 +4525,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap: var(--sp-size-5);
     padding: var(--sp-size-3) var(--sp-size-8);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     border-radius: var(--sp-size-12);
     border       : 1px solid transparent;
     font-weight: 500;
@@ -4539,7 +4554,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     min-width     : 0;
 }
 .sp-space-widget-eramonth {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color                : var(--sp-subtle);
     background : rgba(127, 127, 127, 0.08);
     border-radius: var(--sp-size-5);
@@ -4551,7 +4566,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items: baseline;
     flex-wrap  : wrap;         /* 安全网：塞不下就换行，绝不撑破卡片 */
     gap        : var(--sp-size-8);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     line-height  : 1.5;
     padding    : var(--sp-size-2) 0;
     min-width     : 0;
@@ -4562,16 +4577,16 @@ select.sp-input { appearance: none; cursor: pointer; }
 /* date/name 是 AI 自由文本，可能超长 → 一律允许折行，min-width:0 让 flex 能收缩 */
 .sp-space-widget-almdate { font-weight: 600; color: var(--sp-on-surface); overflow-wrap: anywhere; min-width: 0; }
 .sp-space-widget-almname { flex: 1 1 auto; color: var(--sp-on-surface); word-break: break-word; overflow-wrap: anywhere; min-width: 0; }
-.sp-space-widget-almtype { font-size: var(--sp-fs-70); color: var(--sp-subtle); white-space: nowrap; flex-shrink: 0; }
+.sp-space-widget-almtype { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70); color: var(--sp-subtle); white-space: nowrap; flex-shrink: 0; }
 .sp-space-widget-body { display: flex; flex-direction: column; gap: var(--sp-size-4); min-width: 0; }
 .sp-space-widget-title {
-    font-size  : var(--sp-fs-88);
+    --sp-icon-size: var(--sp-icon-subtitle); font-size  : var(--sp-fs-88);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     line-height: 1.4;
 }
 .sp-space-widget-desc {
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     line-height: var(--sp-lh-body);
     color        : var(--sp-on-surface);
     opacity    : 0.85;
@@ -4581,13 +4596,13 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     flex-wrap   : wrap;
     gap: var(--sp-size-10);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     margin-top: var(--sp-size-2);
 }
 .sp-space-widget-meta .sp-icon { margin-right: var(--sp-size-3); }
 .sp-space-widget-dynamic {
-    font-size   : var(--sp-fs-74);
+    --sp-icon-size: var(--sp-icon-label); font-size   : var(--sp-fs-74);
     color                : var(--sp-subtle);
     padding: var(--sp-size-4) var(--sp-size-8);
     background : rgba(127, 127, 127, 0.08);
@@ -4595,7 +4610,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     margin-top: var(--sp-size-3);
 }
 .sp-space-widget-next {
-    font-size  : var(--sp-fs-75);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-75);
     color        : var(--sp-primary);
     margin-top: var(--sp-size-2);
 }
@@ -4611,25 +4626,25 @@ select.sp-input { appearance: none; cursor: pointer; }
     /* Keep one vertical scroll owner: the surrounding space chat. */
     max-height : none;
     overflow     : visible;
-    font-size: var(--sp-fs-81);
+    --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-81);
 }
 .sp-space-outline-preview li { padding: var(--sp-size-6) 0; border-top: 1px solid var(--sp-divider); }
-.sp-space-outline-preview li > strong { font-size: var(--sp-fs-81); font-weight: 600; line-height: 1.4; }
+.sp-space-outline-preview li > strong { --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-81); font-weight: 600; line-height: 1.4; }
 .sp-space-outline-preview li > span {
         display : block;
     margin-top: var(--sp-size-2);
     color                : var(--sp-subtle);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height: 1.35;
     text-align: right;
 }
-.sp-space-outline-preview li > p { margin: var(--sp-size-4) 0 0; color: var(--sp-subtle); white-space: pre-wrap; font-size: var(--sp-fs-81); line-height: var(--sp-lh-body); }
+.sp-space-outline-preview li > p { margin: var(--sp-size-4) 0 0; color: var(--sp-subtle); white-space: pre-wrap; --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-81); line-height: var(--sp-lh-body); }
 .sp-space-widget-readonly {
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-5);
     color                : var(--sp-subtle);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height  : 1.45;
 }
 .sp-space-widget-apply {
@@ -4644,7 +4659,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : var(--sp-on-primary);
     border         : none;
     border-radius: var(--sp-size-6);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     cursor       : pointer;
     transition   : opacity 0.12s;
 }
@@ -4670,7 +4685,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     flex-shrink  : 0;
     opacity        : 0;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
@@ -4700,7 +4715,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     flex-shrink  : 0;
     opacity        : 0;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
@@ -4759,7 +4774,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     opacity        : 0.55;
     transition     : opacity 0.12s, background 0.12s, color 0.12s;
 }
@@ -4777,7 +4792,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     opacity                 : 1;
     border       : 1px solid var(--sp-divider);
     color        : var(--sp-on-surface);
-    font-size  : var(--sp-text-label);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-text-label);
     border-radius: 999px;
     line-height: var(--sp-lh-control);
 }
@@ -4799,7 +4814,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid var(--sp-divider);
     border-radius: 99px;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-family   : var(--sp-font);
     cursor       : pointer;
     transition   : background 0.12s, color 0.12s, border-color 0.12s, opacity 0.15s, transform 0.1s;
@@ -4881,7 +4896,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     align-items : center;
     gap: var(--sp-size-8);
     padding: var(--sp-size-7) var(--sp-size-11);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     color                : var(--sp-subtle);
     cursor       : pointer;
     user-select : none;
@@ -4889,7 +4904,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 }
 .sp-theater-tpl-picker-summary::-webkit-details-marker { display: none; }
 .sp-theater-tpl-picker-summary:hover:not(:disabled) { background: var(--sp-hover-bg); }
-.sp-theater-tpl-picker-chevron { font-size: var(--sp-fs-70); transition: transform 0.15s; }
+.sp-theater-tpl-picker-chevron { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-icon-label); transition: transform 0.15s; }
 .sp-theater-tpl-picker[open] .sp-theater-tpl-picker-chevron { transform: rotate(90deg); }
 .sp-theater-tpl-picker-body {
     display     : flex;
@@ -4912,7 +4927,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     border       : 1px solid transparent;
     border-radius: var(--sp-size-6);
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-family   : var(--sp-font);
     cursor       : pointer;
     transition   : background 0.12s, border-color 0.12s;
@@ -4951,7 +4966,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     /* Base size for the sanitized fragment. The beautify prompt is told to keep
        body ~13px; em-based inline styles scale from this. Absolute px from the
        AI can still win, but the prompt constraint is the primary guard. */
-    font-size  : var(--sp-text-body);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-text-body);
     line-height: var(--sp-lh-reading);
     letter-spacing: normal;
     color        : var(--sp-on-surface);
@@ -5021,7 +5036,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-6);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     color        : var(--sp-primary);
     background   : var(--sp-sheet-bg);
     border       : 1px solid var(--sp-divider);
@@ -5045,7 +5060,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     display     : inline-flex;
     align-items : center;
     justify-content: center;
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     color        : var(--sp-primary);
     background   : var(--sp-sheet-bg);
     border       : 1px solid var(--sp-divider);
@@ -5083,7 +5098,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-theater-result.sp-theater-fullscreen .sp-theater-result-inner {
     max-width: none;                    /* 去掉宽度上限：内容框整屏铺满、不再居中留白 */
     margin       : 0;
-    font-size: var(--sp-text-heading);                    /* 全屏阅读稍放大 */
+    --sp-icon-size: var(--sp-icon-heading); font-size: var(--sp-text-heading);                    /* 全屏阅读稍放大 */
 }
 /* 全屏时锁背景滚动 */
 body.sp-theater-fs-lock { overflow: hidden; }
@@ -5174,7 +5189,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-theater-list-group > summary {
     padding: var(--sp-size-8) var(--sp-size-12);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     color                : var(--sp-subtle);
     cursor       : pointer;
     list-style  : none;
@@ -5192,7 +5207,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-theater-list-empty {
     padding: var(--sp-size-14);
     text-align : center;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color                : var(--sp-subtle);
 }
 
@@ -5213,13 +5228,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap: var(--sp-size-6);
 }
 .sp-theater-card-title {
-    font-size  : var(--sp-fs-84);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-84);
     font-weight: 500;
     color        : var(--sp-on-surface);
 }
 .sp-theater-card-time {
     margin-left : auto;
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color                : var(--sp-subtle);
 }
 .sp-theater-card-actions {
@@ -5229,7 +5244,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-theater-card-actions button {
     padding: var(--sp-size-3) var(--sp-size-10);
-    font-size   : var(--sp-fs-74);
+    --sp-icon-size: var(--sp-icon-label); font-size   : var(--sp-fs-74);
     background   : transparent;
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-5);
@@ -5281,12 +5296,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding: var(--sp-size-9) var(--sp-size-11);
     cursor       : pointer;
     list-style  : none;
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     color        : var(--sp-on-surface);
 }
 .sp-theater-tpl-library-head::-webkit-details-marker { display: none; }
 .sp-theater-tpl-library-head:hover:not(:disabled) { background: var(--sp-hover-bg); }
-.sp-theater-tpl-library-chevron { font-size: var(--sp-fs-70); transition: transform 0.15s; }
+.sp-theater-tpl-library-chevron { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-icon-label); transition: transform 0.15s; }
 .sp-theater-tpl-library[open] .sp-theater-tpl-library-chevron { transform: rotate(90deg); }
 .sp-theater-tpl-library-count {
     margin-left : auto;
@@ -5294,7 +5309,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-width: var(--sp-size-18);
     text-align : center;
     padding: 1px var(--sp-size-6);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     background   : var(--sp-sheet-bg);
     border       : 1px solid var(--sp-divider);
@@ -5319,7 +5334,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-theater-tpl-import-hint {
     flex: 1 1 var(--sp-size-160);
     min-width     : 0;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height: 1.4;
     color        : var(--sp-on-surface);
     opacity    : 0.7;
@@ -5335,7 +5350,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 指路世界书的提示（查看/改/删去世界书那边做） */
 .sp-theater-tpl-manage-hint {
     padding: var(--sp-size-6) var(--sp-size-8) var(--sp-size-2);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height  : 1.5;
     color        : var(--sp-on-surface);
     opacity    : 0.7;
@@ -5445,8 +5460,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-chat-icon { flex-shrink: 0; color: var(--sp-primary); display: inline-flex; }
 .sp-anchor-chat-svg  { width: var(--sp-size-20); height: var(--sp-size-20); }
 .sp-anchor-chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-size-2); }
-.sp-anchor-chat-name { font-size: var(--sp-fs-90); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sp-anchor-chat-sub  { font-size: var(--sp-fs-72); color: var(--sp-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-anchor-chat-name { --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-90); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-anchor-chat-sub  { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); color: var(--sp-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-anchor-chat-meta { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-size-3);
     min-width: 0;
     max-width: 100%;
@@ -5454,14 +5469,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-chat-count {
     min-width: var(--sp-size-22);
     text-align : center;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     font-weight    : 600;
     padding: 1px var(--sp-size-7);
     border-radius: 999px;
     background    : var(--sp-chip-bg);
     color        : var(--sp-on-surface);
 }
-.sp-anchor-chat-ts { font-size: var(--sp-fs-66); color: var(--sp-subtle);
+.sp-anchor-chat-ts { --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-66); color: var(--sp-subtle);
     overflow-wrap: anywhere;
     text-align: right;
 }
@@ -5490,9 +5505,9 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     transition      : background .15s;
 }
 .sp-anchor-back:hover:not(:disabled)   { background: var(--sp-hover-bg); }
-.sp-anchor-head-title   { flex: 1; min-width: 0; font-size: var(--sp-fs-90); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sp-on-surface); }
+.sp-anchor-head-title   { flex: 1; min-width: 0; --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-90); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sp-on-surface); }
 .sp-anchor-head-floor   { color: var(--sp-subtle); font-weight: 400; }
-.sp-anchor-head-count   { flex-shrink: 0; font-size: var(--sp-fs-72); color: var(--sp-subtle); }
+.sp-anchor-head-count   { flex-shrink: 0; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); color: var(--sp-subtle); }
 .sp-anchor-head-actions { flex-shrink: 0; display: flex; gap: var(--sp-size-4); }
 
 /* 第二层：缩略卡片 */
@@ -5518,11 +5533,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-anchor-item-tags        { display: flex; flex-wrap: wrap; gap: var(--sp-size-4); }
 .sp-anchor-item-tags:empty  { display: none; }   /* 无标签时不占布局空间 */
-.sp-anchor-item-floor       { flex-shrink: 0; font-size: var(--sp-fs-72); font-weight: 700; color: var(--sp-primary); }
+.sp-anchor-item-floor       { flex-shrink: 0; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); font-weight: 700; color: var(--sp-primary); }
 .sp-anchor-item-preview {
     flex       : 1;
     min-width     : 0;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     line-height  : 1.5;
     color        : var(--sp-on-surface);
     display            : -webkit-box;
@@ -5530,7 +5545,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     -webkit-box-orient : vertical;
     overflow      : hidden;
 }
-.sp-anchor-item-ts { flex-shrink: 0; font-size: var(--sp-fs-64); color: var(--sp-subtle);
+.sp-anchor-item-ts { flex-shrink: 0; --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-64); color: var(--sp-subtle);
     max-width: 100%;
     overflow-wrap: anywhere;
 }
@@ -5541,7 +5556,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     align-items : center;
     padding: 1px var(--sp-size-7);
     border-radius: 999px;
-    font-size     : var(--sp-fs-58);
+    --sp-icon-size: var(--sp-icon-micro); font-size     : var(--sp-fs-58);
     font-weight    : 600;
     letter-spacing: 0.02em;
     line-height  : 1.5;
@@ -5625,7 +5640,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-full-host {
     overflow-x   : auto;
 }
-.sp-anchor-full-ts { margin-top: var(--sp-size-10); text-align: center; font-size: var(--sp-fs-66); color: var(--sp-subtle); }
+.sp-anchor-full-ts { margin-top: var(--sp-size-10); text-align: center; --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-66); color: var(--sp-subtle); }
 
 /* ─── 坐标 · 标签筛选栏（三层通用，scroll 顶部）────────────────────────────── */
 .sp-anchor-filterbar {
@@ -5643,7 +5658,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border       : 1px solid var(--sp-divider);
     border-radius: 999px;
     color                : var(--sp-subtle);
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     line-height  : var(--sp-lh-reading);
     cursor       : pointer;
     transition   : background 0.12s, color 0.12s, border-color 0.12s;
@@ -5673,7 +5688,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding: var(--sp-size-22) var(--sp-size-12);
     text-align : center;
     color                : var(--sp-subtle);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
 }
 
 /* ─── 坐标 · L1 标签行 + 标签管理标题栏：整行压缩 ──────────────────────────
@@ -5686,23 +5701,23 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-anchor-chars-head .sp-anchor-head-title,
 .sp-anchor-tagmgr-head .sp-anchor-head-title {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     font-weight: 500;
     letter-spacing: 0.04em;
     color                : var(--sp-subtle);
 }
-.sp-anchor-tagmgr-head .sp-anchor-head-count { font-size: var(--sp-fs-62); }
+.sp-anchor-tagmgr-head .sp-anchor-head-count { --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-62); }
 .sp-anchor-tagmgr-head .sp-anchor-back {
     width: var(--sp-size-22);
     height: var(--sp-size-22);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
 }
 .sp-anchor-chars-head .sp-anchor-tagmgr-btn {
     margin-left : auto;
     width    : auto;
     height: var(--sp-size-24);
     padding: 0 var(--sp-size-8);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     white-space   : nowrap;
 }
 
@@ -5744,7 +5759,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-width: 0;
 }
 .sp-anchor-tagmgr-row .sp-anchor-tagchip { flex-shrink: 0; }
-.sp-tagmgr-usage      { flex: 1; font-size: var(--sp-fs-68); color: var(--sp-subtle); }
+.sp-tagmgr-usage      { flex: 1; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-68); color: var(--sp-subtle); }
 .sp-tagmgr-row-actions { flex-shrink: 0; display: flex; gap: var(--sp-size-4); align-items: center;
     margin-left: auto;
 }
@@ -5758,7 +5773,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-width: 0;
     max-width: 100%;
 }
-.sp-tagmgr-confirm-text { flex: 1; font-size: var(--sp-fs-74); color: var(--sp-on-surface); }
+.sp-tagmgr-confirm-text { flex: 1; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-74); color: var(--sp-on-surface); }
 
 /* ─── 坐标 · 标签选择器（body 级 fixed 浮层，收藏时 & 全文编辑共用）──────── */
 /* 空态 */
@@ -5775,7 +5790,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-dashed-list li {
     position  : relative;
     padding-left: 1.2em;
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     line-height : var(--sp-lh-body);
     color        : var(--sp-on-surface);
     opacity     : 0.88;
@@ -5795,7 +5810,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding: var(--sp-size-9) var(--sp-size-14);
     border-bottom: 1px solid var(--sp-divider);
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     line-height  : 1.45;
 }
 .sp-lines-dashed-status .sp-icon { margin-right: var(--sp-size-4); }
@@ -5814,11 +5829,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     align-items : center;
     justify-content: space-between;
     margin-bottom: var(--sp-size-5);
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     letter-spacing : 0.06em;
     color                : var(--sp-subtle);
 }
-.sp-dashed-inline-sub .sp-dashed-list li { font-size: var(--sp-fs-74); }
+.sp-dashed-inline-sub .sp-dashed-list li { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-74); }
 /* 楼内冷知识刷新键：镜像 summary-actions 小键，再小半档，坐在「世界观补充」行右侧 */
 .sp-inline-refresh-dashed {
     width: var(--sp-size-18);
@@ -5832,7 +5847,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-60);
+    --sp-icon-size: var(--sp-icon-micro); font-size      : var(--sp-fs-60);
     opacity        : 0.55;
     letter-spacing : 0;
     transition     : opacity 0.12s, background 0.12s, color 0.12s;
@@ -5848,7 +5863,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     cursor        : default;
 }
 .sp-dashed-inline-empty {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color                : var(--sp-subtle);
     font-style: italic;
 
@@ -5890,7 +5905,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border        : 0;
     color                : var(--sp-subtle);
     padding: var(--sp-size-5) var(--sp-size-14);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     font-weight: 500;
     line-height: 1;
     cursor       : pointer;
@@ -5921,6 +5936,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 通用操作菜单：菜单项由静态配置生成；固定图标列保证不同图标后的文字严格对齐。 */
 .sp-action-menu { position: relative; }
 .sp-action-menu-list {
+    box-sizing    : border-box;
     position      : absolute;
     z-index      : 40;
     top          : calc(100% + 5px);
@@ -5936,6 +5952,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-action-menu-list[hidden] { display: none; }
 .sp-action-menu-item {
+    box-sizing     : border-box;
+    min-width      : 0;
     width          : 100%;
     display     : flex;
     align-items : center;
@@ -5946,14 +5964,15 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     background   : transparent;
     color        : var(--sp-on-surface);
     font-weight: 500;
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     line-height    : 1.2;
     font-family   : var(--sp-font);
     text-align : left;
-    white-space   : nowrap;
+    white-space   : normal;
     cursor       : pointer;
 }
 .sp-action-menu-item .sp-icon { width: var(--sp-size-16); flex: 0 0 var(--sp-size-16); text-align: center; color: var(--sp-subtle); }
+.sp-action-menu-item span { min-width: 0; overflow-wrap: anywhere; }
 .sp-action-menu-item:hover:not(:disabled) { background: var(--sp-hover-bg); color: var(--sp-primary); }
 .sp-action-menu-item:hover:not(:disabled) .sp-icon { color: var(--sp-primary); }
 
@@ -5980,7 +5999,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding: var(--sp-size-6) var(--sp-size-12);
     border-bottom: 1px solid var(--sp-divider);
     flex-shrink  : 0;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
 
     flex-wrap: wrap;
 }
@@ -5994,24 +6013,24 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-time-context .sp-alm-today-lbl,
 .sp-alm-time-context .sp-alm-clock-lbl {
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
 }
 .sp-alm-time-context .sp-alm-today:not(.sp-alm-today-editing) > .sp-alm-today-lbl,
 .sp-alm-time-context .sp-alm-clock > .sp-alm-clock-lbl { flex: 0 0 var(--sp-size-52); }
 .sp-alm-time-context .sp-alm-today-editing > .sp-alm-today-lbl { flex: 0 0 auto; }
-.sp-alm-today-lbl  { color: var(--sp-subtle); font-size: var(--sp-fs-78); }
+.sp-alm-today-lbl  { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); }
 .sp-alm-today-date { color: var(--sp-on-surface); font-weight: 600;
     min-width: 0;
     max-width: calc(100% - var(--sp-size-52) - var(--sp-size-6));
     overflow-wrap: anywhere;
 }
-.sp-alm-today-pin  { color: var(--sp-primary); font-size: var(--sp-fs-72); }
-.sp-alm-today-hint { color: var(--sp-subtle); font-size: var(--sp-fs-72); margin-left: var(--sp-size-4); }
+.sp-alm-today-pin  { color: var(--sp-primary); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
+.sp-alm-today-hint { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); margin-left: var(--sp-size-4); }
 .sp-alm-today-acts { display: inline-flex; gap: var(--sp-size-2); margin-left: auto;
     flex-shrink: 0;
 }
-.sp-alm-today-acts .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); font-size: var(--sp-fs-72); }
-.sp-alm-today-input { width: var(--sp-size-44) !important; text-align: center; font-size: var(--sp-fs-78); padding: var(--sp-size-4) var(--sp-size-6); }
+.sp-alm-today-acts .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
+.sp-alm-today-input { width: var(--sp-size-44) !important; text-align: center; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); padding: var(--sp-size-4) var(--sp-size-6); }
 .sp-alm-today-month { width: auto !important; min-width: 78px; max-width: min(132px, 38vw); flex: 0 1 var(--sp-size-132); text-align: left; text-overflow: ellipsis; }
 .sp-alm-today-calibration-title { white-space: nowrap; flex-shrink: 0; }
 .sp-alm-today-weekday { width: 78px !important; max-width: 78px; flex: 0 1 var(--sp-size-78); }
@@ -6033,7 +6052,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     padding: var(--sp-size-5) var(--sp-size-12);
     border-bottom: 1px solid var(--sp-divider);
     flex-shrink  : 0;
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
 }
 .sp-alm-time-context .sp-alm-clock {
     padding: var(--sp-size-2) var(--sp-size-12) var(--sp-size-5);
@@ -6042,7 +6061,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-clock-lbl   { display: inline-flex; align-items: center; color: var(--sp-subtle); flex-shrink: 0; }
 .sp-alm-clock-val   { min-width: 0; color: var(--sp-on-surface); opacity: .72; font-weight: 400; overflow-wrap: anywhere; }
 .sp-alm-clock-arrow { color: var(--sp-subtle); font-weight: 400; margin: 0 1px; }
-.sp-alm-clock-wait  { color: var(--sp-subtle); font-weight: 400; font-size: var(--sp-fs-72); }
+.sp-alm-clock-wait  { color: var(--sp-subtle); font-weight: 400; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
 /* 「同步到点」CTA：改了今天后点落后时在今天条冒出的醒目胶囊；点一下后台把点重生成到今天。busy 态换成静默灰胶囊 */
 .sp-alm-body {
     flex       : 1;
@@ -6075,8 +6094,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
     flex-wrap: wrap;
 }
-.sp-alm-date-icon { color: var(--alm-c, var(--sp-primary)); font-size: var(--sp-fs-80); width: var(--sp-size-14); text-align: center; flex-shrink: 0; }
-.sp-alm-date-txt  { font-size: var(--sp-fs-78); color: var(--sp-on-surface); font-weight: 600;  min-width: 0;
+.sp-alm-date-icon { color: var(--alm-c, var(--sp-primary)); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-icon-caption); width: var(--sp-size-14); text-align: center; flex-shrink: 0; }
+.sp-alm-date-txt  { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); color: var(--sp-on-surface); font-weight: 600;  min-width: 0;
     max-width: calc(100% - var(--sp-size-20));
     white-space: normal;
     overflow: visible;
@@ -6093,7 +6112,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-width     : 0;
 }
 .sp-alm-name {
-    font-size  : var(--sp-fs-86);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-86);
     color        : var(--sp-on-surface);
     font-weight: 500;
     line-height: 1.35;
@@ -6105,7 +6124,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     white-space   : nowrap;
 }
 .sp-alm-type-tag {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color        : var(--alm-c, var(--sp-subtle));
     border       : 1px solid color-mix(in oklab, var(--alm-c, var(--sp-divider)) 45%, transparent);
@@ -6115,7 +6134,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-shrink  : 0;
 }
 .sp-alm-src-tag {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color        : var(--sp-primary);
     background    : color-mix(in oklab, var(--sp-primary) 14%, transparent);
@@ -6125,10 +6144,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-shrink  : 0;
 }
 /* 周几小标（跟在日期后，年-free 推算） */
-.sp-alm-wd { font-size: var(--sp-fs-70); color: var(--sp-subtle); font-weight: 500; flex-shrink: 0; }
+.sp-alm-wd { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70); color: var(--sp-subtle); font-weight: 500; flex-shrink: 0; }
 /* 多日节假日「共N天」 */
 .sp-alm-span-tag {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color                : var(--sp-subtle);
     background    : color-mix(in oklab, var(--sp-subtle) 14%, transparent);
@@ -6139,7 +6158,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 /* 多日节假日今天正在进行中 */
 .sp-alm-active-tag {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight   : 700;
     color        : var(--sp-on-primary);
     background   : var(--sp-primary);
@@ -6151,14 +6170,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 操作按钮组：推到第一行末尾右对齐 */
 .sp-alm-acts { display: flex; align-items: center; gap: 0; flex-shrink: 0; margin-left: auto; }
 .sp-alm-acts .sp-icon-btn {
-    width: var(--sp-size-24); height: var(--sp-size-24); font-size: var(--sp-fs-70);
+    width: var(--sp-size-24); height: var(--sp-size-24); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70);
     /* 条目操作钮：对齐点/线/面主面板范式——平时隐藏、hover/点击整行才浮现（不再一直挂着）。 */
     opacity        : 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 .sp-alm-item:hover:not(:disabled) .sp-alm-acts .sp-icon-btn { opacity: 1; }
 /* 第三行：备注整行铺开 */
-.sp-alm-note { font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: 1.5; overflow-wrap: anywhere; padding-left: var(--sp-size-20); }
+.sp-alm-note { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: 1.5; overflow-wrap: anywhere; padding-left: var(--sp-size-20); }
 /* 已锁定：锁钮不必 hover 也常亮主色，一眼看出「生成时保留」（对齐点/线锁定态语义）。 */
 .sp-alm-pinned .sp-alm-pin { color: var(--sp-primary); opacity: 1; }
 
@@ -6187,7 +6206,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     margin: var(--sp-size-8) auto var(--sp-size-12);
     padding: var(--sp-size-6) var(--sp-size-10) var(--sp-size-10);
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     line-height  : 1.5;
 }
 .sp-ledger-task-status {
@@ -6222,7 +6241,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-ledger-task-people {
     margin-top: var(--sp-size-2);
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     overflow-wrap: anywhere;
 }
 .sp-alm-body-ledger { padding-top: 0; }
@@ -6247,7 +6266,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-ledger-empty {
     padding: var(--sp-size-24) var(--sp-size-16);
     text-align : center;
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     color                : var(--sp-subtle);
     line-height: var(--sp-lh-reading);
 }
@@ -6277,7 +6296,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-wrap: wrap;
 }
 .sp-ledger-type {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color        : var(--ledger-c, var(--sp-subtle));
     background    : color-mix(in oklab, var(--ledger-c, var(--sp-divider)) 16%, transparent);
@@ -6289,7 +6308,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 /* 事由独占整行（在元信息头下方）：长了就自己逐行铺开，不再和徽章/钮组抢横向。 */
 .sp-ledger-gist-row { min-width: 0; }
 .sp-ledger-gist {
-    font-size  : var(--sp-fs-82);
+    --sp-icon-size: var(--sp-icon-body); font-size  : var(--sp-fs-82);
     font-weight    : 600;
     color        : var(--sp-on-surface);
     min-width     : 0;
@@ -6316,7 +6335,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     /* 条目操作钮平时隐藏，hover 整行时再浮现。 */
     opacity        : 0;
     transition     : opacity 0.12s, color 0.12s, background 0.12s;
@@ -6345,13 +6364,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border        : 0;
     border-top : 1px dashed var(--sp-divider);
     color                : var(--sp-subtle);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     font-weight: 500;
     cursor       : pointer;
     transition : color 0.12s;
 }
 .sp-ledger-archive-head:hover:not(:disabled) { color: var(--sp-on-surface); }
-.sp-ledger-archive-head .sp-icon { font-size: var(--sp-fs-68); width: var(--sp-size-10); text-align: center; }
+.sp-ledger-archive-head .sp-icon { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-icon-label); width: var(--sp-size-10); text-align: center; }
 .sp-ledger-archive-list { margin-top: var(--sp-size-6); }
 /* 归档条整体压暗，一眼区分于活跃条。 */
 .sp-ledger-archived { opacity: 0.62; }
@@ -6364,7 +6383,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : flex;
     align-items : center;
     gap: var(--sp-size-8);
-    font-size  : var(--sp-fs-76);
+    --sp-icon-size: var(--sp-icon-caption); font-size  : var(--sp-fs-76);
     color                : var(--sp-subtle);
 }
 .sp-led-adv-label { flex: 1; min-width: 0; }
@@ -6377,7 +6396,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     font           : inherit;
     flex-shrink  : 0;
 }
-.sp-led-adv-warn { font-size: var(--sp-fs-68); color: var(--sp-warn); align-self: center; }
+.sp-led-adv-warn { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-68); color: var(--sp-warn); align-self: center; }
 /* 起/周期/终独占一行（在事由行下方）：胶囊左对齐、超多则自然折行，不再和事由/锁抢横向空间。 */
 .sp-ledger-dates {
     display     : flex;
@@ -6387,7 +6406,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     margin-top: var(--sp-size-3);
 }
 .sp-ledger-meta {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color                : var(--sp-subtle);
     background    : color-mix(in oklab, var(--sp-subtle) 14%, transparent);
@@ -6397,12 +6416,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     flex-shrink  : 0;
 }
 /* 第二行：现状整行铺开 */
-.sp-ledger-r2 { font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: 1.5; overflow-wrap: anywhere; }
+.sp-ledger-r2 { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: 1.5; overflow-wrap: anywhere; }
 /* 末行：标签胶囊（牵扯人物已上提到第一行） */
 .sp-ledger-r3 { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-size-6); }
 /* 牵扯人物：内联在第一行、吃掉徽章与钮组间的空档；过长省略不换行（首行保持一行高）。 */
 .sp-ledger-who {
-    font-size  : var(--sp-fs-70);
+    --sp-icon-size: var(--sp-icon-label); font-size  : var(--sp-fs-70);
     color                : var(--sp-subtle);
     font-weight: 500;
     flex       : 1;
@@ -6412,7 +6431,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     white-space   : nowrap;
 }
 .sp-ledger-tag {
-    font-size    : var(--sp-fs-63);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-63);
     font-weight    : 600;
     color        : var(--sp-primary);
     background    : color-mix(in oklab, var(--sp-primary) 14%, transparent);
@@ -6423,14 +6442,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
 /* ── 空态 ── */
 .sp-alm-empty { gap: var(--sp-size-8); padding: var(--sp-size-30) var(--sp-size-20); }
-.sp-alm-empty-glyph .sp-icon { font-size: var(--sp-fs-200); opacity: 0.35; }
-.sp-alm-empty-hint    { font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: var(--sp-lh-reading); max-width: 260px; }
+.sp-alm-empty-glyph .sp-icon { --sp-icon-size: var(--sp-icon-empty); font-size: var(--sp-icon-empty); opacity: 0.35; }
+.sp-alm-empty-hint    { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-76); color: var(--sp-subtle); line-height: var(--sp-lh-reading); max-width: 260px; }
 .sp-alm-empty-actions { display: flex; align-items: center; gap: var(--sp-size-12); margin-top: var(--sp-size-6); }
 .sp-alm-add-link {
     background   : transparent;
     border        : 0;
     color                : var(--sp-subtle);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     cursor       : pointer;
     text-decoration: underline;
     text-underline-offset: 3px;
@@ -6444,7 +6463,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     justify-content: space-between;
     margin-bottom: var(--sp-size-8);
 }
-.sp-alm-cal-title { flex: 1; text-align: center; font-size: var(--sp-fs-90); font-weight: 600; color: var(--sp-on-surface); }
+.sp-alm-cal-title { flex: 1; text-align: center; --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-90); font-weight: 600; color: var(--sp-on-surface); }
 /* 周几表头（周一起）：与下方 .sp-alm-grid 同为 7 列，列宽/间距对齐 */
 .sp-alm-weekhead {
     display              : grid;
@@ -6454,7 +6473,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-alm-weekhead-cell {
     text-align : center;
-    font-size  : var(--sp-fs-66);
+    --sp-icon-size: var(--sp-icon-tiny); font-size  : var(--sp-fs-66);
     font-weight    : 600;
     color                : var(--sp-subtle);
     padding: var(--sp-size-2) 0;
@@ -6488,7 +6507,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : inline-flex;
     align-items : center;
     justify-content: center;
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     color        : var(--sp-on-surface);
 
     width: var(--sp-size-20);
@@ -6519,7 +6538,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     justify-content: space-between;
     gap: var(--sp-size-8);
     margin-bottom: var(--sp-size-8);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-weight    : 600;
     color        : var(--sp-on-surface);
 }
@@ -6527,7 +6546,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-cal-detail-tools .sp-mini-btn { white-space: nowrap; }
 @container sp-almanac (max-width: 380px) {
     .sp-alm-cal-detail-tools { gap: var(--sp-size-3); }
-    .sp-alm-cal-detail-tools .sp-mini-btn { padding-left: var(--sp-size-6); padding-right: var(--sp-size-6); font-size: var(--sp-fs-68); }
+    .sp-alm-cal-detail-tools .sp-mini-btn { padding-left: var(--sp-size-6); padding-right: var(--sp-size-6); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-68); }
 }
 .sp-alm-cal-detail .sp-alm-list { gap: var(--sp-size-6); }
 /* 详情行可点（联动到上方网格），给个可点手势 */
@@ -6543,7 +6562,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     box-shadow : inset 0 0 0 1.5px var(--sp-primary);
 }
 .sp-alm-cell-linked .sp-alm-cell-num { font-weight: 700; color: var(--sp-on-surface); }
-.sp-alm-cal-empty { font-size: var(--sp-fs-76); color: var(--sp-subtle); font-style: italic; padding: var(--sp-size-6) var(--sp-size-2); }
+.sp-alm-cal-empty { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-76); color: var(--sp-subtle); font-style: italic; padding: var(--sp-size-6) var(--sp-size-2); }
 
 /* ── 添加 / 编辑（内联窗，非弹窗；head 在滚动区外，body 复用 .sp-alm-body）── */
 .sp-alm-editor-head {
@@ -6554,10 +6573,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-bottom: 1px solid var(--sp-divider);
     flex-shrink  : 0;
 }
-.sp-alm-editor-title { font-size: var(--sp-fs-90); font-weight: 600; color: var(--sp-on-surface); }
+.sp-alm-editor-title { --sp-icon-size: var(--sp-icon-subtitle); font-size: var(--sp-fs-90); font-weight: 600; color: var(--sp-on-surface); }
 .sp-alm-editor-body  { display: flex; flex-direction: column; gap: var(--sp-size-11); }
 .sp-alm-field, .sp-led-field        { display: flex; flex-direction: column; gap: var(--sp-size-5); }
-.sp-alm-field > span, .sp-led-field > span { font-size: var(--sp-fs-76); color: var(--sp-subtle); font-weight: 500; }
+.sp-alm-field > span, .sp-led-field > span { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-76); color: var(--sp-subtle); font-weight: 500; }
 .sp-alm-field > span small, .sp-led-field > span small { font-weight: 400; opacity: 0.75; }
 .sp-alm-field input,
 .sp-alm-field select,
@@ -6571,7 +6590,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border       : 1px solid var(--sp-divider);
     border-radius: var(--sp-size-8);
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-85);
+    --sp-icon-size: var(--sp-icon-body); font-size    : var(--sp-fs-85);
     font-family   : var(--sp-font);
     outline      : none;
     box-sizing   : border-box;
@@ -6589,7 +6608,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-field-sm     { flex: 1 1 var(--sp-size-80); min-width: 0; }
 /* 编辑器只读周几提示（随月/日/天数实时刷新，纯提示不入库） */
 .sp-alm-wd-hint {
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     margin: calc(-1 * var(--sp-size-2)) var(--sp-size-2) var(--sp-size-2);
     min-height : 1em;
@@ -6605,7 +6624,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     margin       : 0;
     padding: var(--sp-size-5) var(--sp-size-12);
     border-radius: var(--sp-size-8);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     line-height    : 1.2;
 }
 .sp-alm-editor-actions > .sp-alm-editor-cancel {
@@ -6617,33 +6636,33 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 
 /* ── 历法管理：沿用现有设置列表的中性表面语言 ── */
-.sp-alm-manager-hint { padding: var(--sp-size-8) var(--sp-size-14) var(--sp-size-4); font-size: var(--sp-fs-75); color: var(--sp-subtle); }
+.sp-alm-manager-hint { padding: var(--sp-size-8) var(--sp-size-14) var(--sp-size-4); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-subtle); }
 .sp-alm-manager-hint button { border: 0; padding: 0; background: transparent; color: var(--sp-primary); cursor: pointer; font: inherit; }
 .sp-alm-manager-card, .sp-alm-manager-templates { border: 1px solid var(--sp-divider); border-radius: var(--sp-size-8); background: var(--sp-surface); overflow: hidden; }
 .sp-alm-manager-card-head, .sp-alm-manager-template-head, .sp-alm-manager-template-row { display: flex; align-items: center; gap: var(--sp-size-8); }
 .sp-alm-manager-card-head, .sp-alm-manager-template-head { padding: var(--sp-size-4) var(--sp-size-8) var(--sp-size-4) var(--sp-size-12); }
-.sp-alm-manager-card-head .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); font-size: var(--sp-fs-72); }
-.sp-alm-manager-card-title { flex: 1; min-width: 0; font-size: var(--sp-fs-80); font-weight: 600; color: var(--sp-on-surface); }
+.sp-alm-manager-card-head .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
+.sp-alm-manager-card-title { flex: 1; min-width: 0; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); font-weight: 600; color: var(--sp-on-surface); }
 .sp-alm-manager-card-actions { display: inline-flex; align-items: center; flex-shrink: 0; gap: var(--sp-size-2); }
 .sp-alm-manager-card-body, .sp-alm-manager-edit-fields { border-top: 1px solid var(--sp-divider); }
-.sp-alm-manager-current-name { padding: var(--sp-size-10) var(--sp-size-12) 0; color: var(--sp-on-surface); font-size: var(--sp-fs-78); font-weight: 600; overflow-wrap: anywhere; }
+.sp-alm-manager-current-name { padding: var(--sp-size-10) var(--sp-size-12) 0; color: var(--sp-on-surface); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); font-weight: 600; overflow-wrap: anywhere; }
 .sp-alm-manager-current-name + .sp-alm-manager-months { padding-top: var(--sp-size-7); }
 .sp-alm-manager-months { display: flex; flex-wrap: wrap; gap: var(--sp-size-6); padding: var(--sp-size-10) var(--sp-size-12); }
-.sp-alm-manager-month-chip { padding: var(--sp-size-3) var(--sp-size-8); border: 1px solid var(--sp-divider); border-radius: var(--sp-size-8); background: var(--sp-sheet-bg); color: var(--sp-subtle); font-size: var(--sp-fs-72); }
+.sp-alm-manager-month-chip { padding: var(--sp-size-3) var(--sp-size-8); border: 1px solid var(--sp-divider); border-radius: var(--sp-size-8); background: var(--sp-sheet-bg); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
 .sp-alm-manager-edit-fields { display: flex; flex-direction: column; gap: var(--sp-size-9); padding: var(--sp-size-10) var(--sp-size-12); }
 .sp-alm-manager-month-row { display: flex; flex-wrap: wrap; gap: var(--sp-size-6); align-items: flex-end; }
 .sp-alm-manager-month-field { display: flex; flex-direction: column; gap: var(--sp-size-4); min-width: 0; }
 .sp-alm-manager-month-field-name { flex: 1 1 var(--sp-size-150); min-width: 140px; }
 .sp-alm-manager-month-field-days { flex: 0 1 var(--sp-size-74); min-width: var(--sp-size-64); }
-.sp-alm-manager-month-field > span { color: var(--sp-subtle); font-size: var(--sp-fs-70); font-weight: 500; }
+.sp-alm-manager-month-field > span { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70); font-weight: 500; }
 .sp-alm-manager-month-field input { width: 100%; min-width: 0; box-sizing: border-box; }
 .sp-alm-manager-month-actions { display: inline-flex; flex: 0 0 auto; align-items: center; align-self: flex-end; min-height: var(--sp-size-32); margin-left: auto; gap: 0; }
-.sp-alm-manager-month-actions .sp-icon-btn { width: var(--sp-size-24); height: var(--sp-size-24); font-size: var(--sp-fs-70); }
-.sp-alm-manager-error { color: var(--sp-on-surface); font-size: var(--sp-fs-72); line-height: 1.4; }
+.sp-alm-manager-month-actions .sp-icon-btn { width: var(--sp-size-24); height: var(--sp-size-24); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70); }
+.sp-alm-manager-error { color: var(--sp-on-surface); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); line-height: 1.4; }
 .sp-alm-manager-error .sp-icon { color: var(--sp-subtle); margin-right: var(--sp-size-3); }
 .sp-alm-manager-template-head { width: 100%; border: 0; background: transparent; color: var(--sp-on-surface); cursor: pointer; text-align: left; }
 .sp-alm-manager-template-head:hover:not(:disabled) { background: var(--sp-hover-bg); }
-.sp-alm-manager-template-head span { flex: 1; font-size: var(--sp-fs-80); font-weight: 600; }
+.sp-alm-manager-template-head span { flex: 1; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-80); font-weight: 600; }
 .sp-alm-manager-template-head > .sp-icon { width: var(--sp-size-26); height: var(--sp-size-26); display: inline-flex; align-items: center; justify-content: center; }
 .sp-alm-manager-template-body { display: flex; flex-direction: column; gap: var(--sp-size-8); padding: var(--sp-size-8) var(--sp-size-10) var(--sp-size-10); border-top: 1px solid var(--sp-divider); }
 .sp-alm-manager-template-save-current, .sp-alm-manager-add-month {
@@ -6657,7 +6676,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: var(--sp-size-6);
     background   : transparent;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-family   : var(--sp-font);
     cursor       : pointer;
 }
@@ -6669,10 +6688,10 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-manager-template-entry.sp-alm-manager-template-current { border-color: var(--sp-primary); background: var(--sp-hover-bg); }
 .sp-alm-manager-template-row { padding: var(--sp-size-7) var(--sp-size-8); }
 .sp-alm-manager-template-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-size-2); }
-.sp-alm-manager-template-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sp-on-surface); font-size: var(--sp-fs-78); font-weight: 600; }
-.sp-alm-manager-template-meta { color: var(--sp-subtle); font-size: var(--sp-fs-68); }
+.sp-alm-manager-template-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sp-on-surface); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); font-weight: 600; }
+.sp-alm-manager-template-meta { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-68); }
 .sp-alm-manager-template-actions { display: inline-flex; flex-shrink: 0; gap: 0; }
-.sp-alm-manager-template-actions .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); font-size: var(--sp-fs-72); }
+.sp-alm-manager-template-actions .sp-icon-btn { width: var(--sp-size-26); height: var(--sp-size-26); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
 .sp-alm-manager-bind-panel { display: flex; flex-direction: column; gap: var(--sp-size-7); padding: var(--sp-size-8); border-top: 1px solid var(--sp-divider); background: var(--sp-surface); }
 .sp-alm-manager-bind-chips { display: flex; flex-wrap: wrap; gap: var(--sp-size-5); min-height: var(--sp-size-24); align-items: center; }
 .sp-alm-manager-bind-chip-remove {
@@ -6685,14 +6704,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: 99px;
     background   : var(--sp-sheet-bg);
     color        : var(--sp-on-surface);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     font-family   : var(--sp-font);
     cursor       : pointer;
 }
 .sp-alm-manager-bind-chip-remove:hover:not(:disabled), .sp-alm-manager-bind-chip-current { border-color: var(--sp-primary); }
 .sp-alm-manager-bind-chip-remove span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .sp-alm-manager-bind-chip-remove .sp-icon { flex-shrink: 0; color: var(--sp-subtle); }
-.sp-alm-manager-bind-search { width: 100%; box-sizing: border-box; font-size: var(--sp-fs-82); }
+.sp-alm-manager-bind-search { width: 100%; box-sizing: border-box; --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-82); }
 .sp-alm-manager-bind-results { display: flex; flex-direction: column; gap: var(--sp-size-3); max-height: 260px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .sp-alm-manager-bind-results::-webkit-scrollbar { width: 4px; }
 .sp-alm-manager-bind-results::-webkit-scrollbar-thumb { background: var(--sp-divider); border-radius: var(--sp-size-2); }
@@ -6706,7 +6725,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: var(--sp-size-6);
     background   : transparent;
     color        : var(--sp-on-surface);
-    font-size    : var(--sp-fs-80);
+    --sp-icon-size: var(--sp-icon-caption); font-size    : var(--sp-fs-80);
     font-family   : var(--sp-font);
     text-align : left;
     cursor       : pointer;
@@ -6715,11 +6734,11 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-manager-bind-option .sp-icon { width: var(--sp-size-16); flex: 0 0 var(--sp-size-16); text-align: center; color: var(--sp-subtle); }
 .sp-alm-manager-bind-option-label { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--sp-size-2) var(--sp-size-4); }
 .sp-alm-manager-bind-option-name { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.sp-alm-manager-bind-option-hint { flex: 0 0 auto; color: var(--sp-subtle); font-size: var(--sp-fs-68); font-weight: 400; white-space: nowrap; }
+.sp-alm-manager-bind-option-hint { flex: 0 0 auto; color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-68); font-weight: 400; white-space: nowrap; }
 .sp-alm-manager-bind-option-current > .sp-icon, .sp-alm-manager-bind-option-current .sp-alm-manager-bind-option-name { color: var(--sp-primary); }
 .sp-alm-manager-bind-option:disabled, .sp-alm-manager-bind-chip-remove:disabled { cursor: default; opacity: 0.55; }
-.sp-alm-manager-bind-empty { color: var(--sp-subtle); font-size: var(--sp-fs-74); padding: var(--sp-size-5) var(--sp-size-2); }
-.sp-alm-manager-empty-templates { padding: var(--sp-size-6) var(--sp-size-2); color: var(--sp-subtle); font-size: var(--sp-fs-72); font-style: italic; }
+.sp-alm-manager-bind-empty { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-74); padding: var(--sp-size-5) var(--sp-size-2); }
+.sp-alm-manager-empty-templates { padding: var(--sp-size-6) var(--sp-size-2); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); font-style: italic; }
 
 /* ── 轴·楼内事项（只读，沿当前楼的历法与快照）──────────────────
    框根接通共用主题与字体；区域主色沿已解析的 --sp-primary，类型色由 --alm-c 就地提供。 */
@@ -6729,7 +6748,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: var(--sp-size-8);
     overflow      : hidden;
     font-family   : var(--sp-font);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
     background    : rgba(128,128,128,0.07);
     border        : 1px solid rgba(128,128,128,0.15);
@@ -6756,12 +6775,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-event-head:focus-visible { outline: 1px solid var(--sp-primary); outline-offset: -2px; }
 .sp-alm-event-label { display: inline-flex; align-items: baseline; gap: var(--sp-size-8); min-width: 0; max-width: 100%; }
 .sp-alm-event-dot { display: block; flex: 0 0 var(--sp-size-5); align-self: flex-start; width: var(--sp-size-5); height: var(--sp-size-5); margin-top: .62em; border-radius: 50%; background: var(--alm-c, var(--sp-primary)); }
-.sp-alm-event-name { min-width: 0; font-size: var(--sp-fs-82); font-weight: 600; overflow-wrap: anywhere; }
+.sp-alm-event-name { min-width: 0; --sp-icon-size: var(--sp-icon-body); font-size: var(--sp-fs-82); font-weight: 600; overflow-wrap: anywhere; }
 .sp-alm-event-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: var(--sp-size-4) var(--sp-size-8); min-width: 0; max-width: 100%; margin-left: auto; }
-.sp-alm-event-date { color: inherit; font-size: var(--sp-fs-78); text-align: right; overflow-wrap: anywhere; }
-.sp-alm-event-when { color: var(--sp-subtle); font-size: var(--sp-fs-72); white-space: nowrap; }
-.sp-alm-event-detail { display: flex; flex-direction: column; gap: var(--sp-size-5); padding: 0 0 var(--sp-size-14) var(--sp-size-13); color: var(--sp-subtle); font-size: var(--sp-fs-78); line-height: 1.55; overflow-wrap: anywhere; }
-.sp-alm-event-detail-meta { display: flex; flex-wrap: wrap; gap: var(--sp-size-10); font-size: var(--sp-fs-72); }
+.sp-alm-event-date { color: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); text-align: right; overflow-wrap: anywhere; }
+.sp-alm-event-when { color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); white-space: nowrap; }
+.sp-alm-event-detail { display: flex; flex-direction: column; gap: var(--sp-size-5); padding: 0 0 var(--sp-size-14) var(--sp-size-13); color: var(--sp-subtle); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); line-height: 1.55; overflow-wrap: anywhere; }
+.sp-alm-event-detail-meta { display: flex; flex-wrap: wrap; gap: var(--sp-size-10); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); }
 .sp-alm-event-kind { color: var(--alm-c, var(--sp-primary)); }
 .sp-alm-event-detail p { margin: 0; font: inherit; white-space: pre-wrap; }
 
@@ -6774,7 +6793,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     border-radius: var(--sp-size-8);
     overflow      : hidden;
     font-family   : var(--sp-font);
-    font-size     : var(--sp-fs-78);
+    --sp-icon-size: var(--sp-icon-caption); font-size     : var(--sp-fs-78);
     color        : var(--sp-on-surface);
     background    : rgba(128,128,128,0.07);
     border        : 1px solid rgba(128,128,128,0.15);
@@ -6828,14 +6847,14 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-dash-summary::-webkit-details-marker { display: none; }
 .sp-dash-summary-flat { cursor: default; }   /* 纯日期扁条：不可折叠，无箭头 */
 .sp-dash-sum-today { font-weight: 700; letter-spacing: 0.02em; opacity: 0.85; }
-.sp-dash-sum-era { min-width: 0; font-size: var(--sp-fs-72); color: var(--sp-subtle); overflow-wrap: anywhere; }
-.sp-dash-sum-wx    { margin-left: var(--sp-size-4); opacity: 0.9; }   /* 折叠条里的天气图标，紧跟日期 */
+.sp-dash-sum-era { min-width: 0; --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); color: var(--sp-subtle); overflow-wrap: anywhere; }
+.sp-dash-sum-wx    { --sp-icon-size: var(--sp-icon-caption); margin-left: var(--sp-size-4); opacity: 0.9; }   /* 折叠条里的天气图标，紧跟日期 */
 .sp-dash-sum-chips { display: inline-flex; gap: var(--sp-size-6); opacity: 0.6; }
-.sp-dash-sum-chip  { font-size: var(--sp-fs-70); }
+.sp-dash-sum-chip  { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70); }
 /* 时间戳·时刻尾巴：数字戳解析出的「时」贴在天气之后（今 …年…月…日 周X ☀ 15:10）；日期本身已抬进
    .sp-dash-sum-today。极窄屏时它先让位、超长截断留省略号，绝不撑破窄条或挤掉右侧箭头；无「时」/古风戳时整段不出现。 */
-.sp-dash-sum-time { font-size: var(--sp-fs-72); opacity: 0.82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-.sp-dash-sum-caret { margin-left: auto; font-size: var(--sp-fs-62); opacity: 0.45; transition: transform 0.18s; }
+.sp-dash-sum-time { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); opacity: 0.82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.sp-dash-sum-caret { margin-left: auto; --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-icon-tiny); opacity: 0.45; transition: transform 0.18s; }
 .sp-dash[open] > .sp-dash-summary .sp-dash-sum-caret { transform: rotate(180deg); }
 .sp-dash[open] > .sp-dash-summary { border-bottom: 1px solid rgba(128,128,128,0.13); }
 /* 面板体：真实模块依次排列，默认分隔由后续脉络样式接管。 */
@@ -6879,23 +6898,23 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-width     : 0;
     background    : rgba(128,128,128,0.06);
 }
-.sp-sch-scell-rel  { font-size: var(--sp-fs-70);  font-weight: 700; white-space: nowrap; line-height: 1.1; }
+.sp-sch-scell-rel  { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-70);  font-weight: 700; white-space: nowrap; line-height: 1.1; }
 .sp-sch-scell-line { display: flex; align-items: center; gap: var(--sp-size-3);
     flex-wrap: wrap;
     justify-content: center;
     min-width: 0;
     max-width: 100%;
 }
-.sp-sch-scell-md   { font-size: var(--sp-fs-64); opacity: 0.62; white-space: nowrap; }
-.sp-sch-scell-wx   { font-size: var(--sp-fs-78); line-height: 1; }
+.sp-sch-scell-md   { --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-64); opacity: 0.62; white-space: nowrap; }
+.sp-sch-scell-wx   { --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); line-height: 1; }
 .sp-sch-scell-n {
     min-width      : 1.15em;
-    height         : 1.35em;
+    height         : 20.52px;
     padding: 0 var(--sp-size-4);
     display     : inline-flex;
     align-items : center;
     justify-content: center;
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     font-weight   : 700;
     border-radius: 99px;
     background      : color-mix(in oklab, var(--sch-primary) 16%, transparent);
@@ -6921,8 +6940,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     gap: var(--sp-size-5);
 }
 .sp-sch-sday[hidden] { display: none; }
-.sp-sch-sday-head  { font-size: var(--sp-fs-72); font-weight: 700; opacity: 0.8; }
-.sp-sch-sday-empty { font-size: var(--sp-fs-74); opacity: 0.55; padding: var(--sp-size-2) 1px; }
+.sp-sch-sday-head  { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); font-weight: 700; opacity: 0.8; }
+.sp-sch-sday-empty { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-74); opacity: 0.55; padding: var(--sp-size-2) 1px; }
 .sp-sch-sday-list  { display: flex; flex-direction: column; gap: var(--sp-size-5); }
 .sp-sch-drawer-item {
     display     : flex;
@@ -6938,7 +6957,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-3);
-    font-size    : var(--sp-fs-62);
+    --sp-icon-size: var(--sp-icon-tiny); font-size    : var(--sp-fs-62);
     font-weight   : 700;
     padding: 1px var(--sp-size-6);
     border-radius: 99px;
@@ -6946,12 +6965,12 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     color         : var(--sp-point-color);
     flex-shrink  : 0;
 }
-.sp-sch-drawer-title { flex: 1 1 auto; min-width: 0; font-size: var(--sp-fs-78); font-weight: 600; overflow-wrap: anywhere; }
-.sp-sch-drawer-time { font-size: var(--sp-fs-66); font-weight: 600; opacity: 0.7; flex-shrink: 0; white-space: nowrap; }
-.sp-sch-drawer-lock { font-size: var(--sp-fs-70); color: var(--sch-primary); flex-shrink: 0; }
+.sp-sch-drawer-title { flex: 1 1 auto; min-width: 0; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); font-weight: 600; overflow-wrap: anywhere; }
+.sp-sch-drawer-time { --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-66); font-weight: 600; opacity: 0.7; flex-shrink: 0; white-space: nowrap; }
+.sp-sch-drawer-lock { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-icon-label); color: var(--sch-primary); flex-shrink: 0; }
 .sp-sch-drawer-actions { display: inline-flex; align-items: center; gap: var(--sp-size-2); flex-shrink: 0; margin-left: auto; }
-.sp-sch-drawer-desc { font-size: var(--sp-fs-72); opacity: 0.82; line-height: 1.5; overflow-wrap: anywhere; }
-.sp-sch-drawer-meta { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-size-8); font-size: var(--sp-fs-66); opacity: 0.7; }
+.sp-sch-drawer-desc { --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); opacity: 0.82; line-height: 1.5; overflow-wrap: anywhere; }
+.sp-sch-drawer-meta { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-size-8); --sp-icon-size: var(--sp-icon-tiny); font-size: var(--sp-fs-66); opacity: 0.7; }
 .sp-sch-drawer-loc, .sp-sch-drawer-npc { display: inline-flex; align-items: center; gap: var(--sp-size-3); overflow-wrap: anywhere; }
 .sp-sch-drawer-loc .sp-icon, .sp-sch-drawer-npc .sp-icon { opacity: 0.7; }
 /* 楼内注入/删除按钮：移动端无 hover，默认淡显（对齐线块 0.55 逻辑）；删除 hover 转红 */
@@ -6970,7 +6989,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : flex;
     align-items : center;
     justify-content: center;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     flex-shrink  : 0;
     opacity        : 0.55;
     transition     : opacity 0.15s, color 0.15s, background 0.15s;
@@ -6978,7 +6997,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-sch-drawer-item:hover:not(:disabled) .sp-sch-del-one { opacity: 1; }
 .sp-sch-del-one:hover:not(:disabled) { color: var(--sp-danger); background: color-mix(in oklab, var(--sp-danger) 12%, transparent); opacity: 1; }
 /* 点/线/面面板 header 下方的间讨论提示；复用文字链接样式，不另画分隔线。 */
-.sp-jump-hint { padding: var(--sp-size-2) var(--sp-size-16) var(--sp-size-8); font-size: var(--sp-fs-75); color: var(--sp-subtle); flex-shrink: 0; }
+.sp-jump-hint { padding: var(--sp-size-2) var(--sp-size-16) var(--sp-size-8); --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-subtle); flex-shrink: 0; }
 .sp-jump-link { border: 0; padding: 0; background: transparent; color: var(--sp-primary); cursor: pointer; font: inherit; }
 .sp-jump-link:hover:not(:disabled) { text-decoration: underline; }
 
@@ -7113,7 +7132,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 .sp-inline-box.sp-dash .sp-inline-title {
     color          : var(--sp-inline-thread);
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     font-weight   : 700;
     letter-spacing: .08em;
     opacity       : .82;
@@ -7133,7 +7152,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     background   : transparent;
     color          : var(--sp-inline-thread);
     font           : inherit;
-    font-size      : var(--sp-fs-68);
+    --sp-icon-size: var(--sp-icon-label); font-size      : var(--sp-fs-68);
     line-height    : 1.2;
     opacity        : .48;
     cursor       : pointer;
@@ -7195,13 +7214,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     display     : inline-flex;
     align-items : center;
     gap: var(--sp-size-4);
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     cursor       : pointer;
     user-select : none;
 }
 .sp-batch-bar .sp-batch-count {
-    font-size            : var(--sp-fs-72);
+    --sp-icon-size: var(--sp-icon-label); font-size            : var(--sp-fs-72);
     color                : var(--sp-subtle);
     font-variant-numeric : tabular-nums;
 }
@@ -7235,13 +7254,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-alm-time-travel,
 .sp-alm-time-travel-stop { white-space: nowrap; }
 .sp-theater-source-wrap { width: 100%; margin-top: var(--sp-size-10); }
-.sp-theater-source-toggle { display: inline-flex; align-items: center; gap: var(--sp-size-5); max-width: min(220px, 100%); padding: var(--sp-size-6) var(--sp-size-9); border: 1px solid var(--sp-divider); border-radius: 999px; background: color-mix(in oklab, var(--sp-primary) 8%, var(--sp-sheet-bg)); color: var(--sp-subtle); font: inherit; font-size: var(--sp-fs-75); cursor: pointer;
+.sp-theater-source-toggle { display: inline-flex; align-items: center; gap: var(--sp-size-5); max-width: min(220px, 100%); padding: var(--sp-size-6) var(--sp-size-9); border: 1px solid var(--sp-divider); border-radius: 999px; background: color-mix(in oklab, var(--sp-primary) 8%, var(--sp-sheet-bg)); color: var(--sp-subtle); font: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); cursor: pointer;
 }
 .sp-theater-source-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-theater-source-toggle:hover:not(:disabled) { color: var(--sp-on-surface); border-color: var(--sp-primary); }
 .sp-theater-source-detail { width: 100%; box-sizing: border-box; margin-top: var(--sp-size-6); padding: var(--sp-size-9) var(--sp-size-10); border: 1px solid var(--sp-divider); border-radius: var(--sp-size-9); background: color-mix(in oklab, var(--sp-primary) 4%, var(--sp-sheet-bg)); }
-.sp-theater-source-caption { margin-bottom: var(--sp-size-5); font-size: var(--sp-fs-72); color: var(--sp-subtle); }
-.sp-theater-source-detail pre { max-height: 340px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: var(--sp-fs-75); color: var(--sp-on-surface); }
+.sp-theater-source-caption { margin-bottom: var(--sp-size-5); --sp-icon-size: var(--sp-icon-label); font-size: var(--sp-fs-72); color: var(--sp-subtle); }
+.sp-theater-source-detail pre { max-height: 340px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-75); color: var(--sp-on-surface); }
 .sp-storage-mode-card {
     margin: var(--sp-size-8) 0 var(--sp-size-12);
     padding: var(--sp-size-10) var(--sp-size-12);
@@ -7255,7 +7274,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     .sp-alm-sheet-btn { padding-inline: var(--sp-size-7); }
 }
 
-.sp-line-card > .sp-beat-head,
+.sp-line-card > .sp-beat-head { flex-wrap: nowrap; }
 .sp-outline-wrap .sp-beat-head { flex-wrap: wrap; }
 .sp-settings-body .sp-mem-actions > .sp-save-btn,
 .sp-settings-body .sp-mem-actions > .sp-mem-btn,
@@ -7267,4 +7286,13 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 }
 
 /* API connection forms use the existing dialog shell and spacing scale. */
-.sp-api-purpose-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:var(--sp-size-6);min-width:0}.sp-api-purpose-row>.sp-preset-box{width:100%;min-width:0}.sp-api-purpose-row>.sp-api-edit{width:auto;padding:0 var(--sp-size-10);white-space:nowrap}.sp-api-editor-form{display:grid;gap:var(--sp-size-10);min-width:0}.sp-api-editor-field{display:grid;gap:var(--sp-size-5);min-width:0;color:var(--sp-subtle);font-size:var(--sp-text-label)}.sp-api-editor-field>.sp-input{width:100%;min-width:0}.sp-api-editor-inline{display:flex;align-items:start;gap:var(--sp-size-6);min-width:0}.sp-api-editor-inline>.sp-input{flex:1;min-width:0}.sp-api-editor-inline>button{flex:0 0 auto;white-space:nowrap}.sp-api-editor-actions,.sp-api-editor-confirm{display:flex;flex-wrap:wrap;gap:var(--sp-size-8)}.sp-api-editor-confirm>.sp-api-editor-field{flex:1 0 100%}.sp-api-editor-form [hidden]{display:none}.sp-api-editor-form .sp-adv-api-body{display:grid;gap:var(--sp-size-8)}.sp-api-editor-check{display:flex;align-items:center;gap:var(--sp-size-8)}.sp-api-editor-check>input{width:var(--sp-size-16);height:var(--sp-size-16);min-height:0;padding:0;flex:0 0 auto}.sp-api-editor-feedback:empty{display:none}.sp-api-editor-error,.sp-api-editor-danger{color:var(--sp-danger)}
+.sp-api-purpose-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:var(--sp-size-6);min-width:0}.sp-api-purpose-row>.sp-preset-box{width:100%;min-width:0}.sp-api-purpose-row>.sp-api-edit{width:auto;padding:0 var(--sp-size-10);white-space:nowrap}.sp-api-editor-form{display:grid;gap:var(--sp-size-10);min-width:0}.sp-api-editor-field{display:grid;gap:var(--sp-size-5);min-width:0;color:var(--sp-subtle);--sp-icon-size: var(--sp-icon-label); font-size:var(--sp-text-label)}.sp-api-editor-field>.sp-input{width:100%;min-width:0}.sp-api-editor-inline{display:flex;align-items:start;gap:var(--sp-size-6);min-width:0}.sp-api-editor-inline>.sp-input{flex:1;min-width:0}.sp-api-editor-inline>button{flex:0 0 auto;white-space:nowrap}.sp-api-editor-actions,.sp-api-editor-confirm{display:flex;flex-wrap:wrap;gap:var(--sp-size-8)}.sp-api-editor-confirm>.sp-api-editor-field{flex:1 0 100%}.sp-api-editor-form [hidden]{display:none}.sp-api-editor-form .sp-adv-api-body{display:grid;gap:var(--sp-size-8)}.sp-api-editor-check{display:flex;align-items:center;gap:var(--sp-size-8)}.sp-api-editor-check>input{width:var(--sp-size-16);height:var(--sp-size-16);min-height:0;padding:0;flex:0 0 auto}.sp-api-editor-feedback:empty{display:none}.sp-api-editor-error,.sp-api-editor-danger{color:var(--sp-danger)}
+
+/* 固定旧95%图形，文字控件保原内边距并在大字时自然容字。 */
+.sp-close-btn { --sp-icon-size: var(--sp-icon-base); }
+.sp-side-tab .sp-tab-glyph { font-size: var(--sp-icon-base); }
+.sp-uiscale-btn { font-size: var(--sp-icon-subtitle); }
+.sp-anchor-btn.mes_button .sp-anchor-btn-svg { font-size: inherit; }
+.sp-daily-menu-image-pill, .sp-wardrobe-image-pill { min-width: var(--sp-size-40); min-height: var(--sp-size-26); width: auto; height: auto; }
+.sp-daily-menu-image-toggle, .sp-wardrobe-image-toggle { min-width: var(--sp-size-52); }
+.sp-anchor-chars-head .sp-anchor-tagmgr-btn { min-height: var(--sp-size-24); height: auto; }
