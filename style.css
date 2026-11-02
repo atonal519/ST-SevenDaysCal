@@ -2643,7 +2643,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     top     : calc(100dvh - 80px - 44px);
         bottom: auto;
     right   : 16px;
-    z-index : 2000000;
+    z-index : 2000004;   /* 高于主窗与独立弹窗，悬浮球仍可开关窗口。 */
     touch-action  : none;
 }
 .sp-fab-btn {
@@ -4035,7 +4035,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     /* 挂了 .sp-root（为在 shadow 内取 --sp-* 变量）→ 移动端 .sp-root 注入 width:100dvw；
        无 border-box 时叠上本元素的 padding 会撑成 100dvw+40px，遮罩右溢、居中的 sheet 被挤出右缘裁切。 */
     box-sizing   : border-box;
-    z-index        : 2000002;   /* 高于 #sp-modal-root(2000001) 与 #sp-fab(2000000) */
+    z-index        : 2000002;   /* 高于 #sp-modal-root(2000001)，悬浮球独立位于其上 */
     pointer-events : auto;
     background     : rgba(0,0,0,0.55);
     display     : flex;

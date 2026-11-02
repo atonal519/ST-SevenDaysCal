@@ -3222,7 +3222,7 @@ function injectFab() {
     const posStyle = (!mobile && savedPos)
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
         : '';
-    const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000000;${posStyle}${fabEnabled() && pluginEnabled() ? '' : 'display:none'}">
+    const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000004;${posStyle}${fabEnabled() && pluginEnabled() ? '' : 'display:none'}">
         <button class="sp-fab-btn sp-${currentTheme}" title="构画"
             style="transform:translateZ(0);clip:auto;">
             ${PEN_ICON_SVG}
