@@ -393,12 +393,12 @@ function syncUserNameMask() {
         if (!root || observed.has(root)) return;
         observed.add(root);
         const observer = new MutationObserver(records => {
-            let changed = false;
+            const changed = new Set();
             for (const record of records) for (const node of [...record.addedNodes, ...record.removedNodes]) {
-                if (ownsSurface(node)) changed = true;
+                if (ownsSurface(node)) changed.add(node);
                 if (node.nodeType === 1 && (node.id === 'chat' || node.querySelector('#chat'))) observe(document.querySelector('#chat'), true);
             }
-            if (changed) refreshUserNameMask();
+            for (const node of changed) refreshUserNameMask(node);
         });
         observer.observe(root, { childList: true, subtree });
         userNameMaskDiscovery.push(observer);
@@ -5343,7 +5343,7 @@ function showPanel() {
     setTimeout(() => {
         positionPanel();
         syncMobileViewport();
-        refreshUserNameMask();
+        refreshUserNameMask(_spShadow);
     }, 0);
 }
 
@@ -8378,7 +8378,7 @@ function renderMemorySection() {
     $in('#sp-space-persona').val(typeof s.spacePersona === 'string' ? s.spacePersona : '');   // 间·人格覆盖：同为全局设置，须在按源 early-return 前回填
     $in('#sp-space-use-character-persona').prop('checked', s.spaceUseCharacterPersona === true);
     $in('#sp-space-persona-editor').toggle(s.spaceUseCharacterPersona !== true);
-    refreshUserNameMask();
+    refreshUserNameMask(inEl('#sp-settings-overlay'));
     if (currentCharacterExcluded()) {
         $in('#sp-mem-internal').show();
         $in('#sp-mem-qqj-status, #sp-mem-bbb-status, #sp-mem-anima-status, #sp-mem-database-status').hide();
@@ -9596,7 +9596,7 @@ function showToast(msg, onClick, isError = false) {
         if (isFailure || isInfo) { opts.timeOut = holdMs; opts.extendedTimeOut = holdMs; }
         const toast = (isFailure ? tr.error : isInfo ? tr.info : tr.success)(msg, '', opts);
         const element = toast?.[0] || toast;
-        if (element?.setAttribute) { element.setAttribute('data-sp-user-name-surface', 'toast'); refreshUserNameMask(); }
+        if (element?.setAttribute) { element.setAttribute('data-sp-user-name-surface', 'toast'); refreshUserNameMask(element); }
         return;
     }
     const $t = $(`<div class="sp-toast${isFailure ? ' sp-toast-error' : isInfo ? ' sp-toast-info' : ''}">

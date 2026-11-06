@@ -22,48 +22,109 @@ export function findUserNameRanges(text, names) {
 export function createUserNameMask({ documentRef = globalThis.document, getRoots = () => [], getNames = () => [] } = {}) {
     const view = documentRef.defaultView || globalThis;
     const observers = new Map(), spans = new Set(), attributes = new Map(), fields = new Map();
-    let enabled = false, disposed = false, queued = false, updating = false, names = [], namesKey = '', roots = [];
+    const dirtyScopes = new Set(), dirtyFields = new Set();
+    let enabled = false, disposed = false, queued = false, updating = false, names = [], namesKey = '';
+    let roots = new Set(), surfaces = [], fullScan = false, checkNames = false, checkRoots = false, allFields = false, pruneNeeded = false;
     const computed = element => view.getComputedStyle(element);
-    const schedule = () => {
-        if (!enabled || disposed || queued) return;
-        queued = true;
-        queueMicrotask(() => { queued = false; refresh(); });
-    };
-    const resizeObserver = view.ResizeObserver ? new view.ResizeObserver(schedule) : null;
-    let resizeTargets = new Set();
-
-    function owns(node) {
-        for (let current = node; current; current = current.getRootNode?.().host) {
-            if (roots.some(root => root === current || root.contains?.(current))) return true;
-        }
+    const contains = (scope, node) => scope === node || scope?.contains?.(node);
+    function containsAcrossShadow(scope, node) {
+        for (let current = node; current; current = current.getRootNode?.().host) if (contains(scope, current)) return true;
         return false;
     }
-    function collectRoots() {
-        const found = new Set();
-        const visit = root => {
-            if (!root || root.isConnected === false || found.has(root)) return;
-            found.add(root);
-            if (root.shadowRoot) visit(root.shadowRoot);
-            for (const node of root.querySelectorAll?.('*') || []) if (node.shadowRoot) visit(node.shadowRoot);
+    const owns = node => surfaces.some(root => containsAcrossShadow(root, node));
+    const schedule = () => {
+        if (!enabled || disposed || updating || queued) return;
+        queued = true;
+        queueMicrotask(() => { queued = false; flush(); });
+    };
+    const markScope = scope => { if (scope) dirtyScopes.add(scope); };
+    function markMirrors(scope) {
+        for (const field of fields.keys()) if (!scope || containsAcrossShadow(scope, field) || contains(field, scope)) dirtyFields.add(field);
+    }
+    function inputField(node) {
+        if (node?.nodeType === 3) node = node.parentElement;
+        for (const field of fields.keys()) if (contains(field, node)) return field;
+        if (!node || !editable(node)) return null;
+        while (node.parentElement?.isContentEditable && owns(node.parentElement)) node = node.parentElement;
+        return node;
+    }
+    const inputChanged = event => {
+        if (!enabled) return;
+        const field = inputField(event.composedPath?.()[0] || event.target);
+        if (field && owns(field)) { checkNames = true; dirtyFields.add(field); schedule(); }
+    };
+    const scrolled = event => {
+        if (!enabled) return;
+        markMirrors(event.composedPath?.()[0] || event.target); schedule();
+    };
+    const fontsChanged = () => { if (enabled) { allFields = true; schedule(); } };
+    const viewportChanged = () => { if (enabled) { fullScan = true; checkRoots = true; schedule(); } };
+    const resizeObserver = view.ResizeObserver ? new view.ResizeObserver(entries => {
+        if (!enabled) return;
+        for (const entry of entries) markMirrors(entry.target);
+        schedule();
+    }) : null;
+    let resizeTargets = new Set();
+
+    function discover(scope) {
+        if (!scope) return [];
+        const added = [], visited = new Set();
+        const shadow = host => {
+            const root = host?.shadowRoot;
+            if (!root || roots.has(root) || !owns(root)) return;
+            roots.add(root); added.push(root); visit(root);
         };
-        for (const root of getRoots() || []) visit(root);
-        return [...found];
+        const visit = root => {
+            if (visited.has(root)) return;
+            visited.add(root); shadow(root);
+            for (const node of root.querySelectorAll?.('*') || []) shadow(node);
+        };
+        visit(scope);
+        return added;
+    }
+    function reconcileRoots() {
+        surfaces = [...new Set(getRoots() || [])].filter(root => root && root.isConnected !== false);
+        for (const root of roots) if (root.isConnected === false || !owns(root)) { roots.delete(root); pruneNeeded = true; }
+        for (const root of surfaces) if (!roots.has(root)) {
+            roots.add(root); markScope(root);
+            for (const added of discover(root)) markScope(added);
+        }
+    }
+    function mutations(records) {
+        if (!enabled) return;
+        if (records.length) checkNames = true;
+        for (const record of records) {
+            if (record.type === 'childList') {
+                for (const node of record.addedNodes) markScope(node);
+                if (record.removedNodes.length) { pruneNeeded = true; markScope(record.target); }
+            } else {
+                markScope(record.target);
+                if (record.type === 'attributes' && record.attributeName === 'class' && surfaces.includes(record.target)) checkRoots = true;
+            }
+        }
+        schedule();
     }
     function pause() {
-        for (const { observer } of observers.values()) { observer?.takeRecords(); observer?.disconnect(); }
+        // Synchronous field refresh must also process real changes whose callback has not run yet.
+        for (const { observer } of observers.values()) {
+            if (observer) mutations(observer.takeRecords());
+            observer?.disconnect();
+        }
     }
     function connect() {
-        for (const [root, value] of observers) if (!roots.includes(root)) {
+        for (const [root, value] of observers) if (!roots.has(root)) {
             value.observer?.disconnect();
-            for (const type of ['input', 'compositionupdate', 'compositionend', 'scroll']) root.removeEventListener(type, schedule, true);
+            for (const type of ['input', 'compositionupdate', 'compositionend']) root.removeEventListener(type, inputChanged, true);
+            root.removeEventListener('scroll', scrolled, true);
             observers.delete(root);
         }
         for (const root of roots) {
             let value = observers.get(root);
             if (!value) {
-                value = { observer: view.MutationObserver ? new view.MutationObserver(schedule) : null };
+                value = { observer: view.MutationObserver ? new view.MutationObserver(mutations) : null };
                 observers.set(root, value);
-                for (const type of ['input', 'compositionupdate', 'compositionend', 'scroll']) root.addEventListener(type, schedule, true);
+                for (const type of ['input', 'compositionupdate', 'compositionend']) root.addEventListener(type, inputChanged, true);
+                root.addEventListener('scroll', scrolled, true);
             }
             value.observer?.observe(root, { subtree: true, childList: true, characterData: true, attributes: true,
                 attributeFilter: [...hiddenAttributes, 'label', 'class', 'style', 'hidden', 'value', 'type', 'wrap', 'contenteditable', 'open'] });
@@ -211,19 +272,58 @@ export function createUserNameMask({ documentRef = globalThis.document, getRoots
         field.style.setProperty('caret-color', css.caretColor === 'auto' ? css.color : css.caretColor, 'important');
         for (const [name, original] of saved.styles) original.applied = field.style.getPropertyValue(name);
     }
-    function refresh() {
-        if (!enabled || disposed || updating) return;
+    function flowScope(node) {
+        if (node?.nodeType === 3) node = node.parentElement || node.parentNode;
+        if (!node || node.nodeType !== 1 || roots.has(node) || editable(node)) return node;
+        while (node.parentElement && owns(node.parentElement)) {
+            if (!['inline', 'contents'].includes(computed(node).display)) break;
+            node = node.parentElement;
+            if (roots.has(node) || editable(node)) break;
+        }
+        return node;
+    }
+    function cleanup() {
+        for (const root of roots) if (root.isConnected === false || !owns(root)) roots.delete(root);
+        for (const span of [...spans]) if (span.isConnected === false || !owns(span)) unwrap(span);
+        for (const [element, saved] of attributes) if (element.isConnected === false || !owns(element)) restoreAttributes(element, saved);
+        for (const [field, saved] of fields) if (field.isConnected === false || !owns(field)) removeMirror(field, saved);
+    }
+    function flush() {
+        if (!enabled || disposed || updating || !(fullScan || checkNames || checkRoots || allFields || pruneNeeded || dirtyScopes.size || dirtyFields.size)) return;
         updating = true; pause();
         try {
-            roots = collectRoots();
-            const nextNames = nameList(getNames()), nextKey = JSON.stringify(nextNames);
-            const namesChanged = nextKey !== namesKey;
-            if (namesChanged) { restoreAll(); names = nextNames; namesKey = nextKey; }
-            for (const span of [...spans]) if (span.isConnected === false || !owns(span)) unwrap(span);
-            for (const [element, saved] of attributes) if (element.isConnected === false || !owns(element)) restoreAttributes(element, saved);
-            const candidates = new Set(fields.keys());
-            // 同一次回填也可能伴随别处新增文字；暂停观察后完整扫描所有自有根。
-            for (const target of roots) scan(target, candidates);
+            if (checkRoots) { checkRoots = false; reconcileRoots(); }
+            if (checkNames) {
+                checkNames = false;
+                const nextNames = nameList(getNames()), nextKey = JSON.stringify(nextNames);
+                if (nextKey !== namesKey) { restoreAll(); names = nextNames; namesKey = nextKey; fullScan = true; }
+            }
+            if (pruneNeeded || fullScan) { pruneNeeded = false; cleanup(); }
+            const requested = fullScan ? [...roots] : [...dirtyScopes];
+            fullScan = false; dirtyScopes.clear();
+            const targets = new Set();
+            const add = target => {
+                if (!target || target.isConnected === false) return;
+                for (const old of targets) if (contains(old, target)) return;
+                for (const old of targets) if (contains(target, old)) targets.delete(old);
+                targets.add(target);
+            };
+            for (const scope of requested) {
+                if (scope.isConnected === false) continue;
+                const local = owns(scope) ? [flowScope(scope)] : surfaces.filter(root => containsAcrossShadow(scope, root));
+                for (const target of local) {
+                    add(target);
+                    // An already known Shadow must also be scanned when its host is revealed or refreshed.
+                    for (const root of roots) if (containsAcrossShadow(target, root)) add(root);
+                    for (const root of discover(target)) add(root);
+                }
+            }
+            const candidates = new Set(dirtyFields); dirtyFields.clear();
+            if (allFields) { for (const field of fields.keys()) candidates.add(field); allFields = false; }
+            for (const target of targets) {
+                for (const field of fields.keys()) if (containsAcrossShadow(target, field) || contains(field, target)) candidates.add(field);
+                scan(target, candidates);
+            }
             for (const field of candidates) drawMirror(field);
             const nextTargets = new Set([...fields.keys()].flatMap(field => [field, field.parentElement]).filter(Boolean));
             for (const target of resizeTargets) if (!nextTargets.has(target)) resizeObserver?.unobserve(target);
@@ -231,15 +331,29 @@ export function createUserNameMask({ documentRef = globalThis.document, getRoots
             resizeTargets = nextTargets;
         } finally { updating = false; if (enabled) connect(); }
     }
+    function refresh(scope) {
+        if (!enabled || disposed) return;
+        checkNames = true;
+        if (scope) {
+            markScope(scope);
+            if (scope.isConnected === false || !owns(scope)) { checkRoots = true; pruneNeeded = true; }
+        } else { fullScan = true; checkNames = true; checkRoots = true; }
+        flush();
+    }
     function sync(value) {
         if (disposed) return;
         if (value === true) {
-            if (!enabled) { enabled = true; view.addEventListener?.('resize', schedule); documentRef.fonts?.addEventListener('loadingdone', schedule); }
-            refresh();
+            if (!enabled) {
+                enabled = true; fullScan = true;
+                view.addEventListener?.('resize', viewportChanged);
+                documentRef.fonts?.addEventListener('loadingdone', fontsChanged);
+            }
+            checkNames = true; checkRoots = true; flush();
         } else if (enabled) {
-            enabled = false; pause(); roots = []; connect(); restoreAll(); names = []; namesKey = '';
+            enabled = false; pause(); roots.clear(); surfaces = []; connect(); restoreAll(); names = []; namesKey = '';
+            dirtyScopes.clear(); dirtyFields.clear(); fullScan = checkNames = checkRoots = allFields = pruneNeeded = queued = false;
             resizeObserver?.disconnect(); resizeTargets.clear();
-            view.removeEventListener?.('resize', schedule); documentRef.fonts?.removeEventListener('loadingdone', schedule);
+            view.removeEventListener?.('resize', viewportChanged); documentRef.fonts?.removeEventListener('loadingdone', fontsChanged);
         }
     }
     function dispose() { sync(false); disposed = true; }
