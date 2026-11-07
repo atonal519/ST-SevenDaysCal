@@ -105,6 +105,7 @@ export function getJailbreakPrompt() {
 
 // 创作类生成的默认温度：鼓励模型发散/"合理瞎编"。记忆摘要等事实抽取仍走低温（见 callMemoryApi）。
 export const GEN_TEMPERATURE = 1.0;
+const REASONING_MODEL = /^(?:openai\/)?(?:gpt-[56]|o[134])(?:$|[.-])/iu;
 
 // Single wrapper for all OpenAI-compatible /chat/completions calls.
 // Goes through ST's server-side proxy (/api/backends/chat-completions/generate)
@@ -233,6 +234,12 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     for (const p of cfg.excludeParams || []) {
         const key = String(p).trim();
         if (key && !PROTECTED_BODY_KEYS.has(key)) { delete body[key]; delete additional[key]; }
+    }
+    if (Object.hasOwn(additional, 'max_completion_tokens')) delete additional.max_tokens;
+    if (REASONING_MODEL.test(String(body.model).trim())) {
+        delete body.presence_penalty;
+        delete body.frequency_penalty;
+        if (additional.reasoning_effort !== 'none') delete body.temperature;
     }
     if (Object.keys(additional).length) {
         // OpenAI 宿主通道过滤未知字段；自定义通道才把原生 JSON 参数送至上游。

@@ -199,3 +199,74 @@ test('theater generation and regeneration read the current route separately for 
     }
     completion = 'fixture reply';
 });
+
+test('reasoning default request avoids unsupported automatic sampling fields with one dispatch', async t => {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async (_url, options) => {
+        calls += 1;
+        const body = JSON.parse(options.body);
+        if (['temperature', 'presence_penalty', 'frequency_penalty'].some(key => Object.hasOwn(body, key))) return Response.json({ error: { message: 'Unsupported parameter for reasoning model' } }, { status: 400 });
+        return Response.json({ choices: [{ message: { content: 'ok' } }] });
+    });
+    assert.equal(await client.postChatCompletion({ cfg: { ...cfg, model: 'gpt-6-luna' }, messages: [{ role: 'user', content: 'offline task' }], temperature: 1 }), 'ok');
+    assert.equal(calls, 1);
+});
+
+test('known reasoning families omit automatic sampling without adding output limits across JSON and SSE', async t => {
+    for (const model of ['gpt-5', 'gpt-5.2-mini', 'gpt-6-luna', 'openai/gpt-6-luna', 'o1-preview', 'o3-mini', 'openai/o4-mini', 'gpt-4o-mini', 'private-model', 'gpt-50', 'o10']) {
+        for (const stream of [false, true]) await t.test(`${model}/${stream}`, async () => {
+            const start = requests.length;
+            await client.postChatCompletion({ cfg: { ...cfg, model, stream }, messages: theaterMessages, temperature: 1 });
+            assert.equal(requests.length, start + 1);
+            const body = requests.at(-1), known = !['gpt-4o-mini', 'private-model', 'gpt-50', 'o10'].includes(model);
+            for (const field of ['max_tokens', 'max_completion_tokens']) assert.equal(Object.hasOwn(body, field), false);
+            for (const field of ['temperature', 'presence_penalty', 'frequency_penalty']) assert.equal(Object.hasOwn(body, field), !known);
+            if (!known) assert.deepEqual([body.temperature, body.presence_penalty, body.frequency_penalty], [1, 0, 0]);
+            assert.equal(body.stream, stream);
+        });
+    }
+});
+
+test('excluded advanced parameters stay excluded and explicit reasoning values reach the custom upstream', async t => {
+    const cases = [
+        { name: 'legacy only', additional: { max_tokens: 987 }, expected: { max_tokens: 987 } },
+        { name: 'completion zero', additional: { max_completion_tokens: 0 }, expected: { max_completion_tokens: 0 } },
+        { name: 'legacy null', additional: { max_tokens: null }, expected: { max_tokens: null } },
+        { name: 'both prefer completion', additional: { max_tokens: 987, max_completion_tokens: 654 }, expected: { max_completion_tokens: 654 } },
+        { name: 'exclude completion first', additional: { max_tokens: 987, max_completion_tokens: 654 }, excluded: ['max_completion_tokens'], expected: { max_tokens: 987 } },
+        { name: 'exclude both', additional: { max_tokens: 987, max_completion_tokens: 654 }, excluded: ['max_tokens', 'max_completion_tokens'], expected: {} },
+        { name: 'reasoning none', additional: { reasoning_effort: 'none' }, expected: { temperature: 1 } },
+        { name: 'excluded none', additional: { reasoning_effort: 'none' }, excluded: ['reasoning_effort'], expected: {} },
+        { name: 'explicit temperature zero', additional: { temperature: 0 }, expected: { temperature: 0 } },
+        { name: 'explicit temperature null', additional: { temperature: null }, expected: { temperature: null } },
+        { name: 'explicit penalties', additional: { presence_penalty: 0.4, frequency_penalty: null }, expected: { presence_penalty: 0.4, frequency_penalty: null } },
+        { name: 'explicit zero penalties with none', additional: { reasoning_effort: 'none', presence_penalty: 0, frequency_penalty: 0 }, expected: { temperature: 1, presence_penalty: 0, frequency_penalty: 0 } },
+        { name: 'excluded sampling fields', additional: { reasoning_effort: 'none', temperature: 0, presence_penalty: 0.4, frequency_penalty: 0.5 }, excluded: ['temperature', 'presence_penalty', 'frequency_penalty'], expected: {} },
+    ];
+    const fields = ['max_tokens', 'max_completion_tokens', 'temperature', 'presence_penalty', 'frequency_penalty'];
+    for (const row of cases) for (const stream of [false, true]) await t.test(`${row.name}/${stream}`, async () => {
+        const start = requests.length;
+        await client.postChatCompletion({ cfg: { ...cfg, model: 'gpt-6-luna', stream, spAdditionalParams: JSON.stringify(row.additional), excludeParams: row.excluded ?? [] }, messages: theaterMessages, temperature: 1 });
+        const body = requests.at(-1), additional = JSON.parse(body.custom_include_body ?? '{}'), upstream = { ...body, ...additional };
+        assert.equal(requests.length, start + 1);
+        assert.deepEqual(Object.fromEntries(fields.filter(key => Object.hasOwn(upstream, key)).map(key => [key, upstream[key]])), row.expected);
+        for (const key of row.excluded ?? []) { assert.equal(Object.hasOwn(body, key), false); assert.equal(Object.hasOwn(additional, key), false); }
+        if (Object.keys(additional).length) assert.equal(body.chat_completion_source, 'custom');
+    });
+});
+
+test('content utility and theater use their current models through the same reasoning compatibility', async () => {
+    resetRoutes(); settings.apiModel = 'gpt-6-luna'; settings.apiAdditionalParams = '';
+    settings.utilityPresetId = apiSettings.upsertApiPreset('机械', { ...cfg, model: 'openai/gpt-5.2', stream: true });
+    settings.theaterPresetId = apiSettings.upsertApiPreset('剧场', { ...cfg, model: 'o3-mini', spAdditionalParams: '{"temperature":0}' });
+    const start = requests.length;
+    await client.callCustomApi(globalThis.promptTestContext, 'offline task', apiSettings.loadCfg());
+    await client.callMemoryApi(theaterMessages);
+    await client.callTheaterApi(theaterMessages);
+    const sent = requests.slice(start);
+    assert.equal(sent.length, 3);
+    assert.deepEqual(sent.map(body => body.model), ['gpt-6-luna', 'openai/gpt-5.2', 'o3-mini']);
+    assert.equal(sent[1].stream, true);
+    assert.equal(Object.hasOwn(sent[0], 'temperature'), false); assert.equal(Object.hasOwn(sent[1], 'temperature'), false);
+    assert.equal(JSON.parse(sent[2].custom_include_body).temperature, 0);
+});
