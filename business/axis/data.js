@@ -70,7 +70,7 @@ function monthDayFromDayKey(key, cal = loadCalDesc()) {
         const md = almValidMonthDay({ month: +m[2], day: +m[3] }, cal);   // 严格按当前历校验；越界=不可信来源，返回 null 让链继续
         if (!md) return null;
         const year = +m[1];
-        return year > 0 ? { ...md, year } : md;
+        return year >= 0 ? { ...md, year } : md;
     }
     return null;
 }

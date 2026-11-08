@@ -3,6 +3,13 @@ export const DATE_ANCHOR_STORE_KEY = 'date-anchor-user';
 import { validateCalendarDescriptor as formalCalendarValidator } from '../business/calendar/validator.js';
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
 
+function normalizeAnchorYear(value) {
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    if (typeof value === 'string' && !value.trim()) return null;
+    const year = Number(value);
+    return Number.isInteger(year) && year >= 0 && year <= 9999 ? year : null;
+}
+
 export function makeChatAnchor(chatId, month, day, source = 'explicit') {
     if (!String(chatId || '').trim() || !Number.isInteger(+month) || !Number.isInteger(+day)) return null;
     return { schemaVersion: DATE_ANCHOR_SCHEMA, chatId: String(chatId), month: +month, day: +day, source: source === 'auto' || source === 'detected' || source === 'calibration' ? source : 'explicit' };
@@ -14,7 +21,7 @@ export function normalizeChatAnchor(value, chatId) {
     const calibration = a.calibration && typeof a.calibration === 'object' && Number.isInteger(+a.calibration.weekday)
         ? { refMonth: a.calibration.refMonth != null && Number.isInteger(+a.calibration.refMonth) ? +a.calibration.refMonth : +a.month, refDay: a.calibration.refDay != null && Number.isInteger(+a.calibration.refDay) ? +a.calibration.refDay : +a.day, weekday: +a.calibration.weekday, floor: a.calibration.floor != null && Number.isInteger(+a.calibration.floor) ? +a.calibration.floor : null, sourceFloor: a.calibration.sourceFloor != null && Number.isInteger(+a.calibration.sourceFloor) ? +a.calibration.sourceFloor : null, swipe: a.calibration.swipe == null ? null : String(a.calibration.swipe) }
         : null;
-    const year = Number.isInteger(+a.year) && +a.year >= 1 && +a.year <= 9999 ? +a.year : null;
+    const year = normalizeAnchorYear(a.year);
     const eraLabel = typeof a.eraLabel === 'string' && a.eraLabel.trim() ? a.eraLabel.trim() : null;
     return { month: +a.month, day: +a.day, ...(year != null ? { year } : {}), ...(eraLabel ? { eraLabel } : {}), source: a.source || value.source || 'unknown', ...(calibration ? { calibration } : {}) };
 }
@@ -36,7 +43,8 @@ export function createChatAnchorRepository({ chatId, read, write, writeConfirmed
     const setRecord = (month, day, source = 'explicit', options = {}) => {
         const a = makeChatAnchor(id(), month, day, source);
         if (!a) return null;
-        if (Number.isInteger(+options.year) && +options.year >= 1 && +options.year <= 9999) a.year = +options.year;
+        const year = normalizeAnchorYear(options.year);
+        if (year != null) a.year = year;
         if (typeof options.eraLabel === 'string' && options.eraLabel.trim()) a.eraLabel = options.eraLabel.trim();
         const calibration = options.calibration || (source === 'calibration' ? options : null);
         if (calibration && Number.isInteger(+calibration.weekday)) a.calibration = { refMonth: calibration.refMonth != null && Number.isInteger(+calibration.refMonth) ? +calibration.refMonth : +month, refDay: calibration.refDay != null && Number.isInteger(+calibration.refDay) ? +calibration.refDay : +day, weekday: calibration.weekday, floor: calibration.floor != null && Number.isInteger(+calibration.floor) ? +calibration.floor : null, sourceFloor: calibration.sourceFloor != null && Number.isInteger(+calibration.sourceFloor) ? +calibration.sourceFloor : null, swipe: calibration.swipe == null ? null : String(calibration.swipe) };

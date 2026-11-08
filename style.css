@@ -332,7 +332,7 @@ q::after {
     --sp-icon-size: var(--sp-icon-base); font-size: var(--sp-fs-100);
 }
 
-/* ─── Root — desktop: no backdrop, floating ─────────────────────────────────── */
+/* ─── Root ──────────────────────────────────────────────────────────────────── */
 .sp-root {
     position: fixed;
     z-index   : 2000001;
@@ -391,7 +391,7 @@ q::after {
 .sp-root ::-webkit-scrollbar-thumb  { background: var(--sp-divider); border-radius: var(--sp-size-2); }
 .sp-root { scrollbar-width: thin; scrollbar-color: var(--sp-divider) transparent; }
 
-    .sp-backdrop { display: none; }
+    .sp-backdrop { position: fixed; inset: 0; pointer-events: auto; background: transparent; }
 
 /* ─── Sheet ──────────────────────────────────────────────────────────────────── */
 .sp-sheet {
@@ -2141,7 +2141,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-schedule-header .sp-panel-refresh { margin-left: auto; }
 .sp-point-tools { display: inline-flex; align-items: center; gap: var(--sp-size-2); margin-left: auto; flex-shrink: 0; }
 .sp-point-tools .sp-panel-refresh { margin-left: 0; }
-.sp-point-empty-actions { display: inline-flex; align-items: center; gap: var(--sp-size-8); max-width: 100%; min-width: 0; }
+.sp-point-empty-actions { display: inline-flex; flex-direction: column; align-items: center; gap: var(--sp-size-8); max-width: 100%; min-width: 0; }
 .sp-point-empty-actions > .sp-point-tools { margin-left: 0; }
 .sp-point-empty-actions > .sp-gen-btn { margin-top: 0; margin-left: 0; }
 .sp-panel-refresh {
@@ -2650,7 +2650,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     /* 悬浮入口沿用固定尺寸，界面字号缩放不改变球的直径。 */
     width         : 36px;
     height        : 36px;
-    border-radius: 50%;
+    border-radius: 50% !important;
     border         : none;
     cursor       : pointer;
     touch-action  : none;
@@ -2666,7 +2666,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-fab-btn {
     /* 背景真透明（不挡楼内阅读）；那个「若隐若现的小圈」靠下面这圈淡边框呈现，不是填充。 */
     background   : transparent;
-    border    : 1.5px solid color-mix(in oklab, var(--sp-primary) 45%, transparent);
+    border    : 1.5px solid color-mix(in srgb, var(--sp-primary) 45%, var(--sp-surface));
     /* 图标色跟主题明暗（sp-day 近黑 / sp-night 近白）——深色主题自动给浅图标。 */
     color        : var(--sp-on-surface);
 }
@@ -2753,7 +2753,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     pointer-events : auto;
     }
 
-    .sp-backdrop { display: none; }
+
 
     .sp-sheet {
         --sp-sheet-radius: var(--sp-size-14);

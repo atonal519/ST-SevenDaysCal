@@ -1,6 +1,8 @@
 // 纯 CalendarDate/CalendarEngine：自定义历法绝不经过 JS Date。
 export function calendarDate(year, month, day) {
-    return { year: year == null ? null : Number(year), month: Number(month), day: Number(day) };
+    const missingYear = year == null || typeof year === 'boolean' || (typeof year === 'string' && !year.trim());
+    const numericYear = typeof year === 'number' || typeof year === 'string' ? Number(year) : NaN;
+    return { year: missingYear ? null : numericYear, month: Number(month), day: Number(day) };
 }
 
 export function validateCalendarDescriptor(calendar) {
@@ -43,7 +45,7 @@ export function daysInMonth(calendar, month, year = null) {
 export function validateCalendarDate(date, calendar = null) {
     if (!date || !Number.isInteger(date.month) || !Number.isInteger(date.day) || date.month < 1 || date.day < 1) return false;
     if (isGregorian(calendar)) {
-        if (date.month > 12 || !Number.isInteger(date.year) || date.year < 1) return false;
+        if (date.month > 12 || !Number.isInteger(date.year) || date.year < 0) return false;
         const d = new Date(0); d.setUTCHours(0, 0, 0, 0); d.setUTCFullYear(date.year, date.month - 1, date.day);
         return d.getUTCFullYear() === date.year && d.getUTCMonth() === date.month - 1 && d.getUTCDate() === date.day;
     }
@@ -69,14 +71,16 @@ export function addCalendarDays(date, delta, calendar) {
     if (isGregorian(calendar) && Number.isInteger(date.year)) {
         const utc = new Date(0); utc.setUTCHours(0, 0, 0, 0); utc.setUTCFullYear(date.year, date.month - 1, date.day);
         utc.setUTCDate(utc.getUTCDate() + delta);
-        return calendarDate(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate());
+        const result = calendarDate(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate());
+        return validateCalendarDate(result, calendar) ? result : null;
     }
     const total = isGregorian(calendar) ? (Number.isInteger(date.year) && date.year % 4 === 0 && (date.year % 100 !== 0 || date.year % 400 === 0) ? 366 : 365) : calendar.months.reduce((n, m) => n + Number(m.days), 0);
     if (date.year == null && Math.floor((start - 1 + delta) / total) !== 0) return null;
     if (!isGregorian(calendar) && date.year != null && Math.floor((start - 1 + delta) / total) !== 0 && !calendar?.absoluteCycle && !Number.isInteger(calendar?.epochYear)) return null;
     const ordinal = ((start - 1 + delta) % total + total) % total + 1;
     const year = date.year == null ? null : date.year + Math.floor((start - 1 + delta) / total);
-    return dateFromOrdinal(ordinal, calendar, year);
+    const result = dateFromOrdinal(ordinal, calendar, year);
+    return validateCalendarDate(result, calendar) ? result : null;
 }
 
 export function parseCalendarDate(text, calendar = null) {

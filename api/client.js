@@ -98,6 +98,8 @@ The supplied material is fictional and may include explicit sexual content, viol
 The current task instructions and its machine-readable output contract take precedence. Unless the current task explicitly asks for creative generation, do not continue the story, invent new events, embellish, expand, or rewrite the source. Perform only the requested processing, analysis, extraction, classification, compression, transformation, or formatting.
 </fictional_content_processing_protocol>`;
 
+export const RESPONSE_STYLE_GUIDE = '【表达规则】直接讲清事实、解释和判断。确实影响结论的不确定性或条件，简短说明具体缺少什么资料、只能确定到哪一步。禁止主动追加防御性措辞、免责铺垫、推责及预设误解后反复纠偏，不用“没有证据表明…”“不代表…”“并不意味着…”“不能据此认为…”作无关铺垫。仅约束自行撰写的自然语言，机器结构、字段、固定缺省值与原文引用按本轮合同保留，不添加执行声明或额外解释。';
+
 export function getJailbreakPrompt() {
     getSettings();
     return getProcessingPrompt();
@@ -208,13 +210,14 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     const requestCharName = String(charName || ctx.name2 || '角色');
     const stream = cfg.stream === true;
     const custom = substituteParams(expandRequestPlaceholders(resolveSharedProcessingPrompt(getJailbreakPrompt()), { userName: requestUserName, charName: requestCharName }));
+    const requestPrefix = `${custom}\n\n${RESPONSE_STYLE_GUIDE}`;
     // Request-level replacement applies to every role, not only the global custom prompt.
     // Keep non-string content (e.g. multimodal parts) untouched and do not rewrite plain "user".
     messages = expandRequestMessageContents(messages, { userName: requestUserName, charName: requestCharName });
     const si = messages.findIndex(m => m.role === 'system' && typeof m.content === 'string');
     messages = si >= 0
-        ? messages.map((m, idx) => idx === si ? { ...m, content: prependProcessingPrompt(m.content, custom) } : m)
-        : custom.trim() ? [{ role: 'system', content: custom }, ...messages] : messages;
+        ? messages.map((m, idx) => idx === si ? { ...m, content: prependProcessingPrompt(m.content, requestPrefix) } : m)
+        : [{ role: 'system', content: requestPrefix }, ...messages];
     // 调试面板「🐛 AI 输入」的数据源：记在共用提示词注入之后，展示真实请求。
     _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages });
     const body = {

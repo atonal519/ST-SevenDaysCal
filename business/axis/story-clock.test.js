@@ -36,8 +36,31 @@ test('formal month names win over numeric aliases and calendar year semantics re
     assert.equal(parseStoryClock(marker('公历标记2025年2月29日'), { ...gregorian, title: '公历标记' }).startMeta.date, null);
     assert.deepEqual(parseStoryClock(marker('纪元标记2025年2月29日'), { ...gregorian, era: '纪元标记' }).startMeta.date, { month: 2, day: 29, year: 2025, eraLabel: '纪元标记' });
     assert.deepEqual(parseStoryClock(marker('743-11-30')).startMeta.date, { month: 11, day: 30, year: 743 });
-    for (const date of ['0-11-30', '10000-11-30']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
-    for (const date of ['太初历0年4月8日', '太初历10000年4月8日', '太初历十千年4月8日', '太初历三千四百一十二年13月8日', '太初历三千四百一十二年4月31日']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
+    assert.equal(parseStoryClock(marker('10000-11-30')).startMeta.date, null);
+    for (const date of ['太初历10000年4月8日', '太初历十千年4月8日', '太初历三千四百一十二年13月8日', '太初历三千四百一十二年4月31日']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
+});
+
+test('year zero uses the shared numeral grammar and preserves calendar and legacy era boundaries', () => {
+    for (const year of ['0', '零', '〇', '０', '0000']) {
+        const date = `天历${year}年2月29日`;
+        const clock = parseStoryClock(marker(date) + '正文' + marker(date, 'end'));
+        assert.deepEqual(clock.startMeta.date, { month: 2, day: 29, year: 0, eraLabel: '天历' }, date);
+        assert.equal(completeStoryClock(clock), true, date);
+    }
+    for (const date of ['0000-02-29', '0-2-29', '零年2月29日']) {
+        assert.deepEqual(parseStoryClock(marker(date)).startMeta.date, { month: 2, day: 29, year: 0 }, date);
+    }
+    const titled = { ...gregorian, title: '王国历' };
+    assert.deepEqual(parseStoryClock(marker('王国历零年2月29日'), titled).startMeta.date, { month: 2, day: 29, year: 0, eraLabel: '王国历' });
+    assert.deepEqual(parseStoryClock(marker('长纪元零年霜月30日'), named).startMeta.date, { month: 2, day: 30, year: 0, eraLabel: '长纪元' });
+    for (const date of ['0000-02-29T09:00:00', '零年2月29日', '天历〇年2月29日', '【太初历】0年2月29日']) {
+        const expected = { month: 2, day: 29, year: 0, ...(date.includes('天历') ? { eraLabel: '天历' } : date.includes('太初历') ? { eraLabel: '太初历' } : {}) };
+        assert.deepEqual(parseStoryClock(`<!-- SDC-start ${date} 周六 09:00 -->`).startMeta.date, expected, date);
+        assert.deepEqual(parseJudgedDate(date), expected, date);
+    }
+    assert.deepEqual(parseJudgedDate('王国历零年2月29日', titled), { month: 2, day: 29, year: 0, eraLabel: '王国历' });
+    assert.equal(parseJudgedDate('太初历0年2月29日'), null, '旧长纪年仍要求登记或括号');
+    for (const date of ['0000-02-30', '-0001-01-01', '10000-01-01']) assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
 });
 
 test('legacy compact clocks share validated dates without broadening free text era recognition', () => {
@@ -114,7 +137,7 @@ test('Chinese years also work with allowlisted formal month names', () => {
 });
 
 test('recognized Chinese years preserve date bounds and the complete-clock contract', () => {
-    for (const date of ['零年11月30日', '十千年11月30日', '10000年11月30日', '天历0年11月30日', '天历十千年11月30日', '天历七百四十三年13月1日', '天历七百四十三年11月31日', '七百四十三年2月29日']) {
+    for (const date of ['十千年11月30日', '10000年11月30日', '天历十千年11月30日', '天历七百四十三年13月1日', '天历七百四十三年11月31日', '七百四十三年2月29日']) {
         assert.equal(parseStoryClock(marker(date)).startMeta.date, null, date);
     }
     assert.equal(parseStoryClock(marker('天历七百四十三年雾月1日'), named).startMeta.date, null);

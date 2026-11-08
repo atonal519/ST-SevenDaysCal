@@ -43,7 +43,7 @@ function storyYear(value, calendar, structured) {
         if (!/^[\u3400-\u9fff]{2}$/.test(eraLabel)) return null;
     }
     const year = storyNumber(number);
-    if (!Number.isInteger(year) || year < 1 || year > 9999) return null;
+    if (!Number.isInteger(year) || year < 0 || year > 9999) return null;
     return { year, eraLabel, absoluteYear: !eraLabel || eraLabel === String(calendar?.title || '').trim() };
 }
 function parseStoryDate(text, calendarOverride = null, { structured = false } = {}) {

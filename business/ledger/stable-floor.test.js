@@ -11,7 +11,7 @@ import { buildLedgerSources, reconcileLedgerEntries } from './reconcile.js';
 
 const calendar = { kind: 'gregorian' };
 const date = day => ({ month: 1, day, year: 2026 });
-const ai = (body, day) => ({ name: 'Character', mes: day ? `<!-- SDC-start | date=2026-01-${String(day).padStart(2, '0')} | weekday=周一 | time=08:00 -->${body}<!-- SDC-end | date=2026-01-${String(day).padStart(2, '0')} | weekday=周一 | time=09:00 -->` : body, is_user: false, is_system: false });
+const ai = (body, day, year = 2026) => ({ name: 'Character', mes: day ? `<!-- SDC-start | date=${String(year).padStart(4, '0')}-01-${String(day).padStart(2, '0')} | weekday=周一 | time=08:00 -->${body}<!-- SDC-end | date=${String(year).padStart(4, '0')}-01-${String(day).padStart(2, '0')} | weekday=周一 | time=09:00 -->` : body, is_user: false, is_system: false });
 const fixtureChat = () => [
     { is_user: true, mes: 'USER_ZERO' }, ai('EARLIER_BODY', 1),
     { ...ai('HIDDEN_OLD_BODY', 1), is_system: true, is_hidden: true },
@@ -20,7 +20,7 @@ const fixtureChat = () => [
     { is_user: true, mes: 'USER_AFTER_CUTOFF' }, ai('LATEST_UNCONFIRMED_BODY', 8),
 ];
 
-function setup(chat = fixtureChat()) {
+function setup(chat = fixtureChat(), sourceToken = 'F5E') {
     const ctx = { chatId: 'ledger-fixture', characterId: 0, name1: 'User', name2: 'Character', characters: [{ avatar: 'fixture.png' }], chat };
     const requests = [], writes = [], toasts = [], entries = [];
     let onRequest = () => {};
@@ -32,7 +32,7 @@ function setup(chat = fixtureChat()) {
     const state = { initialized: true, checkpoint: null, ledgerRevision: 'fixture-revision' };
     const entry = { id: 'L1', 事由: '左手伤口', 类型: '持续状态', 现状: '仍在流血。', 标签: ['伤口'], 起始锚: { 楼层: 1, 历日期: date(1) } };
     const common = { context: () => ctx, charKey: () => 'fixture-character', target: () => null, config: () => ({ url: 'offline', key: 'offline' }), calendar: () => calendar, validDate: value => value?.month && value?.day ? value : null, today: () => date(8), settings: () => ({ ledgerHistoryScope: 'all', notifyMode: 'off' }), toast: value => toasts.push(value), appendTravel: value => value };
-    const capture = createLedgerCaptureController({ ...common, captureState: () => state, parseCaptureDetailed: parseLedgerCaptureDetailed, listEntries: () => entries, callApi: async (...args) => { requests.push(args); onRequest(); return '左手伤口｜持续状态｜Character｜伤口｜伤口仍在流血。｜｜｜F5E'; }, applyAtomic: async plan => { writes.push(plan); return { ok: true, commitState: 'local-applied', added: plan.additions, patched: plan.patches }; } });
+    const capture = createLedgerCaptureController({ ...common, captureState: () => state, parseCaptureDetailed: parseLedgerCaptureDetailed, listEntries: () => entries, callApi: async (...args) => { requests.push(args); onRequest(); return `左手伤口｜持续状态｜Character｜伤口｜伤口仍在流血。｜｜｜${sourceToken}`; }, applyAtomic: async plan => { writes.push(plan); return { ok: true, commitState: 'local-applied', added: plan.additions, patched: plan.patches }; } });
     const judge = createLedgerJudgeController({ ...common, floorContext: ledgerFloorDateContext, listJudgeable: () => [entry], fmtLedger: fmtLedgerForJudge, getEntry: () => entry, reconcile: async () => ({ summary: { changed: false } }), callApi: async (...args) => { requests.push(args); onRequest(); return 'L1｜伤口已止血。｜维持｜'; }, parseJudge: parseLedgerJudge, applyAtomic: async changes => { writes.push(changes); return { ok: true, commitState: 'local-applied' }; } });
     return { ctx, requests, writes, toasts, state, entry, entries, capture, judge, onRequest: fn => { onRequest = fn; } };
 }
@@ -71,6 +71,23 @@ test('one eligible AI is normal waiting with zero capture or judge requests', as
     }
     assert.equal(h.requests.length, 0);
     assert.equal(h.writes.length, 0);
+});
+
+test('year-zero source on floor zero supports capture and updates from the previous AI', async () => {
+    const zeroDate = day => ({ month: 1, day, year: 0 });
+    const h = setup([ai('ZERO_YEAR_CONFIRMED', 2, 0), { is_user: true, mes: 'NEXT_USER' }, ai('LATEST_EXCLUDED', 1, 1)], 'F0E');
+    h.entry.起始锚 = { 楼层: 0, 历日期: zeroDate(1) };
+    assert.deepEqual(ledgerFloorDateContext(), { floor: 0, date: zeroDate(2) });
+    assert.equal((await h.capture.run(false)).status, 'updated');
+    assert.equal(h.requests.length, 1);
+    assert.deepEqual(h.requests[0][7].ledgerSourceFloors.map(record => record.floor), [0]);
+    assert.equal(h.requests[0][0].chat.length, 1);
+    assert.deepEqual(h.writes[0].additions[0].起始锚.历日期, zeroDate(2));
+    assert.deepEqual(h.writes[0].additions[0].现状锚, { 楼层: 0, 历日期: zeroDate(2) });
+    assert.equal((await h.judge.run(false)).status, 'updated');
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.requests[1][0].chat.length, 1);
+    assert.deepEqual(h.writes[1][0].patch.现状锚, { 楼层: 0, 历日期: zeroDate(2) });
 });
 
 test('saved provenance progress beyond the current cutoff waits without rewriting its original anchors', async () => {

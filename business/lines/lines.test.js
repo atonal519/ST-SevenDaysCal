@@ -535,6 +535,10 @@ test('ticket category suffixes normalize only complete IDs and never override lo
 });
 test('release prompt caps only first generation while preserving global agency and local 6x3 cues', () => {
     const prompt = buildLinesPrompt('用户', '角色', 'user', '', 'auto', { intent: 'initial', firstRun: true, freshTickets: [{ selections: [{ label: '时机', prompt: '近日' }] }] });
+    assert.match(prompt, /至少输出\s*3\s*条独立事件线/);
+    assert.match(prompt, /独立目标与后续/);
+    assert.match(prompt, /同一事件不要拆分凑数/);
+    assert.doesNotMatch(prompt, /可为 0 至 8 条/);
     for (const phrase of ['全局平行事件线', '不是固定叙事中心', '既有配角、群体、势力、机构', 'agency=player 仅表示下一步必须等待', 'agency=world 表示', '不要因为事件将来可能影响 用户 就标 player', '首次最多输出 8 条', '自由判断下一变化应当激化、维持、缓和、转向、解决或淡出', '分歧、关系张力、彼此试探或立场摩擦不等于必须扩大伤害', '无充分依据时不扩大伤害或制造不可逆后果', '阶段只描述生命周期位置', '成形＝影响明确', '收束＝解决、和解、新平衡或事务落定', '淡出＝不再值得追踪', '理想机器结构']) assert.match(prompt, new RegExp(phrase));
     assert.match(prompt, /stage 只使用起线、延展、成形、收束、淡出/);
     for (const obsolete of ['叙事主体为用户', '默认最多出生 1 条', '单轮新生最多 4 条', '每有 1 条旧未锁活线']) assert.doesNotMatch(prompt, new RegExp(obsolete));
@@ -544,6 +548,15 @@ test('release prompt caps only first generation while preserving global agency a
     assert.match(prompt, new RegExp(LINE_NEXT_RELEASE_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(prompt, /本轮真实唯一 Ticket 与 6×3 Cue/);
     assert.match(prompt, /团队补齐资料后由实际签署方决定是否签字/);
+});
+test('manual reroll requests at least three independent lines and expands further with the story', () => {
+    const prompt = buildLinesPrompt('用户', '角色', 'user', raw, 'auto', { intent: 'reroll' });
+    assert.match(prompt, /刷新至少输出\s*3\s*条独立事件线/);
+    assert.match(prompt, /有更多独立事件时继续展开/);
+    assert.match(prompt, /独立目标与后续/);
+    assert.match(prompt, /同一事件不要拆分凑数/);
+    assert.match(prompt, /刷新不要求延续旧自动线/);
+    assert.doesNotMatch(prompt, /首次最多输出 8 条|可为 0 或多条/);
 });
 test('relationship agency guidance stays in line generation intents', () => {
     const expected = '不自动把日常安排、照顾、亲近或一次让步扩写为持续控制';

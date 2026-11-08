@@ -1,3 +1,4 @@
+import { readChatBounds, observeChatBounds, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
 import { primaryTextColor, syncUiTheme } from './utils/ui-theme.js';
 import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
@@ -553,7 +554,7 @@ const pointController = createPointController({
     showPanel,
     setBody,
     loading: loadingHtml,
-    showPrecheckError: message => setBody(`<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button></div></div>`),
+    showPrecheckError: message => setBody(`<div class="sp-error">${icon("alert-circle")}<p>${escapeHtml(message || '记忆读取失败，请重试')}</p><div class="sp-point-empty-actions"><button class="sp-gen-btn" id="sp-gen-schedule-now">重新生成点</button><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span></div></div>`),
     recordFailure: (owner, operation, error) => {
         const target = pointPanelTarget(owner?.view, owner?.charName, owner?.chatId, owner?.chatRevision);
         const message = typeof error === 'string' ? error : diagnosticMessage(error);
@@ -3953,7 +3954,7 @@ function injectModal() {
 
                     <div class="sp-main">
                         <div class="sp-body" id="sp-body">
-                            <div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div></div>
+                            <div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span></div></div>
                         </div>
 
                         <div class="sp-outline-wrap" id="sp-outline-wrap" style="display:none">
@@ -4023,7 +4024,7 @@ function injectModal() {
     host.id = MODAL_ID;
     if (globalThis.__TAURITAVERN__?.abiVersion >= 1) host.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
     host.className = `sp-root sp-${currentTheme}`;
-    host.style.cssText = 'display:none;position:fixed;z-index:2000001';
+    host.style.cssText = 'display:none;position:fixed;inset:0;width:100dvw;height:100dvh;pointer-events:auto;z-index:2000001';
     const root = host.attachShadow({ mode: 'open' });
     _spShadow = root;
     // 键盘边界：shadow 内 input 的 keydown 是 composed 事件，冒泡到 document 时 ST 的
@@ -4062,7 +4063,7 @@ function injectModal() {
     _spShadow.addEventListener('click', event => {
         if (!currentCharacterExcluded()) return;
         const target = (event.composedPath?.() || []).find(node => node instanceof Element) || event.target;
-        const allowed = target?.closest?.('#sp-settings-overlay, .sp-settings-btn, .sp-close-btn');
+        const allowed = target?.closest?.('#sp-settings-overlay, .sp-settings-btn, .sp-close-btn, .sp-backdrop');
         if (allowed) return;
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -4086,7 +4087,9 @@ function injectModal() {
         $(this).toggleClass('sp-btn-active', nowEnabled);
     });
     $in('.sp-theme-toggle-btn').on('click', cycleThemeMode);
-    $in('.sp-backdrop').on('click',     closePanel);
+    bindOutsideClose({ target: host, panel: inEl('.sp-sheet'), close: closePanel,
+        canClose: () => host.style.display !== 'none' && !_spDialogShadow?.querySelector('.sp-dialog-overlay, .sp-confirm-overlay'),
+    });
 
     // 模块介绍气泡：点标题旁的 ? 弹出当前模块简介，点外部/切模块即关
     $in('.sp-module-intro-btn').on('click', function (e) {
@@ -5319,14 +5322,14 @@ function openQuickReplyShortcut(key) {
 function showEmptyGenerate() {
     setBody(`<div class="sp-empty">
         ${icon("calendar")}
-        <div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span>
-        <button class="sp-gen-btn" id="sp-gen-now">生成点</button></div>
+        <div class="sp-point-empty-actions"><button class="sp-gen-btn" id="sp-gen-now">生成点</button>
+        <span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span></div>
     </div>`);
     $in('#sp-gen-now').on('click', triggerGenerate);
 }
 
 function pointScheduleEmptyHtml() {
-    return `<div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button></div></div>`;
+    return `<div class="sp-empty">${icon("calendar")}<p>还没有点</p><div class="sp-point-empty-actions"><button class="sp-gen-btn" id="sp-gen-schedule-now">生成点</button><span class="sp-point-tools"><button class="sp-panel-refresh sp-open-daily-menu" title="今天吃点啥" aria-label="今天吃点啥">${icon("tools-kitchen-2")}</button><button class="sp-panel-refresh sp-open-wardrobe" title="今天穿点啥" aria-label="今天穿点啥">${icon("hanger")}</button></span></div></div>`;
 }
 
 function showPanel() {
@@ -5342,12 +5345,14 @@ function showPanel() {
     else if (hasLegacyChatStorage()) showLegacyChatReturn();
     setTimeout(() => {
         positionPanel();
-        syncMobileViewport();
+        syncPanelViewport();
         refreshUserNameMask(_spShadow);
     }, 0);
 }
 
 function closePanel() {
+    onDragEnd(null, false);
+    onResizeEnd(null, false);
     // 关闭主面板时取消活动确认，但独立弹窗宿主本身不隐藏。
     // 收全屏残留：全屏中经背景/FAB 关面板时，若不清这些类，body 的滚动锁会滞留（酒馆卡死），
     // 且 .sp-sheet 的 sp-fs-flat 会带到下次打开（手机右移半屏）。棱、坐标一并清。
@@ -8320,7 +8325,7 @@ function toggleSettings() {
         if (currentCharacterExcluded()) closePanel();
     }
     $in('.sp-settings-btn').toggleClass('sp-btn-active', settingsOpen);
-    syncMobileViewport();
+    syncPanelViewport();
 }
 
 // ─── Memory section renderer + handlers ─────────────────────────────────────
@@ -9361,18 +9366,19 @@ function onDragMove(e) {
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     const sheet = inEl('.sp-sheet');
-    const left = Math.max(0, Math.min(dragState.origLeft + cx - dragState.startX, window.innerWidth  - sheet.offsetWidth));
-    const top  = Math.max(0, Math.min(dragState.origTop  + cy - dragState.startY, window.innerHeight - 60));
+    const view = readChatBounds(document, window);
+    const left = Math.max(view.left + 10, Math.min(dragState.origLeft + cx - dragState.startX, view.left + view.width - sheet.offsetWidth - 10));
+    const top = Math.max(view.top + 10, Math.min(dragState.origTop + cy - dragState.startY, view.top + view.height - sheet.offsetHeight - 10));
     sheet.style.left  = left + 'px';
     sheet.style.top   = top  + 'px';
     sheet.style.right = 'auto';
 }
 
-function onDragEnd() {
+function onDragEnd(event, persist = true) {
     if (!dragState) return;
     const sheet = inEl('.sp-sheet');
     const rect  = sheet.getBoundingClientRect();
-    if (!isMobile()) {
+    if (persist && !isMobile()) {
         localStorage.setItem(POS_KEY, JSON.stringify({ left: rect.left, top: rect.top }));
     }
     dragState = null;
@@ -9432,34 +9438,25 @@ function onResizeMove(e) {
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = inEl('.sp-sheet');
-        const mobile = isMobile();
-        // On mobile, we ALSO override max-width (CSS media query caps it at 340px);
-        // without this, inline width can't exceed the cap.
-        const maxW = mobile
-            ? Math.min(window.innerWidth - 10, 500)
-            : window.innerWidth - 10;
-        const w = Math.max(280, Math.min(maxW, resizeState.origW + cx - resizeState.startX));
-        const h = Math.max(300, Math.min(window.innerHeight - 10, resizeState.origH + cy - resizeState.startY));
-        sheet.style.width     = w + 'px';
-        sheet.style.height    = h + 'px';
-        sheet.style.maxHeight = h + 'px';
-        if (mobile) {
-            sheet.style.maxWidth = w + 'px';
-            // Recenter after resize: keep translateX(-50%) if still set, else pin left
-            if (!sheet.style.left || sheet.style.left === '50%') {
-                sheet.style.left = '50%';
-            }
-        }
+        const view = readChatBounds(document, window), rect = sheet.getBoundingClientRect();
+        const maxW = Math.max(0, view.left + view.width - rect.left - 10);
+        const maxH = Math.max(0, view.top + view.height - rect.top - 10);
+        const width = Math.max(Math.min(280, maxW), Math.min(maxW, resizeState.origW + cx - resizeState.startX));
+        const height = Math.max(Math.min(300, maxH), Math.min(maxH, resizeState.origH + cy - resizeState.startY));
+        sheet.style.width = width + 'px';
+        sheet.style.height = height + 'px';
+        sheet.style.maxWidth = maxW + 'px';
+        sheet.style.maxHeight = maxH + 'px';
     });
 }
 
-function onResizeEnd() {
+function onResizeEnd(event, persist = true) {
     if (!resizeState) return;
     if (resizeRAF) { cancelAnimationFrame(resizeRAF); resizeRAF = null; }
     const sheet = inEl('.sp-sheet');
     sheet.style.willChange = '';
     document.body.style.userSelect = '';
-    localStorage.setItem(SIZE_KEY, JSON.stringify({ width: sheet.offsetWidth, height: sheet.offsetHeight }));
+    if (persist) localStorage.setItem(SIZE_KEY, JSON.stringify({ width: sheet.offsetWidth, height: sheet.offsetHeight }));
     resizeState = null;
     $(document).off('mousemove.spresize mouseup.spresize');
     document.removeEventListener('touchmove', onResizeMove);
@@ -9469,25 +9466,8 @@ function onResizeEnd() {
 }
 
 function positionPanel() {
-    const sheet = inEl('.sp-sheet');
-    if (!sheet) return;
     bindViewportSync();
-    if (isMobile()) {
-        sheet.style.left      = '';
-        sheet.style.top       = '';
-        sheet.style.right     = '';
-        sheet.style.height    = '';
-        sheet.style.transform = '';
-        syncMobileViewport();
-        return;
-    }
-    let pos = null;
-    try { pos = JSON.parse(localStorage.getItem(POS_KEY) || 'null'); } catch { /* 位置数据损坏则忽略 */ }
-    if (pos) {
-        sheet.style.left  = Math.min(pos.left, window.innerWidth  - sheet.offsetWidth)  + 'px';
-        sheet.style.top   = Math.min(pos.top,  window.innerHeight - 60) + 'px';
-        sheet.style.right = 'auto';
-    }
+    syncPanelViewport();
 }
 
 function bindViewportSync() {
@@ -9495,12 +9475,15 @@ function bindViewportSync() {
     viewportSyncBound = true;
     const onViewportChange = () => {
         closeActionMenus();
+        onDragEnd(null, false);
+        onResizeEnd(null, false);
         if (viewportSyncFrame !== null) return;
-        const callback = () => { viewportSyncFrame = null; syncMobileViewport(); };
+        const callback = () => { viewportSyncFrame = null; syncPanelViewport(); };
         viewportSyncFrame = typeof window.requestAnimationFrame === 'function'
             ? window.requestAnimationFrame(callback)
             : setTimeout(callback, 16);
     };
+    observeChatBounds(document, onViewportChange);
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('orientationchange', onViewportChange);
     if (window.visualViewport) {
@@ -9509,8 +9492,7 @@ function bindViewportSync() {
     }
 }
 
-function syncMobileViewport() {
-    if (!isMobile()) return;
+function syncPanelViewport() {
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;
@@ -9525,29 +9507,29 @@ function syncMobileViewport() {
     const safeBot = parseFloat(cs.bottom) || 0;
     document.body.removeChild(probe);
 
-    const vv = window.visualViewport;
-    const vh = Math.max(320, Math.round((vv?.height || window.innerHeight)));
-    // iOS 软键盘不缩小 layout viewport，而是把可视视口整体上移，visualViewport.offsetTop
-    // 变正；安卓则是直接缩小 layout（offsetTop≈0，靠 vh 变小自适应）。sheet 是
-    // position:fixed（相对 layout viewport 定位），若 top 不叠加 offsetTop，键盘一弹
-    // sheet 就会停在 layout 顶部并离开可视区。叠加 offsetTop 让 sheet 跟随可视视口移到
-    // 键盘上方；安卓 offsetTop≈0，不受该补偿影响。
-    const offsetTop = vv ? Math.max(0, vv.offsetTop) : 0;
-    const marginTop = 20 + safeTop;      // sheet 顶到可视视口顶的留白
-    const bottomGap = 20 + safeBot;
-    const top  = offsetTop + marginTop;  // fixed 绝对值 = 可视视口位移 + 留白
-    const maxH = Math.max(260, vh - marginTop - bottomGap);  // 高度只按可视视口算，不含 offsetTop
-
-    const nextTop = `${top}px`;
-    const nextHeight = `${maxH}px`;
-    if (sheet.style.top === nextTop && sheet.style.height === nextHeight && sheet.style.maxHeight === nextHeight) return;
-
+    const view = readChatBounds(document, window);
     const settingsBody = settingsOpen ? inEl('.sp-settings-body') : null;
     const savedScrollTop = settingsBody?.scrollTop;
-    sheet.style.top = nextTop;
-    sheet.style.height = nextHeight;
-    sheet.style.maxHeight = nextHeight;
-
+    if (isMobile()) {
+        sheet.style.left = `${view.left + view.width / 2}px`;
+        sheet.style.top = `${view.top + 20 + safeTop}px`;
+        sheet.style.right = 'auto';
+        sheet.style.transform = '';
+        sheet.style.width = `${Math.max(0, view.width - 20)}px`;
+        sheet.style.height = `${Math.max(0, view.height - 40 - safeTop - safeBot)}px`;
+        sheet.style.maxWidth = sheet.style.width;
+        sheet.style.maxHeight = sheet.style.height;
+    } else {
+        let savedSize = null, savedPosition = null;
+        try { savedSize = JSON.parse(localStorage.getItem(SIZE_KEY) || 'null'); } catch { /* 忽略损坏的界面尺寸 */ }
+        try { savedPosition = JSON.parse(localStorage.getItem(POS_KEY) || 'null'); } catch { /* 忽略损坏的界面位置 */ }
+        const rect = fitDesktopPanel(view, savedSize, savedPosition);
+        for (const property of ['left', 'top', 'width', 'height']) sheet.style[property] = `${rect[property]}px`;
+        sheet.style.right = 'auto';
+        sheet.style.transform = 'none';
+        sheet.style.maxWidth = `${Math.max(0, view.width - 20)}px`;
+        sheet.style.maxHeight = `${Math.max(0, view.height - 20)}px`;
+    }
     if (!settingsBody) return;
     if (settingsBody.scrollTop !== savedScrollTop) settingsBody.scrollTop = savedScrollTop;
 
