@@ -1,20 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 import * as layout from '../ui/panel-window.js';
 const rect = (left, top, width, height) => ({ left, top, width, height });
 const fixture = nodes => ({ getElementById: id => nodes[id] && { getBoundingClientRect: () => nodes[id] } });
 
-test('main window uses the visible part of chat including visual viewport offsets', () => {
-  assert.equal(typeof layout.readChatBounds, 'function', 'main-window chat geometry is available');
-  const doc = fixture({ chat: rect(100, 70, 900, 650), sheld: rect(0, 0, 1200, 900) });
-  assert.deepEqual(layout.readChatBounds(doc, { innerWidth: 1200, innerHeight: 900, visualViewport: { offsetLeft: 150, offsetTop: 180, width: 700, height: 420 } }), rect(150, 180, 700, 420));
-});
-
-test('missing or hidden chat falls back to sheld above the composer and finally the viewport', () => {
-  const doc = fixture({ chat: rect(0, 0, 0, 0), sheld: rect(120, 50, 700, 760), form_sheld: rect(120, 660, 700, 100), send_form: rect(120, 690, 700, 70) });
-  assert.deepEqual(layout.readChatBounds(doc, { innerWidth: 1000, innerHeight: 800 }), rect(120, 50, 700, 610));
-  assert.deepEqual(layout.readChatBounds(fixture({ chat: rect(0, 1000, 400, 300) }), { innerWidth: 390, innerHeight: 300 }), rect(0, 0, 390, 300));
+test('390 and 320 mobile use the visual viewport independently of chat and composer', () => {
+  for (const width of [390, 320]) {
+    const nodes = { chat: rect(10, 70, width - 20, 650), sheld: rect(0, 0, width, 844) };
+    const win = { innerWidth: width, innerHeight: 844, document: fixture(nodes) };
+    assert.deepEqual(layout.readPanelViewport(win), rect(0, 0, width, 844));
+    nodes.chat = rect(100, 300, 100, 50);
+    nodes.form_sheld = rect(100, 350, 100, 400);
+    assert.deepEqual(layout.readPanelViewport(win), rect(0, 0, width, 844));
+    win.visualViewport = { offsetLeft: 10, offsetTop: 100, width: width - 20, height: 400 };
+    assert.deepEqual(layout.readPanelViewport(win), rect(10, 100, width - 20, 400));
+  }
 });
 
 class Target {
@@ -48,9 +51,75 @@ test('native dialog backdrop uses coordinates so dialog padding remains internal
   click(5, 5); assert.equal(closes, 1);
 });
 
-test('desktop fit clamps saved size and position while allowing a short chat area', () => {
+test('desktop fit clamps saved size and position within a short browser viewport', () => {
   assert.equal(typeof layout.fitDesktopPanel, 'function');
   assert.deepEqual(layout.fitDesktopPanel(rect(200, 100, 500, 600), { width: 700, height: 900 }, { left: -40, top: 500 }), { left: 210, top: 110, width: 480, height: 580 });
   assert.deepEqual(layout.fitDesktopPanel(rect(250, 200, 310, 200)), { left: 260, top: 210, width: 290, height: 180 });
   assert.deepEqual(layout.fitDesktopPanel(rect(100, 80, 1000, 800), { width: 410, height: 620 }, { left: 150, top: 130 }), { left: 150, top: 130, width: 410, height: 620 });
+});
+
+
+test('desktop uses the full visual viewport independently of chat or composer size', () => {
+  const nodes = { chat: rect(500, 300, 400, 400), form_sheld: rect(500, 700, 400, 200) };
+  const win = { document: fixture(nodes), innerWidth: 1400, innerHeight: 1000, visualViewport: { offsetLeft: 40, offsetTop: 30, width: 1300, height: 900 } };
+  assert.deepEqual(layout.readPanelViewport(win), rect(40, 30, 1300, 900));
+  nodes.chat = rect(650, 450, 100, 50);
+  nodes.form_sheld = rect(650, 500, 100, 400);
+  assert.deepEqual(layout.readPanelViewport(win), rect(40, 30, 1300, 900));
+  for (const position of [{ left: 50, top: 40 }, { left: 970, top: 40 }, { left: 50, top: 320 }]) {
+    assert.deepEqual(layout.fitDesktopPanel(layout.readPanelViewport(win), null, position), { ...position, width: 360, height: 600 });
+  }
+  const savedSize = { width: 1010, height: 750 }, savedPosition = { left: 50, top: 40 };
+  assert.deepEqual(layout.fitDesktopPanel(layout.readPanelViewport(win), savedSize, savedPosition), { ...savedPosition, ...savedSize });
+  win.visualViewport.width = 650; win.visualViewport.height = 400;
+  assert.deepEqual(layout.fitDesktopPanel(layout.readPanelViewport(win), savedSize, savedPosition), { left: 50, top: 40, width: 630, height: 380 });
+  assert.deepEqual(savedSize, { width: 1010, height: 750 });
+});
+
+test('desktop default height is 600 until the browser viewport requires a clamp', () => {
+  assert.deepEqual(layout.fitDesktopPanel(rect(0, 0, 1200, 700)), { left: 820, top: 80, width: 360, height: 600 });
+  assert.deepEqual(layout.fitDesktopPanel(rect(0, 0, 1200, 500)), { left: 820, top: 10, width: 360, height: 480 });
+});
+
+test('main panel no longer observes chat dimensions', () => {
+  assert.equal(layout.observeChatBounds, undefined);
+});
+
+
+test('normal mobile sync keeps viewport margins with one safe-area inset and ignores chat size', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function syncPanelViewport() {');
+  const end = source.indexOf('// ─── Toast (top)', start);
+  for (const width of [390, 320]) {
+    const sheet = { style: {} }, root = { style: {} };
+    const nodes = { chat: rect(10, 50, width - 20, 700) };
+    const win = { innerWidth: width, innerHeight: 844 };
+    let safeTop = 0, safeBottom = 0;
+    const document = { ...fixture(nodes), getElementById: id => id === 'panel' ? root : fixture(nodes).getElementById(id),
+      createElement: () => ({ style: {} }), body: { appendChild() {}, removeChild() {} } };
+    const context = { document, window: win, MODAL_ID: 'panel', settingsOpen: false, inEl: () => sheet,
+      isMobile: () => true, readPanelViewport: layout.readPanelViewport,
+      getComputedStyle: () => ({ top: `${safeTop}px`, bottom: `${safeBottom}px` }) };
+    runInNewContext(source.slice(start, end), context);
+    context.syncPanelViewport();
+    assert.equal(sheet.style.width, `${width - 20}px`);
+    assert.equal(sheet.style.height, '764px');
+    assert.equal(sheet.style.top, '40px');
+    assert.equal(sheet.style.left, `${width / 2}px`);
+    const original = { ...sheet.style };
+    nodes.chat = rect(100, 300, 100, 50);
+    nodes.form_sheld = rect(100, 350, 100, 400);
+    context.syncPanelViewport();
+    assert.deepEqual(sheet.style, original);
+    win.visualViewport = { offsetLeft: 10, offsetTop: 30, width: width - 20, height: 400 };
+    safeTop = 10; safeBottom = 5;
+    context.syncPanelViewport();
+    assert.equal(sheet.style.width, `${width - 40}px`);
+    assert.equal(sheet.style.height, '320px');
+    assert.equal(sheet.style.top, '70px');
+    safeTop = 50; safeBottom = 45;
+    context.syncPanelViewport();
+    assert.equal(sheet.style.height, '305px');
+    assert.equal(sheet.style.top, '80px');
+  }
 });

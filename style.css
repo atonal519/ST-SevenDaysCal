@@ -400,7 +400,8 @@ q::after {
     top           : 80px;
     right         : 20px;
     width         : 360px;
-    max-height    : 85vh;
+    height        : 600px;
+    max-height    : calc(100dvh - 20px);
     /* 双层背景：不透明底板(-legacy) + 覆一层酒馆 tint。跟随酒馆色相，
        但即便酒馆主题带 alpha 也不会把弹窗变透明（透明酒馆主题下的兜底）。*/
     background-color: var(--sp-sheet-bg-legacy);
@@ -2758,15 +2759,15 @@ select.sp-input { appearance: none; cursor: pointer; }
     .sp-sheet {
         --sp-sheet-radius: var(--sp-size-14);
     position: fixed;
-        top             : calc(20px + env(safe-area-inset-top, 0px));
+        top             : max(40px, env(safe-area-inset-top, 0px));
         left            : 50%;
         right           : auto;
         bottom: auto;
         transform       : translateX(-50%);
         width           : calc(100dvw - 20px);
         max-width       : calc(100dvw - 20px);
-        height          : calc(100dvh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-        max-height      : calc(100dvh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        height          : calc(100dvh - max(40px, env(safe-area-inset-top, 0px)) - max(40px, env(safe-area-inset-bottom, 0px)));
+        max-height      : calc(100dvh - max(40px, env(safe-area-inset-top, 0px)) - max(40px, env(safe-area-inset-bottom, 0px)));
         border-radius   : var(--sp-sheet-radius);
         pointer-events  : all;
         animation-name  : sp-sheet-in-mobile;

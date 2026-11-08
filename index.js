@@ -1,4 +1,4 @@
-import { readChatBounds, observeChatBounds, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
+import { readPanelViewport, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
 import { primaryTextColor, syncUiTheme } from './utils/ui-theme.js';
 import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
@@ -9366,7 +9366,7 @@ function onDragMove(e) {
     const cx = e.touches ? e.touches[0].clientX : e.clientX;
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     const sheet = inEl('.sp-sheet');
-    const view = readChatBounds(document, window);
+    const view = readPanelViewport(window);
     const left = Math.max(view.left + 10, Math.min(dragState.origLeft + cx - dragState.startX, view.left + view.width - sheet.offsetWidth - 10));
     const top = Math.max(view.top + 10, Math.min(dragState.origTop + cy - dragState.startY, view.top + view.height - sheet.offsetHeight - 10));
     sheet.style.left  = left + 'px';
@@ -9438,7 +9438,7 @@ function onResizeMove(e) {
     resizeRAF = requestAnimationFrame(() => {
         resizeRAF = null;
         const sheet = inEl('.sp-sheet');
-        const view = readChatBounds(document, window), rect = sheet.getBoundingClientRect();
+        const view = readPanelViewport(window), rect = sheet.getBoundingClientRect();
         const maxW = Math.max(0, view.left + view.width - rect.left - 10);
         const maxH = Math.max(0, view.top + view.height - rect.top - 10);
         const width = Math.max(Math.min(280, maxW), Math.min(maxW, resizeState.origW + cx - resizeState.startX));
@@ -9483,7 +9483,6 @@ function bindViewportSync() {
             ? window.requestAnimationFrame(callback)
             : setTimeout(callback, 16);
     };
-    observeChatBounds(document, onViewportChange);
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('orientationchange', onViewportChange);
     if (window.visualViewport) {
@@ -9507,16 +9506,16 @@ function syncPanelViewport() {
     const safeBot = parseFloat(cs.bottom) || 0;
     document.body.removeChild(probe);
 
-    const view = readChatBounds(document, window);
+    const view = readPanelViewport(window);
     const settingsBody = settingsOpen ? inEl('.sp-settings-body') : null;
     const savedScrollTop = settingsBody?.scrollTop;
     if (isMobile()) {
         sheet.style.left = `${view.left + view.width / 2}px`;
-        sheet.style.top = `${view.top + 20 + safeTop}px`;
+        sheet.style.top = `${view.top + Math.max(40, safeTop)}px`;
         sheet.style.right = 'auto';
         sheet.style.transform = '';
         sheet.style.width = `${Math.max(0, view.width - 20)}px`;
-        sheet.style.height = `${Math.max(0, view.height - 40 - safeTop - safeBot)}px`;
+        sheet.style.height = `${Math.max(0, view.height - Math.max(40, safeTop) - Math.max(40, safeBot))}px`;
         sheet.style.maxWidth = sheet.style.width;
         sheet.style.maxHeight = sheet.style.height;
     } else {
