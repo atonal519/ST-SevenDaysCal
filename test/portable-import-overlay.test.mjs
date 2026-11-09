@@ -12,6 +12,12 @@ function harness() {
     const document = {
         getElementById: id => nodes.find(node => node.id === id),
         createElement: () => ({
+            style: {},
+            attachShadow(options) {
+                assert.equal(options.mode, 'open');
+                this.shadowRoot = { innerHTML: '' };
+                return this.shadowRoot;
+            },
             contains(target) { return target === this; },
             remove() { const index = nodes.indexOf(this); if (index >= 0) nodes.splice(index, 1); },
         }),
@@ -19,7 +25,7 @@ function harness() {
         addEventListener: (name, handler) => listeners.set(name, handler),
         removeEventListener: (name, handler) => { if (listeners.get(name) === handler) listeners.delete(name); },
     };
-    const mount = Function('document', 'getSettings', 'currentTheme', source.slice(start, end) + '\nreturn mountPortableImportOverlay;')(document, () => ({ themeMode: 'day' }), 'day');
+    const mount = Function('document', 'getSettings', 'currentTheme', 'STYLESHEET_URL', source.slice(start, end) + '\nreturn mountPortableImportOverlay;')(document, () => ({ themeMode: 'day' }), 'day', 'style.css?v=overlay-test');
     return { mount, nodes, listeners };
 }
 
@@ -27,6 +33,10 @@ test('导入进度遮罩阻止外部输入，关闭及重复关闭都清理遮�
     const { mount, nodes, listeners } = harness();
     const overlay = mount();
     assert.equal(nodes.length, 1);
+    assert.ok(nodes[0].shadowRoot);
+    assert.match(nodes[0].style.cssText, /width:100dvw;height:100dvh/);
+    assert.match(nodes[0].shadowRoot.innerHTML, /style\.css\?v=overlay-test/);
+    assert.match(nodes[0].shadowRoot.innerHTML, /sp-day sp-forced-day/);
     assert.equal(listeners.size, 6);
     let blocked = 0;
     let stopped = 0;

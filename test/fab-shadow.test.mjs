@@ -35,6 +35,7 @@ function harness() {
         $in: () => wrap(toggle),
         getSettings: () => ({ themeMode: mode }),
         _spShadow: { querySelectorAll: () => [panel] }, _spDialogShadow: { querySelectorAll: () => [dialog] },
+        getToastContainer: () => null,
         syncPrimaryTextColor() {}, syncInlineTheme() {}, coordinateRuntime: null, refreshUserNameMask() {},
     };
     const api = vm.runInNewContext(`${region('let _fabBusyCount = 0;', '// ─── FAB ')}

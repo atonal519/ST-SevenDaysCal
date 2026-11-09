@@ -5,7 +5,7 @@
 
 /*
  * 本文件同时被 light DOM（楼内块 .sp-inline-box 系列）与 shadow DOM（主窗口）加载：
- * 全局注入一份给楼内块，主窗口、独立弹窗与悬浮球再经 <link rel="stylesheet">
+ * 全局注入一份给楼内块，主窗口、弹窗、悬浮球、提示与导入浮层再经 <link rel="stylesheet">
  * 引进自己的 shadow root。各根必须引用同一文件。
  */
 /* ST messageFormatting 会把字面引号保留在 <q> 内；浏览器默认又通过
@@ -371,6 +371,7 @@ q::after {
 .sp-inline-box ::selection { background: var(--sp-chip-bg); color: var(--sp-on-surface); }
 #sp-toast-wrap {
     font-family: var(--sp-font);
+    font-weight: 400;
     line-height: var(--sp-lh-body);
     letter-spacing: normal;
     word-spacing: normal;
@@ -885,13 +886,14 @@ q::after {
 .sp-fetch-btn, .sp-eye-btn { min-height: var(--sp-size-34); }
 
 .sp-progress-overlay {
-    position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center;
+    position: absolute; inset: 0; z-index: 2147483647; display: grid; place-items: center;
     padding: max(var(--sp-size-16), env(safe-area-inset-top)) max(var(--sp-size-16), env(safe-area-inset-right)) max(var(--sp-size-16), env(safe-area-inset-bottom)) max(var(--sp-size-16), env(safe-area-inset-left));
     background: rgba(0,0,0,.55); box-sizing: border-box; touch-action: none;
 }
 .sp-root.sp-progress-card {
     position: relative; inset: auto; z-index: auto; width: min(420px, calc(100vw - 32px));
     height: auto; pointer-events: auto; box-sizing: border-box;
+    font-weight: 400;
 }
 .sp-progress-card [data-sp-portable-close] { align-self: flex-end; }
 .sp-progress-card [hidden] { display: none; }

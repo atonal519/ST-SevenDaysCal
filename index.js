@@ -369,7 +369,7 @@ let _spShadow = null;
 let _spDialogShadow = null;
 let userNameMask = null;
 let userNameMaskDiscovery = [];
-const userNameSurfaceSelector = '.sp-inline-box, .sp-progress-card, #sp-toast-wrap, [data-sp-user-name-surface]';
+const userNameSurfaceSelector = '.sp-inline-box, #sp-portable-import-overlay, #sp-toast-host, [data-sp-user-name-surface]';
 function refreshUserNameMask(scope) { userNameMask?.refresh(scope); }
 function syncUserNameMask() {
     const enabled = getSettings().userNameBlurEnabled === true;
@@ -7615,13 +7615,16 @@ function mountPortableImportOverlay() {
     document.getElementById('sp-portable-import-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'sp-portable-import-overlay';
+    // Explicit viewport dimensions also cover ST's transformed html with a fixed body.
+    overlay.style.cssText = 'all:initial;position:fixed;inset:0;width:100dvw;height:100dvh;z-index:2147483647';
+    const shadow = overlay.attachShadow({ mode: 'open' });
     const overlayTheme = `sp-${currentTheme}${(getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : ''}`;
-    overlay.className = 'sp-progress-overlay';
-    overlay.innerHTML = `<div class="sp-root sp-progress-card sp-dialog-sheet ${overlayTheme}" role="dialog" aria-modal="true">
+    shadow.innerHTML = `<link rel="stylesheet" href="${STYLESHEET_URL}">
+      <div class="sp-progress-overlay"><div class="sp-root sp-progress-card sp-dialog-sheet ${overlayTheme}" role="dialog" aria-modal="true">
         <div class="sp-dialog-head">正在导入所选模块</div>
         <div data-sp-portable-status class="sp-dialog-body">正在应用所选模块并更新界面…</div>
         <button class="sp-dialog-button sp-dialog-button-primary" data-sp-portable-close type="button" hidden>关闭</button>
-    </div>`;
+    </div></div>`;
     const block = event => { if (!overlay.contains(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); } };
     for (const name of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'click']) document.addEventListener(name, block, true);
     document.documentElement.appendChild(overlay);
@@ -9280,10 +9283,11 @@ function syncInlineTheme(theme = detectSTTheme()) {
 function applyTheme(theme) {
     currentTheme = theme;
     const forced = (getSettings().themeMode || 'auto') !== 'auto';
-    const roots = document.querySelectorAll(`#${MODAL_ID}, #sp-toast-wrap, .sp-progress-card`);
+    const roots = document.querySelectorAll(`#${MODAL_ID}`);
     for (const root of roots) syncUiTheme(root, theme, forced);
-    const fabButton = getFabButton();
-    if (fabButton) syncUiTheme(fabButton, theme, forced);
+    for (const root of [getFabButton(), getToastContainer(), document.getElementById('sp-portable-import-overlay')?.shadowRoot?.querySelector('.sp-progress-card')]) {
+        if (root) syncUiTheme(root, theme, forced);
+    }
     for (const scope of [_spShadow, _spDialogShadow]) {
         scope?.querySelectorAll('.sp-root').forEach(root => syncUiTheme(root, theme, forced));
     }
@@ -9553,19 +9557,26 @@ function syncPanelViewport() {
 }
 
 // ─── Toast (top) ──────────────────────────────────────────────────────────────
-// toast 容器必须留在 light DOM；检测到第三方主题加载器时，showToast 另走原生 toastr 分支，
-// 由第三方样式作用于原生 toast。全屏提示仍需独立于主窗口显示。
+// 自绘提示使用独立 Shadow Root；第三方提示主题通过 showToast 的 toastr 分支接管。
+
+function getToastContainer() {
+    return document.getElementById('sp-toast-host')?.shadowRoot?.querySelector('#sp-toast-wrap') || null;
+}
 
 function injectToastContainer() {
-    // 带上主题类：#sp-toast-wrap 挂在 <html> 下、在 .sp-root 之外，拿不到 .sp-night/.sp-day
-    // 作用域里的 --sp-*-legacy 令牌。双层背景的不透明底板 var(--sp-surface-legacy) 会落空→透底。
-    // 加 sp-${theme} 把 legacy 令牌带进作用域（applyTheme 会随主题切换更新）。
+    if (document.getElementById('sp-toast-host')) return;
     const nav = globalThis.navigator;
     const userAgent = nav?.userAgent || '';
     const isIos = /iphone|ipad|ipod/i.test(userAgent)
         || ((nav?.maxTouchPoints || 0) > 1 && (nav?.platform === 'MacIntel' || /Macintosh/i.test(userAgent)));
     const tauriIosAttr = globalThis.__TAURITAVERN__?.abiVersion >= 1 && isIos ? ' data-sp-tauritavern-ios' : '';
-    if (!$('#sp-toast-wrap').length) document.documentElement.insertAdjacentHTML('beforeend', `<div id="sp-toast-wrap" class="sp-${currentTheme}"${tauriIosAttr}></div>`);
+    const host = document.createElement('div');
+    host.id = 'sp-toast-host';
+    host.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2000002';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const forcedTheme = (getSettings().themeMode || 'auto') !== 'auto' ? ` sp-forced-${currentTheme}` : '';
+    shadow.innerHTML = `<link rel="stylesheet" href="${STYLESHEET_URL}"><div id="sp-toast-wrap" class="sp-${currentTheme}${forcedTheme}"${tauriIosAttr}></div>`;
+    document.documentElement.appendChild(host);
 }
 
 function showToast(msg, onClick, isError = false) {
@@ -9591,7 +9602,7 @@ function showToast(msg, onClick, isError = false) {
         ${icon(isFailure ? 'alert-circle' : isInfo ? 'info-circle' : 'calendar-check')}
         <span>${escapeHtml(msg)}</span>
     </div>`);
-    $('#sp-toast-wrap').append($t);
+    $(getToastContainer()).append($t);
     requestAnimationFrame(() => $t.addClass('sp-toast-show'));
     if (onClick) $t.css('cursor', 'pointer').on('click', () => { onClick(); $t.remove(); });
     else if (isFailure) $t.css('cursor', 'pointer').on('click', () => { $t.removeClass('sp-toast-show'); setTimeout(() => $t.remove(), 350); });   // 失败 toast 停留久，允许点掉提前消失，免堆叠挡视线
