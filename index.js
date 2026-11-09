@@ -161,7 +161,7 @@ import { createDateDetectionController } from './business/axis/date-detection.js
 
 // Source and bundled entries both live at the plugin root.
 const EXT_BASE = new URL('.', import.meta.url).href;
-// Both Shadow roots must load the stylesheet paired with this build, even when
+// Owned Shadow roots must load the stylesheet paired with this build, even when
 // the browser still has an older unversioned style.css cached.
 const STYLESHEET_URL = typeof __GOUHUA_STYLESHEET_REVISION__ === 'string'
     ? `${EXT_BASE}style.css?v=${__GOUHUA_STYLESHEET_REVISION__}`
@@ -3199,14 +3199,17 @@ function injectExtButton() {
 // sp-btn-generating/done，两套并存互不干扰。计数只增减、不直接读 pointState.isGenerating 那些分散旗标，
 // 天然免漏灯/卡灯。
 let _fabBusyCount = 0;
+function getFabButton() {
+    return document.getElementById(FAB_ID)?.shadowRoot?.querySelector('.sp-fab-btn') || null;
+}
 function setFabBusy(on) {
     _fabBusyCount = Math.max(0, _fabBusyCount + (on ? 1 : -1));
-    $(`#${FAB_ID} .sp-fab-btn`).toggleClass('sp-fab-busy', _fabBusyCount > 0);
+    $(getFabButton()).toggleClass('sp-fab-busy', _fabBusyCount > 0);
 }
 
 function setExtBtnState(state) {
     // 魔法棒(#sp_open_wand)生成态变色太不显眼、用户根本看不到，故不再给它挂状态类——生成指示统一交给悬浮球呼吸灯。
-    const $fab = $(`#${FAB_ID} .sp-fab-btn`);
+    const $fab = $(getFabButton());
     $fab.removeClass('sp-btn-generating sp-btn-done');
     if (state) $fab.addClass(`sp-btn-${state}`);
     // 点生成中只锁「我/TA」子切换（本次生成绑定当前视角，中途换视角无意义，另有 .sp-view-btn 守卫兜底）；
@@ -3223,13 +3226,15 @@ function injectFab() {
     const posStyle = (!mobile && savedPos)
         ? `left:${savedPos.left}px;top:${savedPos.top}px;right:auto;bottom:auto;`
         : '';
-    const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000004;${posStyle}${fabEnabled() && pluginEnabled() ? '' : 'display:none'}">
+    const html = `<div id="${FAB_ID}" style="position:fixed;z-index:2000004;${posStyle}${fabEnabled() && pluginEnabled() ? '' : 'display:none'}"></div>`;
+    document.documentElement.insertAdjacentHTML('beforeend', html);
+    const fab = document.getElementById(FAB_ID);
+    const shadow = fab.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `<link rel="stylesheet" href="${STYLESHEET_URL}">
         <button class="sp-fab-btn sp-${currentTheme}" title="构画"
             style="transform:translateZ(0);clip:auto;">
             ${PEN_ICON_SVG}
-        </button>
-    </div>`;
-    document.documentElement.insertAdjacentHTML('beforeend', html);
+        </button>`;
 
     let wasMobile = isMobile();
     window.addEventListener('resize', () => {
@@ -3257,8 +3262,7 @@ function injectFab() {
         wasMobile = nowMobile;
     });
 
-    const fab = document.getElementById(FAB_ID);
-    const fabButton = fab?.querySelector('.sp-fab-btn');
+    const fabButton = getFabButton();
     if (globalThis.__TAURITAVERN__?.abiVersion >= 1) fab?.setAttribute('data-tt-mobile-surface', 'free-window');
     if (!fab || !fabButton) return;
     fabButton.addEventListener('pointerdown', function (e) {
@@ -9276,8 +9280,10 @@ function syncInlineTheme(theme = detectSTTheme()) {
 function applyTheme(theme) {
     currentTheme = theme;
     const forced = (getSettings().themeMode || 'auto') !== 'auto';
-    const roots = document.querySelectorAll(`#${MODAL_ID}, #${FAB_ID} .sp-fab-btn, #sp-toast-wrap, .sp-progress-card`);
+    const roots = document.querySelectorAll(`#${MODAL_ID}, #sp-toast-wrap, .sp-progress-card`);
     for (const root of roots) syncUiTheme(root, theme, forced);
+    const fabButton = getFabButton();
+    if (fabButton) syncUiTheme(fabButton, theme, forced);
     for (const scope of [_spShadow, _spDialogShadow]) {
         scope?.querySelectorAll('.sp-root').forEach(root => syncUiTheme(root, theme, forced));
     }

@@ -5,8 +5,8 @@
 
 /*
  * 本文件同时被 light DOM（楼内块 .sp-inline-box 系列）与 shadow DOM（主窗口）加载：
- * 全局注入一份给楼内块，injectModal() 又经 <link rel="stylesheet"> 引一份进 shadow
- * root。两处必须引用同一文件：全局份负责楼内块，shadow 份负责主窗口。
+ * 全局注入一份给楼内块，主窗口、独立弹窗与悬浮球再经 <link rel="stylesheet">
+ * 引进自己的 shadow root。各根必须引用同一文件。
  */
 /* ST messageFormatting 会把字面引号保留在 <q> 内；浏览器默认又通过
    q::before/q::after 补一层引号。ST 的全局修正规则进不了本插件的 Shadow DOM，
@@ -233,10 +233,9 @@ q::after {
 }
 
 /* ─── ST theme cascade — ST var 优先，fallback 到上面的 -legacy 值 ──────────── */
-/* .sp-fab-btn 一并纳入：悬浮球 #sp-fab 挂在 <html> 下、在 .sp-root（#sp-modal-root）
-   之外，拿不到这里映射的 --sp-primary，会导致 background:var(--sp-primary) 落空→
-   悬浮球填充透明（看不见）。它自带 .sp-day/.sp-night 提供 legacy 回退、强制模式下
-   还会被加 .sp-forced-*（在下方、源序靠后→照常覆盖），级联语义与面板完全一致。
+/* .sp-fab-btn 一并纳入：悬浮球自有 Shadow root 内的按钮独立取得主题令牌。
+   它自带 .sp-day/.sp-night 提供 legacy 回退，强制模式同步 .sp-forced-*，
+   级联语义与面板完全一致。
    楼内渲染框同理：注入 #chat、在 .sp-root 之外，若不在此映射
    --sp-primary/--sp-subtle/--sp-divider，其内胶囊（约定待办徽章、标签、起始/终止
    日期块、标注/更新胶囊描边、锁/归档钮）的 var(--sp-*) 会落空→颜色/描边透明。故与
@@ -2649,6 +2648,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     touch-action  : none;
 }
 .sp-fab-btn {
+    all: initial;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: var(--sp-font);
+    line-height: 1;
     /* 悬浮入口沿用固定尺寸，界面字号缩放不改变球的直径。 */
     width         : 36px;
     height        : 36px;
@@ -2676,6 +2681,11 @@ select.sp-input { appearance: none; cursor: pointer; }
     transform : scale(1.1);
     box-shadow: 0 6px 20px rgba(0,0,0,0.5);
     opacity                 : 1;
+}
+.sp-fab-btn:focus-visible {
+    outline: 2px solid var(--sp-on-surface);
+    outline-offset: 3px;
+    opacity: 1;
 }
 .sp-fab-btn:active { transform: scale(0.95); }
 /* 生成中 / 刚完成时强制不透明——用户正等结果，别让它半隐形。sp-fab-busy＝插件任意工作态（引用计数）。 */
