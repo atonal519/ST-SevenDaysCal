@@ -164,3 +164,24 @@ test('foreign fixed shadow window remains interactive while ordinary host clicks
   for (const type of ['pointerdown', 'pointerup', 'click']) target.emit(type);
   assert.equal(closes, 1);
 });
+
+
+test('production main panel outside-close follows current640 breakpoint without affecting shared dialogs', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const mobile = source.match(/^const isMobile = .*;$/m)[0];
+  const binding = source.match(/    bindOutsideClose\(\{ target: document, panel: inEl\('\.sp-sheet'\), close: closePanel,[\s\S]*?\n    \}\);/)[0];
+  const target = new Target(), panel = {}, host = { style: { display: 'block' } }, win = { innerWidth: 1280 };
+  let closes = 0, consumed = 0;
+  runInNewContext(mobile + '\n' + binding, { document: target, window: win, host, inEl: () => panel,
+    _spDialogShadow: null, bindOutsideClose: layout.bindOutsideClose,
+    closePanel() { closes++; host.style.display = 'none'; } });
+  const click = () => { target.emit('pointerdown'); target.emit('pointerup'); target.emit('click', { preventDefault() { consumed++; } }); };
+  for (const width of [1280, 641]) { win.innerWidth = width; click(); assert.equal(closes, 0); assert.equal(consumed, 0); }
+  win.innerWidth = 390; target.emit('pointerdown');
+  win.innerWidth = 641; target.emit('pointerup'); target.emit('click');
+  assert.equal(closes, 0, 'mobile-down then desktop-click stays open');
+  target.emit('pointerdown'); win.innerWidth = 390; target.emit('pointerup'); target.emit('click');
+  assert.equal(closes, 0, 'desktop-down does not become a mobile close');
+  for (const width of [640, 390]) { host.style.display = 'block'; win.innerWidth = width; click(); }
+  assert.equal(closes, 2); assert.equal(consumed, 2);
+});

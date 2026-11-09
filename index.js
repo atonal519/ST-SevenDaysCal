@@ -4092,7 +4092,7 @@ function injectModal() {
     });
     $in('.sp-theme-toggle-btn').on('click', cycleThemeMode);
     bindOutsideClose({ target: document, panel: inEl('.sp-sheet'), close: closePanel,
-        canClose: () => host.style.display !== 'none' && !_spDialogShadow?.querySelector('.sp-dialog-overlay, .sp-confirm-overlay'),
+        canClose: () => isMobile() && host.style.display !== 'none' && !_spDialogShadow?.querySelector('.sp-dialog-overlay, .sp-confirm-overlay'),
     });
 
     // 模块介绍气泡：点标题旁的 ? 弹出当前模块简介，点外部/切模块即关
