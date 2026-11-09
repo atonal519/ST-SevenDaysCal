@@ -4024,7 +4024,7 @@ function injectModal() {
     host.id = MODAL_ID;
     if (globalThis.__TAURITAVERN__?.abiVersion >= 1) host.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
     host.className = `sp-root sp-${currentTheme}`;
-    host.style.cssText = 'display:none;position:fixed;inset:0;width:100dvw;height:100dvh;pointer-events:auto;z-index:2000001';
+    host.style.cssText = 'display:none;position:fixed;inset:0;width:100dvw;height:100dvh;pointer-events:none;z-index:2000001';
     const root = host.attachShadow({ mode: 'open' });
     _spShadow = root;
     // 键盘边界：shadow 内 input 的 keydown 是 composed 事件，冒泡到 document 时 ST 的
@@ -4087,7 +4087,7 @@ function injectModal() {
         $(this).toggleClass('sp-btn-active', nowEnabled);
     });
     $in('.sp-theme-toggle-btn').on('click', cycleThemeMode);
-    bindOutsideClose({ target: host, panel: inEl('.sp-sheet'), close: closePanel,
+    bindOutsideClose({ target: document, panel: inEl('.sp-sheet'), close: closePanel,
         canClose: () => host.style.display !== 'none' && !_spDialogShadow?.querySelector('.sp-dialog-overlay, .sp-confirm-overlay'),
     });
 
@@ -9511,7 +9511,8 @@ function syncPanelViewport() {
     const savedScrollTop = settingsBody?.scrollTop;
     if (isMobile()) {
         sheet.style.left = `${view.left + view.width / 2}px`;
-        sheet.style.top = `${view.top + Math.max(40, safeTop)}px`;
+        // Match QQJ's mobile default; the viewport offset already accounts for keyboard/pan movement.
+        sheet.style.top = `${view.top + Math.max(20, safeTop)}px`;
         sheet.style.right = 'auto';
         sheet.style.transform = '';
         sheet.style.width = `${Math.max(0, view.width - 20)}px`;

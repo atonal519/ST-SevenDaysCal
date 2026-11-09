@@ -283,8 +283,9 @@ export function createInlineFeature(env = {}) {
         if (!alm && !schInner && !linesInner && !ledgerInner && !hasDateData) return '';
 
         const collapseControl = label => `<button type="button" class="sp-inline-region-collapse" aria-label="收起${label}" title="收起${label}">${icon("chevron-up")}<span>收起</span></button>`;
+        const moduleCount = [alm, schInner, linesInner, ledgerInner].filter(Boolean).length;
         const region = (cls, seg, label, inner) => inner
-            ? `<details class="${cls} sp-dash-region" data-seg="${seg}" open>${inner}${collapseControl(label)}</details>`
+            ? `<details class="${cls} sp-dash-region" data-seg="${seg}"${moduleCount === 1 ? ' open' : ''}>${inner}${collapseControl(label)}</details>`
             : '';
 
         // 日期只留外层摘要，轴内每个事项按当前历法显示自己的日期范围。

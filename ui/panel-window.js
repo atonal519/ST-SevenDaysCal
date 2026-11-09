@@ -14,7 +14,11 @@ export function bindOutsideClose({ target, panel, close, canClose = () => true, 
       const rect = panel.getBoundingClientRect();
       return event.clientX < rect.left || event.clientX > rect.left + rect.width || event.clientY < rect.top || event.clientY > rect.top + rect.height;
     }
-    return !(event.composedPath?.().includes(panel) ?? panel.contains(event.target));
+    const path = event.composedPath?.();
+    const host = panel.getRootNode?.().host;
+    const foreignWindow = path?.some(node => node?.nodeType === 11 && node.host !== host
+      && panel.ownerDocument?.defaultView?.getComputedStyle?.(node.host)?.position === 'fixed');
+    return !foreignWindow && !(path?.includes(panel) ?? panel.contains(event.target));
   };
   const down = event => {
     gesture = event.button === 0 && event.isPrimary !== false && outside(event) && canClose()
@@ -32,11 +36,15 @@ export function bindOutsideClose({ target, panel, close, canClose = () => true, 
   const click = event => {
     const dismiss = gesture?.up && !gesture.moved && outside(event) && canClose();
     reset();
-    if (dismiss) close();
+    if (dismiss) {
+      event.preventDefault?.();
+      event.stopImmediatePropagation?.();
+      close();
+    }
   };
   const listeners = [['pointerdown', down], ['pointermove', move], ['pointerup', up], ['pointercancel', reset], ['click', click]];
-  for (const [type, listener] of listeners) target.addEventListener(type, listener);
-  return () => { reset(); for (const [type, listener] of listeners) target.removeEventListener(type, listener); };
+  for (const [type, listener] of listeners) target.addEventListener(type, listener, true);
+  return () => { reset(); for (const [type, listener] of listeners) target.removeEventListener(type, listener, true); };
 }
 
 export function fitDesktopPanel(view, savedSize = null, savedPosition = null) {
@@ -47,6 +55,7 @@ export function fitDesktopPanel(view, savedSize = null, savedPosition = null) {
   const width = clamp(preferredWidth, Math.min(280, maxWidth), maxWidth);
   const height = clamp(preferredHeight, Math.min(300, maxHeight), maxHeight);
   const left = clamp(Number.isFinite(savedPosition?.left) ? savedPosition.left : view.left + view.width - width - 20, view.left + 10, view.left + view.width - width - 10);
-  const top = clamp(Number.isFinite(savedPosition?.top) ? savedPosition.top : view.top + 80, view.top + 10, view.top + view.height - height - 10);
+  // Match QQJ's desktop default while keeping an explicitly saved position authoritative.
+  const top = clamp(Number.isFinite(savedPosition?.top) ? savedPosition.top : view.top + 70, view.top + 10, view.top + view.height - height - 10);
   return { left, top, width, height };
 }

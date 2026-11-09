@@ -77,8 +77,11 @@ test('desktop uses the full visual viewport independently of chat or composer si
 });
 
 test('desktop default height is 600 until the browser viewport requires a clamp', () => {
-  assert.deepEqual(layout.fitDesktopPanel(rect(0, 0, 1200, 700)), { left: 820, top: 80, width: 360, height: 600 });
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.sp-sheet\s*\{[^}]*top\s*:\s*70px/);
+  assert.deepEqual(layout.fitDesktopPanel(rect(0, 0, 1200, 700)), { left: 820, top: 70, width: 360, height: 600 });
   assert.deepEqual(layout.fitDesktopPanel(rect(0, 0, 1200, 500)), { left: 820, top: 10, width: 360, height: 480 });
+  assert.deepEqual(layout.fitDesktopPanel(rect(0, 30, 1200, 700)), { left: 820, top: 100, width: 360, height: 600 });
 });
 
 test('main panel no longer observes chat dimensions', () => {
@@ -88,6 +91,8 @@ test('main panel no longer observes chat dimensions', () => {
 
 test('normal mobile sync keeps viewport margins with one safe-area inset and ignores chat size', () => {
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.sp-sheet\s*\{[^}]*top\s*:\s*max\(20px, env\(safe-area-inset-top, 0px\)\)/);
   const start = source.indexOf('function syncPanelViewport() {');
   const end = source.indexOf('// ─── Toast (top)', start);
   for (const width of [390, 320]) {
@@ -104,7 +109,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     context.syncPanelViewport();
     assert.equal(sheet.style.width, `${width - 20}px`);
     assert.equal(sheet.style.height, '764px');
-    assert.equal(sheet.style.top, '40px');
+    assert.equal(sheet.style.top, '20px');
     assert.equal(sheet.style.left, `${width / 2}px`);
     const original = { ...sheet.style };
     nodes.chat = rect(100, 300, 100, 50);
@@ -116,10 +121,46 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     context.syncPanelViewport();
     assert.equal(sheet.style.width, `${width - 40}px`);
     assert.equal(sheet.style.height, '320px');
-    assert.equal(sheet.style.top, '70px');
+    assert.equal(sheet.style.top, '50px');
     safeTop = 50; safeBottom = 45;
     context.syncPanelViewport();
     assert.equal(sheet.style.height, '305px');
     assert.equal(sheet.style.top, '80px');
   }
+});
+
+
+test('document capture consumes only a completed dismissing click and never handles wheel', () => {
+  const target = new Target(), panel = {}; let open = true, child = false, closes = 0, prevented = 0, stopped = 0;
+  const capture = [];
+  const add = target.addEventListener.bind(target);
+  target.addEventListener = (type, listener, options) => { capture.push([type, options]); add(type, listener); };
+  layout.bindOutsideClose({ target, panel, close() { closes += 1; open = false; }, canClose: () => open && !child });
+  const click = () => { target.emit('pointerdown'); target.emit('pointerup'); target.emit('click', { preventDefault() { prevented += 1; }, stopImmediatePropagation() { stopped += 1; } }); };
+  assert.ok(capture.every(([, options]) => options === true));
+  assert.equal(target.listeners.has('wheel'), false);
+  child = true; click(); assert.equal(prevented, 0); assert.equal(closes, 0);
+  child = false; click(); assert.equal(closes, 1); assert.equal(prevented, 1); assert.equal(stopped, 1);
+  click(); assert.equal(closes, 1); assert.equal(prevented, 1);
+});
+
+test('main desktop layer passes hit testing while sheet and mobile backdrop retain their interaction', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(source, /host\.style\.cssText = '[^']*pointer-events:none;z-index:2000001'/);
+  assert.match(source, /bindOutsideClose\(\{ target: document,/);
+  assert.match(css, /\.sp-backdrop\s*\{[^}]*pointer-events:\s*none/);
+  assert.match(css, /\.sp-sheet\s*\{[^}]*pointer-events\s*:\s*auto/);
+  assert.match(css, /@media \(max-width: 640px\) \{[^@]*\.sp-backdrop\s*\{[^}]*pointer-events\s*:\s*auto/);
+});
+
+
+test('foreign fixed shadow window remains interactive while ordinary host clicks dismiss', () => {
+  const target = new Target(), ownHost = {}, foreignHost = {}, foreignRoot = { nodeType: 11, host: foreignHost };
+  const panel = { getRootNode: () => ({ host: ownHost }), ownerDocument: { defaultView: { getComputedStyle: () => ({ position: 'fixed' }) } } };
+  let closes = 0; layout.bindOutsideClose({ target, panel, close: () => closes++ });
+  for (const type of ['pointerdown', 'pointerup', 'click']) target.emit(type, { composedPath: () => [foreignRoot, foreignHost, target] });
+  assert.equal(closes, 0);
+  for (const type of ['pointerdown', 'pointerup', 'click']) target.emit(type);
+  assert.equal(closes, 1);
 });

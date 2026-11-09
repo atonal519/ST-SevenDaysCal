@@ -113,3 +113,34 @@ test('轴组合保历史历法及外层独有纪年，不再重复今日大头�
     feature.mount(ai,false);assert.match(html(),/民国初春/);assert.equal((html().match(/民国/g)||[]).length,1);
     rawStamp='初春';feature.mount(ai,false);assert.match(html(),/初春/);assert.equal((html().match(/民国/g)||[]).length,1);
 });
+
+test('多模块时内层默认收起，单模块时唯一模块默认展开', () => {
+    const calendar = { months: [{ name: '一月', days: 30 }] };
+    const ai = new Node('mes', { mesid: '0', is_user: 'false' });
+    ai.appendChild(new Node('mes_text'));
+    let schedule = true;
+    const feature = createInlineFeature({
+        documentRef: { createElement: () => new Node() }, windowRef: {},
+        pluginEnabled: () => true, getContext: () => ({ chatId: 'region-defaults' }),
+        getSettings: () => ({ inlineRenderEnabled: true }), readSnapshot: () => ({ anchor: { month: 1, day: 2 } }),
+        snapshot: { resolveSnapshotCalendar: () => ({ resolved: true, calendar }) }, loadCalDesc: () => calendar,
+        loadAlmanac: () => [], almTodayAnchor: () => ({ month: 1, day: 2 }), almWeekdayRef: () => null,
+        almWeekdayFor: () => null, ALM_WEEKDAYS: [], escapeHtml: String, calMonthName: () => '一月',
+        calHasEra: () => false, getDateAnchor: () => null, charStableKey: () => '', readCacheRaw: () => '',
+        getCacheKey: () => '', readStore: () => null, keyDesc: () => '', createWeekdayConsumerContext: () => ({ weekdayRef: null }),
+        storyWeekdayRefPure: () => null, ALM_CHAT_SCAN_LIMIT: 1, parseCalendar: () => ({ days: [], future: null }),
+        formatStoryClockHeadParts: () => ({ todayHtml: '', timeHtml: '' }), storyClockEnabled: () => false,
+        axisInlineRenderer: { buildAlmanacBlock: () => ({ summary: '<summary>轴</summary>', itemsHtml: '<div>轴内容</div>' }) },
+        pointInlineRenderer: { buildScheduleBlock: () => schedule ? '<div>点内容</div>' : '', bindScheduleStripDelegation() {} },
+        linesFeature: { inlineHtml: () => '' }, _buildLedgerBlockHtml: () => '',
+    });
+
+    const html = () => ai.querySelector('.mes_text').firstElementChild._innerHTML;
+    feature.mount(ai, false);
+    assert.match(html(), /data-seg="almanac"(?![^>]*\bopen)/);
+    assert.match(html(), /data-seg="schedule"(?![^>]*\bopen)/);
+
+    schedule = false;
+    feature.mount(ai, false);
+    assert.match(html(), /<details class="sp-almanac-inline sp-dash-region" data-seg="almanac" open>/);
+});

@@ -391,13 +391,14 @@ q::after {
 .sp-root ::-webkit-scrollbar-thumb  { background: var(--sp-divider); border-radius: var(--sp-size-2); }
 .sp-root { scrollbar-width: thin; scrollbar-color: var(--sp-divider) transparent; }
 
-    .sp-backdrop { position: fixed; inset: 0; pointer-events: auto; background: transparent; }
+    .sp-backdrop { position: fixed; inset: 0; pointer-events: none; background: transparent; }
 
 /* ─── Sheet ──────────────────────────────────────────────────────────────────── */
 .sp-sheet {
+    pointer-events: auto;
     --sp-sheet-radius: var(--sp-size-20);
     position: fixed;
-    top           : 80px;
+    top           : 70px;
     right         : 20px;
     width         : 360px;
     height        : 600px;
@@ -2726,6 +2727,7 @@ select.sp-input { appearance: none; cursor: pointer; }
        full-screen positioning strategies (inset:0 / top+bottom) failed to
        render on the target mobile browser; this variant is known to work.) */
     @media (max-width: 640px) {
+    .sp-backdrop { pointer-events: auto; }
     @keyframes sp-sheet-in-mobile {
         from { transform: translateX(-50%) scale(0.98); opacity: 0; }
         to   { transform: translateX(-50%) scale(1);    opacity: 1; }
@@ -2759,7 +2761,7 @@ select.sp-input { appearance: none; cursor: pointer; }
     .sp-sheet {
         --sp-sheet-radius: var(--sp-size-14);
     position: fixed;
-        top             : max(40px, env(safe-area-inset-top, 0px));
+        top             : max(20px, env(safe-area-inset-top, 0px));
         left            : 50%;
         right           : auto;
         bottom: auto;
@@ -6802,7 +6804,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
 /* ─── 楼内组合（外层日期摘要与轴/标注池/点/线）──────────────────────────
    外壳 .sp-inline-box.sp-dash 是个 <details>：收起=一小条摘要(今 M/D 周X · 历N 点N 线N)，
-   展开=完整面板。面板内历/点/线各自又是 <details>(.sp-dash-region)，可各自折叠。
+   展开=多模块展开为模块目录，单模块直接显示内容，模块可各自折叠。
    外壳提供唯一的外边距+圆角+边框+背景；进框的区剥掉各自卡片外观、贴合成一节。
    历史楼只读框 .sp-inline-box-ro 整体降透明、左竖条示意「历史·只读」。 */
 .sp-inline-box {
