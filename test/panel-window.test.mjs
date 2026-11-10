@@ -96,14 +96,16 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
   const start = source.indexOf('function syncPanelViewport() {');
   const end = source.indexOf('// ─── Toast (top)', start);
   for (const width of [390, 320]) {
-    const sheet = { style: {} }, root = { style: {}, getBoundingClientRect: () => rect(0, -500, width, 844) };
+    let originTop = 0;
+    const sheet = { style: {} }, root = { style: {}, getBoundingClientRect: () => rect(0, originTop, width, 844) };
     const nodes = { chat: rect(10, 50, width - 20, 700) };
     const win = { innerWidth: width, innerHeight: 844 };
     let safeTop = 0, safeBottom = 0;
     const document = { ...fixture(nodes), getElementById: id => id === 'panel' ? root : fixture(nodes).getElementById(id),
       createElement: () => ({ style: {} }), body: { appendChild() {}, removeChild() {} } };
     const context = { document, window: win, MODAL_ID: 'panel', DIALOG_HOST_ID: 'dialog', syncDialogViewport: layout.syncDialogViewport, settingsOpen: false, inEl: () => sheet,
-      isMobile: () => true, readPanelViewport: layout.readPanelViewport,
+      isMobile: () => win.innerWidth <= 640, readPanelViewport: layout.readPanelViewport,
+      fitDesktopPanel: layout.fitDesktopPanel, localStorage: { getItem: () => null }, SIZE_KEY: 'size', POS_KEY: 'position',
       getComputedStyle: () => ({ top: `${safeTop}px`, bottom: `${safeBottom}px` }) };
     runInNewContext(source.slice(start, end), context);
     context.syncPanelViewport();
@@ -111,7 +113,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     assert.equal(sheet.style.height, '764px');
     assert.equal(sheet.style.top, '20px');
     assert.equal(sheet.style.left, `${width / 2}px`);
-    assert.equal(root.style.transform, 'translate(0px, 500px)', '主宿主补到视口原点，原手机坐标不变');
+    assert.equal(root.style.transform, '', '手机主窗保持原视口 fixed 层');
     const original = { ...sheet.style };
     nodes.chat = rect(100, 300, 100, 50);
     nodes.form_sheld = rect(100, 350, 100, 400);
@@ -127,6 +129,20 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     context.syncPanelViewport();
     assert.equal(sheet.style.height, '305px');
     assert.equal(sheet.style.top, '80px');
+    assert.equal(root.style.transform, '', '内部输入后可视视口收缩不会新增 fixed 包含块');
+    originTop = -500;
+    win.innerWidth = 900;
+    win.visualViewport = { offsetLeft: 0, offsetTop: 0, width: 900, height: 844 };
+    context.syncPanelViewport();
+    assert.equal(root.style.transform, 'translate(0px, 500px)', '桌面继续补偿原点');
+    win.innerWidth = width;
+    win.visualViewport = { offsetLeft: 0, offsetTop: 260, width, height: 350 };
+    context.syncPanelViewport();
+    assert.equal(root.style.transform, 'translate(0px, 500px)', '手机遇真实文档偏移继续必要补偿');
+    originTop = 0; context.syncPanelViewport();
+    assert.equal(root.style.transform, '', '恢复零原点时清掉桌面遗留补偿');
+    assert.equal(sheet.style.top, '310px');
+    assert.equal(sheet.style.height, '255px');
   }
 });
 
