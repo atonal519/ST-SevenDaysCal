@@ -9487,12 +9487,16 @@ function positionPanel() {
 function bindViewportSync() {
     if (viewportSyncBound) return;
     viewportSyncBound = true;
-    const onViewportChange = () => {
+    const onViewportChange = event => {
         closeActionMenus();
         onDragEnd(null, false);
         onResizeEnd(null, false);
-        if (viewportSyncFrame !== null) return;
-        const callback = () => { viewportSyncFrame = null; syncPanelViewport(); };
+        if (viewportSyncFrame !== null) {
+            if (event?.type !== 'orientationchange') return;
+            if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(viewportSyncFrame);
+            else clearTimeout(viewportSyncFrame);
+        }
+        const callback = () => { viewportSyncFrame = null; syncPanelViewport(event?.type !== 'orientationchange'); };
         viewportSyncFrame = typeof window.requestAnimationFrame === 'function'
             ? window.requestAnimationFrame(callback)
             : setTimeout(callback, 16);
@@ -9506,14 +9510,21 @@ function bindViewportSync() {
     }
 }
 
-function syncPanelViewport() {
+function syncPanelViewport(preserveEditingGeometry = false) {
     const dialogHost = document.getElementById(DIALOG_HOST_ID);
     if (dialogHost) syncDialogViewport(dialogHost);
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;
+    if (preserveEditingGeometry && isMobile()) {
+        const focused = _spShadow?.activeElement;
+        const editing = focused?.isContentEditable || !focused?.readOnly && (focused?.tagName === 'TEXTAREA'
+            || focused?.tagName === 'INPUT' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(focused.type));
+        // 内部文本编辑交给浏览器聚焦滚动，避免键盘事件再次改写主窗几何。
+        if (editing) return;
+    }
     const mobile = isMobile();
-    // 手机零偏移时保留原 fixed 层级，真实文档偏移仍按原点补偿。
+    // 手机零原点保留原 fixed 层级，非零原点沿既有补偿。
     root.style.transform = mobile ? '' : 'translate(0px, 0px)';
     const origin = root.getBoundingClientRect();
     if (!mobile || origin.left !== 0 || origin.top !== 0) {
