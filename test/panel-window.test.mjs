@@ -102,7 +102,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     let safeTop = 0, safeBottom = 0;
     const document = { ...fixture(nodes), getElementById: id => id === 'panel' ? root : fixture(nodes).getElementById(id),
       createElement: () => ({ style: {} }), body: { appendChild() {}, removeChild() {} } };
-    const context = { document, window: win, MODAL_ID: 'panel', settingsOpen: false, inEl: () => sheet,
+    const context = { document, window: win, MODAL_ID: 'panel', DIALOG_HOST_ID: 'dialog', syncDialogViewport: layout.syncDialogViewport, settingsOpen: false, inEl: () => sheet,
       isMobile: () => true, readPanelViewport: layout.readPanelViewport,
       getComputedStyle: () => ({ top: `${safeTop}px`, bottom: `${safeBottom}px` }) };
     runInNewContext(source.slice(start, end), context);
@@ -184,4 +184,40 @@ test('production main panel outside-close follows current640 breakpoint without 
   assert.equal(closes, 0, 'desktop-down does not become a mobile close');
   for (const width of [640, 390]) { host.style.display = 'block'; win.innerWidth = width; click(); }
   assert.equal(closes, 2); assert.equal(consumed, 2);
+});
+
+test('dialog viewport sizing compensates transformed roots and document scroll independently of the main panel', () => {
+  assert.equal(typeof layout.syncDialogViewport, 'function');
+  for (const origin of [{ left: 0, top: 0 }, { left: -90, top: -700 }]) {
+    const host = { style: {}, getBoundingClientRect() {
+      return { left: origin.left + parseFloat(this.style.left), top: origin.top + parseFloat(this.style.top) };
+    } };
+    const win = { innerWidth: 820, innerHeight: 1180 };
+    layout.syncDialogViewport(host, win);
+    assert.equal(host.style.width, '820px');
+    assert.equal(host.style.height, '1180px');
+    assert.deepEqual(host.getBoundingClientRect(), { left: 0, top: 0 });
+    win.visualViewport = { offsetLeft: 220, offsetTop: 140, width: 410, height: 350 };
+    layout.syncDialogViewport(host, win);
+    assert.equal(host.style.width, '410px');
+    assert.equal(host.style.height, '350px');
+    assert.deepEqual(host.getBoundingClientRect(), { left: 220, top: 140 });
+  }
+});
+
+
+test('production viewport sync updates an independent dialog while the main panel is hidden', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function syncPanelViewport() {');
+  const end = source.indexOf('// ─── Toast (top)', start);
+  const host = { style: {}, getBoundingClientRect: () => rect(0, -400, 820, 0) };
+  const root = { style: { display: 'none' } };
+  const context = { document: { getElementById: id => id === 'dialog' ? host : root },
+    DIALOG_HOST_ID: 'dialog', MODAL_ID: 'panel', inEl: () => null,
+    syncDialogViewport: node => layout.syncDialogViewport(node, { innerWidth: 820, innerHeight: 1180 }) };
+  runInNewContext(source.slice(start, end), context);
+  context.syncPanelViewport();
+  assert.equal(host.style.width, '820px');
+  assert.equal(host.style.height, '1180px');
+  assert.equal(host.style.top, '400px');
 });

@@ -1,4 +1,4 @@
-import { readPanelViewport, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
+import { readPanelViewport, syncDialogViewport, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
 import { primaryTextColor, syncUiTheme } from './utils/ui-theme.js';
 import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
@@ -3356,6 +3356,8 @@ function injectModal() {
     bindDailyMenuDialogEvents();
     bindWardrobeDialogEvents();
     document.documentElement.appendChild(dialogHost);
+    bindViewportSync();
+    syncDialogViewport(dialogHost);
     const html = `
             <div class="sp-backdrop"></div>
             <div class="sp-sheet">
@@ -9494,6 +9496,7 @@ function bindViewportSync() {
             : setTimeout(callback, 16);
     };
     window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange);
     window.addEventListener('orientationchange', onViewportChange);
     if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', onViewportChange);
@@ -9502,6 +9505,8 @@ function bindViewportSync() {
 }
 
 function syncPanelViewport() {
+    const dialogHost = document.getElementById(DIALOG_HOST_ID);
+    if (dialogHost) syncDialogViewport(dialogHost);
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;

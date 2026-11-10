@@ -2455,7 +2455,7 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 .sp-daily-menu-overlay,
 .sp-wardrobe-overlay { z-index: 2000002; }
-#sp-dialog-overlay-host { position: fixed; inset: 0; z-index: 2000002; pointer-events: none; }
+#sp-dialog-overlay-host { position: absolute; inset: 0; z-index: 2000002; pointer-events: none; }
 .sp-daily-menu-sheet,
 .sp-wardrobe-sheet {
     width: min(520px, calc(100vw - 40px));
@@ -4121,6 +4121,42 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : var(--sp-on-primary);
 }
 .sp-confirm-ok:hover:not(:disabled) { opacity: 0.88; }
+
+/* 独立弹窗宿主由可视视口同步尺寸；遮罩只填充宿主，不再取 html 的 fixed 包含块。 */
+:host(#sp-dialog-host) .sp-dialog-overlay,
+:host(#sp-dialog-host) .sp-confirm-overlay {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    height: auto;
+}
+:host(#sp-dialog-host) .sp-dialog-sheet,
+:host(#sp-dialog-host) .sp-confirm-sheet {
+    box-sizing: border-box;
+    max-height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+:host(#sp-dialog-host) .sp-dialog-sheet-custom,
+:host(#sp-dialog-host) .sp-daily-menu-sheet,
+:host(#sp-dialog-host) .sp-wardrobe-sheet { overflow: hidden; }
+:host(#sp-dialog-host) .sp-dialog-sheet > *,
+:host(#sp-dialog-host) .sp-confirm-sheet > * { flex-shrink: 0; }
+:host(#sp-dialog-host) .sp-daily-menu-content,
+:host(#sp-dialog-host) .sp-wardrobe-content,
+:host(#sp-dialog-host) .sp-dialog-body,
+:host(#sp-dialog-host) .sp-dialog-note,
+:host(#sp-dialog-host) .sp-dialog-custom,
+:host(#sp-dialog-host) .sp-dialog-fields,
+:host(#sp-dialog-host) .sp-confirm-body,
+:host(#sp-dialog-host) .sp-confirm-note {
+    flex-shrink: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+:host(#sp-dialog-host) .sp-dialog-fields > * { flex-shrink: 0; }
 
 /* ─── 通用决策弹窗：独立于作者 sp-confirm 生命周期 ─────────────────────────── */
 .sp-dialog-overlay {

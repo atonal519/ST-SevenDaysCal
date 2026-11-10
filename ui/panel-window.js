@@ -5,6 +5,16 @@ export function readPanelViewport(win = globalThis.window) {
     width: Math.max(0, Number(visual?.width) || win.innerWidth), height: Math.max(0, Number(visual?.height) || win.innerHeight) };
 }
 
+// 宿主 html 的 transform 会把 fixed 定位改为相对文档根；先测原点，再补偿滚动偏移。
+export function syncDialogViewport(host, win = globalThis.window) {
+  const view = readPanelViewport(win);
+  Object.assign(host.style, { left: '0px', top: '0px', right: 'auto', bottom: 'auto',
+    width: `${view.width}px`, height: `${view.height}px` });
+  const origin = host.getBoundingClientRect();
+  host.style.left = `${view.left - origin.left}px`;
+  host.style.top = `${view.top - origin.top}px`;
+}
+
 // down/up 两端均在外侧才关闭，拖选、滚动、取消的手势不转换成关闭。
 export function bindOutsideClose({ target, panel, close, canClose = () => true, nativeDialog = false }) {
   let gesture = null;
