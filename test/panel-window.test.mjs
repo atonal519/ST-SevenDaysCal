@@ -141,8 +141,8 @@ test('document capture consumes only a completed dismissing click and never hand
   assert.ok(capture.every(([, options]) => options === true));
   assert.equal(target.listeners.has('wheel'), false);
   child = true; click(); assert.equal(prevented, 0); assert.equal(closes, 0);
-  child = false; click(); assert.equal(closes, 1); assert.equal(prevented, 1); assert.equal(stopped, 1);
-  click(); assert.equal(closes, 1); assert.equal(prevented, 1);
+  child = false; click(); assert.equal(closes, 1); assert.equal(prevented, 0); assert.equal(stopped, 0);
+  click(); assert.equal(closes, 1); assert.equal(prevented, 0);
 });
 
 test('main desktop layer passes hit testing while sheet and mobile backdrop retain their interaction', () => {
@@ -184,7 +184,7 @@ test('production main panel outside-close follows current640 breakpoint without 
   target.emit('pointerdown'); win.innerWidth = 390; target.emit('pointerup'); target.emit('click');
   assert.equal(closes, 0, 'desktop-down does not become a mobile close');
   for (const width of [640, 390]) { host.style.display = 'block'; win.innerWidth = width; click(); }
-  assert.equal(closes, 2); assert.equal(consumed, 2);
+  assert.equal(closes, 2); assert.equal(consumed, 0);
 });
 
 test('dialog viewport sizing compensates transformed roots and document scroll independently of the main panel', () => {
@@ -236,10 +236,29 @@ test('foreign standard dialogs and popup semantics retain clicks while fixed-bod
     const popup = selector === '[popover]' ? { popover: 'auto', matches: value => value === ':popover-open' }
       : selector === '[aria-haspopup]' ? { getAttribute: name => name === 'aria-haspopup' ? 'menu' : null }
         : { matches: selectors => selectors.split(',').map(value => value.trim()).includes(selector === 'input[list]' ? 'input' : selector) };
+    const before = closes;
     click([{}, popup, target]);
-    assert.equal(closes, 0, selector); assert.equal(blocked, 0, selector);
+    const protectedWindow = ['dialog', '[role~="dialog"]', '[role~="alertdialog"]', '[role~="menu"]', '[role~="listbox"]', '[role~="combobox"]', '[popover]'].includes(selector);
+    assert.equal(closes, before + (protectedWindow ? 0 : 1), selector); assert.equal(blocked, 0, selector);
   }
+  const beforeBody = closes;
   const fixedBody = { matches: () => false, style: { position: 'fixed' } };
-  click([panel, fixedBody, target]); assert.equal(closes, 0, 'own panel remains internal');
-  click([fixedBody, target]); assert.equal(closes, 1, 'ordinary fixed ancestors are not foreign popups');
+  click([panel, fixedBody, target]); assert.equal(closes, beforeBody, 'own panel remains internal');
+  click([fixedBody, target]); assert.equal(closes, beforeBody + 1, 'ordinary fixed ancestors are not foreign popups');
+});
+
+
+test('mobile host input closes without consuming the click, while redirected panel taps stay harmless', () => {
+  const target = new Target(), panel = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 370, height: 764 }) };
+  let closes = 0, blocked = 0;
+  layout.bindOutsideClose({ target, panel, close: () => closes++ });
+  const input = { matches: selectors => selectors.split(',').includes('input') };
+  for (const type of ['pointerdown', 'pointerup', 'click']) target.emit(type, { composedPath: () => [input, target],
+    preventDefault: () => blocked++, stopImmediatePropagation: () => blocked++ });
+  assert.equal(closes, 1); assert.equal(blocked, 0, 'host input receives its original click');
+  for (const type of ['pointerdown', 'pointerup']) target.emit(type, { clientX: 4, clientY: 400, composedPath: () => [panel, target] });
+  target.emit('click', { clientX: 12, clientY: 400, composedPath: () => [panel, target],
+    preventDefault: () => blocked++, stopImmediatePropagation: () => blocked++ });
+  assert.equal(closes, 2, 'outside physical endpoints remain outside after browser touch adjustment');
+  assert.equal(blocked, 2, 'retargeted own-panel action is consumed');
 });

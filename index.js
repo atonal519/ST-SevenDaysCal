@@ -3230,7 +3230,9 @@ function injectFab() {
     document.documentElement.insertAdjacentHTML('beforeend', html);
     const fab = document.getElementById(FAB_ID);
     const shadow = fab.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `<link rel="stylesheet" href="${STYLESHEET_URL}">
+    // The later stylesheet supplies display:flex once the complete FAB style is ready.
+    shadow.innerHTML = `<style>.sp-fab-btn { display: none; }</style>
+        <link rel="stylesheet" href="${STYLESHEET_URL}">
         <button class="sp-fab-btn sp-${currentTheme}" title="构画"
             style="transform:translateZ(0);clip:auto;">
             ${PEN_ICON_SVG}

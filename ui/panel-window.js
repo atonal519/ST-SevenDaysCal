@@ -26,12 +26,16 @@ export function bindOutsideClose({ target, panel, close, canClose = () => true, 
     }
     const path = event.composedPath?.();
     const host = panel.getRootNode?.().host;
-    const foreignWindow = path?.some(node => node?.matches?.('button,input,textarea,select,a[href],label,summary,[contenteditable]:not([contenteditable="false"]),[tabindex]:not([tabindex="-1"]),[role~="button"],[role~="link"],[role~="checkbox"],[role~="radio"],[role~="switch"],[role~="textbox"],dialog,[role~="dialog"],[role~="alertdialog"],[role~="menu"],[role~="listbox"],[role~="combobox"]')
-      || ['true', 'menu', 'listbox', 'tree', 'grid', 'dialog'].includes(node?.getAttribute?.('aria-haspopup'))
-      || typeof node?.popover === 'string' && node.matches?.(':popover-open')
+    const foreignWindow = path?.some(node => node !== panel && (node?.matches?.('dialog,[role~="dialog"],[role~="alertdialog"],[role~="menu"],[role~="listbox"],[role~="combobox"]')
+      || typeof node?.popover === 'string' && node.matches?.(':popover-open'))
       || node?.nodeType === 11 && node.host !== host
       && panel.ownerDocument?.defaultView?.getComputedStyle?.(node.host)?.position === 'fixed');
-    return !foreignWindow && !(path?.includes(panel) ?? panel.contains(event.target));
+    const inside = path?.includes(panel) ?? panel.contains(event.target);
+    const rect = inside ? panel.getBoundingClientRect?.() : null;
+    // Touch adjustment may target the panel even when the physical tap is in its margin.
+    const outsidePoint = rect && (event.clientX < rect.left || event.clientX > rect.left + rect.width
+      || event.clientY < rect.top || event.clientY > rect.top + rect.height);
+    return !foreignWindow && (!inside || outsidePoint);
   };
   const down = event => {
     gesture = event.button === 0 && event.isPrimary !== false && outside(event) && canClose()
@@ -47,11 +51,14 @@ export function bindOutsideClose({ target, panel, close, canClose = () => true, 
   };
   const reset = () => { gesture = null; };
   const click = event => {
-    const dismiss = gesture?.up && !gesture.moved && outside(event) && canClose();
+    const dismiss = gesture?.up && !gesture.moved && canClose();
     reset();
     if (dismiss) {
-      event.preventDefault?.();
-      event.stopImmediatePropagation?.();
+      // Only suppress a touch-adjusted click sent back into our own panel.
+      if (nativeDialog || event.composedPath?.().includes(panel)) {
+        event.preventDefault?.();
+        event.stopImmediatePropagation?.();
+      }
       close();
     }
   };

@@ -11,6 +11,17 @@ function region(start, end) {
     return source.slice(begin, finish);
 }
 
+test('FAB bootstrap hides the native button until the later stylesheet supplies its layout', () => {
+    const injection = region('function injectFab()', 'function onFabPointerMove');
+    const markup = injection.match(/shadow\.innerHTML = `([\s\S]+?)`;/)?.[1];
+    assert.ok(markup);
+    assert.match(markup, /^<style>\.sp-fab-btn\s*\{\s*display:\s*none;\s*\}<\/style>/);
+    assert.ok(markup.indexOf('</style>') < markup.indexOf('<link rel="stylesheet"'));
+    const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+    const rule = css.match(/\.sp-fab-btn\s*\{([^}]+)\}/)?.[1];
+    assert.match(rule, /display\s*:\s*flex/);
+});
+
 function harness() {
     const element = (...classes) => {
         const names = new Set(classes);
