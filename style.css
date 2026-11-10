@@ -2739,7 +2739,7 @@ select.sp-input { appearance: none; cursor: pointer; }
        full-screen positioning strategies (inset:0 / top+bottom) failed to
        render on the target mobile browser; this variant is known to work.) */
     @media (max-width: 640px) {
-    .sp-backdrop { pointer-events: auto; }
+    .sp-backdrop { pointer-events: none; }
     @keyframes sp-sheet-in-mobile {
         from { transform: translateX(-50%) scale(0.98); opacity: 0; }
         to   { transform: translateX(-50%) scale(1);    opacity: 1; }

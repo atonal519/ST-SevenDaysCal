@@ -96,7 +96,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
   const start = source.indexOf('function syncPanelViewport() {');
   const end = source.indexOf('// ─── Toast (top)', start);
   for (const width of [390, 320]) {
-    const sheet = { style: {} }, root = { style: {} };
+    const sheet = { style: {} }, root = { style: {}, getBoundingClientRect: () => rect(0, -500, width, 844) };
     const nodes = { chat: rect(10, 50, width - 20, 700) };
     const win = { innerWidth: width, innerHeight: 844 };
     let safeTop = 0, safeBottom = 0;
@@ -111,6 +111,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     assert.equal(sheet.style.height, '764px');
     assert.equal(sheet.style.top, '20px');
     assert.equal(sheet.style.left, `${width / 2}px`);
+    assert.equal(root.style.transform, 'translate(0px, 500px)', '主宿主补到视口原点，原手机坐标不变');
     const original = { ...sheet.style };
     nodes.chat = rect(100, 300, 100, 50);
     nodes.form_sheld = rect(100, 350, 100, 400);
@@ -151,11 +152,11 @@ test('main desktop layer passes hit testing while sheet and mobile backdrop reta
   assert.match(source, /bindOutsideClose\(\{ target: document,/);
   assert.match(css, /\.sp-backdrop\s*\{[^}]*pointer-events:\s*none/);
   assert.match(css, /\.sp-sheet\s*\{[^}]*pointer-events\s*:\s*auto/);
-  assert.match(css, /@media \(max-width: 640px\) \{[^@]*\.sp-backdrop\s*\{[^}]*pointer-events\s*:\s*auto/);
+  assert.match(css, /@media \(max-width: 640px\) \{[^@]*\.sp-backdrop\s*\{[^}]*pointer-events\s*:\s*none/);
 });
 
 
-test('foreign fixed shadow window remains interactive while ordinary host clicks dismiss', () => {
+test('foreign fixed shadow window remains interactive while outside blank dismisses', () => {
   const target = new Target(), ownHost = {}, foreignHost = {}, foreignRoot = { nodeType: 11, host: foreignHost };
   const panel = { getRootNode: () => ({ host: ownHost }), ownerDocument: { defaultView: { getComputedStyle: () => ({ position: 'fixed' }) } } };
   let closes = 0; layout.bindOutsideClose({ target, panel, close: () => closes++ });
@@ -220,4 +221,25 @@ test('production viewport sync updates an independent dialog while the main pane
   assert.equal(host.style.width, '820px');
   assert.equal(host.style.height, '1180px');
   assert.equal(host.style.top, '400px');
+});
+
+
+test('foreign standard dialogs and popup semantics retain clicks while fixed-body blank still dismisses', () => {
+  const target = new Target(), panel = { contains: () => false };
+  let closes = 0, blocked = 0;
+  layout.bindOutsideClose({ target, panel, close: () => closes++ });
+  const click = path => {
+    for (const type of ['pointerdown', 'pointerup', 'click']) target.emit(type, { composedPath: () => path,
+      preventDefault: () => blocked++, stopImmediatePropagation: () => blocked++ });
+  };
+  for (const selector of ['button', 'input', 'textarea', 'a[href]', 'label', 'summary', '[role~="button"]', '[tabindex]:not([tabindex="-1"])', 'dialog', 'select', 'input[list]', '[role~="dialog"]', '[role~="alertdialog"]', '[role~="menu"]', '[role~="listbox"]', '[role~="combobox"]', '[aria-haspopup]', '[popover]']) {
+    const popup = selector === '[popover]' ? { popover: 'auto', matches: value => value === ':popover-open' }
+      : selector === '[aria-haspopup]' ? { getAttribute: name => name === 'aria-haspopup' ? 'menu' : null }
+        : { matches: selectors => selectors.split(',').map(value => value.trim()).includes(selector === 'input[list]' ? 'input' : selector) };
+    click([{}, popup, target]);
+    assert.equal(closes, 0, selector); assert.equal(blocked, 0, selector);
+  }
+  const fixedBody = { matches: () => false, style: { position: 'fixed' } };
+  click([panel, fixedBody, target]); assert.equal(closes, 0, 'own panel remains internal');
+  click([fixedBody, target]); assert.equal(closes, 1, 'ordinary fixed ancestors are not foreign popups');
 });

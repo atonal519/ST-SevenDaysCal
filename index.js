@@ -4044,8 +4044,8 @@ function injectModal() {
     });
     // shadow 内第一层 wrapper 必须带 sp-root + 主题类：style.css 的 `.sp-root ...` 前缀选择器、
     // .sp-night/.sp-day 色板、.sp-forced-* 强制主题覆盖全靠它匹配
-    // （applyTheme 同步它的主题类）。display:contents 不产生布局盒子，fixed 语义
-    // 仍由 .sp-sheet 承担；host 无 transform/filter，内部 position:fixed 相对视口不变。
+    // （applyTheme 同步它的主题类）。display:contents 不产生布局盒子，主宿主补偿原点后，
+    // .sp-sheet 继续使用可视视口坐标。
     root.innerHTML = `
         <link rel="stylesheet" href="${STYLESHEET_URL}">
         <div class="sp-root sp-${currentTheme}" style="display:contents">${html}</div>`;
@@ -9510,6 +9510,10 @@ function syncPanelViewport() {
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;
+    // 保持子面板的视口坐标，抵消宿主根包含块的文档滚动原点。
+    root.style.transform = 'translate(0px, 0px)';
+    const origin = root.getBoundingClientRect();
+    root.style.transform = `translate(${-origin.left}px, ${-origin.top}px)`;
 
     // Read safe-area insets from CSS env() via a probe element.
     // Fallback to 0 when unsupported (older Android browsers).

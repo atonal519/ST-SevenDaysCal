@@ -26,7 +26,10 @@ export function bindOutsideClose({ target, panel, close, canClose = () => true, 
     }
     const path = event.composedPath?.();
     const host = panel.getRootNode?.().host;
-    const foreignWindow = path?.some(node => node?.nodeType === 11 && node.host !== host
+    const foreignWindow = path?.some(node => node?.matches?.('button,input,textarea,select,a[href],label,summary,[contenteditable]:not([contenteditable="false"]),[tabindex]:not([tabindex="-1"]),[role~="button"],[role~="link"],[role~="checkbox"],[role~="radio"],[role~="switch"],[role~="textbox"],dialog,[role~="dialog"],[role~="alertdialog"],[role~="menu"],[role~="listbox"],[role~="combobox"]')
+      || ['true', 'menu', 'listbox', 'tree', 'grid', 'dialog'].includes(node?.getAttribute?.('aria-haspopup'))
+      || typeof node?.popover === 'string' && node.matches?.(':popover-open')
+      || node?.nodeType === 11 && node.host !== host
       && panel.ownerDocument?.defaultView?.getComputedStyle?.(node.host)?.position === 'fixed');
     return !foreignWindow && !(path?.includes(panel) ?? panel.contains(event.target));
   };
