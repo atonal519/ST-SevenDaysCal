@@ -1,5 +1,8 @@
 export const QIANQIANJIE_BRIDGE_KEY = 'qqj_v3_public_bridge_v1';
 export const QIANQIANJIE_READ_TIMEOUT_MS = 15000;
+const MAX_SUMMARIES = 20;
+const SUMMARY_CHARACTERS = 8000;
+const READING_GUIDE = '【千千结资料读法】\n按来源延续已发生剧情，后续明确进展更新早期状态。历史摘要中的“尚未、未知”描述来源楼当时的状态，当前进展依据近期正文及对应人物状态读取。人物依据亲历、明确告知和实际公开传播的信息行动。私下约定和想法保持各自知情范围。材料空白保留为未知，断言“尚未交谈”“不知道某事”须有剧情依据。计划、承诺与实际完成分别读取。';
 const clean = (value, maximum = 500) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maximum);
 const text = value => typeof value === 'string' ? value.trim() : '';
 const characterLimit = value => Number.isFinite(Number(value)) ? Math.max(0, Math.min(40000, Math.floor(Number(value)))) : 12000;
@@ -38,29 +41,31 @@ function selectPeople(items, query) {
     return { ids: [...ids], names: new Map(people.map(person => [person.entityId, text(person.displayName) || text(person.profile?.name) || person.entityId])) };
 }
 function formatSections(sections, maximum) {
+    const budget = Math.max(0, maximum - READING_GUIDE.length - 2);
     let output = '';
     for (const [heading, body] of sections) {
-        if (!text(body)) continue;
+        const content = text(body);
+        if (!content) continue;
         const separator = output ? '\n\n' : '', prefix = `${separator}${heading}\n`;
-        if (maximum - output.length <= prefix.length) break;
-        output += prefix + clip(text(body), maximum - output.length - prefix.length);
-        if (output.length >= maximum) break;
+        if (prefix.length + content.length > budget - output.length) continue;
+        output += prefix + content;
     }
-    return output;
+    return output ? `${READING_GUIDE}\n\n${output}` : '';
 }
 function formatContext(value, selected, maximum) {
     const sections = [['【千千结｜作者侧背景；不代表人物均已知】', text(value.routerText)]];
+    const selectedIds = Array.isArray(value.selectedEntityIds) ? value.selectedEntityIds : selected.ids;
     for (const actor of Array.isArray(value.actors) ? value.actors : []) {
-        if (!selected.ids.includes(actor?.entityId)) continue;
+        if (!selectedIds.includes(actor?.entityId)) continue;
         const parts = [['档案', actor.profileText], ['状态', actor.stateText], ['本人经历', actor.memoryText]].filter(([, body]) => text(body));
-        if (parts.length) sections.push([`【人物：${selected.names.get(actor.entityId) || actor.entityId}｜仅该人物的资料】`, parts.map(([label, body]) => `${label}：\n${text(body)}`).join('\n')]);
+        if (parts.length) sections.push([`【人物：${text(actor.displayName) || selected.names.get(actor.entityId) || actor.entityId}｜仅该人物的资料】`, parts.map(([label, body]) => `${label}：\n${text(body)}`).join('\n')]);
     }
     return formatSections(sections, maximum);
 }
 function formatHistory(floors, maxFloor, maximum) {
     const eligible = floors.filter(floor => Number.isSafeInteger(floor?.messageIndex) && floor.messageIndex >= 0 && floor.messageIndex <= maxFloor && text(floor.summary))
-        .sort((a, b) => b.messageIndex - a.messageIndex);
-    return formatSections(eligible.map(floor => [`【千千结｜第${floor.messageIndex}楼${Number.isSafeInteger(floor.assistantSeq) ? ` / AI #${floor.assistantSeq}` : ''}｜${floor.summarySource === 'user' ? '人工摘要' : '楼层摘要'}；作者侧背景，不代表人物均已知】`, floor.summary]), maximum);
+        .sort((a, b) => b.messageIndex - a.messageIndex).slice(0, MAX_SUMMARIES);
+    return formatSections(eligible.map(floor => [`【千千结｜第${floor.messageIndex}楼${Number.isSafeInteger(floor.assistantSeq) ? ` / AI #${floor.assistantSeq}` : ''}｜${floor.summarySource === 'user' ? '人工摘要' : '楼层摘要'}；作者侧背景，不代表人物均已知】`, floor.summary]), Math.min(maximum, SUMMARY_CHARACTERS));
 }
 
 export function captureQianQianJieHostIdentity(context) {
@@ -131,7 +136,10 @@ export function createQianQianJieMemoryAccess({ globalRef = globalThis, contextP
             if (people?.status !== 'ready' || !sourceMatches(people.identity, before.host)) return people;
             if (!readPending || signal?.aborted || !current()) return { status: 'stale', message: '读取期间当前聊天或记忆源已变化' };
             const participants = selectPeople(Array.isArray(people.people?.items) ? people.people.items : [], topic);
-            const value = await api.readContext({ query: topic, entityIds: participants.ids, maxCharacters: maximum });
+            const value = await api.readContext({ query: topic, focusQuery: clip(text(query), 2000, true),
+                entityIds: participants.ids, participantNames: [before.participant.userName, before.participant.charName].map(text).filter(Boolean),
+                maxCharacters: maximum, maxSummaries: MAX_SUMMARIES, summaryCharacters: SUMMARY_CHARACTERS,
+                recentSummaries: text(recentText) ? 0 : 3 });
             if (value?.status === 'ready') formatted = formatContext(value, participants, maximum);
             return value;
         };

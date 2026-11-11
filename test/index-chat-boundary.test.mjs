@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
 import { getSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
+import { buildGenerationMemoryQuery } from '../runtime/generation-context.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexSource = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -175,6 +176,7 @@ test('menu buildMessages with includeMemory false skips the memory reader before
     const region = productionFunctions('async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, opts = {}) {', '// ─── Inject');
     let reads = 0;
     const build = evaluateFunctionRegion(region, 'buildMessages', {
+        buildGenerationMemoryQuery,
         buildGenerationHistoryContext: () => ({ history: [], excludeMesIds: [] }),
         buildWorldInfoContext: async () => '',
         readCardExtras: () => ({ personaDesc: '', authorNote: '' }),
@@ -196,6 +198,7 @@ test('buildMessages passes internal recent ids to memory but returns only API ro
     const region = productionFunctions('async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, opts = {}) {', '// ─── Inject');
     let memoryOptions;
     const build = evaluateFunctionRegion(region, 'buildMessages', {
+        buildGenerationMemoryQuery,
         buildGenerationHistoryContext: () => ({ history: [{ role: 'assistant', content: 'recent floor' }], excludeMesIds: [7, 8, 9] }),
         buildWorldInfoContext: async () => '',
         readCardExtras: () => ({ personaDesc: '', authorNote: '' }),

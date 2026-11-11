@@ -105,7 +105,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
       createElement: () => ({ style: {} }), body: { appendChild() {}, removeChild() {} } };
     const context = { document, window: win, MODAL_ID: 'panel', DIALOG_HOST_ID: 'dialog', syncDialogViewport: layout.syncDialogViewport, settingsOpen: false, inEl: () => sheet,
       isMobile: () => win.innerWidth <= 640, readPanelViewport: layout.readPanelViewport,
-      fitDesktopPanel: layout.fitDesktopPanel, localStorage: { getItem: () => null }, SIZE_KEY: 'size', POS_KEY: 'position',
+      fitDesktopPanel: layout.fitDesktopPanel, localStorage: { getItem: () => null }, SIZE_KEY: 'size', POS_KEY: 'position', _spShadow: { activeElement: null },
       getComputedStyle: () => ({ top: `${safeTop}px`, bottom: `${safeBottom}px` }) };
     runInNewContext(source.slice(start, end), context);
     context.syncPanelViewport();
@@ -138,7 +138,7 @@ test('normal mobile sync keeps viewport margins with one safe-area inset and ign
     win.innerWidth = width;
     win.visualViewport = { offsetLeft: 0, offsetTop: 260, width, height: 350 };
     context.syncPanelViewport();
-    assert.equal(root.style.transform, 'translate(0px, 500px)', '手机遇真实文档偏移继续必要补偿');
+    assert.equal(root.style.transform, '', '手机 visualViewport 平移不被重复补偿');
     originTop = 0; context.syncPanelViewport();
     assert.equal(root.style.transform, '', '恢复零原点时清掉桌面遗留补偿');
     assert.equal(sheet.style.top, '310px');
@@ -279,7 +279,7 @@ test('mobile host input closes without consuming the click, while redirected pan
   assert.equal(blocked, 2, 'retargeted own-panel action is consumed');
 });
 
-test('mobile internal text focus keeps main geometry while dialog, rotation and explicit placement continue', () => {
+test('mobile internal text focus follows keyboard geometry, page scrolling and rotation', () => {
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   const start = source.indexOf('function bindViewportSync() {'), end = source.indexOf('// ─── Toast (top)', start);
   const frames = new Map(); let nextFrame = 0, originTop = 0;
@@ -301,15 +301,16 @@ test('mobile internal text focus keeps main geometry while dialog, rotation and 
   win.emit('resize', { type: 'resize' });
   shadow.activeElement = { tagName: 'TEXTAREA' }; originTop = -260;
   Object.assign(win.visualViewport, { offsetTop: 260, height: 350 }); flush();
-  assert.deepEqual(sheet.style, before, '执行RAF时核真实焦点，键盘不改主窗');
+  assert.equal(sheet.style.height, '270px', '键盘打开时仍重算面板高度');
+  assert.equal(sheet.style.top, '280px', '面板顶部跟随可视视口');
   assert.equal(root.style.transform, ''); assert.equal(dialog.style.height, '350px');
   for (const control of [{ tagName: 'INPUT', type: 'password' }, { isContentEditable: true }]) {
-    shadow.activeElement = control; win.visualViewport.emit('resize', { type: 'resize' }); flush(); assert.deepEqual(sheet.style, before);
+    shadow.activeElement = control; win.visualViewport.height -= 10; win.visualViewport.emit('resize', { type: 'resize' }); flush(); assert.equal(sheet.style.height, `${win.visualViewport.height - 80}px`);
   }
   originTop = -500; win.visualViewport.offsetTop = 0;
-  win.visualViewport.emit('scroll', { type: 'scroll' }); flush(); assert.deepEqual(sheet.style, before);
+  win.visualViewport.emit('scroll', { type: 'scroll' }); flush(); assert.equal(root.style.transform, '', '键盘/页面平移不把根窗推到屏外');
   document.activeElement = { tagName: 'TEXTAREA' }; shadow.activeElement = null; win.emit('resize', { type: 'resize' }); flush();
-  assert.equal(sheet.style.height, '270px'); assert.equal(root.style.transform, 'translate(0px, 500px)');
+  assert.equal(sheet.style.height, '250px'); assert.equal(root.style.transform, '');
   for (const control of [...['checkbox', 'radio', 'range', 'button', 'color', 'file'].map(type => ({ tagName: 'INPUT', type })),
     { tagName: 'TEXTAREA', readOnly: true }, { tagName: 'INPUT', type: 'text', readOnly: true }, { tagName: 'SELECT' }]) {
     shadow.activeElement = control; win.visualViewport.height++;
@@ -321,4 +322,13 @@ test('mobile internal text focus keeps main geometry while dialog, rotation and 
   win.visualViewport.height = 450; context.syncPanelViewport(); assert.equal(sheet.style.height, '370px');
   win.innerWidth = 1200; win.visualViewport.width = 1200; win.visualViewport.height = 900;
   win.emit('resize', { type: 'resize' }); flush(); assert.equal(sheet.style.height, '600px');
+  win.innerWidth = 390; win.visualViewport.width = 390; win.visualViewport.height = 350;
+  originTop = -400; win.scrollY = 400; shadow.activeElement = { tagName: 'TEXTAREA' };
+  win.emit('scroll', { type: 'scroll' }); flush();
+  assert.equal(root.style.transform, 'translate(0px, 400px)', '内部输入时仍补偿真实页面滚动');
+  assert.equal(sheet.style.height, '270px');
+  originTop = 0; win.scrollY = 0; win.visualViewport.offsetTop = 260;
+  win.visualViewport.emit('scroll', { type: 'scroll' }); flush();
+  assert.equal(root.style.transform, '', '键盘平移沿用可视视口坐标');
+  assert.equal(sheet.style.top, '280px');
 });

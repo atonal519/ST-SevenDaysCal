@@ -11,6 +11,7 @@ import { createLinesGenerationController } from '../business/lines/controller.js
 import { createTaskOwnerManager } from '../runtime/task-owner.js';
 import { drawTickets } from '../business/lines/vectors/draw.js';
 import { buildLinesPrompt } from '../business/lines/prompt.js';
+import { buildGenerationMemoryQuery } from '../runtime/generation-context.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -125,6 +126,7 @@ function buildHarness(ctx) {
     });
     const formatStoryClockMeta = productionStoryClockFormatter();
     const build = vm.runInNewContext(`${region}\nbuildMessages`, {
+        buildGenerationMemoryQuery,
         buildGenerationHistoryContext: (_context, historyLimit) => ({ history: Number(historyLimit) > 0 ? [{ role: 'assistant', content: '已清洗正文；无时间戳标签' }] : [], excludeMesIds: [] }),
         buildWorldInfoContext: async () => '',
         readCardExtras: () => ({ personaDesc: '', authorNote: '' }),

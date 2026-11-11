@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { selectVisibleChatHistory } from '../business/lines/history.js';
 import { getSharedBodyWrappers } from '../utils/shared-body-wrappers.js';
 import { createQianQianJieMemoryAccess, QIANQIANJIE_BRIDGE_KEY } from '../business/memory/qianqianjie.js';
+import { buildGenerationMemoryQuery } from '../runtime/generation-context.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(repo, 'index.js'), 'utf8');
@@ -40,7 +41,7 @@ function precheckHarness(result, { confirmed = true } = {}) {
     return { ...funcs, titles };
 }
 
-function buildHarness({ getMemText, confirm = async () => true, settings = { useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false }, qianQianJieGenerationSnapshotCurrent = () => false }) {
+function buildHarness({ getMemText, confirm = async () => true, settings = { useDatabase: true, useAnima: false, useBaiBaiBook: false, useQianQianJie: false }, qianQianJieGenerationSnapshotCurrent = () => false, almanacText = '' }) {
     const historyBuilder = evaluate(indexHistory, 'buildGenerationHistoryContext', {
         getSettings: () => ({ keepTags: '', extraTags: '' }),
         getWrapperSettings: () => getSharedBodyWrappers({}),
@@ -52,10 +53,12 @@ function buildHarness({ getMemText, confirm = async () => true, settings = { use
     const stale = Object.assign(new Error('stale'), { diagnosticCode: 'memory-stale' });
     return evaluate(buildMessagesRegion, 'buildMessages', {
         buildGenerationHistoryContext: historyBuilder,
+        buildGenerationMemoryQuery,
         buildWorldInfoContext: async () => '',
         readCardExtras: () => ({ personaDesc: '', authorNote: '' }),
         getSettings: () => ({ ...settings, keepTags: '', extraTags: '' }),
-        getAlmanacInjectText: () => '', resolveAlmanacContextText: () => '', getCalDescInjectText: () => '',
+        getAlmanacInjectText: () => almanacText, resolveAlmanacContextText: (opts, read) => opts.noAlmanac ? '' : read(), getCalDescInjectText: () => '',
+        latestStoryClockPure: () => null, ALM_CHAT_SCAN_LIMIT: 100,
         sanitizeGenerationContextText: value => String(value ?? ''),
         isConfirmedMemoryFallback: snapshot => snapshot?.status === 'fallback-confirmed'
             && ['database', 'anima', 'bai-bai-book'].includes(snapshot.source),
@@ -99,6 +102,29 @@ test('QQJ preflight defers topic reading until the actual generation question is
     assert.equal(reads.length, 1); assert.ok(reads[0].query.includes('灯塔')); assert.ok(reads[0].query.includes('书店'));
     assert.equal(text.split('过去在灯塔约定来年重逢。').length - 1, 1);
     assert.ok(!text.includes('无关的旧召回')); assert.equal(promptReads, 0);
+});
+
+test('planning memory uses upcoming story facts and clean narrative while format instructions remain in the model request', async () => {
+    const reads = [];
+    const almanacText = '【当前剧情日期】3月21日\n【近期将至】\n- 还有7天：3月28日 林岚生日\n【全年其他重要日子】\n- 年末周年庆';
+    const build = buildHarness({ almanacText, getMemText: async options => { reads.push(options); return '她已经告知生日。'; },
+        settings: { useQianQianJie: true }, qianQianJieGenerationSnapshotCurrent: () => true });
+    const ctx = { chat: [{ is_user: false, mes: '林岚和周宁正在书店商量周末。' }], characters: {} };
+    const template = '输出格式、抽签票据、旧主题名称';
+    const messages = await build(ctx, template, '林岚', '周宁', 3,
+        { includeCurrentStoryTime: true, memorySnapshot: { source: 'qianqianjie', status: 'read-required' } });
+    assert.equal(reads.length, 1); assert.match(reads[0].query, /林岚生日/);
+    assert.doesNotMatch(reads[0].query, /输出格式|抽签票据|旧主题|年末周年庆/);
+    assert.match(reads[0].recentText, /商量周末/);
+    assert.equal(messages.at(-1).content, template);
+});
+
+test('planning without upcoming dates uses the actual narrative with the same selected memory source', async () => {
+    const reads = [];
+    const build = buildHarness({ getMemText: async options => { reads.push(options); return '相关旧事'; } });
+    await build({ chat: [{ is_user: false, mes: '两人在码头核对来信。' }], characters: {} }, '创作格式模板', '林岚', '周宁', 3, { includeCurrentStoryTime: true });
+    assert.equal(reads.length, 1); assert.equal(reads[0].query, '');
+    assert.match(reads[0].recentText, /码头核对来信/);
 });
 
 test('QQJ topic-empty fallback confirms once, keeps six recent floors and does not reread', async () => {

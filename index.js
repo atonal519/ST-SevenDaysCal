@@ -153,7 +153,7 @@ import { createAxisTransactionController } from './business/axis/transaction.js'
 import { createAxisPromptBuilder } from './business/axis/prompts.js';
 import { createAxisDateContext } from './business/axis/date-context.js';
 import { createPhoneCalendarApi, createPhoneCalendarSource } from './business/axis/phone.js';
-import { resolveAlmanacContextText, sanitizeGenerationContextText } from './runtime/generation-context.js';
+import { buildGenerationMemoryQuery, resolveAlmanacContextText, sanitizeGenerationContextText } from './runtime/generation-context.js';
 import { bindStoryClock, parseStoryClock as parseStoryClockPure, parseJudgedDate as parseJudgedDatePure, latestStoryClock as latestStoryClockPure, storyClockDate as storyClockDatePure, storyWeekdayRef as storyWeekdayRefPure, completeStoryClock as completeStoryClockPure, storyClockNarrativeBody, buildStoryClockPrompt, createStoryClockController, extensionStoryClockState } from './business/axis/story-clock.js';
 import { createWeekdayConsumerContext } from './business/axis/weekday-coordinator.js';
 import { buildDateJudgePrompt as buildDateJudgePromptPure } from './business/axis/date-detection.js';
@@ -7143,11 +7143,16 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
             .filter(floor => Number.isInteger(Number(floor)))
             .map(String);
     }
+    const almanacText = resolveAlmanacContextText(opts, () => getAlmanacInjectText(clockBoundary?.meta?.date || null));
+    const memoryReadOptions = {
+        query: buildGenerationMemoryQuery(prompt, opts, almanacText),
+        recentText: history.map(message => message.content).join('\n\n'),
+    };
     let qqjMemoryText;
     if (opts.includeMemory !== false && opts.memorySnapshot?.source === 'qianqianjie') {
         if (!qianQianJieGenerationSnapshotCurrent(opts.memorySnapshot, opts.memoryOperationToken, ctx)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
         reportPhase('memory');
-        qqjMemoryText = await getMemText({ source: 'qianqianjie', query: prompt, recentText: history.map(message => message.content).join('\n\n'), signal: opts.signal, maxFloor: opts.ledgerCutoffFloor });
+        qqjMemoryText = await getMemText({ source: 'qianqianjie', ...memoryReadOptions, signal: opts.signal, maxFloor: opts.ledgerCutoffFloor });
         throwIfAborted();
         if (!qianQianJieGenerationSnapshotCurrent(opts.memorySnapshot, opts.memoryOperationToken, ctx)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
         if (!String(qqjMemoryText || '').trim()) {
@@ -7192,13 +7197,13 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
             } else if (snapshot?.status === 'read-required') {
                 if (!isMemoryReadSnapshot(snapshot)) throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
                 reportPhase('memory');
-                rawMemText = await getMemText({ source: snapshot.source, full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
+                rawMemText = await getMemText({ source: snapshot.source, full: opts.fullMemory, ...memoryReadOptions, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
             } else {
                 throw makeDiagnosticError('memory-stale', { phase: 'memory-preflight' });
             }
         } else {
             reportPhase('memory');
-            rawMemText = await getMemText({ full: opts.fullMemory, query: prompt, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
+            rawMemText = await getMemText({ full: opts.fullMemory, ...memoryReadOptions, signal: opts.signal, operationToken: opts.memoryOperationToken, excludeMesIds: memoryExcludeMesIds, maxFloor: opts.ledgerCutoffFloor });
         }
         memText = sanitizeGenerationContextText(rawMemText, { reroll: opts.reroll });
     }
@@ -7214,7 +7219,6 @@ async function buildMessages(ctx, prompt, userName, charName, historyLimit = 3, 
         : '';
 
     // 历（本世界观重要日期）：供构画生成与讨论上下文使用，不做主楼常驻注入。
-    const almanacText = resolveAlmanacContextText(opts, () => getAlmanacInjectText(clockBoundary?.meta?.date || null));
     const almanacBlock = almanacText
         ? `【本世界观·重要日期（历）】以下是这个世界的既定节日、生日、纪念日等重要日子，已按「当前剧情日期」标注倒计时；每条冒号后的「说明」是该日子的既定设定（由来、涉及人物阵营、习俗活动、持续天数等），是背景事实。\n${almanacText}\n\n★ 推演点/线/大纲时：凡列在【近期将至】里的日子（未来数日内或进行中），应**主动**把它纳入近期剧情——依据其「说明」里的设定生成与之相关的铺垫、筹备、事件或人物动向，让故事顺着该世界的历法自然推进；【全年其他重要日子】作为背景，时间线接近时再纳入考量。\n★ 务必尊重每条「说明」里的既定设定，据此展开合理、可延续的剧情；说明里没写到的细节可以合理补完，但**不得编造与既定设定冲突的内容**。`
         : '';
@@ -9487,16 +9491,12 @@ function positionPanel() {
 function bindViewportSync() {
     if (viewportSyncBound) return;
     viewportSyncBound = true;
-    const onViewportChange = event => {
+    const onViewportChange = () => {
         closeActionMenus();
         onDragEnd(null, false);
         onResizeEnd(null, false);
-        if (viewportSyncFrame !== null) {
-            if (event?.type !== 'orientationchange') return;
-            if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(viewportSyncFrame);
-            else clearTimeout(viewportSyncFrame);
-        }
-        const callback = () => { viewportSyncFrame = null; syncPanelViewport(event?.type !== 'orientationchange'); };
+        if (viewportSyncFrame !== null) return;
+        const callback = () => { viewportSyncFrame = null; syncPanelViewport(); };
         viewportSyncFrame = typeof window.requestAnimationFrame === 'function'
             ? window.requestAnimationFrame(callback)
             : setTimeout(callback, 16);
@@ -9510,24 +9510,23 @@ function bindViewportSync() {
     }
 }
 
-function syncPanelViewport(preserveEditingGeometry = false) {
+function syncPanelViewport() {
     const dialogHost = document.getElementById(DIALOG_HOST_ID);
     if (dialogHost) syncDialogViewport(dialogHost);
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;
-    if (preserveEditingGeometry && isMobile()) {
-        const focused = _spShadow?.activeElement;
-        const editing = focused?.isContentEditable || !focused?.readOnly && (focused?.tagName === 'TEXTAREA'
-            || focused?.tagName === 'INPUT' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(focused.type));
-        // 内部文本编辑交给浏览器聚焦滚动，避免键盘事件再次改写主窗几何。
-        if (editing) return;
-    }
     const mobile = isMobile();
-    // 手机零原点保留原 fixed 层级，非零原点沿既有补偿。
+    // 手机键盘平移时保留浏览器给 fixed 层的可视坐标；仅真实页面滚动才补偿
+    // 宿主 html 的 fixed 包含块，避免把 visualViewport.offsetTop 再算成上移量。
     root.style.transform = mobile ? '' : 'translate(0px, 0px)';
     const origin = root.getBoundingClientRect();
-    if (!mobile || origin.left !== 0 || origin.top !== 0) {
+    const pageLeft = Number(window.scrollX ?? window.pageXOffset) || 0;
+    const pageTop = Number(window.scrollY ?? window.pageYOffset) || 0;
+    // getBoundingClientRect already contains the page-scroll displacement; scroll
+    // coordinates are only the signal that a mobile root offset is real document
+    // movement rather than visualViewport pan.
+    if (!mobile || pageLeft !== 0 || pageTop !== 0) {
         root.style.transform = `translate(${-origin.left}px, ${-origin.top}px)`;
     }
 

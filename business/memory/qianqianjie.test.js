@@ -44,6 +44,40 @@ test('status is a read-only readiness check and old history works without a rece
     assert.equal(h.calls.people, 1); assert.equal(h.calls.context.length, 1); assert.equal(h.calls.forbidden, 0);
 });
 
+test('bounded recall passes its topic and participant names through the existing single read', async () => {
+    const h = harness();
+    await h.access.result({ query: '生日约定', recentText: '李明在书店看信' });
+    const options = h.calls.context[0];
+    assert.equal(options.focusQuery, '生日约定');
+    assert.deepEqual(options.participantNames, ['User', '李明']);
+    assert.equal(options.maxSummaries, 20); assert.equal(options.summaryCharacters, 8000);
+    assert.equal(options.recentSummaries, 0);
+    assert.equal(options.maxCharacters, 12000);
+    assert.equal(h.calls.context.length, 1); assert.equal(h.calls.snapshot, 0); assert.equal(h.calls.forbidden, 0);
+});
+
+test('an empty recent body requests three saved recent summaries within the same twenty-item read', async () => {
+    const h = harness();
+    await h.access.result({ query: '生日约定', recentText: '' });
+    assert.equal(h.calls.context[0].recentSummaries, 3); assert.equal(h.calls.context[0].maxSummaries, 20);
+    assert.equal(h.calls.context.length, 1); assert.equal(h.calls.snapshot, 0); assert.equal(h.calls.forbidden, 0);
+});
+
+test('core-resolved actor identities retain their names and private knowledge with an empty UI directory', async () => {
+    const h = harness({ peopleValue: { status: 'ready', identity: identity(), people: { status: 'not-ready', items: [] } }, value: material({
+        selectedEntityIds: ['user-id', 'char-id'],
+        actors: [{ entityId: 'user-id', displayName: 'User', memoryText: '用户自己的约定' },
+            { entityId: 'char-id', displayName: '李明', memoryText: '明确传给李明的信息：生日日期' },
+            { entityId: 'unselected', displayName: '未选人物', memoryText: '未选人物的秘密' }],
+    }) });
+    const result = await h.access.result({ query: '生日约定' });
+    assert.match(result.text, /人物：User[\s\S]*用户自己的约定/);
+    assert.match(result.text, /人物：李明[\s\S]*明确传给李明的信息/);
+    assert.doesNotMatch(result.text, /未选人物的秘密/);
+    assert.match(result.text, /后续明确进展/); assert.match(result.text, /私下约定/);
+    assert.equal(h.calls.context.length, 1); assert.equal(h.calls.snapshot, 0); assert.equal(h.calls.forbidden, 0);
+});
+
 test('different questions are sent to readContext, with stable user/char and unique explicitly named NPCs', async () => {
     const h = harness({ read: ({ query }) => material({ routerText: query.includes('灯塔') ? '灯塔钥匙往事' : '山路寻药往事' }) });
     const first = await h.access.result({ query: '小舟在灯塔做过什么？老周呢？李明呢？Anniversary', recentText: '无关近况' });
@@ -77,6 +111,7 @@ test('query plus sanitized recent text stays within 8000, keeping the current qu
     const h = harness(); const question = '最后的真正问题：我们第一次去灯塔是什么时候？';
     await h.access.result({ query: '旧模板'.repeat(4000) + question, recentText: '近况'.repeat(5000) });
     assert.ok(h.calls.context[0].query.length <= 8000); assert.ok(h.calls.context[0].query.includes(question));
+    assert.ok(h.calls.context[0].focusQuery.length <= 2000); assert.ok(h.calls.context[0].focusQuery.includes(question));
     await h.access.result({ query: question, recentText: '过长旧正文'.repeat(2000) + '最新净正文' });
     assert.ok(h.calls.context[1].query.startsWith(question)); assert.ok(h.calls.context[1].query.endsWith('最新净正文')); assert.ok(h.calls.context[1].query.length <= 8000);
 });
@@ -177,4 +212,14 @@ test('maxFloor handles no eligible history, unavailable snapshots and unready me
     const unsupported = harness({ bridge: { getSnapshot: undefined } }); assert.equal((await unsupported.access.result({ maxFloor: 5 })).status, 'api-unavailable');
     const unready = harness({ snapshot: { status: 'ready', identity: identity(), memory: { status: 'not-ready', floors: [] } } }); assert.equal((await unready.access.result({ maxFloor: 5 })).status, 'not-ready');
     for (const h of [empty, unsupported, unready]) { assert.equal(h.calls.context.length, 0); assert.equal(h.calls.forbidden, 0); }
+});
+
+test('historical summary reading also obeys the eight-thousand-character budget without partial summaries', async () => {
+    const floors = Array.from({ length: 20 }, (_, i) => ({ messageIndex: i, assistantSeq: i + 1, summary: `故事${i}：${'已经发生的剧情。'.repeat(240)}` }));
+    const h = harness({ snapshot: { status: 'ready', identity: identity(), memory: { status: 'ready', floors } } });
+    const result = await h.access.result({ maxFloor: 18 });
+    assert.ok(result.text.length <= 8000);
+    assert.doesNotMatch(result.text, /故事19：/);
+    for (const floor of floors) if (result.text.includes(`故事${floor.messageIndex}：`)) assert.ok(result.text.includes(floor.summary));
+    assert.equal(h.calls.snapshot, 1); assert.equal(h.calls.context.length, 0); assert.equal(h.calls.forbidden, 0);
 });
