@@ -9549,12 +9549,16 @@ function positionPanel() {
 function bindViewportSync() {
     if (viewportSyncBound) return;
     viewportSyncBound = true;
-    const onViewportChange = () => {
+    const onViewportChange = event => {
         closeActionMenus();
         onDragEnd(null, false);
         onResizeEnd(null, false);
-        if (viewportSyncFrame !== null) return;
-        const callback = () => { viewportSyncFrame = null; syncPanelViewport(); };
+        if (viewportSyncFrame !== null) {
+            if (event?.type !== 'orientationchange') return;
+            if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(viewportSyncFrame);
+            else clearTimeout(viewportSyncFrame);
+        }
+        const callback = () => { viewportSyncFrame = null; syncPanelViewport(event?.type !== 'orientationchange'); };
         viewportSyncFrame = typeof window.requestAnimationFrame === 'function'
             ? window.requestAnimationFrame(callback)
             : setTimeout(callback, 16);
@@ -9568,13 +9572,23 @@ function bindViewportSync() {
     }
 }
 
-function syncPanelViewport() {
+function syncPanelViewport(preserveEditingGeometry = false) {
     const dialogHost = document.getElementById(DIALOG_HOST_ID);
     if (dialogHost) syncDialogViewport(dialogHost);
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
     if (!root || !sheet || root.style.display === 'none') return;
     const mobile = isMobile();
+    if (preserveEditingGeometry && mobile) {
+        const userAgent = globalThis.navigator?.userAgent || '';
+        const safariOnPhone = /iPhone|iPod/i.test(userAgent) && /Version\/[\d.]+.*Safari\//i.test(userAgent);
+        const focused = _spShadow?.activeElement;
+        const editing = focused?.isContentEditable || !focused?.readOnly && (focused?.tagName === 'TEXTAREA'
+            || focused?.tagName === 'INPUT' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(focused.type));
+        // Safari 已为输入框平移页面时，保留主窗几何，避免再缩短窗口把输入区送出屏幕。
+        // 显式打开和旋转继续定位；独立弹窗已在上方同步。
+        if (safariOnPhone && editing) return;
+    }
     // 手机键盘平移时保留浏览器给 fixed 层的可视坐标；仅真实页面滚动才补偿
     // 宿主 html 的 fixed 包含块，避免把 visualViewport.offsetTop 再算成上移量。
     root.style.transform = mobile ? '' : 'translate(0px, 0px)';
