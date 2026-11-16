@@ -4,9 +4,9 @@
 @keyframes sp-icon-spin { to { transform: rotate(360deg); } }
 
 /*
- * 本文件同时被 light DOM（楼内块 .sp-inline-box 系列）与 shadow DOM（主窗口）加载：
- * 全局注入一份给楼内块，主窗口、弹窗、悬浮球、提示与导入浮层再经 <link rel="stylesheet">
- * 引进自己的 shadow root。各根必须引用同一文件。
+ * 全局样式仅承接宿主集成外壳；主窗口、弹窗、楼内内容、悬浮球、提示与导入浮层
+ * 经 <link rel="stylesheet"> 引进自己的 shadow root。各根引用同一文件；
+ * 魔杖与楼层工具栏中的小图标使用内联基础样式。
  */
 /* ST messageFormatting 会把字面引号保留在 <q> 内；浏览器默认又通过
    q::before/q::after 补一层引号。ST 的全局修正规则进不了本插件的 Shadow DOM，
@@ -2696,8 +2696,6 @@ select.sp-input { appearance: none; cursor: pointer; }
 .sp-fab-btn.sp-btn-done { opacity: 1; }
 /* FAB 保36px；笔图标固定原95%的17.48px。 */
 .sp-pen-icon { width: var(--sp-icon-large); height: var(--sp-icon-large); display: block; }
-#sp_open_wand .sp-menu-icon { width: 20px; height: 20px; flex: 0 0 20px; display: flex; align-items: center; justify-content: center; align-self: center; }
-#sp_open_wand .sp-menu-pen-icon { width: 18px; height: 18px; display: block; }
 
 /* ─── Generating state — neon bar animation ──────────────────────────────────── */
 @keyframes sp-neon-bar {
@@ -3332,8 +3330,11 @@ select.sp-input { appearance: none; cursor: pointer; }
 
 .sp-space-pages { display: flex; flex: 0 0 auto; gap: var(--sp-size-6); padding: var(--sp-size-6) var(--sp-size-10); border-bottom: 1px solid var(--sp-divider); }
 .sp-space-pages[hidden] { display: none; }
-.sp-space-pages button { border: 1px solid transparent; border-radius: var(--sp-size-6); padding: var(--sp-size-5) var(--sp-size-10); background: transparent; color: var(--sp-subtle); font: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); cursor: pointer; }
+.sp-space-page { display: inline-flex; align-items: center; gap: var(--sp-size-2); }
+.sp-space-page[hidden] { display: none; }
+.sp-space-pages button[role="tab"] { border: 1px solid transparent; border-radius: var(--sp-size-6); padding: var(--sp-size-5) var(--sp-size-10); background: transparent; color: var(--sp-subtle); font: inherit; --sp-icon-size: var(--sp-icon-caption); font-size: var(--sp-fs-78); cursor: pointer; }
 .sp-space-pages button[aria-selected="true"] { background: var(--sp-hover-bg); color: var(--sp-primary); border-color: var(--sp-divider); }
+.sp-space-pages .sp-space-page-close { width: var(--sp-size-18); height: var(--sp-size-18); --sp-icon-size: var(--sp-icon-tiny); }
 .sp-space-pages button:focus-visible, .sp-space-more-menu button:focus-visible { outline: 2px solid var(--sp-primary); outline-offset: 2px; }
 .sp-space-more-menu { flex: 0 0 auto; }
 .sp-space-more-menu .sp-action-menu-list { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
@@ -5433,6 +5434,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 
 /* 楼层内「收藏此楼」按钮（普通 ST 在姓名旁；TT 在楼层操作栏 → 全局样式） */
 .sp-anchor-btn {
+    --sp-anchor-icon-size: var(--sp-size-15);
     color          : var(--SmartThemeBodyColor, #aaa);
     opacity      : 0.5;
     transition     : opacity .15s, color .15s, transform .15s;
@@ -5451,6 +5453,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     vertical-align : middle;
 }
 .sp-anchor-btn.mes_button {
+    --sp-anchor-icon-size: 1em;
     appearance     : none;
     background   : none;
     border        : 0;
@@ -5471,14 +5474,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     min-height     : calc(1em + 2px);
     padding: 1px 3px;
 }
-#chat .mes .sp-anchor-btn.mes_button[data-sp-anchor-entry="menu"] .sp-anchor-btn-svg {
-    flex: 0 0 1em;
-}
 .sp-anchor-btn:not(.mes_button):hover:not(:disabled) { opacity: 1; transform: translateY(-1px); }
 .sp-anchor-btn.mes_button:hover:not(:disabled)       { opacity: 1; }
-.sp-anchor-btn-svg                    { display: block; pointer-events: none; }
-.sp-anchor-btn:not(.mes_button) .sp-anchor-btn-svg { width: var(--sp-size-15); height: var(--sp-size-15); }
-.sp-anchor-btn.mes_button .sp-anchor-btn-svg       { width: 1em; height: 1em; }
 .sp-anchor-btn.sp-anchor-saved { opacity: 1; color: var(--SmartThemeQuoteColor, #d0bcff); }
 .sp-anchor-btn.sp-anchor-busy  { opacity: 0.35; pointer-events: none; }
 
@@ -6855,6 +6852,7 @@ body.sp-anchor-fs-lock { overflow: hidden; }
    展开=多模块展开为模块目录，单模块直接显示内容，模块可各自折叠。
    外壳提供唯一的外边距+圆角+边框+背景；进框的区剥掉各自卡片外观、贴合成一节。
    历史楼只读框 .sp-inline-box-ro 整体降透明、左竖条示意「历史·只读」。 */
+.sp-inline-surface { visibility: visible; }
 .sp-inline-box {
     margin-top    : var(--sp-size-12);
     border-radius : var(--sp-size-8);
@@ -7343,7 +7341,6 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-close-btn { --sp-icon-size: var(--sp-icon-base); }
 .sp-side-tab .sp-tab-glyph { font-size: var(--sp-icon-base); }
 .sp-uiscale-btn { font-size: var(--sp-icon-subtitle); }
-.sp-anchor-btn.mes_button .sp-anchor-btn-svg { font-size: inherit; }
 .sp-daily-menu-image-pill, .sp-wardrobe-image-pill { min-width: var(--sp-size-40); min-height: var(--sp-size-26); width: auto; height: auto; }
 .sp-daily-menu-image-toggle, .sp-wardrobe-image-toggle { min-width: var(--sp-size-52); }
 .sp-anchor-chars-head .sp-anchor-tagmgr-btn { min-height: var(--sp-size-24); height: auto; }

@@ -12,7 +12,7 @@ export function buildDateJudgePrompt(calendarText = '') { return calendarText ? 
 不要解释，不要输出任何多余文字。` : DATE_JUDGE_PROMPT; }
 export function storyWeekdayDisplaySignature(clock) {
     const meta = clock?.endMeta;
-    return meta?.complete && Number.isInteger(meta.month) && Number.isInteger(meta.day) && Number.isInteger(meta.weekdayIndex)
+    return Number.isInteger(meta?.month) && Number.isInteger(meta?.day) && Number.isInteger(meta?.weekdayIndex)
         ? `${meta.month}/${meta.day}:${meta.weekdayIndex}`
         : null;
 }
@@ -29,7 +29,7 @@ export function createDateDetectionController(options = {}) {
         const prev = options.getAnchor?.(charKey);
         if (prev && prev.month === md.month && prev.day === md.day && prev.year === md.year && prev.eraLabel === md.eraLabel) return { status: 'unchanged', date: md };
         if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
-        const stored = options.setAnchor?.(charKey, md.month, md.day, 'detected', { ...(mode === 'api' && calibration ? { calibration } : {}), year: md.year, eraLabel: md.eraLabel });
+        const stored = options.setAnchor?.(charKey, md.month, md.day, 'detected', { ...((mode === 'api' || mode === 'sdc' && !Number.isInteger(options.storyClock?.()?.endMeta?.weekdayIndex)) && calibration ? { calibration } : {}), year: md.year, eraLabel: md.eraLabel });
         if (!stored?.ok) { if (notify) options.toast?.('剧情日期自动保存失败，请重试', null, true); return { status: 'failed', reason: stored?.reason }; }
         if (ownerIdentity && !ownerCurrent(ownerIdentity)) return { status: 'cancelled' };
         if (notify && options.settings?.().notifyMode === 'full') {
@@ -57,10 +57,11 @@ export function createDateDetectionController(options = {}) {
     const reland = ({ suppressAftermath = false } = {}) => {
         if (options.storyEnabled?.() !== true) return { status: 'no-date', reason: 'disabled' };
         const clock = options.storyClock?.();
-        const nextWeekdaySignature = options.completeStoryClock?.(clock) ? storyWeekdayDisplaySignature(clock) : null;
+        const usableDate = clock && !clock.duplicate && clock.ordered !== false && (clock.endMeta?.date || options.completeStoryClock?.(clock));
+        const nextWeekdaySignature = usableDate ? storyWeekdayDisplaySignature(clock) : null;
         const weekdayDisplayChanged = lastWeekdayDisplaySignature !== nextWeekdaySignature && (lastWeekdayDisplaySignature !== undefined || nextWeekdaySignature !== null);
         lastWeekdayDisplaySignature = nextWeekdaySignature;
-        if (!options.completeStoryClock?.(clock)) { if (weekdayDisplayChanged && !suppressAftermath) options.aftermath?.(); return { status: 'no-date', reason: 'missing-complete-sdc' }; }
+        if (!usableDate) { if (weekdayDisplayChanged && !suppressAftermath) options.aftermath?.(); return { status: 'no-date', reason: 'missing-date' }; }
         const md = options.storyDate?.(); if (!md) return { status: 'no-date', reason: 'missing-date' };
         const ownerIdentity = { ...identity(), floor: clock.floor, participantIdentity: options.captureParticipantIdentity?.() || null };
         const applied = apply(options.charKey?.(options.context()), md, true, ownerIdentity, 'sdc', { suppressAftermath });

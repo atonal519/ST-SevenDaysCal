@@ -23,11 +23,16 @@ export function createSpaceUi(host = {}) {
     let pageAnimation = null;
     const pageIds = () => controllers?.repository?.pages?.() || ['1'];
     const syncPages = () => {
-        if (!pageIds().includes(activePage)) activePage = '1';
+        const pages = pageIds();
+        if (!pages.includes(activePage)) activePage = pages[0];
         const bar = query('#sp-space-pages');
-        bar?.prop?.('hidden', pageIds().length < 2);
-        for (const id of ['1', '2']) query(`[data-space-page="${id}"]`)?.attr?.('aria-selected', String(activePage === id))?.attr?.('tabindex', activePage === id ? '0' : '-1');
-        query('#sp-space-add-page')?.prop?.('disabled', pageIds().length >= 2)?.attr?.('title', pageIds().length >= 2 ? '已有两个窗口' : '新增第二个窗口');
+        bar?.prop?.('hidden', pages.length < 2);
+        for (const id of ['1', '2']) {
+            query(`[data-space-page-slot="${id}"]`)?.prop?.('hidden', !pages.includes(id));
+            query(`[data-space-page="${id}"]`)?.attr?.('aria-selected', String(activePage === id))?.attr?.('tabindex', activePage === id ? '0' : '-1');
+            query(`[data-space-close-page="${id}"]`)?.prop?.('disabled', pages.length < 2 || !!thinking);
+        }
+        query('#sp-space-add-page')?.prop?.('disabled', pages.length >= 2)?.attr?.('title', pages.length >= 2 ? '已有两个窗口' : '新增窗口');
     };
     const switchPage = pageId => {
         if (pageId === activePage || !pageIds().includes(pageId)) return;
@@ -47,6 +52,28 @@ export function createSpaceUi(host = {}) {
             { clipPath: 'inset(0 0 0% 0)', transform: 'translateY(0)' },
         ], { duration: reduced ? 120 : 200, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
         host.onPageChanged?.();
+    };
+
+    const closePage = async pageId => {
+        if (controllers.chat.busy || pageIds().length < 2 || !pageIds().includes(pageId)) return false;
+        const target = controllers.repository.capture();
+        const confirmed = await host.confirm?.({
+            title: `关闭窗口${pageId}`, body: `将删除窗口${pageId}的全部讨论记录和未发送草稿。`,
+            confirmText: '关闭', cancelText: '取消',
+        });
+        if (!confirmed || controllers.chat.busy) return false;
+        if (!controllers.repository.removePage(pageId, target)) { host.toast?.('关闭窗口失败，请重试', true); return false; }
+        if (activePage === pageId) switchPage(pageIds()[0]);
+        else {
+            const messages = element('#sp-space-msgs');
+            const scrollTop = messages?.scrollTop || 0;
+            renderHistory(controllers.chat.history());
+            if (messages) messages.scrollTop = scrollTop;
+        }
+        drafts.delete(pageId); scrolls.delete(pageId);
+        host.onPageClosed?.(pageId);
+        element('#sp-space-more')?.focus?.({ preventScroll: true });
+        return true;
     };
 
     const registerWidget = (widget, messageContext = {}) => {
@@ -132,11 +159,13 @@ export function createSpaceUi(host = {}) {
     };
     const beginThinking = (pageId = activePage) => {
         thinking = { pageId, node: pageId === activePage ? appendThinking() : null };
+        syncPages();
         return thinking;
     };
     const endThinking = value => {
         value?.node?.remove?.();
         if (thinking === value) thinking = null;
+        syncPages();
     };
 
     const startEdit = ($message, index) => {
@@ -184,10 +213,17 @@ export function createSpaceUi(host = {}) {
         };
         $root.on('click.spSpaceFeature', '#sp-space-send', sendInput);
         $root.on('click.spSpaceFeature', '[data-space-page]', function () { switchPage(host.$(this).attr('data-space-page')); });
+        $root.on('click.spSpaceFeature', '[data-space-close-page]', function (event) {
+            event.stopPropagation(); host.closeActionMenus?.();
+            return closePage(host.$(this).attr('data-space-close-page'));
+        });
         $root.on('keydown.spSpaceFeature', '[data-space-page]', event => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
             event.preventDefault();
-            switchPage(event.key === 'Home' ? '1' : event.key === 'End' ? '2' : activePage === '1' ? '2' : '1');
+            const pages = pageIds();
+            const next = event.key === 'Home' ? pages[0] : event.key === 'End' ? pages.at(-1)
+                : pages[(pages.indexOf(activePage) + (event.key === 'ArrowRight' ? 1 : -1) + pages.length) % pages.length];
+            switchPage(next);
             element(`[data-space-page="${activePage}"]`)?.focus?.();
         });
         $root.on('click.spSpaceFeature', '#sp-space-more', function (event) {
@@ -295,7 +331,7 @@ export function createSpaceUi(host = {}) {
         activePageId: () => activePage,
         switchPage,
         resetPages: () => {
-            activePage = '1'; drafts.clear(); scrolls.clear(); thinking = null; pageAnimation?.cancel?.();
+            activePage = pageIds()[0]; drafts.clear(); scrolls.clear(); thinking = null; pageAnimation?.cancel?.();
             query('#sp-space-input')?.val?.('');
             host.autoGrow?.(element('#sp-space-input'));
             syncPages();

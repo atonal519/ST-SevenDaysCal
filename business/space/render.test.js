@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createSpaceRenderer } from './render.js';
 import { firstPointEventBlock, parsePointEventRecord, isCompletePointEvent } from '../point/parse.js';
 import { parseLineCard } from '../lines/schema.js';
+import { appendSpaceAssistant, SPACE_WIDGET_KINDS } from './schema.js';
 
 test('完整裸字段回收成卡片后不再重复显示原始字段文本', () => {
     const renderer = createSpaceRenderer();
@@ -21,6 +22,23 @@ test('完整裸字段回收成卡片后不再重复显示原始字段文本', ()
 
 const pointBody = '<schedule_widget>Event: main|约定|双方交换信息|周五||||</schedule_widget>';
 const lineBody = '<line_widget>Line: 暗号|延展|近日|world|false|false\nDesc: 旧信号再次出现\nNext: 两人核对发送者</line_widget>';
+
+test('间的四栏合写面方案保存后显示预览与应用按钮', () => {
+    const raw = '<outline_widget>\nBeat: 下月｜查访旧案｜调查·旧案线｜线索汇合\nScene: 双方核对旧案材料\n</outline_widget>';
+    const [saved] = appendSpaceAssistant([], raw, { allowedWidgetKinds: SPACE_WIDGET_KINDS, outlineRawToken: 'current-outline' });
+    assert.equal(saved.expectedWidgetKind, 'outline_widget');
+    assert.equal(saved.outlineRawToken, 'current-outline');
+    const registrations = [];
+    const rendered = createSpaceRenderer().message('ai', saved.content, 0, widget => {
+        registrations.push(widget);
+        return 'outline-candidate';
+    }, saved);
+    assert.equal(registrations.length, 1);
+    assert.equal(registrations[0].kind, 'outline_widget');
+    assert.match(rendered.widgetCards, /查访旧案/);
+    assert.match(rendered.widgetCards, /应用到面/);
+    assert.doesNotMatch(rendered.widgetCards, /sp-space-widget-card-error/);
+});
 
 test('间只为本轮允许且通过业务解析器的点线卡注册应用动作', () => {
     const registrations = [];

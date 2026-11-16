@@ -1,4 +1,4 @@
-import { normalizeSpaceDocument } from './schema.js';
+import { normalizeSpaceDocument, spacePageId } from './schema.js';
 
 export function createSpaceRepository({ captureIdentity, isCurrent, readStore, writeStore } = {}) {
     let document = normalizeSpaceDocument(null);
@@ -20,12 +20,21 @@ export function createSpaceRepository({ captureIdentity, isCurrent, readStore, w
     const clearMemory = () => { document = normalizeSpaceDocument(null); return document.messages; };
     const clear = (target = capture()) => write(target, normalizeSpaceDocument(null));
     const addPage = (target = capture()) => {
-        if (document.pages.length >= 2) return null;
-        return write(target, { ...document, pages: ['1', '2'] }) ? '2' : null;
+        const pageId = ['1', '2'].find(id => !document.pages.includes(id));
+        if (!pageId) return null;
+        return write(target, { ...document, pages: ['1', '2'] }) ? pageId : null;
+    };
+    const removePage = (pageId, target = capture()) => {
+        if (document.pages.length <= 1 || !document.pages.includes(pageId)) return false;
+        return write(target, {
+            ...document,
+            pages: document.pages.filter(id => id !== pageId),
+            messages: document.messages.filter(message => spacePageId(message) !== pageId),
+        });
     };
     const baseline = (target = capture()) => Object.freeze({
         chatId: target?.chatId || '', historyKey: target?.historyKey ?? null, saved: read(target),
     });
     return Object.freeze({ capture, isCurrent: current, read, load, history: () => document.messages,
-        pages: () => [...document.pages], replace, save, clear, clearMemory, addPage, baseline });
+        pages: () => [...document.pages], replace, save, clear, clearMemory, addPage, removePage, baseline });
 }

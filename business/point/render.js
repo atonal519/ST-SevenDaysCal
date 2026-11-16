@@ -116,7 +116,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         let wdLabel = '';
         if (startDate) {
             const { month, day, wd } = scheduleDayLabel(offset, startDate, ctx);
-            wdLabel  = wd == null ? '星期未记录' : ALM_WEEKDAYS[wd];
+            wdLabel  = wd == null ? '' : ALM_WEEKDAYS[wd];
             numLabel = formatPointDate(month, day, ctx.cal, true) || '日期未知';
         }
         return `<button class="sp-tab${i === 0 ? ' sp-tab-active' : ''}" data-day="${i}">
@@ -135,7 +135,7 @@ export function renderSchedule(raw, userName, perspective = 'user', calendar = n
         if (startDate) {
             const { month, day: dd, wd } = scheduleDayLabel(offset, startDate, ctx);
             const dateText = formatPointDate(month, dd, ctx.cal);
-            dateLabel = dateText ? `${dateText} · ${wd == null ? '星期未记录' : ALM_WEEKDAYS[wd]}` : '日期未知';
+            dateLabel = dateText ? [dateText, wd == null ? '' : ALM_WEEKDAYS[wd]].filter(Boolean).join(' · ') : '日期未知';
         }
         return `<div class="sp-day-panel" style="width:calc(100%/${totalTabs})">${weatherChipHtml(day.weather, day.temp)}${day.events.map((ev, ei) => renderEvent(ev, di, ei, day.weather, day.temp, dateLabel, owner)).join('')}</div>`;
     });

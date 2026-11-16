@@ -88,6 +88,7 @@ function effectivePointEventBlocksFromInner(inner) {
     const semanticLines = maskedLines.map(line => stripRecordWrappers(line, pointAnchorKind, completePointStructure));
     const out = [];
     let hasContext = false;
+    let section = null;
     let current = null;
     const flush = end => {
         if (!current) return;
@@ -102,16 +103,18 @@ function effectivePointEventBlocksFromInner(inner) {
         if (day) {
             flush(index);
             hasContext = day.dayNumber != null;
+            section = hasContext ? `Day:${day.dayNumber}` : null;
             return;
         }
         if (/^(?:Future|未来)\s*[:：]/i.test(line)) {
             flush(index);
             hasContext = true;
+            section = 'Future';
             return;
         }
         if (/^Event\s*[:：]/i.test(line)) {
             flush(index);
-            current = hasContext ? { start: index, end: index + 1 } : null;
+            current = hasContext ? { start: index, end: index + 1, section } : null;
             return;
         }
         if (/^<\/(?:calendar|schedule)_widget>/i.test(line)) {
@@ -202,6 +205,18 @@ export function pointEventLines(raw) {
     const m = src.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
     const inner = (m ? m[1] : src).replace(/<!--[\s\S]*?-->/g, '');
     return bufferedPointEventLines(inner);
+}
+
+// 与编号及定点替换共用有效记录；日期归属变化也会让原修改目标失效。
+export function pointEventSignatures(raw) {
+    const source = String(raw || '');
+    const match = source.match(/<calendar_widget[^>]*>([\s\S]*?)<\/calendar_widget>/i);
+    const inner = match ? match[1] : source;
+    const semantic = stripRecordWrappers(inner.replace(/<!--[\s\S]*?-->/g, ''), pointAnchorKind, completePointStructure);
+    const startDate = semantic.match(/^[ \t]*StartDate[ \t]*[:：][ \t]*([^\r\n]*)/im)?.[1]?.trim() || '';
+    return effectivePointEventBlocksFromInner(inner).map(({ section, event }) => JSON.stringify([
+        startDate, section, event.type, event.title, event.desc, event.time, event.location, event.npcAction, event.pin, event.adult,
+    ]));
 }
 
 // 点 → 编号列表（编辑冲突检测 / 提示词辅助）

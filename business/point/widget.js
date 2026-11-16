@@ -1,6 +1,6 @@
 import { icon } from '../../utils/icons.js';
 // 间→点 widget 应用：按人物 scope 保持 canonical raw，并沿用 Future 追加/就地替换规则。
-import { isCompletePointEvent } from './parse.js';
+import { isCompletePointEvent, pointEventSignatures } from './parse.js';
 
 const normalizeOwner = owner => owner?.view === 'char' && String(owner.charName || '').trim()
     ? { view: 'char', charName: String(owner.charName).trim() }
@@ -9,9 +9,16 @@ const normalizeOwner = owner => owner?.view === 'char' && String(owner.charName 
         : null;
 
 export function createPointWidgetActions(env) {
-    const sameBaseline = (saved, baseline) => !!baseline
-        && env.pointRawToken?.(saved?.raw || '') === baseline.rawToken
-        && (Number(saved?.ts) || null) === (Number(baseline.ts) || null);
+    const sameBaseline = (saved, baseline, editIndex) => {
+        if (Array.isArray(baseline?.eventTokens)) {
+            const expected = baseline.eventTokens[editIndex - 1];
+            const signature = pointEventSignatures(saved?.raw || '')[editIndex - 1];
+            return typeof expected === 'string' && typeof signature === 'string' && env.pointRawToken?.(signature) === expected;
+        }
+        // 旧卡只保存整份版本，继续按原方式核对。
+        return !!baseline && env.pointRawToken?.(saved?.raw || '') === baseline.rawToken
+            && (Number(saved?.ts) || null) === (Number(baseline.ts) || null);
+    };
     const ownerLabel = owner => owner.view === 'char' ? `${owner.charName}（TA）` : `${env.getUserName()}（我）`;
 
     return async function applyScheduleWidget(body, button, target = null) {
@@ -39,7 +46,7 @@ export function createPointWidgetActions(env) {
         let raw = saved?.raw || '';
         if (editIndex != null && Array.isArray(options.pointBaselines)) {
             const baseline = options.pointBaselines.find(item => item?.view === owner.view && (owner.view !== 'char' || item.charName === owner.charName));
-            if (!sameBaseline(saved, baseline)) {
+            if (!sameBaseline(saved, baseline, editIndex)) {
                 env.showToast(`${ownerLabel(owner)}的点已变化，请在「间」重新生成修改卡`, null, true);
                 return false;
             }

@@ -57,7 +57,7 @@ export function formatStoryClockMeta(meta, escape = value => String(value ?? '')
 export function formatStoryClockHeadParts({ anchor, anchorWeekday, clockMeta = null, rawStamp = '', calendar = null, monthName = (_cal, month) => `${month}月`, escapeHtml = value => String(value ?? ''), tip = '' } = {}) {
     const today = (dateText, weekday = '', title = '') => `<span class="sp-dash-sum-today"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(dateText)}${weekday ? ` ${escapeHtml(weekday)}` : ''}</span>`;
     const dateText = value => formatCalendarDate(value, calendar, monthName);
-    const fallbackWeekday = anchorWeekday || '星期未记录';
+    const fallbackWeekday = anchorWeekday || '';
     const fallback = { todayHtml: today(dateText(anchor), fallbackWeekday), timeHtml: '' };
     if (clockMeta?.valid && clockMeta.month != null && clockMeta.day != null) {
         const weekday = clockMeta.weekdayText || fallbackWeekday;
@@ -95,9 +95,9 @@ export function createAxisUi(env = {}) {
     const todayBarHtml = () => {
         const key = env.charKey?.(), cal = env.calendar?.(), today = env.today?.();
         const wdIndex = env.weekday?.(today.month, today.day, null, cal);
-        const wd = wdIndex == null ? '星期未记录' : env.weekdays?.[wdIndex];
-        const todayText = formatCalendarDate(today, cal, env.monthName);
-        if (!key) return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}·${wd}</span><span class="sp-alm-today-hint">无角色卡，无法钉</span></div>`;
+        const wd = wdIndex == null ? '' : env.weekdays?.[wdIndex];
+        const todayText = [formatCalendarDate(today, cal, env.monthName), wd].filter(Boolean).join('·');
+        if (!key) return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}</span><span class="sp-alm-today-hint">无角色卡，无法钉</span></div>`;
         if (env.editing?.()) {
             const maxDim = Math.max(...cal.months.map(month => month.days));
             const selected = env.storyCalibration?.()?.weekday;
@@ -110,7 +110,7 @@ export function createAxisUi(env = {}) {
         }
         const pinned = env.anchor?.(key), calibration = env.storyCalibration?.(), pinTag = calibration ? `<span class="sp-alm-today-pin" title="人工故事时间校准">${icon("compass")}</span>` : pinned ? `<span class="sp-alm-today-pin" title="兼容旧版日期锚点">${icon("pin")}</span>` : '';
         const autoBtn = pinned || calibration ? `<button class="sp-icon-btn sp-alm-today-clear" title="恢复自动">${icon("refresh")}</button>` : '';
-        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}·${wd}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）">${icon("chevron-left")}</button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）">${icon("chevron-right")}</button><button class="sp-icon-btn sp-alm-today-edit" title="校准故事时间">${icon("pencil")}</button>${autoBtn}</span></div>`;
+        return `<div class="sp-alm-today"><span class="sp-alm-today-lbl">今天</span><span class="sp-alm-today-date">${env.escapeHtml(todayText)}</span>${pinTag}<span class="sp-alm-today-acts"><button class="sp-icon-btn sp-alm-today-prev" title="往前一天（−1 天）">${icon("chevron-left")}</button><button class="sp-icon-btn sp-alm-today-next" title="往后一天（+1 天）">${icon("chevron-right")}</button><button class="sp-icon-btn sp-alm-today-edit" title="校准故事时间">${icon("pencil")}</button>${autoBtn}</span></div>`;
     };
     const storyClockBarHtml = () => {
         if (!env.storyClockEnabled?.()) return '';

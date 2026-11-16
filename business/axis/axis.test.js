@@ -100,3 +100,15 @@ test('轴楼内44条乱序只显示排序后最近五条，少于五条按真实
     const short=h.renderer.buildAlmanacBlock([rows.find(it=>it.id==='next-12'),rows.find(it=>it.id==='active')],{month:1,day:10},cal);
     assert.match(short.summary,/2件事/);assert.equal((short.itemsHtml.match(/class="sp-alm-event /g)||[]).length,2);
 });
+
+test('局部可用日期直接落锚且保留已有人工星期校准，不派模型', () => {
+    const calibration = { floor: 1, weekday: 3 }; let stored;
+    const controller = createDateDetectionController({
+        storyEnabled: () => true, context: () => ({}), identity: () => ({ floor: 2 }), charKey: () => 'card',
+        storyClock: () => ({ floor: 2, duplicate: false, ordered: true, endMeta: { complete: false, date: { month: 11, day: 16 }, month: 11, day: 16, weekdayIndex: null } }),
+        completeStoryClock: () => false, storyDate: () => ({ month: 11, day: 16 }), getCalibration: () => calibration,
+        setAnchor: (...args) => { stored = args; return { ok: true }; }, settings: () => ({}), callApi: () => { throw new Error('unexpected model'); },
+    });
+    assert.equal(controller.reland().status, 'updated');
+    assert.deepEqual(stored[4].calibration, calibration);
+});

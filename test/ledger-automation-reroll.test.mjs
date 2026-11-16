@@ -150,3 +150,33 @@ test('chat reset clears replacement intent before an ordinary same-index deletio
     await h.remove(); h.ctx.chat.push(ai('new chat reply')); await h.render();
     assert.deepEqual(h.calls, ['capture', 'judge']);
 });
+
+for (const interval of [1, 4]) for (const ending of ['end', 'stop', 'quiet-end']) for (const phase of ['before-delete', 'after-delete', 'empty-placeholder']) {
+    test(`an early ${ending} at ${phase} does not make the reroll a new contribution: interval=${interval}`, async () => {
+        const h = harness({ interval, captureCounter: interval === 4 ? 2 : 0, judgeCounter: interval === 4 ? 1 : 0 });
+        const before = h.state();
+        h.start('regenerate');
+        if (phase !== 'before-delete') await h.remove();
+        if (phase === 'empty-placeholder') h.ctx.chat.push(ai(''));
+        if (ending === 'quiet-end') h.start('quiet');
+        if (ending === 'stop') h.stop(); else h.end();
+        if (phase === 'before-delete') await h.remove();
+        if (phase === 'empty-placeholder') h.ctx.chat[5].mes = 'same-floor replacement published after the early end';
+        else h.ctx.chat.push(ai('same-floor replacement published after the early end'));
+        await h.render(5, ending === 'quiet-end' ? undefined : 'regenerate');
+        h.end();
+        assert.deepEqual(h.state(), before);
+        assert.deepEqual(h.calls, []);
+        h.start('normal'); await h.appendReply(); h.end();
+        if (interval === 1) assert.deepEqual(h.calls, ['capture', 'judge']);
+        else { assert.equal(h.state().captureCounter, 3); assert.equal(h.state().judgeCounter, 2); assert.deepEqual(h.calls, []); }
+    });
+}
+
+test('an ended reroll with no replacement leaves the next real generation countable', async () => {
+    const h = harness();
+    h.start('regenerate'); await h.remove(); h.end();
+    h.start('normal'); h.ctx.chat.push(ai('actual new reply after failed reroll'));
+    await h.render(); h.end();
+    assert.deepEqual(h.calls, ['capture', 'judge']);
+});

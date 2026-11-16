@@ -1,6 +1,6 @@
 import { normalizeOutlineResponse } from '../outline/schema.js';
 import { parseLineCard } from '../lines/schema.js';
-import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord } from '../point/parse.js';
+import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord, pointEventSignatures } from '../point/parse.js';
 
 export const spacePageId = message => message?.pageId === '2' ? '2' : '1';
 
@@ -11,8 +11,9 @@ export function normalizeSpaceHistory(saved) {
 
 export function normalizeSpaceDocument(saved) {
     const messages = normalizeSpaceHistory(saved);
-    const secondPage = saved?.version === 1 && saved.pages?.includes?.('2') || messages.some(message => spacePageId(message) === '2');
-    return { version: 1, pages: secondPage ? ['1', '2'] : ['1'], messages };
+    const configured = saved?.version === 1 && Array.isArray(saved.pages) ? saved.pages : ['1'];
+    const pages = ['1', '2'].filter(id => configured.includes(id) || messages.some(message => spacePageId(message) === id));
+    return { version: 1, pages: pages.length ? pages : ['1'], messages };
 }
 
 export function appendSpaceUser(history, content, pageId = '1') {
@@ -109,6 +110,7 @@ export function compactPointBaselines(scopes = []) {
         charName: scope.view === 'char' ? String(scope.charName || '').trim() : '',
         rawToken: pointRawToken(scope.raw),
         ts: Number(scope.ts) || null,
+        eventTokens: Object.freeze(pointEventSignatures(scope.raw).map(pointRawToken)),
     })));
 }
 

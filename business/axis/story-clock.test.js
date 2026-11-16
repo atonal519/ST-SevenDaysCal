@@ -174,3 +174,93 @@ test('草稿中的纯占位格式例不覆盖正文真实跨午夜时间戳，�
     const malformed = '<!-- SDC-start | date=2025-05-15 | weekday=周四 | time=未知 -->';
     assert.equal(completeStoryClock(parseStoryClock(malformed + start + '正文' + end)), false);
 });
+
+test('unknown weekday and conflicting fields preserve the usable date independently', () => {
+    const pair = (ns, date, weekday, time) => `<!-- ${ns}-start | date=${date} | weekday=${weekday} | time=${time} -->正文<!-- ${ns}-end | date=${date} | weekday=${weekday} | time=${time} -->`;
+    const unknown = parseStoryClock(pair('QQJ', '永熙二十六年11月16日', '未知', '07:45'));
+    assert.equal(completeStoryClock(unknown), true);
+    assert.equal(unknown.endMeta.weekdayIndex, null);
+    const dual = parseStoryClock(pair('QQJ', '永熙二十六年11月16日', '未知', '07:45') + pair('SDC', '永熙二十六年冬月十六日', '周三', '辰时三刻'));
+    assert.deepEqual(dual.endMeta.date, { month: 11, day: 16, year: 26, eraLabel: '永熙' });
+    assert.equal(dual.endMeta.time, null);
+    assert.equal(dual.endMeta.weekdayIndex, null);
+    assert.equal(completeStoryClock(dual), false);
+    const bad = parseStoryClock(pair('SDC', '11月16日', '周八', '99:99'));
+    assert.deepEqual(bad.endMeta.date, { month: 11, day: 16 });
+    assert.equal(bad.endMeta.time, null);
+});
+
+test('默认提示词合理补全时间并持续沿用，自定义与双插件注入仍沿既有协作', async () => {
+    const { buildStoryClockPrompt, createStoryClockController, storyWeekdayRef } = await import('./story-clock.js');
+    const prompt = buildStoryClockPrompt({});
+    assert.match(prompt, /缺[少失][^\n]*合理补全[^\n]*年份/);
+    assert.match(prompt, /年份[^\n]*星期/);
+    assert.match(prompt, /(?:补全|确定)[^\n]*持续沿用/);
+    assert.match(prompt, /公历[^\n]*星期/);
+    assert.match(prompt, /已有故事星期优先沿用/);
+    assert.doesNotMatch(prompt, /不补造年份或星期|没有可靠年份时不要补写年份|没有依据时写“未知”/);
+    assert.equal(buildStoryClockPrompt({ storyClockPrompt: '  逐字自定义  ' }), '  逐字自定义  ');
+    const calls = []; let peer = { active: false, custom: false }; let settings = {};
+    const controller = createStoryClockController({ context: () => ({ setExtensionPrompt: (key, value) => calls.push([key, value]) }), pluginEnabled: () => true, enabled: () => true, settings: () => settings, peerState: () => peer });
+    assert.equal(controller.refresh().inject, true);
+    assert.equal(calls.at(-1)[1], prompt);
+    peer = { active: true, custom: false }; assert.equal(controller.refresh().inject, true);
+    peer.custom = true; assert.equal(controller.refresh().inject, false);
+    settings = { storyClockPrompt: '双自定义保留' }; assert.equal(controller.refresh().inject, true); assert.equal(calls.at(-1)[1], '双自定义保留');
+    const stamp = (weekday) => `<!-- QQJ-start | date=11月16日 | weekday=${weekday} | time=07:45 -->正文<!-- QQJ-end | date=11月16日 | weekday=${weekday} | time=07:45 -->`;
+    bindStoryClock({ dayOfYear: (_m, d) => d });
+    assert.equal(storyWeekdayRef({ chat: [{ mes: stamp('周三') }, { mes: stamp('未知') }] }, gregorian), null, '未知星期不得借历史同日补算');
+});
+
+test('duplicate date fields stay unknown while the healthy time survives', () => {
+    const raw = '<!-- SDC-start | date=11月16日 | date=11月17日 | weekday=未知 | time=07:45 -->正文<!-- SDC-end | date=11月16日 | date=11月17日 | weekday=未知 | time=07:45 -->';
+    const clock = parseStoryClock(raw);
+    assert.equal(completeStoryClock(clock), false);
+    assert.equal(clock.endMeta.date, null);
+    assert.equal(clock.endMeta.time, '7:45');
+});
+
+test('weekday consumers need a date and weekday, independent of the clock field', async () => {
+    const { storyWeekdayRef } = await import('./story-clock.js');
+    const raw = '<!-- SDC-start | date=11月16日 | weekday=周三 | time=未知 -->正文<!-- SDC-end | date=11月16日 | weekday=周三 | time=未知 -->';
+    bindStoryClock({ dayOfYear: (_m, d) => d });
+    assert.equal(storyWeekdayRef({ chat: [{ mes: raw }] }, gregorian)?.refWd, 3);
+});
+
+test('重复或含杂文的星期字段不从原文重捞可靠星期', () => {
+    for (const weekday of ['周三 | weekday=周四', '未知周三']) {
+        const clock = parseStoryClock(`<!-- SDC-start | date=11月16日 | weekday=${weekday} | time=07:45 -->正文<!-- SDC-end | date=11月16日 | weekday=${weekday} | time=07:45 -->`);
+        assert.equal(completeStoryClock(clock), false);
+        assert.equal(clock.endMeta.weekdayIndex, null);
+        assert.deepEqual(clock.endMeta.date, { month: 11, day: 16 });
+    }
+});
+
+test('默认只要求本格式一套，不沿历史双套重复追加', async () => {
+    const { buildStoryClockPrompt } = await import('./story-clock.js');
+    assert.match(buildStoryClockPrompt({}), /一套.*start\/end/);
+    assert.match(buildStoryClockPrompt({}), /历史.*QQJ.*myknots.*重复/);
+});
+
+test('equivalent dates converge while real date and weekday conflicts stay local', () => {
+    const pair = (ns, date, weekday = '周三') => `<!-- ${ns}-start | date=${date} | weekday=${weekday} | time=07:45 -->正文<!-- ${ns}-end | date=${date} | weekday=${weekday} | time=07:45 -->`;
+    const equal = parseStoryClock(pair('QQJ', '永熙二十六年11月16日') + pair('SDC', '永熙26年冬月十六日'));
+    assert.equal(completeStoryClock(equal), true);
+    const weekday = parseStoryClock(pair('QQJ', '11月16日', '周二') + pair('SDC', '11月16日', '周三'));
+    assert.deepEqual(weekday.endMeta.date, { month: 11, day: 16 }); assert.equal(weekday.endMeta.time, '7:45'); assert.equal(weekday.endMeta.weekdayIndex, null);
+    const date = parseStoryClock(pair('QQJ', '11月16日') + pair('SDC', '11月17日'));
+    assert.equal(date.endMeta.date, null); assert.equal(date.endMeta.time, '7:45');
+    assert.equal(completeStoryClock(date), false);
+    const reverse = parseStoryClock(marker('11月16日', 'end') + marker('11月16日'));
+    assert.equal(completeStoryClock(reverse), false);
+});
+
+test('an earlier orphan namespace does not hide a closed partial clock', () => {
+    const raw = '<!-- SDC-start | date=2026-11-16 | weekday=周三 | time=07:45 --><!-- QQJ-start | date=2026-11-16 | weekday=周三 | time=未知 -->正文<!-- QQJ-end | date=2026-11-16 | weekday=周三 | time=未知 -->';
+    const clock = parseStoryClock(raw);
+    assert.equal(clock.namespace, 'QQJ');
+    assert.equal(clock.ordered, true);
+    assert.equal(completeStoryClock(clock), false);
+    assert.deepEqual(clock.endMeta.date, { year: 2026, month: 11, day: 16 });
+    assert.equal(clock.endMeta.weekdayIndex, 3);
+});

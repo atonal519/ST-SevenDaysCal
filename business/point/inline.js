@@ -26,7 +26,13 @@ export function createPointInlineRenderer(env) {
         else {
             const index = Number(dayKey); const day = days[index]; events = day?.events || []; weather = String(day?.weather || '').trim(); temp = String(day?.temp || '').trim();
             const dayNumber = Number(day?.dayNumber); const offset = Number.isInteger(dayNumber) && dayNumber > 0 ? dayNumber - 1 : index; const ordinal = Number.isInteger(dayNumber) && dayNumber > 0 ? dayNumber : index + 1;
-            if (startDate) { const context = env.scheduleDayCtx(startDate, calendar, weekdayRefOverride); const value = env.scheduleDayLabel(offset, startDate, context); const dateText = formatPointDate(value.month, value.day, context.cal); headLabel = dateText ? `${dateText} · ${value.wd == null ? '星期未记录' : env.weekdays[value.wd]}` : '日期未知'; }
+            if (startDate) {
+                const context = env.scheduleDayCtx(startDate, calendar, weekdayRefOverride);
+                const value = env.scheduleDayLabel(offset, startDate, context);
+                const dateText = formatPointDate(value.month, value.day, context.cal);
+                const weekday = value.wd == null ? '' : env.weekdays[value.wd];
+                headLabel = dateText ? [dateText, weekday].filter(Boolean).join(' · ') : '日期未知';
+            }
             else headLabel = `第${ordinal}天`;
             dateLabel = headLabel;
         }
@@ -40,8 +46,8 @@ export function createPointInlineRenderer(env) {
         }).join('');
         return `${head}<div class="sp-sch-sday-list">${rows}</div>`;
     }
-    function bindScheduleStripDelegation({ $, inlineTapContext }) {
-        $(document).on('click.spschstrip', '.sp-schedule-inline .sp-sch-strip-live .sp-sch-scell', function (event) {
+    function bindScheduleStripDelegation({ $, target = document, inlineTapContext }) {
+        $(target).off?.('click.spschstrip', '.sp-schedule-inline .sp-sch-strip-live .sp-sch-scell').on('click.spschstrip', '.sp-schedule-inline .sp-sch-strip-live .sp-sch-scell', function (event) {
             event.preventDefault(); event.stopPropagation(); const wrap = this.closest('.sp-sch-strip-live'); if (!wrap) return; const day = wrap.querySelector('.sp-sch-sday'); if (!day) return;
             if (this.classList.contains('sp-sch-scell-open')) { this.classList.remove('sp-sch-scell-open'); day.hidden = true; day.innerHTML = ''; return; }
             wrap.querySelectorAll('.sp-sch-scell-open').forEach(cell => cell.classList.remove('sp-sch-scell-open')); this.classList.add('sp-sch-scell-open');

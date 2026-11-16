@@ -19,6 +19,7 @@ export function createInlineFeature(env = {}) {
     let initialized = false;
     let delegated = false;
     let pendingExpandScroll = null;
+    const rootBinders = new Map();
     const getContext = env.getContext;
     const loadAlmanac = env.loadAlmanac;
     const almTodayAnchor = env.almTodayAnchor;
@@ -63,16 +64,16 @@ export function createInlineFeature(env = {}) {
     // dayKey='0'|'1'|…|'future'。rawArg=null 读 canonical user 活缓存（最新楼）；字符串=快照 raw（历史楼）。
     // readOnly=true 时 drawer 去掉注入/删除按钮（历史楼只读）。
 
-    // 日程条 per-day tap：点某格 → 下方就地展开当天事件（再点同格收起、点别格切换）。委托到 document、
-    // 只注册一次——块会被 #chat observer 反复重建，不能绑在块自身上；只对 .sp-sch-strip-live 生效。
-    function initScheduleStripDelegation() {
-        pointInlineRenderer.bindScheduleStripDelegation({ $, inlineTapContext: inlineTapContext });
+    // 日程条点某格就地展开当天事件，再点同格收起。
+    // 委托绑定到所属楼内容器，重建时随新容器绑定，只对 .sp-sch-strip-live 生效。
+    function initScheduleStripDelegation(target = doc) {
+        pointInlineRenderer?.bindScheduleStripDelegation({ $, target, inlineTapContext });
     }
 
-    // 每个实际渲染出的顶层子模块在末尾提供同一枚原生收起按钮。事件委托挂在 document，
-    // 因此楼层重绘后无需逐节点重绑；历史只读楼也允许执行这项纯显示操作。
-    function initRegionCollapseDelegation() {
-        $(doc).on('click.spinlineregioncollapse', '.sp-inline-box.sp-dash > .sp-dash-body > details.sp-dash-region > .sp-inline-region-collapse', function (e) {
+    // 每个顶层子模块末尾提供收起按钮，委托绑定到所属容器。
+    // 历史只读楼也允许执行这项纯显示操作。
+    function initRegionCollapseDelegation(target = doc) {
+        $(target).on('click.spinlineregioncollapse', '.sp-inline-box.sp-dash > .sp-dash-body > details.sp-dash-region > .sp-inline-region-collapse', function (e) {
             e.preventDefault();
             e.stopPropagation();
             const region = this.closest?.('details.sp-dash-region');
@@ -103,13 +104,20 @@ export function createInlineFeature(env = {}) {
         cancelFrame(pending.frame);
         for (const type of pending.intentEvents) pending.chat.removeEventListener?.(type, pending.cancelOnIntent, true);
     };
+    const messageFor = node => {
+        for (let current = node; current; current = current.getRootNode?.().host) {
+            const message = current.closest?.('.mes');
+            if (message) return message;
+        }
+        return null;
+    };
     const expandScrollStillCurrent = pending => {
         if (pendingExpandScroll !== pending || !initialized) return false;
         if (!pluginEnabled() || getSettings().inlineRenderEnabled === false) return false;
         if (doc?.querySelector?.('#chat') !== pending.chat) return false;
         if ((getContext().chatId ?? null) !== pending.chatId) return false;
         if (pending.details.open !== true || pending.summary.parentElement !== pending.details) return false;
-        if (pending.summary.isConnected === false || !pending.chat.contains?.(pending.summary)) return false;
+        if (pending.summary.isConnected === false || !pending.chat.contains?.(messageFor(pending.summary) || pending.summary)) return false;
         return true;
     };
     const runExpandScrollFrame = pending => {
@@ -128,9 +136,9 @@ export function createInlineFeature(env = {}) {
         if (pending.framesLeft <= 0) cancelExpandScroll();
         else pending.frame = requestFrame(() => runExpandScrollFrame(pending));
     };
-    const initExpandScrollDelegation = () => {
+    const initExpandScrollDelegation = (target = doc) => {
         const selector = '.sp-inline-box.sp-dash > summary, .sp-inline-box.sp-dash > .sp-dash-body > details.sp-dash-region[data-seg] > summary, .sp-inline-box.sp-dash details.sp-alm-event > summary';
-        $(doc).on('click.spinlinescroll', selector, function (event) {
+        $(target).on('click.spinlinescroll', selector, function (event) {
             cancelExpandScroll();
             if (event.defaultPrevented || event.isDefaultPrevented?.()) return;
             if (event.target?.closest?.('a, button, input, select, textarea, [contenteditable], [role="button"]')) return;
@@ -138,7 +146,7 @@ export function createInlineFeature(env = {}) {
             const details = summary.parentElement;
             if (!details || details.open === true) return;
             const chat = doc?.querySelector?.('#chat');
-            if (!chat?.contains?.(summary)) return;
+            if (!chat?.contains?.(messageFor(summary) || summary)) return;
             const top = Number(summary.getBoundingClientRect?.().top);
             if (!Number.isFinite(top)) return;
             const pending = {
@@ -205,7 +213,7 @@ export function createInlineFeature(env = {}) {
         if (!stamp) return fallback;
         const tip = '时间戳·主楼 AI 每楼隐形打点读回';
         const clockMeta = clk?.endMeta?.valid ? clk.endMeta : (clk?.startMeta?.valid ? clk.startMeta : (clk?.endMeta || clk?.startMeta));
-        const weekdayText = clockMeta?.weekdayIndex == null ? null : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '星期未记录');
+        const weekdayText = clockMeta?.weekdayIndex == null ? null : (ALM_WEEKDAYS[clockMeta.weekdayIndex] || '');
         return format({ clockMeta: clockMeta ? { ...clockMeta, ...(weekdayText ? { weekdayText } : {}) } : null, rawStamp: stamp, tip });
     }
     function dashSummaryHtml(snap, hasDate, almOn, schOn, linesOn, flat = false, isLatest = false, floorClock = null, calendarOverride = undefined, weekdayRefOverride = undefined, ledgerOn = false) {
@@ -213,12 +221,12 @@ export function createInlineFeature(env = {}) {
         let head = '';
         if (hasDate) {
             const a = dashAnchor(snap);
-            let wd = '星期未记录';
+            let wd = '';
             try {
                 const meta = floorClock?.endMeta?.valid ? floorClock.endMeta : (floorClock?.startMeta?.valid ? floorClock.startMeta : null);
                 const localRef = weekdayRefOverride !== undefined ? weekdayRefOverride : (meta?.weekdayIndex == null ? (!snap ? almWeekdayRef(renderCalendar) : null) : { refDoy: almDayOfYear(meta.month, meta.day, renderCalendar), refWd: meta.weekdayIndex });
                 const wdIndex = almWeekdayFor(a.month, a.day, localRef, renderCalendar);
-                if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '星期未记录';
+                if (wdIndex != null) wd = ALM_WEEKDAYS[wdIndex] || '';
             } catch { /* unknown */ }
             // 天气：从点当天格（days[0].weather）拿，与大头 masthead 同源；拿不到就不显。历史楼用快照点 raw。
             let wxHtml = '';
@@ -319,7 +327,7 @@ export function createInlineFeature(env = {}) {
     function inlineTapContext(el) {
         const box = el.closest?.('.sp-inline-box-ro');
         if (!box) return { readOnly: false, snap: null, resolvedCalendar: loadCalDesc(), resolution: { resolved: true, source: 'live-current' } };
-        const mesEl = el.closest('.mes');
+        const mesEl = messageFor(el);
         const mid = mesEl?.getAttribute('mesid');
         const snap = mid != null ? snapshot.readSnapshot(Number(mid)) : null;
         const fallback = readStore(keyDesc('caldesc-fallback', 'user', ''));
@@ -329,15 +337,16 @@ export function createInlineFeature(env = {}) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  楼内渲染窗口控制器（render_depth 深度窗 + IntersectionObserver 视口懒挂）
+    //  楼内渲染窗口控制器（render_depth 深度窗 + IntersectionObserver 首次懒挂）
     // ═══════════════════════════════════════════════════════════════════════════
     //
     // 当前窗口由深度与视口共同决定；超窗只留 message.extra 快照，不挂 DOM，滑回再重建。
     //
     // 插件设置为正数时使用它；否则取酒馆助手的正数深度；两者都无效时回退 6 层 AI 楼。
     // inlineRenderDepth>0 时优先使用插件设置，否则读取酒馆助手深度。
-    // 视口：IntersectionObserver 观察每层 AI 楼，进视口才真正 build DOM、离开视口卸 DOM（省重排）。
-    //   深度窗外的楼直接不观察、不挂（连快照都不建 DOM，只静静躺在 extra 里）。
+    // 视口：IntersectionObserver 观察每层楼，首次进视口才 build DOM。
+    // 已挂载的框保留到离开深度窗，避免离屏拆除改变聊天高度和滚动锚点。
+    // 深度窗外的楼直接不观察、不挂，快照仍留在 extra 里。
     //
     // 深度按最近 N 个 AI 楼确定，但窗口覆盖其间用户楼；仅当前最后一个可见楼读活态出口，其余一律读各自快照。
     const renderedBoxes = new Map();
@@ -362,9 +371,19 @@ export function createInlineFeature(env = {}) {
     const releaseRenderedBox = rendered => {
         if (!rendered) return;
         syncRenderedOpen(rendered);
+        if ($ && rendered.surface) $(rendered.surface).off();
         delete rendered.node;
+        delete rendered.host;
+        delete rendered.root;
+        delete rendered.surface;
         delete rendered.html;
         delete rendered.isLatest;
+    };
+    const getRoots = () => [...renderedBoxes.values()].map(rendered => rendered.root)
+        .filter(root => root && root.host.isConnected !== false);
+    const bindRoots = (key, bind) => {
+        rootBinders.set(key, bind);
+        for (const rendered of renderedBoxes.values()) if (rendered.surface) bind(rendered.surface);
     };
 
     const clearTimer = key => { if (key) clearTimeout(key); };
@@ -416,7 +435,7 @@ export function createInlineFeature(env = {}) {
         return rect.bottom > 0 && rect.top < (win?.innerHeight || doc?.documentElement?.clientHeight || 0);
     };
     const unmount = el => {
-        if (pendingExpandScroll && el?.contains?.(pendingExpandScroll.summary)) cancelExpandScroll();
+        if (pendingExpandScroll && (messageFor(pendingExpandScroll.summary) === el || el?.contains?.(pendingExpandScroll.summary))) cancelExpandScroll();
         syncRenderedChat();
         releaseRenderedBox(renderedBoxes.get(renderedBoxKey(el)));
         el?.querySelectorAll?.(BOX_SELECTOR)?.forEach(box => box.remove());
@@ -452,11 +471,16 @@ export function createInlineFeature(env = {}) {
         if (!html) { releaseRenderedBox(rendered); boxes.forEach(box => box.remove()); return; }
         // 宿主重绘可能留下多个同级框：统一收敛为一个。正文逐字相同才保留首个，保住展开态。
         const existing = boxes[0];
-        if (rendered && rendered.node === existing && rendered.html === html && rendered.isLatest === isLatest) {
+        if (rendered && rendered.host === existing && rendered.html === html && rendered.isLatest === isLatest) {
             boxes.slice(1).forEach(box => box.remove());
             return;
         }
-        boxes.forEach(box => box.remove());
+        const reusable = existing && rendered?.host === existing ? rendered : null;
+        if (reusable) boxes.slice(1).forEach(box => box.remove());
+        else {
+            releaseRenderedBox(rendered);
+            boxes.forEach(box => box.remove());
+        }
         const holder = doc.createElement('div');
         holder.innerHTML = html;
         const box = holder.firstElementChild;
@@ -470,14 +494,47 @@ export function createInlineFeature(env = {}) {
             const id = item.getAttribute('data-alm-id');
             if (id && Object.hasOwn(rendered?.items || {}, id)) item.open = rendered.items[id] === true;
         });
-        const nextRendered = { node: box, html, isLatest, open: box.open === true, regions: rendered?.regions, items: rendered?.items };
+        let host, root, surface;
+        if (reusable) {
+            ({ host, root, surface } = reusable);
+            surface.replaceChildren(box);
+        } else {
+            host = doc.createElement('div');
+            host.className = 'sp-inline-box sp-inline-host';
+            host.setAttribute('data-sp-inline-host', '');
+            root = host.attachShadow({ mode: 'open' });
+            const baseline = doc.createElement('style');
+            baseline.textContent = ':host{all:initial!important;display:block!important;min-width:0!important;color:inherit!important;-webkit-tap-highlight-color:transparent!important}.sp-inline-surface{display:contents}';
+            root.appendChild(baseline);
+            if (env.stylesheetUrl) {
+                // 外链样式就绪后，同一份 CSS 会恢复内容可见，避免首帧显示默认字号。
+                baseline.textContent += '.sp-inline-surface{visibility:hidden}';
+                const stylesheet = doc.createElement('link');
+                stylesheet.rel = 'stylesheet';
+                stylesheet.href = env.stylesheetUrl;
+                root.appendChild(stylesheet);
+            }
+            surface = doc.createElement('div');
+            surface.className = 'sp-inline-surface';
+            surface.appendChild(box);
+            root.appendChild(surface);
+        }
+        const nextRendered = { node: box, host, root, surface, html, isLatest, open: box.open === true, regions: rendered?.regions, items: rendered?.items };
         renderedBoxes.set(renderKey, nextRendered);
         box.addEventListener('toggle', () => {
             const current = renderedBoxes.get(renderKey);
             if (current?.node === box) current.open = box.open === true;
         });
-        msg.appendChild(box);
-        env.syncTheme?.(doc, box);
+        if (!reusable) {
+            msg.appendChild(host);
+            if ($) {
+                initScheduleStripDelegation(surface);
+                initRegionCollapseDelegation(surface);
+                initExpandScrollDelegation(surface);
+            }
+            for (const bind of rootBinders.values()) bind(surface);
+        }
+        env.syncTheme?.(root, box);
     };
     const ensureInlineObserver = () => {
         if (inlineObserver || typeof globalThis.IntersectionObserver !== 'function') return;
@@ -487,7 +544,6 @@ export function createInlineFeature(env = {}) {
                 const el = entry.target;
                 const latest = el === current.currentEl;
                 if (entry.isIntersecting) mount(el, latest, { freezeSnapshots: false });
-                else if (!latest) unmount(el);
             }
         }, { root: null, rootMargin: '200px 0px', threshold: 0 });
     };
@@ -564,5 +620,5 @@ export function createInlineFeature(env = {}) {
         clear();
         renderedBoxes.clear();
     };
-    return { init, refresh, clear, destroy, computeWindow, mount, unmount, computeRenderDepth };
+    return { init, refresh, clear, destroy, computeWindow, mount, unmount, computeRenderDepth, bindRoots, getRoots };
 }

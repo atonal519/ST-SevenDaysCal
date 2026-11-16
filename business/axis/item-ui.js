@@ -3,7 +3,7 @@ export function createAxisItemUi(env = {}) {
     const rowHtml = (it, ctx) => {
         const meta = env.typeMeta(it.type);
         const wdIndex = env.weekdayFor(it.month, it.day, ctx?.wkRef, ctx?.cal);
-        const wd = wdIndex == null ? '星期未记录' : env.weekdays?.[wdIndex];
+        const wd = wdIndex == null ? '' : env.weekdays?.[wdIndex];
         const days = env.clampInt(it.days, 1, env.yearLength(ctx?.cal), 1);
         const spanTag = days > 1 ? `<span class="sp-alm-span-tag">共${days}天</span>` : '';
         const active = days > 1 && ctx?.todayDoy != null && env.itemCoversDoy(it, ctx.todayDoy, ctx?.cal);
@@ -16,7 +16,7 @@ export function createAxisItemUi(env = {}) {
         <div class="sp-alm-top">
             ${checkbox}${icon(meta.icon, "sp-alm-date-icon")}
             <span class="sp-alm-date-txt">${env.escapeHtml(env.dateLabel(it, ctx?.cal))}</span>
-            <span class="sp-alm-wd">${wd}</span>${spanTag}
+            ${wd ? `<span class="sp-alm-wd">${env.escapeHtml(wd)}</span>` : ''}${spanTag}
             ${batchOn ? '' : `<span class="sp-alm-acts">
                 <button class="sp-icon-btn sp-alm-pin" data-id="${it.id}" title="${it.pin ? '已锁定 · 生成时保留（点击解锁）' : '锁定 · 生成时保留'}">${icon(it.pin ? 'lock' : 'lock-open')}</button>
                 <button class="sp-icon-btn sp-alm-edit" data-id="${it.id}" title="编辑">${icon("pencil")}</button>

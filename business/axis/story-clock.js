@@ -135,19 +135,23 @@ function parseStoryTime(raw, { structured = false } = {}) {
 }
 function parseStoryClockMetaValue(raw, calendarOverride = null) {
     const value = String(raw || '').trim();
-    const field = name => new RegExp(`(?:^|[|｜,，;；\\n])\\s*(?:${name})\\s*[=＝:]\\s*([^|｜,，;；\\n}]*)`, 'i').exec(value)?.[1]?.trim();
+    const field = name => {
+        const matches = [...value.matchAll(new RegExp(`(?:^|[|｜,，;；\\n])\\s*(?:${name})\\s*[=＝:]\\s*([^|｜,，;；\\n}]*)`, 'ig'))];
+        return matches.length === 1 ? matches[0][1].trim() : undefined;
+    };
     const structuredDate = field('date');
     const structuredWeekday = field('weekday|星期');
     const structuredTime = field('time');
-    const structured = structuredDate != null || structuredWeekday != null || structuredTime != null;
+    const structured = /(?:^|[|｜,，;；\n])\s*(?:date|weekday|星期|time)\s*[=＝:]/i.test(value);
     const date = structured ? (structuredDate ? parseStoryDate(structuredDate, calendarOverride, { structured: true }) : null) : parseStoryDate(value, calendarOverride);
     const weekdayIndex = /^[一二三四五六日天]$/.test(String(structuredWeekday || '').trim())
         ? ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 })[String(structuredWeekday).trim()]
-        : parseStoryWeekday(structuredWeekday || value);
+        : structured && !/^(?:(?:周|週|星期|礼拜|禮拜)\s*[一二三四五六日天]|sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/i.test(structuredWeekday || '') ? null : parseStoryWeekday(structured ? structuredWeekday : value);
     const weekdayText = weekdayIndex == null ? null : WEEKDAY_TEXT[weekdayIndex];
     const dirtyStructuredTime = structuredTime && /(?:^|\s)[^=＝:|｜,，;；\n]+\s*(?:[=＝]|:(?=\s*[^\d]))/.test(structuredTime);
-    const time = dirtyStructuredTime ? null : parseStoryTime(structuredTime || value, { structured: !!structuredTime });
-    return { raw: value, structured, dateText: structuredDate ?? null, date, month: date?.month ?? null, day: date?.day ?? null, year: date?.year ?? null, eraLabel: date?.eraLabel ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && weekdayIndex != null && !!time };
+    const time = dirtyStructuredTime || structured && !structuredTime || /^(?:未知|未明确|未明|不详)$/.test(structuredTime || '') ? null : parseStoryTime(structuredTime || value, { structured: !!structuredTime });
+    const weekdayUnknown = /^(?:未知|未明确|未明|不详)$/.test(structuredWeekday || '');
+    return { raw: value, structured, dateText: structuredDate ?? null, date, month: date?.month ?? null, day: date?.day ?? null, year: date?.year ?? null, eraLabel: date?.eraLabel ?? null, weekdayIndex, weekdayText, time: time || null, valid: !!date, complete: !!date && (weekdayIndex != null || weekdayUnknown) && !!time };
 }
 // Literal format examples contain no time metadata; leave real incomplete/duplicate markers visible to validation.
 const CLOCK_TEMPLATE_VALUE = /^\s*[|｜]?\s*date\s*[=＝:]\s*(?:…+|\.{3})\s*[|｜]\s*weekday\s*[=＝:]\s*(?:周x|…+|\.{3})\s*[|｜]\s*time\s*[=＝:]\s*(?:…+|\.{3})\s*$/i;
@@ -164,12 +168,28 @@ export function parseStoryClock(message, calendarOverride = null) {
         const start = starts[0]; const end = ends[0];
         const startMeta = start ? parseStoryClockMetaValue(start[1], calendarOverride) : null; const endMeta = end ? parseStoryClockMetaValue(end[1], calendarOverride) : null;
         const duplicate = starts.length !== 1 || ends.length !== 1;
-        const complete = !duplicate && !!start && !!end && end.index >= start.index + start[0].length && !!startMeta?.complete && !!endMeta?.complete;
-        return { namespace, starts, ends, start, end, startMeta, endMeta, duplicate, complete, sourceIndex: Math.min(start?.index ?? Infinity, end?.index ?? Infinity) };
+        const ordered = !!start && !!end && end.index >= start.index + start[0].length;
+        const complete = !duplicate && ordered && !!startMeta?.complete && !!endMeta?.complete;
+        return { namespace, starts, ends, start, end, startMeta, endMeta, duplicate, ordered, complete, sourceIndex: Math.min(start?.index ?? Infinity, end?.index ?? Infinity) };
     }).filter(Boolean).sort((left, right) => Number(right.complete) - Number(left.complete) || left.sourceIndex - right.sourceIndex);
-    const selected = candidates[0] ?? null; const start = selected?.start; const end = selected?.end;
+    const usable = candidates.filter(candidate => candidate.ordered && !candidate.duplicate);
+    let selected = usable[0] ?? candidates[0] ?? null;
+    if (usable.length > 1) {
+        const merge = values => {
+            const merged = { ...values[0], raw: values.map(value => value.raw).join(' / ') };
+            const same = (key, normalize = value => value) => values.every(value => JSON.stringify(normalize(value[key])) === JSON.stringify(normalize(values[0][key])));
+            if (!same('date', date => date && [date.eraLabel || '', date.year ?? null, date.month, date.day])) merged.date = null;
+            if (!same('weekdayIndex')) { merged.weekdayIndex = null; merged.weekdayText = null; }
+            if (!same('time')) merged.time = null;
+            Object.assign(merged, { month: merged.date?.month ?? null, day: merged.date?.day ?? null, year: merged.date?.year ?? null, eraLabel: merged.date?.eraLabel ?? null, valid: !!merged.date });
+            merged.complete = values.every(value => value.complete) && !!merged.date && !!merged.time && new Set(values.map(value => value.weekdayIndex).filter(value => value != null)).size <= 1;
+            return merged;
+        };
+        selected = { ...usable[0], startMeta: merge(usable.map(candidate => candidate.startMeta)), endMeta: merge(usable.map(candidate => candidate.endMeta)) };
+    }
+    const start = selected?.start; const end = selected?.end;
     const out = { start: start ? start[1].trim() : null, end: end ? end[1].trim() : null };
-    Object.defineProperties(out, { duplicate: { value: selected ? selected.duplicate : true, enumerable: false }, namespace: { value: selected?.namespace ?? null, enumerable: false }, startMeta: { value: selected?.startMeta ?? null, enumerable: false }, endMeta: { value: selected?.endMeta ?? null, enumerable: false } });
+    Object.defineProperties(out, { duplicate: { value: selected ? selected.duplicate : true, enumerable: false }, ordered: { value: selected?.ordered === true, enumerable: false }, namespace: { value: selected?.namespace ?? null, enumerable: false }, startMeta: { value: selected?.startMeta ?? null, enumerable: false }, endMeta: { value: selected?.endMeta ?? null, enumerable: false } });
     return out;
 }
 export function storyClockNarrativeBody(message) {
@@ -188,15 +208,15 @@ export const STORY_CLOCK_DEPTH = 0;
 export const DEFAULT_STORY_CLOCK_PROMPT = [
     '【故事时间戳 SDC｜每楼附加元数据】',
     '在本楼正文最前与最后各放一个 HTML 注释，作为本楼附加时间元数据，不显示给读者。',
-    '沿用正文既有纪年、历法和计时方式；通常以上一楼 end 推进，本楼已有可靠事实时按本楼填写。没有参考时依据剧情合理填写；除此之外不在正文讨论 SDC。',
+    '沿用正文既有纪年、历法和计时方式；通常以上一楼 end 推进，本楼已有明确事实时按本楼填写。缺少资料时按世界观合理补全年份、星期和其余缺失时间信息，补全后持续沿用；除此之外不在正文讨论 SDC。',
     '<!-- SDC-start | date=… | weekday=周X | time=… -->正文<!-- SDC-end | date=… | weekday=周X | time=… -->',
 ].join('\n');
 export const STORY_CLOCK_MACHINE_CONTRACT = [
     '【SDC机器合同·双向隔离】',
-    'SDC-start 与 SDC-end 必须各自使用 date=… | weekday=… | time=… 三个字段，weekday 只能是周一、周二、周三、周四、周五、周六或周日。有可靠故事年份或纪年时，date 必须携带完整年份并沿用原有年号与历法；开局没有已有可靠纪年时，先依据开场白和本轮生效的世界书设定；中途没有可靠故事年份或纪年时，先依据已经发生的正文和本轮生效的世界书确定合理纪年。上述材料仍无可用纪年时，再结合上下文创作符合世界观的故事年份或纪年，并写入 start 与 end。年份可用纪元年、中文数字、阿拉伯数字或世界观自定义纪年表达，不限四位公历格式；不能使用系统或服务器现实年份。Gregorian 必须使用数字月份；文学季节词不能替代月份。自定义历法仅允许当前 calendar.months 中实际存在的正式月名，不能臆造或猜测未配置月份。',
+    'SDC-start 与 SDC-end 必须各自完整填写 date=… | weekday=… | time=… 三个字段，date 包含故事年份、月份与日。已有日期和纪年优先，缺失项依次参考上一楼时间戳、已发生正文、角色卡与世界书；资料仍不足时，合理补全符合世界观的年份、纪年及其余时间信息。补全后持续沿用同一时间锚，按实际剧情经过推进；跨日、跨年、倒叙按本楼对应时刻记录。年份可用中文、阿拉伯数字或世界观纪年，不拿系统或服务器现实年份补位。',
+    'weekday 使用周一至周日，已有故事星期优先沿用。公历年月日完整且没有故事星期依据时按该日期确定星期；架空历法沿已有星期锚推进，缺少星期参考时合理设定初始星期，之后按经过天数连续推进。世界设定明确没有星期制度时才写“未知”。自定义历法使用当前 calendar.months 中实际存在的正式月名和合法日数，不改写配置的月份。',
     'SDC 是额外内部元数据。请先完整执行上下文中其他世界书的日期、历法、状态栏、时间与时间戳要求，不得因输出 SDC 而省略、合并、替代或改写它们。',
-    'SDC 仅供构画读取，不能代替其他日期输出；构画不读取、不修改、不接管其他时间戳格式。',
-    '完成其他输出要求后，仍必须独立输出含完整 date/weekday/time 的 SDC start/end；其他时间戳不能视作已经满足 SDC。',
+    '本楼仅按本提示指定的 SDC 格式输出一套 start/end；历史楼出现 QQJ、myknots 等同类标记时，不因此重复追加。世界书自身的独立输出要求仍须完整执行。',
 ].join('\n');
 export const STORY_CLOCK_PROMPT_VERSION = 2;
 export function buildStoryClockPrompt(settings = {}) {
@@ -215,10 +235,10 @@ export function buildStoryClockCalendarContext(description = '') {
 }
 export function latestStoryClock(context, limit = 100) {
     const messages = context?.chat || []; let scanned = 0;
-    for (let i = messages.length - 1; i >= 0 && scanned < limit; i--) { const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue; scanned++; const clock = parseStoryClock(msg.mes, deps.calendarForFloor?.(i, context)); const out = { start: clock.start, end: clock.end, floor: i }; Object.defineProperties(out, { duplicate: { value: clock.duplicate, enumerable: false }, startMeta: { value: clock.startMeta, enumerable: false }, endMeta: { value: clock.endMeta, enumerable: false } }); return out; }
+    for (let i = messages.length - 1; i >= 0 && scanned < limit; i--) { const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue; scanned++; const clock = parseStoryClock(msg.mes, deps.calendarForFloor?.(i, context)); const out = { start: clock.start, end: clock.end, floor: i }; Object.defineProperties(out, { duplicate: { value: clock.duplicate, enumerable: false }, ordered: { value: clock.ordered, enumerable: false }, startMeta: { value: clock.startMeta, enumerable: false }, endMeta: { value: clock.endMeta, enumerable: false } }); return out; }
     return null;
 }
-export function completeStoryClock(clock) { return !!clock && !clock.duplicate && !!clock.startMeta?.complete && !!clock.endMeta?.complete; }
+export function completeStoryClock(clock) { return !!clock && !clock.duplicate && clock.ordered !== false && !!clock.startMeta?.complete && !!clock.endMeta?.complete; }
 function storyWeekdayResult(refDoy, refWd, weekdayText, floor, source, sourceFloor = floor) {
     const out = { refDoy, refWd, weekdayText, floor };
     Object.defineProperties(out, {
@@ -249,7 +269,7 @@ export function storyWeekdayRef(context = deps.context?.(), calendar = deps.load
     }
     if (!Number.isInteger(aiFloor)) return null;
     const clock = parseStoryClock(messages[aiFloor].mes, deps.calendarForFloor?.(aiFloor, context));
-    if (completeStoryClock(clock)) {
+    if (!clock.duplicate && clock.ordered && clock.endMeta?.date && Number.isInteger(clock.endMeta?.weekdayIndex)) {
         const meta = clock.endMeta;
         const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
         return Number.isInteger(refDoy) ? storyWeekdayResult(refDoy, meta.weekdayIndex, meta.weekdayText, aiFloor, 'sdc') : null;
@@ -257,6 +277,7 @@ export function storyWeekdayRef(context = deps.context?.(), calendar = deps.load
 
     // 只读当前 AI 楼正文里的显式「日期 + 星期」组合。先剥掉残缺/重复 SDC，
     // 避免其中单侧 weekday 字段伪装成正文证据；解析能力由既有保守 helper 提供。
+    if (clock.ordered && !clock.duplicate && clock.endMeta?.weekdayIndex == null) return null;
     const explicit = deps.explicitWeekdayDate?.(storyTextWithoutClockMetadata(messages[aiFloor].mes), calendar);
     if (explicit && Number.isInteger(explicit.wd)) {
         const md = deps.validMonthDay?.({ month: explicit.month, day: explicit.day }, calendar);
@@ -276,9 +297,9 @@ export function storyWeekdayRef(context = deps.context?.(), calendar = deps.load
         const msg = messages[i]; if (!msg || msg.is_user || msg.is_system || msg.role === 'system' || !msg.mes) continue;
         scanned++;
         const historical = parseStoryClock(msg.mes, deps.calendarForFloor?.(i, context));
-        if (!completeStoryClock(historical)) continue;
+        if (historical.duplicate || !historical.ordered || !historical.endMeta?.date || !Number.isInteger(historical.endMeta?.weekdayIndex)) continue;
         const meta = historical.endMeta;
-        // 只允许最近一份完整历史 SDC 作证；它一旦不同日/纪年不相容，
+        // 只允许最近一份可靠日期与星期作证；它一旦不同日/纪年不相容，
         // 就立即未知，不能越过它捞取更老的同日记录。
         if (!sameStoryDate(effectiveDate, meta?.date)) return null;
         const refDoy = deps.dayOfYear?.(meta.month, meta.day, calendar);
@@ -286,7 +307,7 @@ export function storyWeekdayRef(context = deps.context?.(), calendar = deps.load
     }
     return null;
 }
-export function storyClockDate(context, parseDate, limit = 100) { const clock = latestStoryClock(context, limit); return clock ? (clock.endMeta?.date || clock.startMeta?.date || parseDate(clock.end) || parseDate(clock.start)) : null; }
+export function storyClockDate(context, parseDate, limit = 100) { const clock = latestStoryClock(context, limit); return clock && !clock.duplicate && clock.ordered ? clock.endMeta?.date ?? null : null; }
 export function createStoryClockController(options = {}) {
     const refresh = () => {
         const context = options.context?.();

@@ -26,12 +26,29 @@ test('确定的外层记录包装兼容缺少辅助字段的节点', () => {
     assert.equal(parseCompleteOutline(normalized).length, 1);
 });
 
+test('四栏 Beat 中明确合写的类型与故事线拆回五栏且结果完整保留', () => {
+    for (const separator of ['|', '｜']) {
+        const raw = `<outline_widget>\nBeat: ${['下月', '查访旧案', '调查·旧案线', '线索汇合，后续选择保持开放'].join(separator)}\nScene: 双方核对旧案材料\n</outline_widget>`;
+        const [beat] = parseCompleteOutline(raw);
+        assert.ok(beat);
+        assert.equal(beat.type, '调查');
+        assert.equal(beat.line, '旧案线');
+        assert.equal(beat.outcome, '线索汇合，后续选择保持开放');
+        const normalized = normalizeOutlineResponse(raw);
+        assert.match(normalized, /Beat: 下月\|查访旧案\|调查\|旧案线\|线索汇合，后续选择保持开放/);
+        assert.equal(normalizeOutlineResponse(normalized), normalized);
+    }
+});
+
 test('缺少 Beat 关键值或 Scene 的节点不进入可应用结果', () => {
     const source = `<outline_widget>\n${validBeat}\nBeat: 一个月后|遗漏类型||主线|结果\nScene: 不完整\nBeat: 下月|遗漏场景|调查|主线|仍需材料\nThink: 可保留为原始草稿\n</outline_widget>`;
     assert.equal(parseCompleteOutline(source).length, 1);
     assert.match(normalizeOutlineResponse(source), /资料汇合/);
     assert.doesNotMatch(normalizeOutlineResponse(source), /遗漏类型|遗漏场景/);
     assert.equal(normalizeOutlineResponse('这里是普通分析文字，没有正式节点'), '');
+    for (const fields of ['下月|查访|调查|结果', '下月|查访|调查·|结果', '下月|查访|·旧案线|结果']) {
+        assert.equal(normalizeOutlineResponse(`Beat: ${fields}\nScene: 核对材料`), '');
+    }
 });
 
 test('多个闭合面块按原顺序合并，坏节点槽位保留但规范化只保留合法节点', () => {

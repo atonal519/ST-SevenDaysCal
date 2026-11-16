@@ -90,7 +90,7 @@ export function finalizeLedgerEventUi(result, { refreshInline, render, toast } =
     return result;
 }
 
-export function bindLedgerEvents({ almanac, chat, $, capture, judge, captureState, actions, render, refreshInline, identity, isCurrentIdentity, editor, archive, batch, updateBatchSelection, toast } = {}) {
+export function bindLedgerEvents({ almanac, chat, $, bindInlineRoots, capture, judge, captureState, actions, render, refreshInline, identity, isCurrentIdentity, editor, archive, batch, updateBatchSelection, toast } = {}) {
     const namespace = '.spLedger';
     const redraw = () => { render(); };
     const syncBatchSelection = scope => typeof updateBatchSelection === 'function' ? updateBatchSelection(scope) : redraw();
@@ -185,14 +185,18 @@ export function bindLedgerEvents({ almanac, chat, $, capture, judge, captureStat
     almanac.on(`change${namespace}`, '.sp-batch-selall', function () { const scope = batch.scope(); if (!scope || !batch.scopes.includes(scope)) return; if (this.checked) batch.ids(scope).forEach(id => batch.selected().add(id)); else batch.selected().clear(); syncBatchSelection(scope); });
     almanac.on(`change${namespace}`, '.sp-batch-check', function () { const id = $(this).closest('[data-id]').attr('data-id'); if (id == null) return; const scope = batch.scope(); if (this.checked) batch.selected().add(id); else batch.selected().delete(id); syncBatchSelection(scope); });
     almanac.on(`click${namespace}`, '.sp-batch-exec', async function (e) { e.stopPropagation(); const scope = batch.scope(); const ids = [...batch.selected()]; if (!scope || !batch.scopes.includes(scope) || !ids.length) return; await batch.exec(scope, ids); });
-    if (chat) {
-        if (chat !== almanac) chat.off?.(namespace);
-        chat.on(`click${namespace}`, '.sp-inline-ledger-capture', function (e) { e.stopPropagation(); return runManualCapture(this, { inline: true }); });
-        chat.on(`click${namespace}`, '.sp-inline-ledger-judge', function (e) { e.stopPropagation(); return runManualJudge(); });
-        chat.on(`click${namespace}`, '.sp-inline-ledger-lock', function (e) { e.stopPropagation(); actions.toggleLock($(this).attr('data-id'), { inline: true, panel: false }); });
-        chat.on(`click${namespace}`, '.sp-inline-ledger-mute', function (e) { e.stopPropagation(); actions.toggleMute($(this).attr('data-id'), { inline: true, panel: false }); });
-        chat.on(`click${namespace}`, '.sp-inline-ledger-close', async function (e) { e.stopPropagation(); await actions.close($(this).attr('data-id'), { inline: true, panel: false }); });
-    }
+    const bindInline = target => {
+        if (!target) return;
+        const $target = target?.on && target?.off ? target : $(target);
+        if ($target !== almanac) $target.off?.(namespace);
+        $target.on(`click${namespace}`, '.sp-inline-ledger-capture', function (e) { e.stopPropagation(); return runManualCapture(this, { inline: true }); });
+        $target.on(`click${namespace}`, '.sp-inline-ledger-judge', function (e) { e.stopPropagation(); return runManualJudge(); });
+        $target.on(`click${namespace}`, '.sp-inline-ledger-lock', function (e) { e.stopPropagation(); actions.toggleLock($(this).attr('data-id'), { inline: true, panel: false }); });
+        $target.on(`click${namespace}`, '.sp-inline-ledger-mute', function (e) { e.stopPropagation(); actions.toggleMute($(this).attr('data-id'), { inline: true, panel: false }); });
+        $target.on(`click${namespace}`, '.sp-inline-ledger-close', async function (e) { e.stopPropagation(); await actions.close($(this).attr('data-id'), { inline: true, panel: false }); });
+    };
+    if (chat) bindInline(chat);
+    bindInlineRoots?.(bindInline);
     async function envConfirm() {
         return typeof capture.confirmAbandon === 'function' ? capture.confirmAbandon() : true;
     }

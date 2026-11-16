@@ -91,12 +91,19 @@ test('mounted inline box keeps a readable ledger-only summary chip and omits it 
         querySelector: selector => selector === '#chat' ? chat : null,
         querySelectorAll: () => [],
         createElement() {
-            const holder = { firstElementChild: null };
+            const holder = {
+                children: [],
+                setAttribute() {},
+                appendChild(child) { this.children.push(child); return child; },
+                attachShadow() { this.shadowRoot = doc.createElement(); this.shadowRoot.host = this; return this.shadowRoot; },
+                get firstElementChild() { return this.children[0] || null; },
+                remove() { message.children = message.children.filter(node => node !== this); },
+            };
             Object.defineProperty(holder, 'innerHTML', { set(value) {
-                holder.firstElementChild = {
+                holder.children = [{
                     producedHtml: value, open: false,
                     querySelectorAll: () => [], addEventListener() {}, remove() { message.children = message.children.filter(node => node !== this); },
-                };
+                }];
             } });
             return holder;
         },
@@ -125,7 +132,7 @@ test('mounted inline box keeps a readable ledger-only summary chip and omits it 
     ledgerHtml = '<summary class="sp-inline-summary"><span class="sp-inline-title">标注池</span>实际记录</summary>';
     feature.mount(floor, true);
     assert.equal(message.children.length, 1);
-    const ledgerOnlyHtml = message.children[0].producedHtml;
+    const ledgerOnlyHtml = message.children[0].shadowRoot.children.at(-1).firstElementChild.producedHtml;
     assert.match(ledgerOnlyHtml, /<span class="sp-dash-sum-chip">标注池<\/span>/);
     assert.match(ledgerOnlyHtml, /实际记录/);
     assert.doesNotMatch(ledgerOnlyHtml, /<span class="sp-dash-sum-chip">点\d+/);
@@ -138,7 +145,7 @@ test('mounted inline box keeps a readable ledger-only summary chip and omits it 
     ledgerHtml = '<summary class="sp-inline-summary"><span class="sp-inline-title">标注池</span>实际记录</summary>';
     scheduleHtml = '<summary class="sp-inline-summary"><span class="sp-inline-title">点</span>真实日程</summary>';
     feature.mount(floor, true);
-    const mixedHtml = message.children.at(-1).producedHtml;
+    const mixedHtml = message.children.at(-1).shadowRoot.children.at(-1).firstElementChild.producedHtml;
     assert.match(mixedHtml, /<span class="sp-dash-sum-chip">标注池<\/span>/);
     assert.match(mixedHtml, /点1/);
     assert.match(mixedHtml, /真实日程/);

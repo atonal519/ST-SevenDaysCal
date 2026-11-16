@@ -60,7 +60,16 @@ export function renderAxisWeekdayHint(env = {}) {
     const month = env.clamp(env.monthValue(), 1, env.monthCount(cal), 1);
     const day = env.clamp(env.dayValue(), 1, env.monthDays(cal, month), 1);
     const days = env.clamp(env.durationValue(), 1, env.yearLength(cal), 1);
-    const ref = env.weekdayRef(cal); const wdIndex = env.weekdayFor(month, day, ref, cal); const wd = wdIndex == null ? '星期未记录' : env.weekdays[wdIndex];
-    if (days > 1) { const end = env.endMonthDay({ month, day, days }, cal); const endIndex = env.weekdayFor(end.month, end.day, ref, cal); const ewd = endIndex == null ? '星期未记录' : env.weekdays[endIndex]; return `${env.monthName(cal, month)}${day}日 ${wd} · 共 ${days} 天，至 ${env.monthName(cal, end.month)}${end.day}日 ${ewd}`; }
-    return `${env.monthName(cal, month)}${day}日 · ${wd}`;
+    const ref = env.weekdayRef(cal);
+    const wdIndex = env.weekdayFor(month, day, ref, cal);
+    const wd = wdIndex == null ? '' : env.weekdays[wdIndex];
+    const date = `${env.monthName(cal, month)}${day}日`;
+    if (days > 1) {
+        const end = env.endMonthDay({ month, day, days }, cal);
+        const endIndex = env.weekdayFor(end.month, end.day, ref, cal);
+        const ewd = endIndex == null ? '' : env.weekdays[endIndex];
+        const endDate = `${env.monthName(cal, end.month)}${end.day}日`;
+        return `${[date, wd].filter(Boolean).join(' ')} · 共 ${days} 天，至 ${[endDate, ewd].filter(Boolean).join(' ')}`;
+    }
+    return [date, wd].filter(Boolean).join(' · ');
 }

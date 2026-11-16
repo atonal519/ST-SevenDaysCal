@@ -30,6 +30,11 @@ function parseOutlineBlock(raw, structured = false) {
         if (/^Beat\s*[:：]/i.test(text)) {
             if (current) beats.push(current);
             const parts = text.replace(/^Beat\s*[:：]\s*/i, '').split(/[|｜]/);
+            if (parts.length === 4) {
+                // 模型有时将类型与故事线写成“调查·旧案线”，两项均明确时拆回独立字段。
+                const combined = parts[2].match(/^([^·]+)·(.+)$/);
+                if (combined) parts.splice(2, 1, combined[1], combined[2]);
+            }
             current = {
                 time: (parts[0] || '').trim(),
                 title: (parts[1] || '').trim(),

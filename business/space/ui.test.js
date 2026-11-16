@@ -4,6 +4,115 @@ import { createSpaceUi } from './ui.js';
 import { createSpaceRenderer } from './render.js';
 import { appendSpaceAssistant } from './schema.js';
 import { createAxisWidgetActions } from '../axis/widget.js';
+import { createSpaceRepository } from './repository.js';
+
+function pageUiFixture(pages = ['1', '2']) {
+    const target = { chatId: 'page-ui', historyKey: 'page-ui-history' };
+    let saved = { version: 1, pages, messages: pages.map(id => ({ role: 'user', content: `窗口${id}记录`, pageId: id })) };
+    let writable = true, confirm = true, busy = false;
+    const writes = [], confirmations = [], handlers = new Map(), nodes = new Map();
+    const node = selector => {
+        if (!nodes.has(selector)) nodes.set(selector, {
+            length: 1, attrs: {}, props: {}, value: '', scrollTop: 0, scrollHeight: 400,
+            attr(key, value) { if (arguments.length > 1) { this.attrs[key] = value; return this; } return this.attrs[key]; },
+            prop(key, value) { if (arguments.length > 1) { this.props[key] = value; return this; } return this.props[key]; },
+            val(value) { if (arguments.length) { this.value = value; return this; } return this.value; },
+            on(event, selector, handler) { handlers.set(`${event} ${selector}`, handler); return this; },
+            off() { return this; }, empty() { this.scrollTop = 0; return this; },
+            addClass() { return this; }, html() { return this; }, append() { return this; }, appendTo() { return this; }, focus() {},
+        });
+        return nodes.get(selector);
+    };
+    const repository = createSpaceRepository({
+        captureIdentity: () => target, isCurrent: value => value === target, readStore: () => saved,
+        writeStore: (_key, value) => { if (!writable) return false; saved = structuredClone(value); writes.push(saved); return true; },
+    });
+    repository.load();
+    const ui = createSpaceUi({
+        query: node, element: node, $: value => typeof value === 'string' ? node(Symbol()) : value,
+        confirm: async options => { confirmations.push(options); return confirm; },
+    });
+    ui.bindControllers({ repository, chat: { history: repository.history, get busy() { return busy; } }, renderer: createSpaceRenderer() });
+    ui.bind(); ui.renderHistory(repository.history());
+    return {
+        ui, repository, writes, confirmations, node,
+        close: id => handlers.get('click.spSpaceFeature [data-space-close-page]').call(node(`close-${id}`).attr('data-space-close-page', id), { stopPropagation() {} }),
+        add: () => handlers.get('click.spSpaceFeature #sp-space-add-page')({ stopPropagation() {} }),
+        key: key => handlers.get('keydown.spSpaceFeature [data-space-page]')({ key, preventDefault() {} }),
+        setConfirm: value => { confirm = value; }, setWritable: value => { writable = value; }, setBusy: value => { busy = value; },
+    };
+}
+
+test('关闭当前窗口切回另一页并还原草稿和滚动，重新新增的页没有旧草稿', async () => {
+    const f = pageUiFixture();
+    f.node('#sp-space-input').val('第一页草稿');
+    f.node('#sp-space-msgs').scrollTop = 41;
+    f.ui.switchPage('2');
+    f.node('#sp-space-input').val('第二页草稿');
+    assert.equal(await f.close('2'), true);
+    assert.equal(f.ui.activePageId(), '1');
+    assert.equal(f.node('#sp-space-input').val(), '第一页草稿');
+    assert.equal(f.node('#sp-space-msgs').scrollTop, 41);
+    assert.deepEqual(f.repository.history().map(message => message.pageId), ['1']);
+    assert.match(f.confirmations[0].body, /窗口2/);
+    f.add();
+    assert.equal(f.ui.activePageId(), '2');
+    assert.equal(f.node('#sp-space-input').val(), '');
+});
+
+test('关闭另一窗口不切页、不挪滚动，窗口2单独保留时键盘和重置仍选中它', async () => {
+    const f = pageUiFixture();
+    f.ui.switchPage('2');
+    f.node('#sp-space-input').val('继续窗口2');
+    f.node('#sp-space-msgs').scrollTop = 73;
+    assert.equal(await f.close('1'), true);
+    assert.equal(f.ui.activePageId(), '2');
+    assert.equal(f.node('#sp-space-input').val(), '继续窗口2');
+    assert.equal(f.node('#sp-space-msgs').scrollTop, 73);
+    assert.deepEqual(f.repository.pages(), ['2']);
+    f.key('Home'); assert.equal(f.ui.activePageId(), '2');
+    f.ui.resetPages(); assert.equal(f.ui.activePageId(), '2');
+    assert.equal(f.node('[data-space-page="2"]').attr('aria-selected'), 'true');
+});
+
+test('取消关闭、生成中、保存失败及最后一个窗口都不删除记录', async () => {
+    const f = pageUiFixture();
+    const before = structuredClone(f.repository.history());
+    f.setConfirm(false); assert.equal(await f.close('1'), false);
+    f.setConfirm(true); f.setBusy(true); assert.equal(await f.close('1'), false);
+    assert.equal(f.confirmations.length, 1);
+    f.setBusy(false); f.setWritable(false); assert.equal(await f.close('1'), false);
+    assert.deepEqual(f.repository.pages(), ['1', '2']);
+    assert.deepEqual(f.repository.history(), before);
+    assert.equal(f.writes.length, 0);
+    const single = pageUiFixture(['2']);
+    assert.equal(single.ui.activePageId(), '2');
+    assert.equal(await single.close('2'), false);
+    assert.equal(single.confirmations.length, 0);
+    assert.equal(single.writes.length, 0);
+    assert.equal(single.node('#sp-space-pages').prop('hidden'), true);
+});
+
+test('空窗口也先弹确认，等待或取消期间保留窗口和另一页草稿', async () => {
+    const f = pageUiFixture();
+    f.repository.replace(f.repository.capture(), f.repository.history().filter(message => message.pageId === '1'));
+    f.node('#sp-space-input').val('窗口1未发送草稿');
+    const beforeWrites = f.writes.length;
+    let answer;
+    f.setConfirm(new Promise(resolve => { answer = resolve; }));
+    const pending = f.close('2');
+    assert.equal(f.confirmations.length, 1);
+    assert.deepEqual(f.repository.pages(), ['1', '2']);
+    assert.equal(f.writes.length, beforeWrites);
+    answer(false);
+    assert.equal(await pending, false);
+    assert.deepEqual(f.repository.pages(), ['1', '2']);
+    assert.equal(f.node('#sp-space-input').val(), '窗口1未发送草稿');
+    f.setConfirm(true);
+    assert.equal(await f.close('2'), true);
+    assert.equal(f.confirmations.length, 2);
+    assert.deepEqual(f.repository.pages(), ['1']);
+});
 
 test('语义面候选重绘后仍注册同一正式稿依据并执行既有应用动作', async () => {
     const rawToken = 'formal-outline-token';

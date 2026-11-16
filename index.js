@@ -235,6 +235,11 @@ import {
 // 坐标与楼内框各自持有唯一 runtime 句柄。
 let coordinateRuntime = null;
 let inlineFeature = null;
+const pendingInlineRootBindings = [];
+function registerInlineRootBinding(key, binder) {
+    if (inlineFeature?.bindRoots) inlineFeature.bindRoots(key, binder);
+    else pendingInlineRootBindings.push({ key, binder });
+}
 
 function refreshInlineWindow(immediate = false) { return inlineFeature?.refresh?.(immediate); }
 function _clearAllInlineBoxes() { return inlineFeature?.clear?.(); }
@@ -2381,6 +2386,7 @@ jQuery(async () => {
         ledgerLastJudgedMsgId = lastSeen;
         ledgerJudgeCounter = 0;
         ledgerRegeneratedMsgId = -1;
+        ledgerRegenerationDeleted = false;
         currentView = 'user';
         charViewName = null;
         outlineMode = false;
@@ -2560,7 +2566,7 @@ jQuery(async () => {
         refreshStoryClockInjection();
         linesFeature.onGenerationStarted({ genType, dryRun });
         if (dryRun || genType === 'quiet') return;
-        finishLedgerRegeneration();
+        finishLedgerRegeneration(true);
         const chat = getContext().chat;
         const last = Array.isArray(chat) ? chat.length - 1 : -1;
         if (genType === 'regenerate' && ledgerNarrativeMessage(chat?.[last])) {
@@ -2958,6 +2964,7 @@ inlineFeature = createInlineFeature({
     getLinesCacheKey, parseLines, linesFeature, snapshot, keyDesc, createWeekdayConsumerContext,
     storyWeekdayRefPure, ALM_CHAT_SCAN_LIMIT, pointInlineRenderer, axisInlineRenderer, $, _buildLedgerBlockHtml,
     buildUserRecall: _buildUserRecallBoxHtml,
+    stylesheetUrl: STYLESHEET_URL,
     pluginEnabled, documentRef: document, windowRef: window,
     freezeSnapshot: freezeSnapshotToFloor,
     readSnapshot: id => snapshot.readSnapshot(id),
@@ -2969,12 +2976,15 @@ inlineFeature = createInlineFeature({
     chatMessage: floor => getContext()?.chat?.[floor]?.mes || '', parseStoryClock: (message, calendar) => parseStoryClockPure(message, calendar),
     coordinateChanged: input => coordinateRuntime?.feature?.onChatDomChanged?.(input),
     isStreaming: () => linesFeature.isStreaming(),
-    syncTheme: (_doc, box) => {
+    syncTheme: (root, box) => {
         const theme = detectSTTheme();
+        if (root?.host) syncUiTheme(root.host, theme);
         syncUiTheme(box, theme);
-        syncVectorGlyphTheme(document, theme);
+        syncVectorGlyphTheme(root || box, theme);
+        if (root?.host) refreshUserNameMask(root.host);
     },
 });
+for (const { key, binder } of pendingInlineRootBindings.splice(0)) inlineFeature.bindRoots?.(key, binder);
 if (document.querySelector('#chat')) inlineFeature.init();
 // ─── 线·伏笔潜伏注入（隐形注入主楼 AI）────────────────────────────────────────
 // 把当前视角的活跃线（跳过终态 stage）以 SYSTEM 角色注入聊天上下文（IN_CHAT + depth），
@@ -3001,6 +3011,7 @@ let   ledgerAutomationEpoch  = 0;
 let   ledgerCaptureQueued    = false;
 let   ledgerJudgeQueued      = false;
 let   ledgerRegeneratedMsgId = -1;
+let   ledgerRegenerationDeleted = false;
 function enqueueLedgerAutomation(task) {
     const epoch = ledgerAutomationEpoch;
     const queued = ledgerAutomationQueue.catch(() => {}).then(() => epoch === ledgerAutomationEpoch ? task() : { status: 'cancelled', reason: 'superseded' });
@@ -3015,8 +3026,10 @@ function invalidateLedgerAutomationQueue() {
 }
 function rewindLedgerAutomationAfterDeletion(messageId) {
     const replacingLastAi = ledgerRegeneratedMsgId >= 0 && messageId === ledgerRegeneratedMsgId && getContext().chat?.length === ledgerRegeneratedMsgId;
-    if (!replacingLastAi) {
+    if (replacingLastAi) ledgerRegenerationDeleted = true;
+    else {
         ledgerRegeneratedMsgId = -1;
+        ledgerRegenerationDeleted = false;
         const latest = ledgerLatestAiFloorId();
         ledgerLastCapturedMsgId = Math.min(ledgerLastCapturedMsgId, latest - 1);
         ledgerLastJudgedMsgId = Math.min(ledgerLastJudgedMsgId, latest - 1);
@@ -3025,11 +3038,16 @@ function rewindLedgerAutomationAfterDeletion(messageId) {
     }
     invalidateLedgerAutomationQueue();
 }
-function finishLedgerRegeneration() {
+function finishLedgerRegeneration(nextGeneration = false) {
     const floor = ledgerRegeneratedMsgId;
+    if (floor < 0) return;
+    const hasReplacement = ledgerNarrativeMessage(getContext().chat?.[floor]);
+    // 结束/停止通知可能早于删楼或替代正文落地；缺失是否已成定局，留到下一次真正生成时确认。
+    if (!nextGeneration && (!ledgerRegenerationDeleted || !hasReplacement)) return;
     ledgerRegeneratedMsgId = -1;
+    ledgerRegenerationDeleted = false;
     // 旧 AI 已删除、替代回复尚未落地就中止时，下一条回复仍应按新楼计数。
-    if (floor >= 0 && !ledgerNarrativeMessage(getContext().chat?.[floor])) rewindLedgerAutomationAfterDeletion();
+    if (!hasReplacement) rewindLedgerAutomationAfterDeletion();
 }
 
 // 历·API 兜底判定的间隔（缺省/非法 → 3；≥1）。抄 getOutlineJudgeInterval。
@@ -3174,17 +3192,28 @@ function initChatObserver() {
 
 function injectExtButton() {
     // 侧栏入口由魔杖或悬浮按钮打开。
+    const contentHtml = `
+        <div class="extensionsMenuExtensionButton sp-menu-icon" title="打开构画">${PEN_MENU_ICON_SVG}</div>
+        <span>构画</span>`;
     const wandHtml = `
         <div id="sp_open_wand" class="list-group-item flex-container flexGap5" style="display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;white-space:nowrap">
-            <div class="extensionsMenuExtensionButton sp-menu-icon" title="打开构画">${PEN_MENU_ICON_SVG}</div>
-            <span>构画</span>
+            ${contentHtml}
         </div>`;
 
     function mountWandBtn() {
+        if (document.getElementById('sp_open_wand')) return true;
         const c = document.getElementById('sp_wand_container') || document.getElementById('extensionsMenu');
-        if (!c || document.getElementById('sp_open_wand')) return false;
+        if (!c) return false;
         c.insertAdjacentHTML('beforeend', wandHtml);
-        document.getElementById('sp_open_wand')?.addEventListener('click', () => openSchedule());
+        const entry = document.getElementById('sp_open_wand');
+        // 保留 Light DOM 内容供酒馆识别名称与键盘入口；不设 slot，实际绘制只使用根内内容。
+        const shadow = entry.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `<style>
+            .sp-menu-icon { width:20px;height:20px;flex:0 0 20px;display:flex;align-items:center;justify-content:center;align-self:center;pointer-events:none; }
+            .sp-menu-pen-icon { width:18px;height:18px;display:block; }
+            span { font:inherit;color:inherit; }
+        </style>${contentHtml}`;
+        entry.addEventListener('click', () => openSchedule());
         return true;
     }
     if (!mountWandBtn()) {
@@ -3987,8 +4016,14 @@ function injectModal() {
 
                         <div class="sp-space-wrap" id="sp-space-wrap" style="display:none;flex-direction:column;flex:1;min-height:0">
                             <div class="sp-space-pages" id="sp-space-pages" role="tablist" aria-label="讨论窗口" hidden>
-                                <button type="button" role="tab" data-space-page="1" aria-selected="true">窗口1</button>
-                                <button type="button" role="tab" data-space-page="2" aria-selected="false" tabindex="-1">窗口2</button>
+                                <span class="sp-space-page" data-space-page-slot="1" role="presentation">
+                                    <button type="button" role="tab" data-space-page="1" aria-selected="true">窗口1</button>
+                                    <button type="button" class="sp-icon-btn sp-space-page-close" data-space-close-page="1" title="关闭窗口1" aria-label="关闭窗口1">${icon("x")}</button>
+                                </span>
+                                <span class="sp-space-page" data-space-page-slot="2" role="presentation">
+                                    <button type="button" role="tab" data-space-page="2" aria-selected="false" tabindex="-1">窗口2</button>
+                                    <button type="button" class="sp-icon-btn sp-space-page-close" data-space-close-page="2" title="关闭窗口2" aria-label="关闭窗口2">${icon("x")}</button>
+                                </span>
                             </div>
                             <div class="sp-space-failure-slot" id="sp-space-failure-slot"></div>
                             <div class="sp-chat-msgs" id="sp-space-msgs"></div>
@@ -3996,8 +4031,8 @@ function injectModal() {
                                 <div class="sp-action-menu sp-space-more-menu">
                                     <button type="button" id="sp-space-more" class="sp-icon-btn sp-action-menu-toggle" title="更多" aria-label="更多讨论操作" aria-expanded="false" aria-controls="sp-space-more-list">${icon("dots-vertical")}</button>
                                     <div class="sp-action-menu-list" id="sp-space-more-list" hidden>
+                                        <button type="button" id="sp-space-add-page" class="sp-action-menu-item">${icon("plus")}新增</button>
                                         <button type="button" id="sp-space-clear" class="sp-action-menu-item">${icon("clear-all")}清屏</button>
-                                        <button type="button" id="sp-space-add-page" class="sp-action-menu-item">${icon("plus")}新增窗口</button>
                                     </div>
                                 </div>
                                 <textarea id="sp-space-input" class="sp-input sp-chat-input-ta" rows="1" placeholder="聊点什么？"></textarea>
@@ -4270,6 +4305,24 @@ function injectModal() {
         if (text) injectToST(text);
     });
 
+    // 楼内 ShadowRoot 的真实委托容器：与 Light DOM #chat 保持同一套业务入口。
+    // 只登记稳定 key；inlineFeature 会在冷启动和每个后续楼内根创建时调用。
+    const bindInlineChatEvents = target => {
+        if (!target) return;
+        const $target = target?.on && target?.off ? target : $(target);
+        $target.off?.('.spInlineChat');
+        $target.on('click.spInlineChat', '.sp-refresh-lines, .sp-inline-refresh-lines', function (e) { e.stopPropagation(); linesFeature.actions.reroll(); });
+        $target.on('click.spInlineChat', '.sp-advance-lines, .sp-inline-advance-lines', function (e) { e.stopPropagation(); linesFeature.actions.advance(); });
+        $target.on('click.spInlineChat', '.sp-inline-refresh-dashed', function (e) { e.stopPropagation(); linesFeature.dashed.run({ reroll: true }); });
+        $target.on('click.spInlineChat', '.sp-line-del-one', function (e) { e.stopPropagation(); const idx = Number($(this).attr('data-line-idx')); if (Number.isInteger(idx)) linesFeature.actions.delete(idx); });
+        $target.on('click.spInlineChat', '.sp-line-pin-toggle', function (e) { e.stopPropagation(); const idx = Number($(this).attr('data-line-idx')); if (Number.isInteger(idx)) linesFeature.actions.pin(idx); });
+        $target.on('click.spInlineChat', '.sp-adult-sensitive', revealAdult);
+        $target.on('keydown.spInlineChat', '.sp-adult-sensitive', revealAdultKey);
+        $target.on('click.spInlineChat', '.sp-sch-del-one', function (e) { e.stopPropagation(); const day = $(this).attr('data-day'); const idx = Number($(this).attr('data-ev')); if (Number.isInteger(idx)) triggerDeletePointEvent(day === 'future' ? 'future' : Number(day), idx, { view: 'user', charName: '' }); });
+        $target.on('click.spInlineChat', '.sp-inject-btn', function () { const text = _injectTexts[$(this).data('iid')]; if (text) injectToST(text); });
+    };
+    registerInlineRootBinding('chat-events', bindInlineChatEvents);
+
     // 点/线面板底部引导只切到间，不预填、不生成；用户需说明目标并请求可应用方案
     // 点与线的入口都由同一委托处理。
     $inAll('#sp-body, #sp-lines-wrap').on('click', '.sp-jump-link', () => $in('.sp-view-btn[data-view="space"]').trigger('click'));
@@ -4303,7 +4356,7 @@ function injectModal() {
         batchBar.find('.sp-batch-exec').prop('disabled', count === 0);
     };
     bindLedgerEvents({
-        almanac: $almanac, chat: $('#chat'), $,
+        almanac: $almanac, chat: $('#chat'), bindInlineRoots: binder => registerInlineRootBinding('ledger', binder), $,
         capture: { run: runLedgerCaptureStep, abort: () => ledgerCaptureController.abort(), prepareAbandon: () => ledgerCaptureController.prepareAbandon?.(), abandon: token => ledgerCaptureController.abandon?.(token), confirmAbandon: () => spConfirm({ title: '放弃未确认候选', body: '只会放弃仍未找到可靠来源的候选；已经逐批保存的刻度条目不会删除。', confirmText: '放弃待查', cancelText: '继续保留' }) },
         judge: { run: runLedgerJudgeStep }, captureState: () => ({ busy: ledgerCaptureController.isBusy, controller: ledgerCaptureController.abortController }), actions: ledgerActions,
         render: renderAlmanacPanel,
@@ -6069,9 +6122,8 @@ function getDateAnchor(charKey) {
         if (local.calibration) {
             if (!local.calibration || !Number.isInteger(local.calibration.weekday)) return null;
             const current = latestStoryClockPure(getContext(), ALM_CHAT_SCAN_LIMIT);
-            // 半残 SDC 只能作为人工校准的日期相位，不能提前停用校准；
-            // 只有当前 AI 楼的 start/end 两侧都完整且无重复歧义时才允许接管。
-            if (completeStoryClockPure(current)) {
+            // 可靠日期与星期才允许接管人工星期锚；未知时刻不影响星期依据。
+            if (current && !current.duplicate && current.ordered && current.endMeta?.date && Number.isInteger(current.endMeta?.weekdayIndex)) {
                 const calibrationFloor = local.calibration?.floor;
                 if (!Number.isInteger(calibrationFloor) || current.floor !== calibrationFloor) return null;
             }
@@ -9286,6 +9338,12 @@ function syncPrimaryTextColor(theme) {
 function syncInlineTheme(theme = detectSTTheme()) {
     document.querySelectorAll('.sp-inline-box').forEach(root => syncUiTheme(root, theme));
     syncVectorGlyphTheme(document, theme);
+    for (const shadowRoot of inlineFeature?.getRoots?.() || []) {
+        const box = shadowRoot.querySelector?.('.sp-inline-box');
+        if (box) syncUiTheme(box, theme);
+        syncVectorGlyphTheme(shadowRoot, theme);
+        if (shadowRoot.host) refreshUserNameMask(shadowRoot.host);
+    }
 }
 
 function applyTheme(theme) {

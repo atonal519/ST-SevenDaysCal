@@ -82,3 +82,44 @@ test('manual capture finally refresh errors do not replace updated or emit succe
     assert.equal(renders, 1);
     assert.deepEqual(toasts, ['内容已更新，界面刷新失败']);
 });
+
+test('ledger inline binder can be registered for each shadow root', () => {
+    const handlers = new Map();
+    const roots = [];
+    const makeTarget = name => ({ name, off() {}, on(event, selector, handler) { handlers.set(`${name}:${selector}`, handler); } });
+    bindLedgerEvents({
+        almanac: makeTarget('panel'), $: () => ({
+            off() {}, on() {}, closest() { return { attr: () => 'id' }; }, attr() {},
+        }),
+        bindInlineRoots: binder => roots.push(binder),
+        capture: { run: async () => ({ status: 'unchanged' }) }, judge: { run: async () => ({ status: 'unchanged' }) },
+        captureState: () => ({ busy: false }), identity: () => ({}), isCurrentIdentity: () => true,
+        actions: { toggleLock() {}, toggleMute() {}, close() {} }, editor: { open() {}, save() {}, close() {} },
+        archive: { toggle() {} }, batch: { scopes: [], selected: () => new Set(), ids: () => [], scope: () => null },
+    });
+    assert.equal(roots.length, 1);
+    roots[0](makeTarget('shadow-a'));
+    roots[0](makeTarget('shadow-b'));
+    assert.ok(handlers.has('shadow-a:.sp-inline-ledger-close'));
+    assert.ok(handlers.has('shadow-b:.sp-inline-ledger-close'));
+});
+
+test('re-binding one inline root replaces its handlers instead of duplicating actions', () => {
+    const active = new Map();
+    const target = {
+        off() { active.clear(); },
+        on(_event, selector, handler) { active.set(selector, handler); },
+    };
+    let roots;
+    bindLedgerEvents({
+        almanac: { off() {}, on() {} }, $: () => ({ off() {}, on() {} }),
+        bindInlineRoots: binder => { roots = binder; },
+        capture: { run: async () => ({ status: 'unchanged' }) }, judge: { run: async () => ({ status: 'unchanged' }) },
+        captureState: () => ({ busy: false }), identity: () => ({}), isCurrentIdentity: () => true,
+        actions: { toggleLock() {}, toggleMute() {}, close() {} }, editor: { open() {}, save() {}, close() {} },
+        archive: { toggle() {} }, batch: { scopes: [], selected: () => new Set(), ids: () => [], scope: () => null },
+    });
+    roots(target);
+    roots(target);
+    assert.equal(active.size, 5);
+});

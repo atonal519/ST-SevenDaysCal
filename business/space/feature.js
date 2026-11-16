@@ -25,7 +25,10 @@ export function createSpaceFeature(env = {}) {
     });
     const context = createSpaceContext(env.contextEnv);
     const renderer = createSpaceRenderer(env.renderEnv);
-    const ui = createSpaceUi({ ...env.ui, widgetParsers: env.renderEnv, captureIdentity, isCurrentIdentity: isCurrent, onPageChanged: () => renderFailure() });
+    const ui = createSpaceUi({ ...env.ui, widgetParsers: env.renderEnv, captureIdentity, isCurrentIdentity: isCurrent,
+        onPageChanged: () => renderFailure(),
+        onPageClosed: pageId => { failureNotes.clear('space-chat', failureKey(repository.capture(), pageId)); renderFailure(); },
+    });
     const failureNotes = createPanelFailureStore({ escapeHtml: env.escapeHtml });
     const failureKey = (target, pageId = ui.activePageId()) => JSON.stringify([String(target?.chatId || ''), Number(target?.chatRevision) || 0, pageId]);
     const renderFailure = () => ui.setFailureHtml?.(failureNotes.html('space-chat', failureKey(repository.capture())));

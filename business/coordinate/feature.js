@@ -124,7 +124,6 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                     active.type = 'button';
                     active.className = entry === 'menu' ? 'sp-anchor-menu-btn sp-anchor-btn' : 'sp-anchor-inline-btn sp-anchor-btn';
                     active.setAttribute('data-sp-anchor-entry', entry);
-                    active.innerHTML = host.svg?.('sp-anchor-btn-svg') || icon('map-pin', 'sp-anchor-btn-svg');
                     active.addEventListener('click', event => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -134,6 +133,14 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                     if (entry === 'inline' && isTauriTavern) target.insertBefore(active, target.querySelector('.mes_edit'));
                     else target.appendChild(active);
                 } else setButtonClass(active, 'mes_button', asMesButton);
+                // Native toolbars own the button; the SVG is isolated without replacing that entry or its listeners.
+                if (!active.querySelector('sp-anchor-icon')?.shadowRoot) {
+                    const iconHost = doc.createElement('sp-anchor-icon');
+                    iconHost.setAttribute('aria-hidden', 'true');
+                    const shadow = iconHost.attachShadow({ mode: 'open' });
+                    shadow.innerHTML = `<style>:host{all:initial;display:inline-flex;flex:0 0 auto;width:var(--sp-anchor-icon-size,14.25px);height:var(--sp-anchor-icon-size,14.25px);font:inherit;line-height:1;color:inherit;pointer-events:none}svg{display:block;width:100%;height:100%;color:inherit;pointer-events:none}</style>${host.svg?.('sp-anchor-btn-svg') || icon('map-pin', 'sp-anchor-btn-svg')}`;
+                    active.replaceChildren(iconHost);
+                }
                 refreshButton(mes, active, { trusted, context: scanContext });
             };
             // 未标记的旧节点可能仍带旧 runtime listener；当前实例只复用自己创建并标明入口的节点。
