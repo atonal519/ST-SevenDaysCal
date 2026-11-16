@@ -1,4 +1,5 @@
 import { readPanelViewport, syncDialogViewport, bindOutsideClose, fitDesktopPanel } from './ui/panel-window.js';
+import { bindWindowDiagnosticControls } from './ui/window-diagnostics.js';
 import { primaryTextColor, syncUiTheme } from './utils/ui-theme.js';
 import { icon, setIcon } from './utils/icons.js';
 import { getContext, extension_settings, extensionNames, extensionTypes } from '../../../extensions.js';
@@ -2148,6 +2149,7 @@ const _injectIdsByText  = new Map();
 let   _injectIdSeq      = 0;
 let viewportSyncBound   = false;
 let viewportSyncFrame = null;
+let windowDiagnostics = null;
 
 const isMobile = () => window.innerWidth <= 640;
 
@@ -3956,7 +3958,7 @@ function injectModal() {
                                         <summary class="sp-settings-section-title">诊断管理</summary>
                                         <div class="sp-settings-section-body">
                                             <div class="sp-diagnostics-block">
-                                                <label class="sp-cfg-group">AI 输入</label>
+                                                <div class="sp-cfg-group">AI 输入</div>
                                                 <p class="sp-cfg-hint"><strong>仅供本人排查。</strong>这里是最近一次实际发给 AI 的完整输入，可能包含最近聊天、上下文、世界书和提示词等敏感内容，不建议公开分享。</p>
                                                 <details class="sp-diagnostics-preview sp-diagnostics-preview-empty" id="sp-diagnostics-ai-input-preview">
                                                     <summary class="sp-diagnostics-preview-title">查看最近 AI 输入</summary>
@@ -3968,14 +3970,25 @@ function injectModal() {
                                             </div>
                                             <hr class="sp-mem-divider">
                                             <div class="sp-diagnostics-block">
-                                                <label class="sp-cfg-group">请求诊断</label>
+                                                <div class="sp-cfg-group">请求诊断</div>
                                                 <p class="sp-cfg-hint"><strong>适合发给开发者。</strong>复制最近 30 条安全诊断日志；不含正文、提示词、API Key 或 URL。</p>
                                                 <button id="sp-diagnostic-export" class="sp-save-btn" type="button">${icon("copy")} 复制最近诊断日志</button>
                                             </div>
                                             <div class="sp-diagnostics-block">
-                                                <div class="sp-diagnostics-label">当前聊天诊断包</div>
+                                                <div class="sp-cfg-group">当前聊天诊断包</div>
                                                 <p class="sp-cfg-hint">包含两楼 AI 输入与原始回复，可能含剧情。它不是完整可导入备份，也不会包含 API 密钥、地址或请求头。</p>
                                                 <button id="sp-current-diagnostic-export" class="sp-save-btn" type="button">${icon("file-export")} 导出当前聊天诊断包</button>
+                                            </div>
+                                            <hr class="sp-mem-divider">
+                                            <div class="sp-diagnostics-block">
+                                                <div class="sp-cfg-group">窗口排查</div>
+                                                <p class="sp-cfg-hint">开始记录后返回间复现，收起键盘再回来复制。仅记录界面信息，一分钟后自动停止。</p>
+                                                <div class="sp-mem-actions">
+                                                    <button id="sp-window-diagnostic-start" class="sp-save-btn" type="button"><span id="sp-window-diagnostic-start-label">开始记录</span></button>
+                                                    <button id="sp-window-diagnostic-copy" class="sp-save-btn" type="button" title="复制窗口诊断" aria-label="复制窗口诊断" disabled>${icon("copy")} 复制结果</button>
+                                                    <button id="sp-window-diagnostic-export" class="sp-save-btn" type="button" title="导出窗口诊断文件" aria-label="导出窗口诊断文件" disabled>${icon("file-export")} 导出文件</button>
+                                                </div>
+                                                <span id="sp-window-diagnostic-status" class="sp-cfg-hint" role="status" aria-live="polite">尚未开始记录。</span>
                                             </div>
                                         </div>
                                     </details>
@@ -4601,6 +4614,17 @@ function injectModal() {
         });
     });
     $in('#sp-current-diagnostic-export').on('click', () => { void exportCurrentChatDiagnosticPackage(); });
+    windowDiagnostics?.stop('remount');
+    windowDiagnostics = bindWindowDiagnosticControls({
+        root: _spShadow, windowRef: window, sourceUrl: import.meta.url,
+        elements: () => ({ root: document.getElementById(MODAL_ID), sheet: inEl('.sp-sheet'), shadow: _spShadow,
+            dialogHost: document.getElementById(DIALOG_HOST_ID), fab: document.getElementById(FAB_ID),
+            input: inEl('#sp-space-input'), settingsBody: inEl('.sp-settings-body'), messages: inEl('#sp-space-msgs') }),
+        readUiState: () => ({ module: _lastMainView, settingsOpen }),
+        copyText: copyPlainText, promptTextarea: options => customDialog.promptTextarea(options),
+        downloadJson: data => downloadDiagnosticPackage(data),
+        notify: (message, isError) => showToast(message, null, isError),
+    });
     bindApiPresetEvents();
     $in('#sp-qr-shortcuts').on('change', 'input[data-qr-shortcut]', function () {
         const key = this.dataset.qrShortcut;
@@ -5394,6 +5418,7 @@ function pointScheduleEmptyHtml() {
 }
 
 function showPanel() {
+    windowDiagnostics?.record('panel.open-requested');
     const $root  = $(`#${MODAL_ID}`);
     const sheet  = inEl('.sp-sheet');
     // Clear inline animation so the CSS open-animation replays on every show
@@ -5412,6 +5437,7 @@ function showPanel() {
 }
 
 function closePanel() {
+    windowDiagnostics?.record('panel.close-requested');
     onDragEnd(null, false);
     onResizeEnd(null, false);
     // 关闭主面板时取消活动确认，但独立弹窗宿主本身不隐藏。
@@ -5425,6 +5451,8 @@ function closePanel() {
     customDialog.cancelActive();
     $(`#${MODAL_ID}`).stop(true).animate({ opacity: 0 }, 150, function () {
         $(this).css('display', 'none');
+        windowDiagnostics?.record('panel.closed');
+        windowDiagnostics?.stop('panel-closed');
     });
 }
 
@@ -9573,21 +9601,22 @@ function bindViewportSync() {
 }
 
 function syncPanelViewport(preserveEditingGeometry = false) {
+    windowDiagnostics?.record('sync.requested', { preserveEditingGeometry });
     const dialogHost = document.getElementById(DIALOG_HOST_ID);
     if (dialogHost) syncDialogViewport(dialogHost);
     const root  = document.getElementById(MODAL_ID);
     const sheet = inEl('.sp-sheet');   // .sp-sheet 在 shadow 内：document.querySelector('#sp-modal-root .sp-sheet') 跨不过边界→null→整个移动端视口同步静默失效；用 inEl 查 shadow root
-    if (!root || !sheet || root.style.display === 'none') return;
+    if (!root || !sheet || root.style.display === 'none') { windowDiagnostics?.record('sync.inactive'); return; }
     const mobile = isMobile();
     if (preserveEditingGeometry && mobile) {
         const userAgent = globalThis.navigator?.userAgent || '';
-        const safariOnPhone = /iPhone|iPod/i.test(userAgent) && /Version\/[\d.]+.*Safari\//i.test(userAgent);
+        const phoneBrowser = /iPhone|iPod/i.test(userAgent) && (/Version\/[\d.]+.*Safari\//i.test(userAgent) || /FxiOS\//i.test(userAgent));
         const focused = _spShadow?.activeElement;
         const editing = focused?.isContentEditable || !focused?.readOnly && (focused?.tagName === 'TEXTAREA'
             || focused?.tagName === 'INPUT' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(focused.type));
-        // Safari 已为输入框平移页面时，保留主窗几何，避免再缩短窗口把输入区送出屏幕。
+        // 手机浏览器已为输入框平移页面时，保留主窗几何，避免再缩短窗口把输入区送出屏幕。
         // 显式打开和旋转继续定位；独立弹窗已在上方同步。
-        if (safariOnPhone && editing) return;
+        if (phoneBrowser && editing) { windowDiagnostics?.record('sync.preserved', { preserveEditingGeometry, mobile }); return; }
     }
     // 手机键盘平移时保留浏览器给 fixed 层的可视坐标；仅真实页面滚动才补偿
     // 宿主 html 的 fixed 包含块，避免把 visualViewport.offsetTop 再算成上移量。
@@ -9636,6 +9665,8 @@ function syncPanelViewport(preserveEditingGeometry = false) {
         sheet.style.maxWidth = `${Math.max(0, view.width - 20)}px`;
         sheet.style.maxHeight = `${Math.max(0, view.height - 20)}px`;
     }
+    windowDiagnostics?.record('sync.applied', { preserveEditingGeometry, mobile,
+        safeTop, safeBottom: safeBot, rootOriginLeft: origin.left, rootOriginTop: origin.top });
     if (!settingsBody) return;
     if (settingsBody.scrollTop !== savedScrollTop) settingsBody.scrollTop = savedScrollTop;
 
