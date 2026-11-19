@@ -1,5 +1,7 @@
 import { lineDirectionContract } from './lines/direction.js';
 
+export const PLAYER_SPOILER_GUIDANCE = '【玩家视角】写的时候想一想，玩家会不会从标题或其他字段里提前知道剧情中的秘密。涉及玩家可能还不知道的真相时，可以用异常迹象或值得追查的关键线索带出后续，把谜底留给剧情揭晓。';
+
 export const NARRATIVE_PACE_VALUES = Object.freeze(['free', 'slow', 'fast']);
 
 export function normalizeNarrativePace(value) {

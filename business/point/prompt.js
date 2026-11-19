@@ -1,6 +1,6 @@
 // ─── 点（日程）域 · 生成 prompt ───────────────────────────────────────────────
 // 提示词与锁点输入投影；不依赖 DOM、store 或历法运行态。
-import { narrativePreferenceContract } from '../narrative-preferences.js';
+import { narrativePreferenceContract, PLAYER_SPOILER_GUIDANCE } from '../narrative-preferences.js';
 
 function pointPinsFromParsed(parsed) {
     const pins = [];
@@ -40,6 +40,7 @@ ${adultContext.mode === 'mixed' ? '混合模式的成人比例只是情境适合
 
 以 ${subject} 自身目标和既有因果为核心，有依据时才涉及 ${companion} 或第三方，不默认爱情。type 仅 main／hidden／bond：分别表示主体直接卷入的推进、伏笔或未决走向、关系变化（不限爱情）。
 ${narrativePreferenceContract(preferences)}
+${PLAYER_SPOILER_GUIDANCE}
 每项写清该时段将推进的具体行动及可能改变；推演不是既成事实，玩家尚未作出的关键选择保持开放。同一长期目标可跨日分阶段推进，但各日有不同动作或局面变化，不靠换标题重复。${adultBlock}
 依次写 Day 1、Day 2、Day 3、Future，目标数量为 3、3、3、5 条，锁点占原栏目名额。可写有依据且真正独立的自身事务、第三方、阵营或生活事项，不拆碎、换名复述或凑数。Day 1 从当前剧情向后，不回填已发生的事；Future 仅收 Day 3 后或时间未定的事项，不重复前三天，不编造既定约定或承诺。
 

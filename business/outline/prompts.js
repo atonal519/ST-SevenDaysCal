@@ -1,4 +1,4 @@
-import { narrativePaceContract, narrativePreferenceContract } from '../narrative-preferences.js';
+import { narrativePaceContract, narrativePreferenceContract, PLAYER_SPOILER_GUIDANCE } from '../narrative-preferences.js';
 
 export const OUTLINE_INJECT_KEY = 'sp_outline_step';
 export const OUTLINE_INJECT_DEPTH = 4;
@@ -55,6 +55,8 @@ Think: 成立依据与叙事作用
 export function buildOutlinePrompt(userName, charName, perspective = 'user', preferences = {}) {
     const subject = perspective === 'char' ? charName : userName;
     return `请暂停角色扮演，以编剧顾问第三人称视角，用中文直呼角色姓名，不用第一人称；根据以上剧情和设定为 ${subject} 所在故事规划阶段大纲，不续写正文。
+
+${PLAYER_SPOILER_GUIDANCE}
 
 ${buildOutlineCreationContract(preferences)}`;
 }

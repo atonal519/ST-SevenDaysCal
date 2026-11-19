@@ -36,6 +36,17 @@ test('meso names organization and group level, while outline remains stage based
     assert.doesNotMatch(meso, /数周至数月/);
 });
 
+test('point, line and outline generation prompts ask the model to consider spoilers from the player’s perspective', () => {
+    const prompts = {
+        point: buildPointPrompt('用户', '角色'),
+        line: buildLinesPrompt(),
+        outline: buildOutlinePrompt('用户', '角色'),
+    };
+    for (const [module, prompt] of Object.entries(prompts)) {
+        assert.match(prompt, /【玩家视角】[^\n]*提前[^\n]*秘密[^\n]*异常[^\n]*关键线索/, module);
+    }
+});
+
 test('space adds preferences only to point and line creation, not calendar or ordinary discussion', () => {
     const base = { userName: '用户', charName: '角色', preferences: preferences('meso') };
     const point = buildSpaceChatSystemPrompt({ ...base, intent: { action: 'write', kind: 'schedule_widget' } });
@@ -88,6 +99,7 @@ test('semantic-route applies point/line preferences only if it chooses those car
     const ambiguous = '我想看线的未来可能性';
     assert.equal(classifySpaceIntent(ambiguous).action, 'semantic-route');
     const routed = (await build(ambiguous))[0].content;
+    assert.doesNotMatch(routed, /【玩家视角】/);
     assert.match(routed, /提问、评价、引用、讨论或否定\/暂缓生成时用自然语言回答/);
     assert.match(routed, /普通讨论不套用卡片的剧情偏好/);
     assert.match(routed, /快：压缩无关键变化的过渡，让有据事件实质推进，过渡可自然跨日或数日/);
@@ -149,7 +161,7 @@ test('outline host injection keeps current and future material and respects both
     assert.match(injected.at(-1), /当前节点：.*当前/);
     assert.match(injected.at(-1), /下个节点（仅供未来方向）：.*未来/);
     assert.match(injected.at(-1), /组织内部协作|后续计划/);
-    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度/);
+    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度|【玩家视角】/);
     outlineInject = false; injection.refresh(); assert.equal(injected.at(-1), '');
     outlineInject = true; injectEnabled = false; injection.refresh(); assert.equal(injected.at(-1), '');
 });
@@ -166,7 +178,7 @@ test('line host injection keeps event facts and pending directions without inter
     assert.match(injected.at(-1), /当前线|既有背景|下一步/);
     assert.match(injected.at(-1), /既成事实|待发生方向/);
     assert.doesNotMatch(injected.at(-1), /下一步：下一步：/);
-    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度|人物自主与相互回应|线索事实与待展开进展|成人模式|每条 Next|整张票/);
+    assert.doesNotMatch(injected.at(-1), /叙事尺度|剧情倾向|剧情推进幅度|人物自主与相互回应|线索事实与待展开进展|成人模式|每条 Next|整张票|【玩家视角】/);
     linesInject = false; controller.refresh(); assert.equal(injected.at(-1), '');
     linesInject = true; injectEnabled = false; controller.refresh(); assert.equal(injected.at(-1), '');
 });
