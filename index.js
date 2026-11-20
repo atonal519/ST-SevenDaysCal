@@ -7090,8 +7090,7 @@ const qianQianJieMemoryAccess = createQianQianJieMemoryAccess({
     isSelected: () => getSettings().useQianQianJie === true,
 });
 
-// Alternate sources are mutually exclusive; only an explicitly confirmed per-request
-// fallback may omit a source. Read failures otherwise propagate to the generation UI.
+// Read from the selected memory source. Each caller decides whether a failure blocks its request.
 async function _getMemTextRaw(opts = {}) {
     const { excludeMesIds, maxFloor, source, ...sourceOpts } = opts;
     const s = getSettings();
@@ -7107,7 +7106,8 @@ async function _getMemTextRaw(opts = {}) {
             const result = await qianQianJieMemoryAccess.result({ ...sourceOpts, recentText, maxFloor });
             if (result.status === 'cancelled') throw new DOMException('The operation was aborted.', 'AbortError');
             if (['read-failed', 'timed-out', 'error', 'api-unavailable', 'disabled', 'stale', 'not-ready', 'unavailable'].includes(result.status)) {
-                throw makeDiagnosticError('memory-read', { phase: 'memory' });
+                const code = result.status === 'stale' ? 'memory-stale' : 'memory-read';
+                throw makeDiagnosticError(code, { phase: 'memory' });
             }
             return result.text || '';
         } catch (err) {

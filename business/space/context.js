@@ -119,7 +119,12 @@ export function createSpaceContext(env = {}) {
         const memoryQuery = settings.useQianQianJie
             ? [...historyMessages.slice(-4).filter(item => item.role === 'user').map(item => String(item.content || '')), message].filter(Boolean).join('\n')
             : message;
-        const memText = await env.readMemory?.(ctx, memoryQuery) || '';
+        let memText = '';
+        try {
+            memText = await env.readMemory?.(ctx, memoryQuery) || '';
+        } catch (error) {
+            if (error?.diagnosticCode !== 'memory-read') throw error;
+        }
         const recentCtx = await env.readRecent?.(ctx) || '';
         const { personaDesc = '', authorNote = '' } = env.readCardExtras?.(ctx) || {};
         const useCharacterPersona = settings.spaceUseCharacterPersona === true;
