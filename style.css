@@ -3562,7 +3562,9 @@ select.sp-input { appearance: none; cursor: pointer; }
     transition   : opacity 0.12s;
     flex-shrink  : 0;
 }
-.sp-chat-msg-wrap:hover:not(:disabled) .sp-chat-msg-actions { opacity: 0.85; }
+.sp-chat-msg-wrap:hover:not(:disabled) .sp-chat-msg-actions,
+.sp-chat-msg-wrap:focus-within .sp-chat-msg-actions,
+.sp-chat-msg-actions:has(> .sp-chat-msg-favorite[data-favorite-state="saved"]) { opacity: 0.85; }
 @media (hover: none) {
     .sp-chat-msg-actions { opacity: 0.5; }
     .sp-chat-msg-wrap:hover:not(:disabled) .sp-chat-msg-actions { opacity: 1; }
@@ -3582,6 +3584,12 @@ select.sp-input { appearance: none; cursor: pointer; }
     color        : var(--sp-primary);
     background: rgba(127, 127, 127, 0.12);
 }
+.sp-chat-msg-actions button.sp-chat-msg-favorite[data-favorite-state="saved"] {
+    color: var(--sp-primary);
+    cursor: default;
+}
+.sp-chat-msg-favorite[data-favorite-state="saved"] .sp-icon { fill: currentColor; }
+.sp-chat-msg-favorite[data-favorite-state="pending"] { opacity: 0.5; }
 
 /* Inline editor for user messages */
 .sp-chat-msg-editor {
@@ -5559,7 +5567,8 @@ body.sp-anchor-fs-lock { overflow: hidden; }
 .sp-anchor-head-actions { flex-shrink: 0; display: flex; gap: var(--sp-size-4); }
 
 /* 第二层：缩略卡片 */
-.sp-anchor-item-card {
+.sp-anchor-item-card,
+.sp-anchor-note-card {
     display     : flex;
     flex-direction: column;
     align-items: stretch;
@@ -5597,6 +5606,27 @@ body.sp-anchor-fs-lock { overflow: hidden; }
     max-width: 100%;
     overflow-wrap: anywhere;
 }
+.sp-anchor-note-card {
+    box-sizing: border-box;
+    cursor: default;
+}
+.sp-anchor-note-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--sp-size-6);
+}
+.sp-anchor-note-meta .sp-anchor-item-ts { flex-shrink: 1; }
+.sp-anchor-note-open { margin-inline-start: auto; }
+.sp-anchor-note-expand { align-self: flex-start; }
+.sp-anchor-note-text {
+    font-size: var(--sp-text-caption);
+    line-height: var(--sp-lh-reading);
+    overflow-wrap: anywhere;
+}
+.sp-anchor-note-plain { white-space: pre-wrap; }
+.sp-anchor-note-detail { padding: var(--sp-size-16) var(--sp-size-18); }
+.sp-anchor-note-text[hidden] { display: none; }
 
 /* ─── 坐标·标签 chip（非交互 span，可安全放进 <button> 卡片）─ 对齐 .sp-line-stall-tag 尺度 */
 .sp-anchor-tagchip {

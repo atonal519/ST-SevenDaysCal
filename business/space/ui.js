@@ -1,6 +1,7 @@
 import { icon } from '../../utils/icons.js';
 import { positionActionMenu, clearActionMenuPlacement } from '../utils/action-menu.js';
 import { resolveSpaceWidgets, spaceMessagePlainText, spacePageId } from './schema.js';
+import { SPACE_FAVORITE_LABELS } from './render.js';
 
 export function createSpaceUi(host = {}) {
     const query = host.query || (() => null);
@@ -13,6 +14,7 @@ export function createSpaceUi(host = {}) {
         return Number.isFinite(width) && width <= 640;
     };
     const widgets = new Map();
+    const noteSaves = new WeakMap();
     let widgetSeq = 0;
     let controllers = null;
     let bound = false;
@@ -21,6 +23,19 @@ export function createSpaceUi(host = {}) {
     const scrolls = new Map();
     let thinking = null;
     let pageAnimation = null;
+    const favoriteState = message => {
+        if (noteSaves.get(message)?.pending) return 'pending';
+        const note = message?.coordinateNote;
+        if (typeof note?.id !== 'string') return 'idle';
+        const chatId = controllers.repository.capture()?.chatId;
+        const saved = chatId && (host.hasSpaceNote?.(note.id, chatId) ?? note.chatId === chatId);
+        return saved ? 'saved' : 'idle';
+    };
+    const setFavoriteState = ($button, state) => {
+        const label = SPACE_FAVORITE_LABELS[state];
+        $button.attr('data-favorite-state', state).attr('title', label).attr('aria-label', label)
+            .attr('aria-disabled', String(state !== 'idle')).prop('disabled', state === 'pending');
+    };
     const pageIds = () => controllers?.repository?.pages?.() || ['1'];
     const syncPages = () => {
         const pages = pageIds();
@@ -98,7 +113,9 @@ export function createSpaceUi(host = {}) {
     };
     const appendMessage = (role, content, historyIndex = null, messageContext = {}) => {
         if ((messageContext.pageId || '1') !== activePage) return;
-        messageContext = { ...messageContext, currentOutlineRaw: host.currentOutlineRaw?.() || '' };
+        const canSaveNote = typeof host.saveSpaceNote === 'function';
+        messageContext = { ...messageContext, currentOutlineRaw: host.currentOutlineRaw?.() || '', canSaveNote,
+            favoriteState: canSaveNote ? favoriteState(controllers.chat.history()[historyIndex]) : 'idle' };
         const parts = controllers.renderer.message(role, content, historyIndex, registerWidget, messageContext);
         const $wrap = host.$?.('<div>').addClass(`sp-chat-msg-wrap ${parts.wrapClass}`);
         if (!$wrap) return;
@@ -269,6 +286,39 @@ export function createSpaceUi(host = {}) {
                 $button.html(`${icon("copy")}`).attr('title', '复制').removeData('sp-copy-reset');
             }, 1200);
             $button.data('sp-copy-reset', timer);
+        });
+        $root.on('click.spSpaceFeature', '.sp-chat-msg-actions > button.sp-chat-msg-favorite', async function () {
+            const $button = host.$(this);
+            const index = Number($button.closest('.sp-chat-msg-wrap').attr('data-idx'));
+            const message = controllers.chat.history()[index];
+            const text = String(message?.content ?? '');
+            if (!text.trim() || spacePageId(message) !== activePage || favoriteState(message) !== 'idle') return;
+            const target = controllers.repository.capture();
+            const note = message.coordinateNote;
+            const save = noteSaves.get(message) || {
+                id: note?.chatId === target?.chatId && note?.id?.startsWith?.('space-') ? note.id
+                    : `space-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+            };
+            noteSaves.set(message, save);
+            save.pending = true;
+            setFavoriteState($button, 'pending');
+            try {
+                const saved = await host.saveSpaceNote?.({ id: save.id, text, role: message.role });
+                const linked = saved && controllers.repository.rememberNote(target, message, save.id);
+                if (this.isConnected !== false) {
+                    if (!saved) host.toast?.('当前聊天无法收藏', true);
+                    else host.toast?.(linked ? '已收藏到坐标' : '便签已保存，星标状态未写入聊天', !linked);
+                }
+            } catch (error) {
+                if (this.isConnected !== false) host.toast?.(error?.detailWritten ? '便签已写入，更新收藏目录失败，可以再点一次收藏' : '收藏失败，请重试', true);
+            } finally {
+                save.pending = false;
+                const liveIndex = controllers.chat.history().indexOf(message);
+                const liveButton = liveIndex < 0 || spacePageId(message) !== activePage ? null
+                    : element(`#sp-space-msgs [data-idx="${liveIndex}"] > .sp-chat-msg-actions > .sp-chat-msg-favorite`);
+                if (liveButton && liveButton !== this) setFavoriteState(host.$(liveButton), favoriteState(message));
+                setFavoriteState($button, favoriteState(message));
+            }
         });
         $root.on('click.spSpaceFeature', '.sp-chat-msg-edit', function () {
             if (controllers.chat.busy) return;

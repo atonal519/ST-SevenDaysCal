@@ -15,6 +15,7 @@ import { createPanelFailureStore, createPanelFailureRecency, UI_REFRESH_FAILURE_
 import { createCoordinateRuntime } from './business/coordinate/runtime.js';
 import { enterCoordinateSidebar } from './business/coordinate/ui.js';
 import { captureSnapshotElement } from './business/coordinate/capture.js';
+import { SPACE_NOTE_KIND } from './business/coordinate/schema.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
@@ -2023,7 +2024,8 @@ const spaceFeature = createSpaceFeature({
                 });
             } catch { return '【刻度读取失败】本轮暂时无法读取这项资料。'; }
         },
-        readWorldInfo: (ctx, triggerText, referenceHistory, titleSupplementText = '') => buildWorldInfoContext(ctx, triggerText === undefined ? undefined : { triggerText, triggerMode: 'query', referenceHistory, titleSupplementText }),
+        readWorldInfo: (ctx, triggerText, referenceHistory, titleSupplementText = '', { includeTitleDirectory = false } = {}) =>
+            buildWorldInfoContext(ctx, { triggerText, triggerMode: 'query', referenceHistory, titleSupplementText, includeTitleDirectory }),
         readMemory: (ctx, query) => getMemText({ query, excludeMesIds: getRecentVisibleFloorIds(ctx, 6) }),
         readRecent: ctx => buildRecentChatContext(ctx, 6, Infinity),
         readCardExtras,
@@ -2088,9 +2090,9 @@ const spaceFeature = createSpaceFeature({
             let scoped;
             try {
                 const items = await repo.getAllItems();
-                scoped = items.filter(item => chatHash != null
+                scoped = items.filter(item => item.kind !== SPACE_NOTE_KIND && (chatHash != null
                     ? String(item.chatIdHash ?? '') === String(chatHash) || (item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId)
-                    : item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId);
+                    : item.chatIdHash == null && chatId && String(item.chatId ?? '') === chatId));
             } catch { return '【坐标读取失败】本轮暂时无法读取这项资料。'; }
             const rows = scoped.map(item => `- 楼层 ${item.floorIndex ?? item.messageId ?? '?'}：${item.textPreview || '（无摘要）'}${item.tags?.length ? `｜标签 ${item.tags.join('、')}` : ''}`);
             const selected = selectCoordinateReference(message, scoped);
@@ -2112,7 +2114,7 @@ const spaceFeature = createSpaceFeature({
     renderEnv: {
         escapeHtml,
         getUserName: () => getContext().name1 || '用户',
-        formatAi: text => renderAiMessageHtml(text, { FORBID_TAGS: ['button', 'input', 'textarea', 'select', 'option', 'form', 'iframe', 'object', 'embed'] }),
+        formatAi: renderSpaceReplyHtml,
         parseAlmanac: parseAlmanacWidget,
         parseEra: parseEraWidget,
         loadCalendar: loadCalDesc,
@@ -2129,6 +2131,8 @@ const spaceFeature = createSpaceFeature({
         setFailureHtml: html => $in('#sp-space-failure-slot').html(html),
         autoGrow: autoGrowTextarea,
         copyText: copyPlainText,
+        saveSpaceNote: note => coordinateRuntime?.feature?.saveSpaceNote(note),
+        hasSpaceNote: (id, chatId) => coordinateRuntime?.repository?.hasSpaceNote(id, chatId),
         confirm: spConfirm,
         toast: (message, error) => showToast(message, null, error),
         closeActionMenus,
@@ -2326,6 +2330,7 @@ jQuery(async () => {
             sheet: () => _spShadow?.querySelector?.('.sp-sheet') || document.querySelector('.sp-sheet'),
             chatName: () => { const el = document.querySelector('#selected_chat_pole, #chat_name_pole, .current_chat_name'); return el?.value || el?.textContent?.trim() || getContext().chatId || '当前聊天'; },
             capture: el => captureSnapshotElement(el, { documentRef: document, DOMPurify: globalThis.DOMPurify }),
+            formatSpaceReply: text => renderSpaceReplyHtml(text, { ADD_TAGS: [], FORBID_ATTR: ['class', 'id', 'style'], ALLOW_DATA_ATTR: false }),
             toast: (message, action, error) => showToast(message, action, error),
             saveChatDebounced: () => { prepareNormalChatStoreForSave(getContext()); return scriptCore.saveChatDebounced(); },
             warn: (message, error) => console.warn(message, error),
@@ -6798,13 +6803,7 @@ function worldInfoKeyMatchesText(text, rawKey, entry, ctx) {
 function worldInfoTitleSupplementAllows(entry, triggerText, ctx) {
     const raw = entry?.activationEntry || {};
     if (raw.disable === true || (Array.isArray(raw.triggers) && raw.triggers.length && !raw.triggers.includes('quiet'))) return false;
-    const names = raw.characterFilter?.names;
-    if (Array.isArray(names) && names.length) {
-        const includesName = names.includes(getCharaFilename());
-        if (raw.characterFilter.isExclude ? includesName : !includesName) return false;
-    }
-    // Tag filters depend on host tag-map state that has no read-only resolver here; fail closed.
-    if (Array.isArray(raw.characterFilter?.tags) && raw.characterFilter.tags.length) return false;
+    if (!worldInfoCharacterFilterAllows(raw.characterFilter)) return false;
     // These outcomes depend on host chat/timed-effect state; a title-only path has no safe read-only equivalent.
     if (raw.decorators?.includes?.('@@dont_activate') || raw.decorators?.includes?.('@@activate') || raw.constant || raw.group || raw.delay || raw.delayUntilRecursion || raw.cooldown || raw.sticky) return false;
     // A simple person card may be absent from the host dry-run because its scan budget
@@ -6825,7 +6824,17 @@ function worldInfoTitleSupplementAllows(entry, triggerText, ctx) {
     return true;
 }
 
-async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '', triggerMode = 'query', referenceHistory, onGenerationPhase, signal } = {}) {
+function worldInfoCharacterFilterAllows(filter) {
+    const names = filter?.names;
+    if (Array.isArray(names) && names.length) {
+        const includesName = names.includes(getCharaFilename());
+        if (filter.isExclude ? includesName : !includesName) return false;
+    }
+    // Tag filters need host tag-map state for a read-only applicability check.
+    return !Array.isArray(filter?.tags) || !filter.tags.length;
+}
+
+async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '', triggerMode = 'query', referenceHistory, onGenerationPhase, signal, includeTitleDirectory = false } = {}) {
     const reportPhase = phase => { try { onGenerationPhase?.(phase); } catch {} };
     const throwIfAborted = () => { if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError'); };
     reportPhase('world-info-books');
@@ -6851,6 +6860,13 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
     const selected = entries
         .filter(e => worldInfoSelectionAllows(selection, e.key))
         .filter(e => e.hostEnabled !== false);
+    const titleRows = includeTitleDirectory ? selected
+        .filter(entry => worldInfoCharacterFilterAllows(entry.activationEntry?.characterFilter))
+        .flatMap(entry => {
+            const title = String(entry.title ?? '').replace(/\s+/gu, ' ').trim();
+            return title ? [`- ${entry.source}｜${title}`] : [];
+        }) : [];
+    const titleDirectory = titleRows.length ? `【当前可读世界书标题目录】\n${titleRows.join('\n')}` : '';
     let effectiveTriggerText = triggerText;
     // 「间」可凭自己的历史快照解析回指；面内只有本轮明确要求全体角色时才能直接列名单。
     const explicitAllRosterQuery = WORLD_INFO_ALL_ROLES.test(String(triggerText || ''))
@@ -6895,7 +6911,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
             lukerAvailable: typeof ctx?.simulateWorldInfoActivation === 'function',
             nativeAvailable: typeof worldInfoCore.checkWorldInfo === 'function',
         });
-        return '';
+        return titleDirectory;
     }
     const candidates = selected
         .filter(e => activation.keys.has(worldInfoCandidateKey(e.source, e.uid))
@@ -6918,7 +6934,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
             warning: '宿主 API 未返回预算溢出标记；硬上限或外部扫描 prompt 可能导致宿主在构画筛选前省略候选。',
         });
     }
-    if (!candidates.length) return '';
+    if (!candidates.length) return titleDirectory;
     const result = `【世界书】\n${candidates.join('\n\n')}`;
     // Final diagnostics are observational only: never wait for the host tokenizer after selection; send chosen entries unchanged.
     const estimate = estimateWorldInfoTokens(result);
@@ -6929,7 +6945,7 @@ async function buildWorldInfoContext(ctx, { triggerText, titleSupplementText = '
         exactCount: estimate.exact,
         warning: '构画不裁剪已命中的世界书；宿主扫描预算仍可能使宿主在构画筛选前省略候选。',
     });
-    return result;
+    return titleDirectory ? `${titleDirectory}\n\n${result}` : result;
 }
 
 // Read Anima's summary layer from the chat-bound worldbook. Anima persists each
@@ -7396,6 +7412,13 @@ function renderAiMessageHtml(text, sanitizerOverrides = {}) {
     return escapeHtml(String(text ?? '')).replace(/\n/g, '<br>');
 }
 
+
+function renderSpaceReplyHtml(text, sanitizerOverrides = {}) {
+    return renderAiMessageHtml(text, {
+        FORBID_TAGS: ['button', 'input', 'textarea', 'select', 'option', 'form', 'iframe', 'object', 'embed'],
+        ...sanitizerOverrides,
+    });
+}
 
 // idx0 从 0 起。就地替换 calendar_widget 内第 idx0 个 Event: 行（保留其 Day/Future 归属与缩进），找不到返回 null。
 function replaceNthEventLine(raw, idx0, newEventLine) {

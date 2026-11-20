@@ -251,6 +251,49 @@ test('worldbook read exceptions are reported while successful books remain injec
     assert.doesNotMatch(notices[0], /已读取的书仍会参与生成/);
 });
 
+test('Space worldbook directory lists readable headings while bodies still require activation', async () => {
+    const entries = [
+        { source: '示例书', uid: 1, key: 'rule', title: '副本生成规范', content: '命中的生成规范正文' },
+        { source: '示例书', uid: 2, key: 'fixed', title: '预写冒险', content: '没有命中的冒险正文' },
+        { source: '示例书', uid: 3, key: 'off', title: '已关闭条目', hostEnabled: false },
+        { source: '示例书', uid: 4, key: 'unselected', title: '构画未勾选条目' },
+        { source: '排除书', uid: 5, key: 'excluded', title: '排除整书中的条目' },
+        { source: '示例书', uid: 6, key: 'other-card', title: '另一角色的条目', activationEntry: { characterFilter: { names: ['另一角色'] } } },
+    ];
+    let reads = 0;
+    let activation = new Set(['示例书::1']);
+    const build = evaluate(region('function worldInfoTitleSupplementAllows(', "// Read Anima's summary layer"), 'buildWorldInfoContext', {
+        WORLD_INFO_ALL_ROLES: /$a/, WORLD_INFO_GROUP_INFO_TOPIC: /$a/,
+        WORLD_INFO_SCAN_BUDGET: 100,
+        getCharBookEntries: async () => { reads++; return entries; },
+        getWiExcludeSet: () => new Set(['排除书']),
+        hasWiExcluded: (source, excluded) => excluded.has(source),
+        ensureCurrentWiSelection: () => ({}),
+        worldInfoSelectionAllows: (_selected, key) => key !== 'unselected',
+        getCharaFilename: () => '当前角色',
+        worldInfoCandidateKey: (world, uid) => `${world}::${uid}`,
+        resolveWorldInfoActivation: async () => ({ failed: false, keys: activation }),
+        countWorldInfoTokens: async () => ({ tokens: 8, exact: true }),
+        worldInfoTitleMatches: () => false,
+        worldInfoPersonTitleMatches: () => false,
+        worldInfoCore: { world_info_budget_cap: 0, world_info_budget: 100 },
+        console: { warn() {}, info() {} },
+        estimateWorldInfoTokens: () => ({ tokens: 4, exact: true }),
+    });
+    const triggerText = '世界书里有预写的副本吗';
+    const selected = await build({}, { triggerText, includeTitleDirectory: true });
+    assert.equal(reads, 1);
+    assert.match(selected, /当前可读世界书标题目录/);
+    assert.match(selected, /预写冒险/);
+    assert.match(selected, /命中的生成规范正文/);
+    assert.doesNotMatch(selected, /没有命中的冒险正文|已关闭条目|未勾选条目|排除整书|另一角色/);
+    assert.equal(await build({}, { triggerText }), '【世界书】\n命中的生成规范正文');
+    activation = new Set();
+    const directoryOnly = await build({}, { triggerText, includeTitleDirectory: true });
+    assert.match(directoryOnly, /预写冒险/);
+    assert.doesNotMatch(directoryOnly, /命中的生成规范正文|没有命中的冒险正文/);
+});
+
 test('worldbook query without a trusted person roster keeps the original query', async () => {
     const runQuery = ({ names = [], recognized = true, failRead = false } = {}) => {
         const activations = [];

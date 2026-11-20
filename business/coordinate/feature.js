@@ -2,8 +2,9 @@ import { icon } from '../../utils/icons.js';
 import { createCoordinateController } from './controller.js';
 import { createCoordinateUI } from './ui.js';
 import { captureMesText, sanitizeSnapshot, makePreview } from './capture.js';
-import { createCoordinateRenderer, createFullscreenController } from './render.js';
+import { createCoordinateRenderer, createFullscreenController, renderSpaceNoteContent } from './render.js';
 import { clearReplyMarker, normalizeId, readReplyMarker, replyVersion, writeReplyMarker } from './identity.js';
+import { SPACE_NOTE_KIND } from './schema.js';
 import { createPanelFailureStore } from '../ui/panel-failure.js';
 
 export function createCoordinateFeature({ repository, root = null, capture = captureMesText, ports = null, host = {} } = {}) {
@@ -19,7 +20,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
     };
     let currentTheme = host.theme?.() || 'day';
     let renderToken = 0; let activeRender = null;
-    const rendererImpl = createCoordinateRenderer({ repository, captureRender: () => activeRender, setBody: (html, request) => { if (!root || !request || activeRender !== request || request.token !== renderToken || !controller.isCurrent(request.revision)) return false; root.innerHTML = html; renderFailure(); return true; }, getState: () => { const state = ui.state?.() || {}; return { ...state, level: state.level || ui.route(), charName: state.charName, chatId: state.chatId || (state.level === 'items' ? state.itemId : null), itemId: state.itemId }; }, setState: next => ui.setRoute(next), getTheme: () => currentTheme, documentRef: host.document || globalThis.document, queryRoot: root });
+    const rendererImpl = createCoordinateRenderer({ repository, captureRender: () => activeRender, setBody: (html, request) => { if (!root || !request || activeRender !== request || request.token !== renderToken || !controller.isCurrent(request.revision)) return false; root.innerHTML = html; renderFailure(); return true; }, getState: () => { const state = ui.state?.() || {}; return { ...state, level: state.level || ui.route(), charName: state.charName, chatId: state.chatId || (state.level === 'items' ? state.itemId : null), itemId: state.itemId }; }, setState: next => ui.setRoute(next), getTheme: () => currentTheme, formatSpaceReply: host.formatSpaceReply, documentRef: host.document || globalThis.document, queryRoot: root });
     const renderCurrent = task => { const current = { token: ++renderToken, revision: controller.snapshotRevision() }; activeRender = current; return Promise.resolve(task()).finally(() => { if (activeRender === current) activeRender = null; }); };
     const renderer = new Proxy(rendererImpl, { get(target, key) { const value = target[key]; return typeof value === 'function' && ['render', 'chars', 'chats', 'items', 'full', 'tags'].includes(key) ? (...args) => renderCurrent(() => value.apply(target, args)) : value; } });
     const fullscreen = createFullscreenController({ body: root, sheet: host.sheet?.(), documentRef: host.document || globalThis.document });
@@ -218,12 +219,52 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
         host.toast?.(markerSaved ? '已收藏此楼' : '收藏已保存，但回复关联保存失败', null, !markerSaved);
         finish();
     };
+    const toggleNotePreview = async button => {
+        const card = button.closest('.sp-anchor-note-card');
+        const preview = card?.querySelector('.sp-anchor-note-preview');
+        const body = card?.querySelector('.sp-anchor-note-body');
+        if (!preview || !body || button.disabled) return;
+        const expanding = body.hidden;
+        if (expanding && !body.textContent) {
+            button.disabled = true;
+            button.textContent = '读取中…';
+            try {
+                const note = await repository.getItem(button.dataset.id);
+                if (button.isConnected === false) return;
+                if (note?.kind !== SPACE_NOTE_KIND || typeof note.text !== 'string') throw new Error('missing note');
+                body.innerHTML = renderSpaceNoteContent(note.text, note.role, host.formatSpaceReply);
+            } catch {
+                if (button.isConnected !== false) host.toast?.('便签读取失败，请重试', null, true);
+                return;
+            } finally {
+                button.disabled = false;
+                button.textContent = '展开全文';
+            }
+        }
+        preview.hidden = expanding;
+        body.hidden = !expanding;
+        button.setAttribute('aria-expanded', String(expanding));
+        button.textContent = expanding ? '收起' : '展开全文';
+    };
     const tagColor = color => ['rose', 'amber', 'olive', 'teal', 'indigo', 'plum', 'slate', 'clay'].includes(String(color)) ? String(color) : 'slate';
     const api = { addTag: trackedMutation('coordinate-tag-add', '新建标签', (name, color) => controller.action(() => repository.addTag(name, tagColor(color))).then(result => result.value)), deleteTag: trackedMutation('coordinate-tag-delete', '删除标签', id => controller.action(() => repository.deleteTag(id)).then(result => result.value)), setItemTags: trackedMutation('coordinate-item-tags', '更新收藏标签', (id, tags) => controller.action(() => repository.setItemTags(id, tags)).then(result => result.value)), renameTag: trackedMutation('coordinate-tag-rename', '重命名标签', (id, name) => controller.action(() => repository.renameTag(id, name)).then(result => result.value)), recolorTag: trackedMutation('coordinate-tag-color', '更改标签颜色', (id, color) => controller.action(() => repository.recolorTag(id, tagColor(color))).then(result => result.value)), updateTag: trackedMutation('coordinate-tag-update', '保存标签', (id, name, color) => controller.action(() => repository.updateTag(id, name, tagColor(color))).then(result => result.value)), onFloorButton };
     return {
         repository, controller, ui,
         init(meta) { if (!initialized) { initialized = true; controller.beginChat(meta); } return this; },
         refreshSavedKeys, scanButtons, onFloorButton,
+        saveSpaceNote({ id, text, role }) {
+            const ctx = host.context?.();
+            return repository.addSpaceNote({
+                id,
+                chatId: ctx?.chatId,
+                chatIdHash: ctx?.chatMetadata?.chat_id_hash ?? null,
+                chatName: host.chatName?.() || ctx?.chatId,
+                charName: ctx?.name2 || '角色',
+                text,
+                role,
+                ts: ports?.now?.() ?? Date.now(),
+            });
+        },
         addTag: (name, color) => api.addTag(name, color),
         renameTag: (id, name) => api.renameTag(id, name),
         recolorTag: (id, color) => api.recolorTag(id, color),
@@ -253,7 +294,7 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
         bindUi(target) {
             const renderFullIfSelected = itemId => { const state = ui.state(); return state.level === 'full' && String(state.itemId) === String(itemId) ? renderer.full(itemId) : undefined; };
             const off = ui.bind(target, 'click', async event => {
-                const el = event.target?.closest?.('[data-to], .sp-anchor-tagmgr-btn, .sp-anchor-tag-edit, .sp-anchor-ftag-chip, .sp-anchor-ftag-add, .sp-anchor-ftag-done, .sp-anchor-filter-chip, .sp-anchor-char-card, .sp-anchor-chat-card, .sp-anchor-item-card, .sp-anchor-fullscreen, .sp-tagmgr-new-add, .sp-tagmgr-edit, .sp-tagmgr-save, .sp-tagmgr-cancel, .sp-tagmgr-swatch, .sp-tagmgr-del');
+                const el = event.target?.closest?.('[data-to], .sp-anchor-tagmgr-btn, .sp-anchor-tag-edit, .sp-anchor-ftag-chip, .sp-anchor-ftag-add, .sp-anchor-ftag-done, .sp-anchor-filter-chip, .sp-anchor-char-card, .sp-anchor-chat-card, .sp-anchor-item-card, .sp-anchor-note-open, .sp-anchor-note-expand, .sp-anchor-fullscreen, .sp-tagmgr-new-add, .sp-tagmgr-edit, .sp-tagmgr-save, .sp-tagmgr-cancel, .sp-tagmgr-swatch, .sp-tagmgr-del');
                 if (!el) return;
                 const row = el.closest('[data-id]');
                 const itemId = ui.state().itemId;
@@ -270,7 +311,8 @@ export function createCoordinateFeature({ repository, root = null, capture = cap
                 if (el.matches('.sp-anchor-filter-chip')) { ui.setFilter(el.dataset.id); return renderer.render(); }
                 if (el.matches('.sp-anchor-char-card')) { ui.setRoute('chats', el.dataset.char); return renderer.render(); }
                 if (el.matches('.sp-anchor-chat-card')) { ui.setRoute('items', el.dataset.chatid); return renderer.render(); }
-                if (el.matches('.sp-anchor-item-card')) { ui.setRoute('full', el.dataset.id); return renderer.full(el.dataset.id); }
+                if (el.matches('.sp-anchor-note-expand')) return toggleNotePreview(el);
+                if (el.matches('.sp-anchor-item-card, .sp-anchor-note-open')) { ui.setRoute('full', el.dataset.id); return renderer.full(el.dataset.id); }
                 if (el.matches('.sp-anchor-fullscreen')) return fullscreen.toggle();
                 if (el.dataset.to) { ui.setRoute(el.dataset.to, el.dataset.chatid || null); return renderer.render(); }
             });

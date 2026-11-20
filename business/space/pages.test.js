@@ -82,6 +82,22 @@ test('页内回指请求交给同次模型理解，并保留完整候选历史',
     assert.deepEqual(intent.allowedWidgetKinds, ['schedule_widget', 'line_widget', 'almanac_widget', 'era_widget', 'outline_widget']);
 });
 
+test('portable Space histories omit links to favorites owned by the original chat', () => {
+    const message = { role: 'user', content: '设定', coordinateNote: { id: 'space-note', chatId: 'original' } };
+    const value = { version: 1, pages: ['1'], messages: [message] };
+    const exported = buildPortableChatPackage({
+        selectedModules: ['space'],
+        roots: { 'sp-store': { version: 1, data: { 'space-chat-user': value } } },
+    });
+    assert.equal(exported.ok, true);
+    const portableValue = exported.package.modules.space.entries['space-chat-user'];
+    assert.deepEqual(portableValue.messages, [{ role: 'user', content: '设定' }]);
+    assert.equal(message.coordinateNote.id, 'space-note');
+    portableValue.messages[0].coordinateNote = message.coordinateNote;
+    const plan = createPortableImportPlan({ portablePackage: exported.package, selectedModules: ['space'], targetChatId: 'copy' });
+    assert.equal(plan.replacementRoots['sp-store'].data['space-chat-user'].messages[0].coordinateNote, undefined);
+});
+
 test('导入替换及数据管理清除后重置临时页草稿，不把窗口2草稿带到窗口1', async () => {
     const { createSpaceFeature } = await import('./feature.js');
     let saved = { version: 1, pages: ['1', '2'], messages: [] };

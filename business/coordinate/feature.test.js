@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCoordinateFeature } from './feature.js';
+import { createCoordinateRenderer } from './render.js';
 import { createCoordinateRepository } from './repository.js';
 import { INDEX_NAME, fileNameOf, pathOf } from './schema.js';
 import { REPLY_MARKER_KEY, writeReplyMarker } from './identity.js';
@@ -11,7 +12,7 @@ function deferred() {
     return { promise, resolve };
 }
 
-function coordinateHarness({ initialIndex = { version: 1, items: [], tags: [{ id: 'tag-1', name: 'research', color: 'slate' }] }, selectMany = null, failUploadAt = 0 } = {}) {
+function coordinateHarness({ initialIndex = { version: 1, items: [], tags: [{ id: 'tag-1', name: 'research', color: 'slate' }] }, selectMany = null, failUploadAt = 0, loseUploadResponseAt = 0 } = {}) {
     const events = [];
     const toasts = [];
     const files = new Map([[INDEX_NAME, JSON.stringify(initialIndex)]]);
@@ -39,6 +40,7 @@ function coordinateHarness({ initialIndex = { version: 1, items: [], tags: [{ id
                 events.push(`upload:${body.name}`);
                 if (uploads.length === failUploadAt) return { ok: false, status: 500 };
                 files.set(body.name, body.data);
+                if (uploads.length === loseUploadResponseAt) throw new Error('upload response lost');
                 return { ok: true, status: 200, json: async () => ({ path: pathOf(body.name) }) };
             }
             if (url === '/api/files/delete') {
@@ -69,6 +71,115 @@ function coordinateHarness({ initialIndex = { version: 1, items: [], tags: [{ id
     };
     return { feature, repository, context, events, files, uploads, toasts, mes };
 }
+
+test('Space favorites save a complete snapshot under the source chat and reuse a single 间 tag', async () => {
+    const h = coordinateHarness({ selectMany: () => assert.fail('Space favorites save in one click') });
+    const text = '旧港口的约定\n\n守船人只收一枚铜币。';
+    const first = h.feature.saveSpaceNote({ id: 'space-first', text });
+    h.context.chatId = 'chat-2';
+    h.context.chatMetadata = { chat_id_hash: 'hash-2' };
+    const second = h.feature.saveSpaceNote({ id: 'space-second', text: '另一个故事的设定' });
+    await Promise.all([first, second]);
+
+    const fresh = createCoordinateRepository({ ports: h.repository.ports });
+    const notes = await fresh.getAllItems();
+    const tags = (await fresh.getTags()).filter(tag => tag.name === '间');
+    assert.equal(tags.length, 1);
+    assert.deepEqual(notes.map(note => [note.chatId, note.chatIdHash, note.tags]), [
+        ['chat-1', 'hash-1', [tags[0].id]],
+        ['chat-2', 'hash-2', [tags[0].id]],
+    ]);
+    assert.equal((await fresh.getItem('space-first')).text, text);
+    assert.deepEqual(await fresh.findItemIdsByFloor('chat-1', 0), []);
+    assert.equal(await fresh.adoptOrphans('角色', ['chat-2'], 'chat-2', '另一个故事', 'hash-2'), 0);
+    assert.equal((await fresh.getItem('space-first')).chatId, 'chat-1');
+    assert.deepEqual(h.uploads.map(upload => upload.name), [fileNameOf('space-first'), INDEX_NAME, fileNameOf('space-second'), INDEX_NAME]);
+    assert.ok(!h.events.includes('saveChatDebounced'));
+});
+
+test('retrying a Space favorite after an index write failure leaves one item and one tag', async () => {
+    const h = coordinateHarness({ failUploadAt: 2 });
+    const input = { id: 'space-retry', text: '灯塔下的便签' };
+    await assert.rejects(h.feature.saveSpaceNote(input), { detailWritten: true });
+    assert.equal(await h.repository.countItems(), 0);
+    await h.feature.saveSpaceNote(input);
+    assert.equal(await h.repository.countItems(), 1);
+    assert.equal((await h.repository.getTags()).filter(tag => tag.name === '间').length, 1);
+});
+
+test('notes use the actual chat even when a hash appears late or is shared with a branch', async () => {
+    const h = coordinateHarness();
+    h.context.chatMetadata = {};
+    await h.feature.saveSpaceNote({ id: 'before-hash', text: '第一条' });
+    h.context.chatMetadata = { chat_id_hash: 42 };
+    await h.feature.saveSpaceNote({ id: 'after-hash', text: '第二条' });
+    h.context.chatId = 'branch';
+    await h.feature.saveSpaceNote({ id: 'branch-note', text: '分支设定' });
+    await h.repository.healChatByHash('branch', '分支', 42);
+    const buckets = new Map((await h.repository.listByChat()).map(bucket => [bucket.chatId, bucket.items.map(item => item.id).sort()]));
+    assert.equal(buckets.size, 2);
+    assert.deepEqual(buckets.get('chat-1'), ['after-hash', 'before-hash']);
+    assert.deepEqual(buckets.get('branch'), ['branch-note']);
+    assert.equal((await h.repository.getItem('after-hash')).chatId, 'chat-1');
+});
+
+test('saving a different note after losing the index response preserves the committed note', async () => {
+    const h = coordinateHarness({ loseUploadResponseAt: 4 });
+    await h.feature.saveSpaceNote({ id: 'first', text: '第一条' });
+    await assert.rejects(h.feature.saveSpaceNote({ id: 'response-lost', text: '第二条' }), { detailWritten: true });
+    await h.feature.saveSpaceNote({ id: 'third', text: '第三条' });
+    assert.deepEqual((await h.repository.getAllItems()).map(item => item.id), ['first', 'response-lost', 'third']);
+});
+
+test('bookmarking the same note again keeps any tags added since the original save', async () => {
+    const h = coordinateHarness();
+    const input = { id: 'space-tagged', text: '有额外标签的设定' };
+    const saved = await h.feature.saveSpaceNote(input);
+    const tags = [...saved.tags, 'tag-1'];
+    await h.repository.setItemTags(saved.id, tags);
+    const writes = h.uploads.length;
+    await h.feature.saveSpaceNote(input);
+    assert.deepEqual((await h.repository.getItem(saved.id)).tags, tags);
+    assert.equal(h.uploads.length, writes);
+});
+
+test('the collection shows complete short Space notes and a 300-character preview of longer ones', async () => {
+    const h = coordinateHarness();
+    await h.feature.onFloorButton(h.mes, {});
+    const short = '<em>潮汐</em>\n加上这行';
+    const initial = '潮'.repeat(299) + '🪶';
+    await h.feature.saveSpaceNote({ id: 'short-note', text: short });
+    await h.feature.saveSpaceNote({ id: 'at-limit-note', text: initial });
+    await h.feature.saveSpaceNote({ id: 'long-note', text: initial + '\n真正的尾巴' });
+    let html = '';
+    const renderer = createCoordinateRenderer({ repository: h.repository, setBody: value => { html = value; } });
+    await renderer.items('chat-1');
+    assert.match(html, /&lt;em&gt;潮汐&lt;\/em&gt;\n加上这行/);
+    assert.ok(html.includes(initial));
+    assert.doesNotMatch(html, /真正的尾巴/);
+    assert.equal((html.match(/展开全文/g) || []).length, 1);
+    assert.match(html, /sp-anchor-item-floor">#0</);
+    assert.match(html, /sp-anchor-tagchip[^>]*>间</);
+    assert.equal((await h.repository.getItem('long-note')).text, initial + '\n真正的尾巴');
+});
+
+test('Space note previews use the reply formatter for old notes and preserve plain user messages', async () => {
+    const h = coordinateHarness();
+    const text = '**方案 A**\n\n---';
+    await h.feature.saveSpaceNote({ id: 'old-note', text });
+    await h.feature.saveSpaceNote({ id: 'user-note', text, role: 'user' });
+    let html = '';
+    const replies = [];
+    const renderer = createCoordinateRenderer({
+        repository: h.repository,
+        setBody: value => { html = value; },
+        formatSpaceReply: value => { replies.push(value); return '<p><strong>方案 A</strong></p><hr>'; },
+    });
+    await renderer.items('chat-1');
+    assert.deepEqual(replies, [text]);
+    assert.match(html, /<strong>方案 A<\/strong><\/p><hr>/);
+    assert.ok(html.includes(text));
+});
 
 test('new floor waits for tag choice and writes selected tags with the first saved item', async () => {
     const selection = deferred();

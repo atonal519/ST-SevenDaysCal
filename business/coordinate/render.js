@@ -1,12 +1,34 @@
 import { icon } from '../../utils/icons.js';
 import { isCurrentRevision } from './identity.js';
+import { SPACE_NOTE_KIND } from './schema.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
 const tagChips = (tags, map) => (Array.isArray(tags) ? tags : []).map(id => map.get(id)).filter(Boolean).map(tag => `<span class="sp-anchor-tagchip" data-color="${esc(tag.color || 'slate')}">${esc(tag.name)}</span>`).join('');
 
-export function createCoordinateRenderer({ repository, setBody, captureRender, getState, setState, getTheme = () => 'day', escapeHtml = esc, formatTimestamp = value => new Date(value || 0).toLocaleString(), svg = () => '', documentRef = globalThis.document, queryRoot = null } = {}) {
+export function renderSpaceNoteContent(text, role, formatSpaceReply) {
+    const source = String(text ?? '');
+    const formatted = role === 'user' ? '' : formatSpaceReply?.(source);
+    return formatted || `<span class="sp-anchor-note-plain">${esc(source)}</span>`;
+}
+
+export function createCoordinateRenderer({ repository, setBody, captureRender, getState, setState, getTheme = () => 'day', escapeHtml = esc, formatSpaceReply, formatTimestamp = value => new Date(value || 0).toLocaleString(), svg = () => '', documentRef = globalThis.document, queryRoot = null } = {}) {
     const current = () => getState?.() || { level: 'chars', charName: null, chatId: null, itemId: null, filter: null, fullTagEdit: false };
     const visible = (items, filter) => filter ? items.filter(item => item.tags?.includes(filter)) : items;
+    const noteCard = (item, tags) => {
+        const id = esc(item.id);
+        const bodyId = `sp-anchor-note-body-${id}`;
+        const expandable = item.previewTruncated;
+        return `<article class="sp-anchor-note-card">
+            <div class="sp-anchor-note-meta">
+                <span class="sp-anchor-item-tags">${tagChips(item.tags, tags)}</span>
+                <span class="sp-anchor-item-ts">${formatTimestamp(item.ts)}</span>
+                <button type="button" class="sp-anchor-note-open sp-mini-btn" data-id="${id}">详情</button>
+            </div>
+            <div class="sp-anchor-note-text sp-anchor-note-preview sp-chat-msg-content">${renderSpaceNoteContent(item.textPreview + (expandable ? '…' : ''), item.role, formatSpaceReply)}</div>
+            ${expandable ? `<div class="sp-anchor-note-text sp-anchor-note-body sp-chat-msg-content" id="${bodyId}" hidden></div>
+                <button type="button" class="sp-anchor-note-expand sp-mini-btn" data-id="${id}" aria-expanded="false" aria-controls="${bodyId}">展开全文</button>` : ''}
+        </article>`;
+    };
     const filterBar = (tags, active) => `<div class="sp-anchor-filterbar"><button class="sp-anchor-filter-chip${!active ? ' sp-anchor-filter-on' : ''}" data-id="">全部</button>${tags.map(tag => `<button class="sp-anchor-filter-chip sp-anchor-filter-tag${tag.id === active ? ' sp-anchor-filter-on' : ''}" data-id="${esc(tag.id)}"><span class="sp-anchor-tagchip" data-color="${esc(tag.color || 'slate')}">${esc(tag.name)}</span></button>`).join('')}</div>`;
     async function chars(renderRequest = captureRender?.()) {
         const all = await repository.listByChat?.() || []; const tags = await repository.getTags(); const s = current(); const groups = new Map();
@@ -36,16 +58,23 @@ export function createCoordinateRenderer({ repository, setBody, captureRender, g
     }
     async function items(chatId, renderRequest = captureRender?.()) {
         const bucket = (await repository.listByChat?.() || []).find(entry => String(entry.chatId) === String(chatId)); if (!bucket) return chars(renderRequest); const tags = await repository.getTags(); const map = new Map(tags.map(tag => [tag.id, tag])); const s = current(); const list = visible(bucket.items, s.filter);
-        setBody(`<div class="sp-anchor-head"><button class="sp-anchor-back" data-to="chats" data-char="${esc(bucket.charName)}" title="返回聊天列表" aria-label="返回聊天列表">${icon('chevron-left')}</button><span class="sp-anchor-head-title">${escapeHtml(bucket.chatName || bucket.charName || '收藏')}</span><span class="sp-anchor-head-count">${list.length} 条</span></div><div class="sp-anchor-scroll">${filterBar(tags, s.filter)}<div class="sp-anchor-item-list">${list.map(item => `<button class="sp-anchor-item-card" data-id="${esc(item.id)}"><span class="sp-anchor-item-tags">${tagChips(item.tags, map)}</span><span class="sp-anchor-item-main"><span class="sp-anchor-item-floor">#${item.floorIndex ?? '?'}</span><span class="sp-anchor-item-preview">${escapeHtml(item.textPreview || '(无正文预览)')}</span><span class="sp-anchor-item-ts">${formatTimestamp(item.ts)}</span></span></button>`).join('') || '<div class="sp-anchor-filter-empty">没有含此标签的收藏</div>'}</div></div>`, renderRequest);
+        const notes = list.filter(item => item.kind === SPACE_NOTE_KIND).sort((a, b) => b.ts - a.ts).map(item => noteCard(item, map));
+        const floors = list.filter(item => item.kind !== SPACE_NOTE_KIND).map(item => `<button class="sp-anchor-item-card" data-id="${esc(item.id)}"><span class="sp-anchor-item-tags">${tagChips(item.tags, map)}</span><span class="sp-anchor-item-main"><span class="sp-anchor-item-floor">#${item.floorIndex ?? '?'}</span><span class="sp-anchor-item-preview">${escapeHtml(item.textPreview || '(无正文预览)')}</span><span class="sp-anchor-item-ts">${formatTimestamp(item.ts)}</span></span></button>`);
+        const cards = [...notes, ...floors].join('');
+        setBody(`<div class="sp-anchor-head"><button class="sp-anchor-back" data-to="chats" data-char="${esc(bucket.charName)}" title="返回聊天列表" aria-label="返回聊天列表">${icon('chevron-left')}</button><span class="sp-anchor-head-title">${escapeHtml(bucket.chatName || bucket.charName || '收藏')}</span><span class="sp-anchor-head-count">${list.length} 条</span></div><div class="sp-anchor-scroll">${filterBar(tags, s.filter)}<div class="sp-anchor-item-list">${cards || '<div class="sp-anchor-filter-empty">没有含此标签的收藏</div>'}</div></div>`, renderRequest);
     }
     async function full(itemId, revision = null, theme = null, renderRequest = captureRender?.()) {
         theme = theme || getTheme?.() || 'day';
         const item = await repository.getItem(itemId); if (!item || (revision && !isCurrentRevision(revision, getState?.()))) return chars(renderRequest); const tags = await repository.getTags(); const map = new Map(tags.map(tag => [tag.id, tag]));
+        const isNote = item.kind === SPACE_NOTE_KIND;
+        const subtitle = isNote ? '便签' : `#${item.floorIndex ?? '?'}`;
+        const note = isNote ? `<div class="sp-anchor-note-text sp-anchor-note-detail sp-chat-msg-content">${renderSpaceNoteContent(item.text, item.role, formatSpaceReply)}</div>` : '';
         const edit = current().fullTagEdit ? `<div class="sp-anchor-full-tagedit"><div class="sp-anchor-ftag-chips">${tags.map(tag => `<button class="sp-anchor-ftag-chip${item.tags?.includes(tag.id) ? ' sp-tp-chip-on' : ''}" data-id="${esc(tag.id)}"><span class="sp-anchor-tagchip" data-color="${esc(tag.color || 'slate')}">${esc(tag.name)}</span></button>`).join('')}</div><div class="sp-anchor-ftag-new"><input class="sp-anchor-ftag-name sp-input" placeholder="新建标签名…"></div><div class="sp-anchor-ftag-foot"><button class="sp-anchor-ftag-add sp-mini-btn">新增</button><button class="sp-anchor-ftag-done sp-mini-btn">完成</button></div></div>` : `<div class="sp-anchor-full-tags">${tagChips(item.tags, map)}<button class="sp-anchor-tag-edit sp-mini-btn">编辑标签</button></div>`;
-        const accepted = setBody(`<div class="sp-anchor-head"><button class="sp-anchor-back" data-to="items" data-chatid="${esc(item.chatId)}" title="返回收藏列表" aria-label="返回收藏列表">${icon("arrow-left")}</button><span class="sp-anchor-head-title">${escapeHtml(item.charName || '')}<span class="sp-anchor-head-floor"> · #${item.floorIndex ?? '?'}</span></span><span class="sp-anchor-head-actions"><button class="sp-icon-btn sp-anchor-fullscreen" title="全屏浏览" aria-label="全屏浏览">${icon("arrows-maximize")}</button><button class="sp-icon-btn sp-anchor-del" title="删除此收藏" aria-label="删除此收藏">${icon("trash")}</button></span></div><div class="sp-anchor-scroll">${edit}<div class="sp-anchor-full-host" id="sp-anchor-full-host"></div><div class="sp-anchor-full-ts">收藏于 ${formatTimestamp(item.ts)}</div></div><div class="sp-anchor-fs-resize" title="拖拽调整大小" aria-label="拖拽调整阅读区大小"></div>`, renderRequest);
+        const accepted = setBody(`<div class="sp-anchor-head"><button class="sp-anchor-back" data-to="items" data-chatid="${esc(item.chatId)}" title="返回收藏列表" aria-label="返回收藏列表">${icon("arrow-left")}</button><span class="sp-anchor-head-title">${escapeHtml(item.charName || '')}<span class="sp-anchor-head-floor"> · ${escapeHtml(subtitle)}</span></span><span class="sp-anchor-head-actions"><button class="sp-icon-btn sp-anchor-fullscreen" title="全屏浏览" aria-label="全屏浏览">${icon("arrows-maximize")}</button><button class="sp-icon-btn sp-anchor-del" title="删除此收藏" aria-label="删除此收藏">${icon("trash")}</button></span></div><div class="sp-anchor-scroll">${edit}<div class="sp-anchor-full-host" id="sp-anchor-full-host">${note}</div><div class="sp-anchor-full-ts">收藏于 ${formatTimestamp(item.ts)}</div></div><div class="sp-anchor-fs-resize" title="拖拽调整大小" aria-label="拖拽调整阅读区大小"></div>`, renderRequest);
         // A stale render may still finish its file reads; only commit route and shadow state when the current DOM accepted its body.
         if (accepted === false) return null;
         setState?.({ level: 'full', itemId });
+        if (isNote) return item;
         const host = queryRoot?.querySelector?.('#sp-anchor-full-host') || documentRef?.querySelector?.('#sp-anchor-full-host');
         if (host) {
             const shadow = host.shadowRoot || host.attachShadow?.({ mode: 'open' });

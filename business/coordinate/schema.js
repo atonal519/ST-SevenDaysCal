@@ -2,6 +2,19 @@ export const INDEX_NAME = 'sp-anchor-index.json';
 export const FILE_PREFIX = 'sp-anchor-';
 export const SIZE_WARN_BYTES = 8 * 1024 * 1024;
 export const SCHEMA_VERSION = 1;
+export const SPACE_NOTE_KIND = 'space-note';
+const SPACE_NOTE_PREVIEW_LENGTH = 300;
+
+export function createSpaceNote({ id, chatId, chatIdHash, chatName, charName, text, ts, role } = {}) {
+    if (!id || !String(chatId ?? '').trim() || typeof text !== 'string' || !text.trim()) return null;
+    const characters = Array.from(text);
+    return {
+        id, kind: SPACE_NOTE_KIND, chatId, chatIdHash, chatName, charName, text, ts,
+        role: role === 'user' ? 'user' : 'assistant',
+        textPreview: characters.slice(0, SPACE_NOTE_PREVIEW_LENGTH).join(''),
+        previewTruncated: characters.length > SPACE_NOTE_PREVIEW_LENGTH,
+    };
+}
 
 export function emptyIndex() { return { version: SCHEMA_VERSION, items: [], tags: [] }; }
 
@@ -30,6 +43,10 @@ export function normalizeMeta(item) {
         ts: Number(item.ts) || 0,
         bytes: Number(item.bytes) || 0,
         tags: Array.isArray(item.tags) ? [...item.tags] : [],
+        ...(item.kind === SPACE_NOTE_KIND ? {
+            kind: SPACE_NOTE_KIND, role: item.role === 'user' ? 'user' : 'assistant',
+            previewTruncated: item.previewTruncated === true,
+        } : {}),
     };
 }
 
@@ -53,6 +70,9 @@ export function toMeta(item) {
         ts: item?.ts,
         bytes: itemBytes(item),
         tags: item?.tags,
+        kind: item?.kind,
+        role: item?.role,
+        previewTruncated: item?.previewTruncated,
     });
 }
 

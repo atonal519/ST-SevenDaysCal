@@ -1,4 +1,4 @@
-import { INDEX_NAME, emptyIndex, normalizeIndex, fileNameOf, toMeta, formatBytes, SIZE_WARN_BYTES } from './schema.js';
+import { INDEX_NAME, emptyIndex, normalizeIndex, fileNameOf, toMeta, formatBytes, SIZE_WARN_BYTES, SPACE_NOTE_KIND, createSpaceNote } from './schema.js';
 import { uploadJson, readJson, deleteJson, createCoordinateHostPorts } from '../../runtime/coordinate-host-ports.js';
 
 function strHash(input) {
@@ -32,14 +32,26 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
     const saveIndex = async candidate => {
         const next = candidate || cache;
         if (!next) throw new Error('coordinate index is not loaded');
-        await uploadJson(ports, INDEX_NAME, next);
+        try { await uploadJson(ports, INDEX_NAME, next); }
+        catch (error) { cache = null; throw error; }
         cache = next;
     };
     const partialError = (error, detail) => Object.assign(error instanceof Error ? error : new Error(String(error || 'coordinate mutation failed')), detail);
     const serial = task => { const next = mutation.then(task, task); mutation = next.catch(() => {}); return next; };
-    const addItemUnlocked = async item => {
+    const ensureTag = (index, name, color) => {
+        const existing = index.tags.find(tag => tag.name === name);
+        if (existing) return existing;
+        const id = globalThis.crypto?.randomUUID?.() || `t-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+        const tag = { id, name, color: String(color || '') };
+        index.tags.push(tag);
+        return tag;
+    };
+    const addItemUnlocked = async (source, tagName) => {
         const idx = cloneIndex(await readIndex());
-        const meta = toMeta(item); const i = idx.items.findIndex(x => x.id === meta.id);
+        const i = idx.items.findIndex(item => item.id === String(source.id || ''));
+        if (tagName && idx.items[i]?.kind === SPACE_NOTE_KIND) return api.getItem(source.id);
+        const item = tagName ? { ...source, tags: [ensureTag(idx, tagName, 'slate').id] } : source;
+        const meta = toMeta(item);
         if (i < 0) idx.items.push(meta); else idx.items[i] = meta;
         await uploadJson(ports, fileNameOf(item.id), item);
         try { await saveIndex(idx); }
@@ -53,12 +65,17 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
         invalidate() { cache = null; },
         async getItem(id) { if (!id) return null; const result = await readJson(ports, fileNameOf(id)); return result.missing ? null : result.value; },
         getAllItems: async () => (await readIndex()).items.map(item => ({ ...item, html: '' })),
+        hasSpaceNote: (id, chatId) => cache?.items.some(item => item.kind === SPACE_NOTE_KIND && item.id === id && String(item.chatId) === String(chatId)) ?? null,
         countItems: async () => (await readIndex()).items.length,
         getTags: async () => [...(await readIndex()).tags],
         estimateBytes: async () => (await readIndex()).items.reduce((sum, item) => sum + (Number(item.bytes) || 0), 0),
         formatBytes,
         checkSize: async () => { const bytes = await api.estimateBytes(); return { bytes, over: bytes > (Number(ports.settings()?.anchorSizeWarnBytes) || warnBytes), warnBytes }; },
         addItem: item => serial(() => addItemUnlocked(item)),
+        addSpaceNote(input) {
+            const note = createSpaceNote(input);
+            return note ? serial(() => addItemUnlocked(note, '间')) : Promise.resolve(null);
+        },
         deleteItem: id => serial(async () => {
             if (!id) return;
             const current = await readIndex(); const removed = current.items.find(item => item.id === id);
@@ -84,8 +101,7 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
             const nm = String(name || '').trim(); if (!nm) return null;
             const current = await readIndex(); const old = current.tags.find(tag => tag.name === nm); if (old) return old;
             const idx = cloneIndex(current);
-            const id = globalThis.crypto?.randomUUID?.() || `t-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-            const tag = { id, name: nm, color: String(color || '') }; idx.tags.push(tag); await saveIndex(idx); return tag;
+            const tag = ensureTag(idx, nm, color); await saveIndex(idx); return tag;
         }),
         renameTag: (id, name) => serial(async () => { const idx = cloneIndex(await readIndex()); const tag = idx.tags.find(x => x.id === id); const nm = String(name || '').trim(); if (tag && nm && tag.name !== nm) { tag.name = nm; await saveIndex(idx); } }),
         recolorTag: (id, color) => serial(async () => { const idx = cloneIndex(await readIndex()); const tag = idx.tags.find(x => x.id === id); if (tag) { tag.color = String(color || ''); await saveIndex(idx); } }),
@@ -100,8 +116,36 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
             await saveIndex(idx);
         }),
         setItemTags: (id, tags) => serial(async () => { const item = await api.getItem(id); if (!item) return; item.tags = Array.isArray(tags) ? [...tags] : []; await api._addItemUnlocked(item); }),
-        findItemIdsByFloor: async (chatId, floor) => (await readIndex()).items.filter(item => String(item.chatId) === String(chatId) && (Number(item.messageId) === Number(floor) || Number(item.floorIndex) === Number(floor))).map(item => item.id),
-        listByChat: async () => { const buckets = new Map(); for (const item of await api.getAllItems()) { const key = item.chatIdHash != null ? `h:${item.chatIdHash}` : `c:${item.chatId || '(unknown)'}`; const bucket = buckets.get(key) || { chatId: item.chatId, chatIdHash: item.chatIdHash ?? null, chatName: item.chatName || '(未命名聊天)', charName: item.charName || '', items: [], latestTs: 0 }; bucket.items.push(item); if ((item.ts || 0) >= bucket.latestTs) { bucket.latestTs = item.ts || 0; bucket.chatId = item.chatId ?? bucket.chatId; bucket.chatName = item.chatName || bucket.chatName; bucket.charName = item.charName || bucket.charName; } buckets.set(key, bucket); } return [...buckets.values()].map(bucket => ({ ...bucket, count: bucket.items.length, items: bucket.items.sort((a, b) => (Number(b.floorIndex) || 0) - (Number(a.floorIndex) || 0) || (Number(b.ts) || 0) - (Number(a.ts) || 0)) })).sort((a, b) => b.latestTs - a.latestTs); },
+        findItemIdsByFloor: async (chatId, floor) => (await readIndex()).items.filter(item => item.kind !== SPACE_NOTE_KIND && String(item.chatId) === String(chatId) && (Number(item.messageId) === Number(floor) || Number(item.floorIndex) === Number(floor))).map(item => item.id),
+        listByChat: async () => {
+            const items = await api.getAllItems();
+            const noteChats = new Set(items.filter(item => item.kind === SPACE_NOTE_KIND).map(item => String(item.chatId)));
+            const buckets = new Map();
+            for (const item of items) {
+                // Branches can share a hash. In chats with notes, group by the actual chat file.
+                const key = item.chatIdHash != null && !noteChats.has(String(item.chatId))
+                    ? `h:${item.chatIdHash}`
+                    : `c:${item.chatId || '(unknown)'}`;
+                const bucket = buckets.get(key) || {
+                    chatId: item.chatId, chatIdHash: item.chatIdHash ?? null,
+                    chatName: item.chatName || '(未命名聊天)', charName: item.charName || '',
+                    items: [], latestTs: 0,
+                };
+                bucket.items.push(item);
+                if (item.ts >= bucket.latestTs) {
+                    bucket.latestTs = item.ts;
+                    bucket.chatId = item.chatId ?? bucket.chatId;
+                    bucket.chatName = item.chatName || bucket.chatName;
+                    bucket.charName = item.charName || bucket.charName;
+                }
+                buckets.set(key, bucket);
+            }
+            return [...buckets.values()].map(bucket => ({
+                ...bucket,
+                count: bucket.items.length,
+                items: bucket.items.sort((a, b) => (Number(b.floorIndex) || 0) - (Number(a.floorIndex) || 0) || b.ts - a.ts),
+            })).sort((a, b) => b.latestTs - a.latestTs);
+        },
         deleteTag: id => serial(async () => {
             const idx = cloneIndex(await readIndex());
             const affected = idx.items.filter(item => item.tags?.includes(id));
@@ -123,12 +167,12 @@ export function createCoordinateRepository({ ports = createCoordinateHostPorts()
             }
         }),
         renameChatId: (oldId, newId, name = '', hash = null) => serial(async () => { const idx = cloneIndex(await readIndex()); const hit = idx.items.filter(item => String(item.chatId) === String(oldId)); if (!hit.length) return 0; for (const meta of hit) { meta.chatId = String(newId); meta.chatName = String(name || newId); if (hash != null) meta.chatIdHash = hash; } await saveIndex(idx); for (const meta of hit) { const item = await api.getItem(meta.id); if (item) { item.chatId = String(newId); item.chatName = String(name || newId); if (hash != null) item.chatIdHash = hash; await api._addItemUnlocked(item); } } return hit.length; }),
-        healChatByHash: (currentId, name, hash) => serial(async () => { if (currentId == null || hash == null) return 0; const want = Number(hash); const idx = cloneIndex(await readIndex()); const hit = idx.items.filter(item => (item.chatIdHash != null && Number(item.chatIdHash) === want) || (item.chatIdHash == null && strHash(item.chatId) === want) || String(item.chatId) === String(currentId)); let changed = 0; for (const meta of hit) { if (String(meta.chatId) !== String(currentId) || meta.chatName !== String(name || currentId) || Number(meta.chatIdHash) !== want) { meta.chatId = String(currentId); meta.chatName = String(name || currentId); meta.chatIdHash = hash; changed++; } } if (changed) await saveIndex(idx); for (const meta of hit) { const item = await api.getItem(meta.id); if (item && (String(item.chatId) !== String(currentId) || Number(item.chatIdHash) !== want)) { item.chatId = String(currentId); item.chatName = String(name || currentId); item.chatIdHash = hash; await api._addItemUnlocked(item); } } return changed; }),
+        healChatByHash: (currentId, name, hash) => serial(async () => { if (currentId == null || hash == null) return 0; const want = Number(hash); const idx = cloneIndex(await readIndex()); const hit = idx.items.filter(item => item.kind !== SPACE_NOTE_KIND && ((item.chatIdHash != null && Number(item.chatIdHash) === want) || (item.chatIdHash == null && strHash(item.chatId) === want) || String(item.chatId) === String(currentId))); let changed = 0; for (const meta of hit) { if (String(meta.chatId) !== String(currentId) || meta.chatName !== String(name || currentId) || Number(meta.chatIdHash) !== want) { meta.chatId = String(currentId); meta.chatName = String(name || currentId); meta.chatIdHash = hash; changed++; } } if (changed) await saveIndex(idx); for (const meta of hit) { const item = await api.getItem(meta.id); if (item && (String(item.chatId) !== String(currentId) || Number(item.chatIdHash) !== want)) { item.chatId = String(currentId); item.chatName = String(name || currentId); item.chatIdHash = hash; await api._addItemUnlocked(item); } } return changed; }),
         adoptOrphans: (charName, existingIds, currentId, name, hash = null) => serial(async () => {
             if (!String(charName || '').trim() || !String(currentId || '').trim() || !(existingIds instanceof Set || Array.isArray(existingIds))) return 0;
             const allowed = new Set(Array.from(existingIds, value => String(value || '').replace(/\.jsonl$/i, '')).filter(Boolean));
             if (allowed.size !== 1 || !allowed.has(String(currentId).replace(/\.jsonl$/i, ''))) return 0;
-            const idx = cloneIndex(await readIndex()); const hit = idx.items.filter(item => String(item.charName || '') === String(charName) && !allowed.has(String(item.chatId)));
+            const idx = cloneIndex(await readIndex()); const hit = idx.items.filter(item => item.kind !== SPACE_NOTE_KIND && String(item.charName || '') === String(charName) && !allowed.has(String(item.chatId)));
             for (const meta of hit) { meta.chatId = String(currentId); meta.chatName = String(name || currentId); if (hash != null) meta.chatIdHash = hash; }
             if (hit.length) await saveIndex(idx);
             for (const meta of hit) { const item = await api.getItem(meta.id); if (item) { item.chatId = String(currentId); item.chatName = String(name || currentId); if (hash != null) item.chatIdHash = hash; await api._addItemUnlocked(item); } }

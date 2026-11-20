@@ -11,6 +11,7 @@ const SPACE_MATERIAL_RX = Object.freeze({
     menu: /(?:今天吃点啥|今日菜单|菜单|吃什么|菜品|上次的菜)/,
     theater: /(?:棱|小剧场|棱作品|棱模板|已存作品|已保存作品|作品列表|模板列表)/,
     coordinate: /(?:坐标|收藏夹|收藏楼|收藏的楼|已存坐标|坐标收藏|锚点收藏|展开第\s*\d+\s*楼坐标正文)/,
+    worldInfoDirectory: /世界书\s*(?:的\s*)?(?:目录|标题|条目列表|[这那]几)|世界书[^，。！？?\n]{0,24}(?:哪些|哪几|多少|有没有|(?:有|写|包含|收录|记载)[^，。！？?\n]{0,12}(?:什么|啥|吗))|(?:列出|查看|看看)(?:一下)?世界书\s*[里中内]?的?\s*(?:内容|条目)/u,
 });
 
 export function requestedSpaceMaterials(message) {
@@ -124,7 +125,9 @@ export function createSpaceContext(env = {}) {
         const useCharacterPersona = settings.spaceUseCharacterPersona === true;
         const personaOverride = useCharacterPersona ? '' : String(settings.spacePersona || '').trim();
         const titleSupplementText = [message, ...historyMessages.map(item => String(item?.content ?? '')), outlineRaw, pointList, lineList, ledgerList, memText, recentCtx, personaDesc, characterData, authorNote, almanacText, calDescText, storyDate, materialText, personaOverride].filter(Boolean).join('\n\n');
-        const wiContext = await env.readWorldInfo?.(ctx, message, historySnapshot.slice(0, -1), titleSupplementText) || '';
+        const wiContext = await env.readWorldInfo?.(ctx, message, historySnapshot.slice(0, -1), titleSupplementText, {
+            includeTitleDirectory: requested.worldInfoDirectory,
+        }) || '';
         const system = buildSpaceChatSystemPrompt({ userName, charName, personaDesc, characterData, authorNote, storyDate, outlineRaw, wiContext, memText, recentCtx, pointList, lineList, ledgerList, almanacText, calDescText: calDescForContract, materialText, requestedMaterials: requested, faqText, personaOverride, useCharacterPersona, preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' }, intent });
         const sharedPages = pages.length > 1 || historySnapshot.some(item => spacePageId(item) === '2');
         const pageNote = sharedPages ? `\n【讨论窗口】当前在窗口${pageId}。以下两窗口记录按实际先后共享；窗口标记表示来源，不表示连续问答。` : '';

@@ -5,6 +5,12 @@ import { parseLineCard } from '../lines/schema.js';
 import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord } from '../point/parse.js';
 import { normalizeOutlineResponse, parseOutline } from '../outline/schema.js';
 
+export const SPACE_FAVORITE_LABELS = Object.freeze({
+    idle: '收藏到坐标',
+    pending: '正在收藏',
+    saved: '已收藏到坐标',
+});
+
 export function createSpaceRenderer(env = {}) {
     const escape = value => env.escapeHtml?.(String(value ?? '')) ?? String(value ?? '');
     const widgetName = kind => ({
@@ -187,8 +193,13 @@ export function createSpaceRenderer(env = {}) {
         const canAct = role !== 'system' && Number.isInteger(historyIndex);
         let contentHtml;
         let widgetCards = '';
+        const favoriteState = messageContext.favoriteState || 'idle';
+        const favoriteLabel = SPACE_FAVORITE_LABELS[favoriteState];
+        const favorite = messageContext.canSaveNote && String(content ?? '').trim()
+            ? `<button type="button" class="sp-chat-msg-favorite" data-favorite-state="${favoriteState}" title="${favoriteLabel}" aria-label="${favoriteLabel}" aria-disabled="${favoriteState !== 'idle'}"${favoriteState === 'pending' ? ' disabled' : ''}>${icon("star")}</button>`
+            : '';
         const actions = canAct
-            ? `<div class="sp-chat-msg-actions">${role === 'user' ? `<button class="sp-chat-msg-edit" title="编辑">${icon("pencil")}</button>` : ''}<button class="sp-chat-msg-copy" title="复制">${icon("copy")}</button><button class="sp-chat-msg-delete" title="删除">${icon("trash")}</button></div>`
+            ? `<div class="sp-chat-msg-actions">${role === 'user' ? `<button class="sp-chat-msg-edit" title="编辑">${icon("pencil")}</button>` : ''}<button class="sp-chat-msg-copy" title="复制">${icon("copy")}</button>${favorite}<button class="sp-chat-msg-delete" title="删除">${icon("trash")}</button></div>`
             : '';
         if (role === 'ai') {
             const parsed = extractWidgets(content);

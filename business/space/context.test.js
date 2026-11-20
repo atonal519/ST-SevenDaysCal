@@ -151,6 +151,40 @@ test('本轮问题原样传入同一次记忆读取，保留历史细节的查�
     assert.match(messages[0].content, /旧约定材料/);
 });
 
+test('间明确查问世界书内容时，同一轮请求带标题目录', async () => {
+    const calls = [];
+    const context = createSpaceContext({
+        readWorldInfo: async (_ctx, query, _history, _supplement, options) => {
+            calls.push({ query, directory: options?.includeTitleDirectory });
+            return options?.includeTitleDirectory ? '【当前可读世界书标题目录】\n- 示例书｜预写副本' : '';
+        },
+    });
+    const questions = [
+        { query: '除了世界书的这几场试炼，还能另开一场吗', directory: true },
+        { query: '世界书里不是还收录了几座迷宫吗', directory: true },
+        { query: '列出世界书里的条目', directory: true },
+        { query: '世界书里都写了啥', directory: true },
+        { query: '雾港迷宫的解法是什么', directory: false },
+        { query: '世界书设置在哪打开', directory: false },
+        { query: '按世界书里的设定接着写', directory: false },
+    ];
+    for (const { query: userMsg, directory } of questions) {
+        const messages = await context.buildMessages({
+            target: {}, userMsg,
+            historySnapshot: [{ role: 'user', content: userMsg }],
+        });
+        assert.equal(messages.at(-1).content, userMsg);
+        assert.equal(messages.filter(item => item.role === 'user' && item.content === userMsg).length, 1);
+        if (directory) {
+            assert.match(messages[0].content, /当前可读世界书标题目录/);
+            assert.match(messages[0].content, /世界书正文.*本轮命中/);
+        } else {
+            assert.doesNotMatch(messages[0].content, /当前可读世界书标题目录/);
+        }
+    }
+    assert.deepEqual(calls, questions);
+});
+
 test('语义路由的历法编辑合同保留所有未提及字段，不依赖预判卡型', async () => {
     const context = createSpaceContext({ context: () => ({}), settings: () => ({}), readCalendarText: () => '旧纪年｜风月30天、雨月31天｜classical' });
     const messages = await context.buildMessages({ target: {}, userMsg: '把雨月改成32天，其他照旧', historySnapshot: [] });

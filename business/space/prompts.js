@@ -152,6 +152,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         authorNote  ? `\n【作者注释（当前聊天）】\n${authorNote}` : '',
         storyDate ? `\n【当前故事日期证据】\n${storyDate}` : '',
         outlineRaw ? `\n【当前正式面完整规划｜仅用于规划和编辑定位，不能作为已发生证据】\n${outlineRaw}` : '',
+        wiContext || requestedMaterials.worldInfoDirectory ? '【世界书读法】世界书正文是本轮命中的条目。询问书里有哪些条目时参考已提供的标题目录，具体内容依据已读正文。资料不足时按已读范围回答。' : '',
         wiContext,
         memText ? `\n【故事记忆】\n${memText}` : '',
         recentCtx,

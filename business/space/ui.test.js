@@ -6,7 +6,7 @@ import { appendSpaceAssistant } from './schema.js';
 import { createAxisWidgetActions } from '../axis/widget.js';
 import { createSpaceRepository } from './repository.js';
 
-function pageUiFixture(pages = ['1', '2']) {
+function pageUiFixture(pages = ['1', '2'], options = {}) {
     const target = { chatId: 'page-ui', historyKey: 'page-ui-history' };
     let saved = { version: 1, pages, messages: pages.map(id => ({ role: 'user', content: `窗口${id}记录`, pageId: id })) };
     let writable = true, confirm = true, busy = false;
@@ -31,17 +31,75 @@ function pageUiFixture(pages = ['1', '2']) {
     const ui = createSpaceUi({
         query: node, element: node, $: value => typeof value === 'string' ? node(Symbol()) : value,
         confirm: async options => { confirmations.push(options); return confirm; },
+        saveSpaceNote: options.saveSpaceNote,
+        hasSpaceNote: options.hasSpaceNote,
+        toast: options.toast,
     });
     ui.bindControllers({ repository, chat: { history: repository.history, get busy() { return busy; } }, renderer: createSpaceRenderer() });
     ui.bind(); ui.renderHistory(repository.history());
     return {
         ui, repository, writes, confirmations, node,
         close: id => handlers.get('click.spSpaceFeature [data-space-close-page]').call(node(`close-${id}`).attr('data-space-close-page', id), { stopPropagation() {} }),
+        favorite: index => {
+            const button = node(`favorite-${index}`);
+            button.closest = () => node(`message-${index}`).attr('data-idx', String(index));
+            return handlers.get('click.spSpaceFeature .sp-chat-msg-actions > button.sp-chat-msg-favorite').call(button);
+        },
         add: () => handlers.get('click.spSpaceFeature #sp-space-add-page')({ stopPropagation() {} }),
         key: key => handlers.get('keydown.spSpaceFeature [data-space-page]')({ key, preventDefault() {} }),
         setConfirm: value => { confirm = value; }, setWritable: value => { writable = value; }, setBusy: value => { busy = value; },
     };
 }
+
+test('the Space bubble bookmarks its complete text once while the write is pending', async () => {
+    let finish;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const requests = [], toasts = [];
+    const f = pageUiFixture(['1', '2'], {
+        saveSpaceNote: note => { requests.push(note); return pending; },
+        toast: (...args) => toasts.push(args),
+    });
+    f.ui.switchPage('2');
+    const save = f.favorite(1);
+    assert.equal(f.node('favorite-1').attr('data-favorite-state'), 'pending');
+    await f.favorite(1);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].text, '窗口2记录');
+    assert.ok(requests[0].id);
+    assert.equal(toasts.length, 0);
+    finish(requests[0]);
+    await save;
+    assert.equal(toasts[0][0], '已收藏到坐标');
+    assert.equal(f.node('favorite-1').attr('data-favorite-state'), 'saved');
+    assert.equal(f.node('favorite-1').attr('aria-label'), '已收藏到坐标');
+    const id = requests[0].id;
+    assert.deepEqual(f.repository.history()[1].coordinateNote, { id, chatId: 'page-ui' });
+    assert.equal(f.writes[0].messages[1].coordinateNote.id, id);
+    f.repository.load();
+    f.ui.switchPage('1');
+    f.ui.switchPage('2');
+    assert.equal(await f.close('2'), true);
+    assert.deepEqual(f.repository.history().map(message => message.pageId), ['1']);
+    assert.equal(requests[0].text, '窗口2记录');
+});
+
+test('a failed bookmark returns to the unfilled state and can retry', async () => {
+    const requests = [];
+    const f = pageUiFixture(['1'], {
+        saveSpaceNote: note => {
+            requests.push(note.id);
+            return requests.length === 1 ? Promise.reject(new Error('save failed')) : Promise.resolve(note);
+        },
+    });
+    await f.favorite(0);
+    assert.equal(f.node('favorite-0').attr('data-favorite-state'), 'idle');
+    assert.equal(f.node('favorite-0').prop('disabled'), false);
+    assert.equal(f.writes.length, 0);
+    await f.favorite(0);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0], requests[1]);
+    assert.equal(f.node('favorite-0').attr('data-favorite-state'), 'saved');
+});
 
 test('关闭当前窗口切回另一页并还原草稿和滚动，重新新增的页没有旧草稿', async () => {
     const f = pageUiFixture();
