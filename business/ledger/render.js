@@ -321,10 +321,10 @@ export function renderLedgerSheet({ includeControls = true } = {}) {
            </div>`
         : '';
     if (!entries.length) {
-        const hint = busy ? '正在标注…'
-            : autoCaptureOn
-                ? '暂无活跃刻度条目。聊几楼后自动标注，或点右上「立即标注」。'
-                : '暂无活跃刻度条目。当前不会自动标注；点右上「立即标注」可手动标注。';
+        let hint = '暂无活跃刻度条目。点上方「标注」可手动标注。';
+        if (busy) hint = '正在标注…';
+        else if (s.ledgerCaptureEnabled !== true) hint = '暂无活跃刻度条目。开启刻度功能后可标注。';
+        else if (autoCaptureOn) hint = '暂无活跃刻度条目。聊几楼后自动标注，或点上方「标注」。';
         const initialized = env.getLedgerCaptureStatus?.()?.initialized === true;
         const initHint = initialized ? '' : '<div>世界书初始化：待首次标注</div>';
         return (includeControls ? renderLedgerControls() : '') + `<div class="sp-ledger-empty"><div>${hint}</div>${initHint}</div>` + archive;

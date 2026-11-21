@@ -135,6 +135,7 @@ export function createLinesGenerationController(env = {}) {
             reportPhase('message-assembly');
             const beforeCall = env.readSaved() || {};
             if (!lineStoreMatches(beforeCall, commitBaseline.store)) return { status: 'cancelled', reason: 'stale-baseline' };
+            if (env.canGenerate?.(silent) === false) return { status: 'skipped', reason: 'lines-disabled' };
             const raw = await waitForSignal(env.callApi(prompt, signal, {
                 ...(travelContext || {}),
                 ...(swipeCtx?.forceReroll || swipeCtx?.reroll ? { reroll: true, module: 'lines' } : {}),

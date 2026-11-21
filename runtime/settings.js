@@ -44,11 +44,11 @@ export const DEFAULT_SETTINGS = {
     uiFontUrl   : 'https://fontsapi.zeoseven.com/387/main/result.css',  // 字体 CSS(@font-face) 的 URL：经动态 <link> 引入。默认＝zeoseven 387 有爱圆体(Nowar Rounded TW Wc)，unicode-range 分片、移动端友好。留空=不加载网络字体、只用系统栈
     uiFontFamily: 'Nowar Rounded TW Wc',                                // 生效字体 family 名：写进 --sp-font-user。须与 uiFontUrl 那份 CSS 里 @font-face 声明的 font-family 完全一致，否则加载了也不生效
     notifyMode: 'lite',  // 通知提醒档：'off'=全静音 / 'lite'(默认)=仅你手动生成·刷新时提示 / 'full'=另在后台自动改动点线面历时提示（真改动才弹）
-    linesEnabled : true, // master switch: false disables line generation/advance and latent injection; inline display is independently controlled
+    linesEnabled : true, // 线功能：控制手动生成、手动和自动推进以及潜伏注入
     linesInterval: 2,
     linesMode: 'turns',  // 'turns' | 'days' | 'manual'
     linesInject: false,  // 潜伏注入：活跃线隐形注入主楼 AI（IN_CHAT/SYSTEM）；默认关（改 AI 行为+token 成本，opt-in）
-    dashedEnabled: false, // 冷知识自动生成/楼层展示：跟线多生成两条；历史与面板手动生成不受此开关删除或阻断
+    dashedEnabled: false, // 冷知识功能：控制手动生成、随线生成与楼层展示，已有条目仍可在面板查看
     dashedCleanupEnabled: true, // 冷知识历史自动清理：只限制未锁条目，锁定项不计入数量
     dashedKeepCount: 15,
     outlineInject: false,       // 大纲自动注入：开启后每 N 楼独立判定剧情推进到哪个节点，把当前/下个节点隐形注入主楼 AI。多判定 API 调用，默认关 opt-in
@@ -68,16 +68,14 @@ export const DEFAULT_SETTINGS = {
     almanacAutoDetect    : true,  // 读不到戳时用 API 兜底判定（戳关时＝历自动判定总开关，回落老行为）
     almanacJudgeInterval : 3,     // API 兜底节奏：每几条 AI 回复兜底一次
     scheduleAutoDetect   : false, // 点·后台自动跟随「今天」：开＝历今天变了自动重排点（多一次 API）；关（默认）＝只手动刷新点时对齐今天
-    // 暗账·标注：每 N 楼构画 AI 从正文捞「需按时间追踪」的新事件写入 sp-ledger（伤情/身心/约定/周期）。
-    // 独立开关+间隔，关掉即不触发 API；默认关（opt-in，多一路后台判定+API 成本，照 outlineInject 的克制）。
-    ledgerCaptureEnabled : false, // 暗账标注：默认关
-    ledgerCaptureInterval: 5,     // 标注节奏：0 关闭自动标注；手动标注仍可用
-    ledgerJudgeInterval  : 4,     // 判定节奏：0 关闭自动更新；手动更新仍可用
+    ledgerCaptureEnabled : false, // 刻度功能：控制手动和自动标注、更新及潜伏注入
+    ledgerCaptureInterval: 5,     // 刻度开启时，0 设为只手动标注
+    ledgerJudgeInterval  : 4,     // 刻度开启时，0 设为只手动更新
     ledgerHistoryScope   : 'recent', // 首次来源溯源范围：all / recent / custom
     ledgerHistoryLimit   : 50,       // recent 模式读取的有效可见 AI 楼数量
     ledgerHistoryStartFloor: 0,      // custom 模式真实楼号（含）
     ledgerHistoryEndFloor  : 999999, // custom 模式真实楼号（含）
-    ledgerInject         : false, // 暗历潜伏注入主楼 AI：默认关（opt-in，多一路注入+略增 token，照 linesInject/outlineInject 的克制）
+    ledgerInject         : false, // 刻度潜伏注入主楼 AI，需开启刻度功能和潜伏注入总闸
     // Memory system
     memoryEnabled  : true,
     memoryL0Group  : 5,    // AI floors per L0 entry

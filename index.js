@@ -19,7 +19,7 @@ import { SPACE_NOTE_KIND } from './business/coordinate/schema.js';
 import * as store from './store.js';
 import { bindStoreViewFallback, keyDesc, readStore, writeStore, writeStoreConfirmed, removeStore } from './store.js';
 import * as ledger from './business/ledger/repository.js';
-import { normalizeLedgerInterval } from './business/ledger/settings.js';
+import { ledgerGenerationBlock, normalizeLedgerInterval } from './business/ledger/settings.js';
 import * as theaterDeviceCache from './runtime/theater-device-cache.js';
 import { createTheaterHostPorts } from './runtime/theater-host-ports.js';
 import { createUserNameMask } from './ui/user-name-mask.js';
@@ -808,9 +808,11 @@ async function runLedgerCaptureWithFeedback(manual, travelContext) {
     }
     return result;
 }
-const runLedgerCaptureStep = (manual = false, travelContext = null) => pluginEnabled()
-    ? runLedgerCaptureWithFeedback(manual, travelContext)
-    : Promise.resolve({ status: 'skipped', reason: 'plugin-disabled' });
+const runLedgerCaptureStep = (manual = false, travelContext = null) => runLedgerStep(runLedgerCaptureWithFeedback, manual, travelContext);
+async function runLedgerStep(run, manual, travelContext) {
+    if (!pluginEnabled()) return { status: 'skipped', reason: 'plugin-disabled' };
+    return ledgerGenerationBlock(getSettings(), showToast, manual, travelContext) || run(manual, travelContext);
+}
 const ledgerInjectionController = createLedgerInjectionController({
     context: getContext,
     enabled: injectEnabled,
@@ -879,9 +881,7 @@ async function runLedgerJudgeWithFeedback(manual, travelContext) {
     }
     return result;
 }
-const runLedgerJudgeStep = (manual = false, travelContext = null) => pluginEnabled()
-    ? runLedgerJudgeWithFeedback(manual, travelContext)
-    : Promise.resolve({ status: 'skipped', reason: 'plugin-disabled' });
+const runLedgerJudgeStep = (manual = false, travelContext = null) => runLedgerStep(runLedgerJudgeWithFeedback, manual, travelContext);
 const ledgerInlineRenderer = createLedgerInlineRenderer({
     settings: getSettings,
     calendar: loadCalDesc,
@@ -1370,7 +1370,7 @@ function collectTimeTravelContext(sourceDate, targetDate) {
     const injectionState = {
         linesInjected: injectionOn && settings.linesEnabled !== false && settings.linesInject === true && lines.length > 0,
         outlineInjected: outline.length > 0,
-        ledgerInjected: injectionOn && settings.ledgerInject === true && ledgerInjectionController.echo.length > 0,
+        ledgerInjected: injectionOn && settings.ledgerCaptureEnabled === true && settings.ledgerInject === true && ledgerInjectionController.echo.length > 0,
     };
     return { sourceDate, targetDate, calendar, anniversaries, targetWeekday, outline, outlineCursor, lines, injectionState };
 }
@@ -1610,7 +1610,7 @@ const MODULE_INTROS = {
         _iSub('刻度') +
         _iText('“标注”从正文提取时间账，“更新”刷新现状；依据前一条 AI 正文，最新回复在下一条出现后纳入。') +
         _iText('编辑保存后自动锁定；锁定项不受 AI 更新。“暂停埋入”只停注入；“了结”移入归档，可捞回或彻底删除。') +
-        _iText('刻度自动任务默认关闭；在推进设置开启“刻度”后按标注／更新间隔运行，0 分别关闭。潜伏注入需总开关和刻度开关。') +
+        _iText('在功能与内容开关开启「刻度」后，可手动标注和更新，再按推进设置的间隔运行自动任务。间隔为 0 时只手动执行对应任务。潜伏注入还需开启注入总闸与刻度注入。') +
         _iText('「间」可追加轴日期或应用整套历法；旧日期的编辑、删除及刻度操作在轴页完成。'),
     lines:
         _iLede('「线」追踪平行事件与冷知识。平行事件首次最多八条，后续按剧情自然增减。') +
@@ -1618,8 +1618,8 @@ const MODULE_INTROS = {
         _iKey('player-track-next', '推进', '更新已有线，也可能新增或结束事件') +
         _iKey('history', '历史版本', '预览并恢复最近十份旧版；恢复前的当前版也会保留') +
         _iKey('dots-vertical', '事件菜单', '编辑、锁定、注入或删除单条线；注入先填入输入框') +
-        _iText('推进可按回合、日期或手动进行，在推进设置中选择。潜伏注入需同时开启总开关和线开关。') +
-        _iText('冷知识开关控制随线自动生成和楼内显示，手动面板始终可用。新增或修改事件线也可去「间」讨论后应用。'),
+        _iText('生成与推进需要开启「线」。推进可按回合、日期或手动进行，在推进设置中选择。潜伏注入还需开启注入总闸与线注入。') +
+        _iText('开启「冷知识」后可在面板新增、在楼层换一条，也可随线自动生成。已有冷知识可在面板查看。新增或修改事件线也可去「间」讨论后应用。'),
     outline:
         _iLede('「面」管理正式剧情大纲与当前节点。重新生成会替换整份大纲；「间」里的草稿需点击应用才替换，并从第一节点开始。') +
         _iKey('box', '去间讨论', '切到间并预填讨论开头，仍需手动发送') +
@@ -2513,7 +2513,7 @@ jQuery(async () => {
         // 轴日历块：独立于线主开关，刷新当前渲染窗口（最新 AI 楼读活态，历史楼读快照；只读，无生成）
         syncLatestAlmanacBlock();
         syncLatestScheduleBlock();   // 点·日程条：同上，随新楼补挂（只读）
-        // Master switch: linesEnabled=false disables auto-advance + inline block
+        // 线功能关时跳过自动推进与线的楼内处理。
         if (getSettings().linesEnabled === false) return;
         const mid = Number(messageId);
         const autoSuppressed = isAutomationSuppressed(mid, AUTOMATION_MODULES.LINES);
@@ -2690,11 +2690,12 @@ jQuery(async () => {
     };
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.ledgerJudge);
     // 暗历·注入重算（场景感知）：每出一楼就按最新正文重挑注入集——纯 JS 打分、零 API，故不设间隔/单调闸，
-    // 让选择跟着场景走（正文提到谁/什么标签，那条就浮上来）。仅 ledgerInject 开时干活（refresh 内部再兜一层门控）。
+    // 让选择跟着场景走（正文提到谁/什么标签，那条就浮上来）。刻度和刻度注入均开启时重算。
     if (_stListeners.ledgerInjectRescore) eventSource.removeListener?.(event_types.CHARACTER_MESSAGE_RENDERED, _stListeners.ledgerInjectRescore);
     _stListeners.ledgerInjectRescore = async (messageId) => {
         if (!pluginEnabled()) return;
-        if (getSettings().ledgerInject !== true) return;
+        const settings = getSettings();
+        if (settings.ledgerCaptureEnabled !== true || settings.ledgerInject !== true) return;
         const chat = getContext().chat;
         if (!Array.isArray(chat) || messageId !== chat.length - 1) return;   // 只跟最新楼，别为改旧楼空转
         // 先重挑注入集（更新 ledger injection controller echo），再刷窗——本监听器在 char 之后触发，char 那趟冻的是
@@ -3852,6 +3853,7 @@ function injectModal() {
                                                 <input id="sp-dashed-keep-count" class="sp-input sp-interval-input" type="number" min="2" step="1" value="${escapeAttr(String(linesFeature.dashed.normalizeKeepCount(getSettings().dashedKeepCount)))}" ${getSettings().dashedCleanupEnabled !== false ? '' : 'disabled'} aria-label="保留最近多少条未锁冷知识">
                                             </div>
                                             <label class="sp-mode-opt"><input type="checkbox" id="sp-ledger-capture-enabled" ${getSettings().ledgerCaptureEnabled === true ? 'checked' : ''}><span>刻度</span></label>
+                                            <p class="sp-cfg-hint">线控制手动生成和推进、自动推进与潜伏注入。冷知识控制手动生成、随线生成与楼内显示。刻度控制手动和自动标注、更新与潜伏注入。</p>
                                         </div>
                                     </details>
 
@@ -3915,7 +3917,7 @@ function injectModal() {
                                         <div class="sp-settings-section-body">
                                             <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-capture-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerCaptureInterval()))}"><span>条 AI 回复标注一次</span></label>
                                             <label class="sp-mode-opt"><span>每</span><input id="sp-ledger-judge-interval" class="sp-input sp-interval-input" type="number" min="0" max="30" value="${escapeAttr(String(getLedgerJudgeInterval()))}"><span>条 AI 回复更新一次现状</span></label>
-                                            <p class="sp-cfg-hint">间隔设为 0 可关闭对应自动任务；手动标注和更新仍可使用。默认每 5 条自动标注、每 4 条自动更新现状。依据前一条 AI 正文标注和更新，最新回复在下一条 AI 出现后纳入。</p>
+                                            <p class="sp-cfg-hint">刻度开启时，间隔设为 0 只关闭对应自动任务，仍可手动标注或更新。默认每 5 条自动标注、每 4 条自动更新现状。依据前一条 AI 正文标注和更新，最新回复在下一条 AI 出现后纳入。</p>
                                             <p class="sp-cfg-group">首次历史溯源范围</p>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="recent" ${getSettings().ledgerHistoryScope !== 'all' && getSettings().ledgerHistoryScope !== 'custom' ? 'checked' : ''}><span>最近</span><input id="sp-ledger-history-limit" class="sp-input sp-interval-input" type="number" min="1" max="500" value="${escapeAttr(String(Math.max(1, Math.min(500, Number(getSettings().ledgerHistoryLimit) || 50))))}"><span>个有效历史角色回复（默认）</span></label>
                                             <label class="sp-mode-opt"><input type="radio" name="sp-ledger-history-scope" value="all" ${getSettings().ledgerHistoryScope === 'all' ? 'checked' : ''}><span>全部有效历史角色回复</span></label>
@@ -4028,7 +4030,7 @@ function injectModal() {
                         <div class="sp-lines-wrap" id="sp-lines-wrap" style="display:none">
                             <div class="sp-lines-toolbar" id="sp-lines-toolbar"></div>
                             <div class="sp-lines-list" id="sp-lines-list">
-                                <div class="sp-empty">${icon("line")}<p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>
+                                ${renderEmptyLinesState()}
                             </div>
                         </div>
 
@@ -4683,6 +4685,7 @@ function injectModal() {
         saveSettingsDebounced();
         // Refresh chat area: on → back-fill latest floor with block; off → clear all
         backfillLinesInlineBlocks();
+        if (linesMode) linesFeature.refreshPanel();
     });
     // 线·楼内块显隐开关（独立于线主开关 linesEnabled）：立刻生效。渲染窗口按段开关重算所有窗内楼。
     // 线的推进与潜伏注入不受影响（refreshLinesInjection 另在 backfill/sync 路径）。
@@ -4754,7 +4757,7 @@ function injectModal() {
         refreshStoryClockInjection({ announce: true });
         if (axisState.almanacMode) renderAlmanacPanel();
     });
-    // 冷知识自动开关：off 只停随线生成与楼层展示，历史保留并仍可在线面板查看。
+    // 冷知识开关管生成和楼内显示，已有冷知识仍可在线面板查看。
     $in('#sp-dashed-enabled').on('change', function () {
         getSettings().dashedEnabled = this.checked;
         saveSettingsDebounced();
@@ -4863,6 +4866,10 @@ function injectModal() {
         getSettings().ledgerCaptureEnabled = this.checked;
         saveSettingsDebounced();
         ledgerCaptureCounter = 0;
+        ledgerJudgeCounter = 0;
+        refreshLedgerInjection();
+        refreshInlineWindow(true);
+        if (axisState.almanacMode && axisState._almanacSheet === 'ledger') renderAlmanacPanel();
     });
     $in('#sp-ledger-capture-interval').on('change', function () {
         const n = normalizeLedgerInterval(this.value, 5);
@@ -8226,7 +8233,8 @@ function bindStorageHandlers() {
 
 
 function renderEmptyLinesState() {
-    return `<div class="sp-empty">${icon("line")}<p>还没有追踪的线，可以生成一版</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>`;
+    const hint = getSettings().linesEnabled === false ? '还没有追踪的线，开启线功能后可生成' : '还没有追踪的线，可以生成一版';
+    return `<div class="sp-empty">${icon("line")}<p>${hint}</p><button class="sp-gen-btn" id="sp-gen-lines-now">生成线</button></div>`;
 }
 
 async function triggerGenerateLines() {

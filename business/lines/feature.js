@@ -58,6 +58,11 @@ export function createLinesFeature(env = {}) {
     const swipeStore = env.swipeStore || createSwipeLinesStore({ storage: env.storage });
     const injection = env.injection || (env.injectionEnv && createLinesInjectionController(env.injectionEnv));
     const dashed = env.dashed || (env.dashedEnv && createDashedModule({ ...env.dashedEnv, refreshPanel: () => refreshPanel?.(true), refreshInline: () => syncInline?.() }));
+    const canGenerate = silent => {
+        if (env.getSettings?.()?.linesEnabled !== false) return true;
+        if (!silent) (env.actionsEnv?.toast || env.toast)?.('请先开启线功能');
+        return false;
+    };
     let historyBusy = false;
     let pendingHistoryRestore = null;
     let autoAdvanceQueueEpoch = 0;
@@ -76,6 +81,7 @@ export function createLinesFeature(env = {}) {
     const generation = env.generation || (env.generationEnv && createLinesGenerationController({
         ...env.generationEnv,
         timeLimits: env.timeLimits || env.generationEnv.timeLimits,
+        canGenerate,
         owners,
         runtime,
         commit: async (...args) => {
@@ -106,6 +112,7 @@ export function createLinesFeature(env = {}) {
     const actions = env.actions || (env.actionsEnv && createLinesActions({
         ...env.actionsEnv,
         timeLimits: env.timeLimits || env.actionsEnv.timeLimits,
+        canGenerate,
         isBusy: () => runtime.busy || historyBusy,
         resetCounter: () => { lifecycle.counter = 0; },
         render: raw => renderLines(raw),
@@ -242,6 +249,7 @@ export function createLinesFeature(env = {}) {
         while (pendingAutoAdvance) {
             const intent = pendingAutoAdvance;
             pendingAutoAdvance = null;
+            if (!canGenerate(true)) continue;
             if (intent.queueEpoch !== autoAdvanceQueueEpoch) continue;
             const stillCurrent = () => intent.queueEpoch === autoAdvanceQueueEpoch;
             if (!stillCurrent()) continue;

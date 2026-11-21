@@ -3,6 +3,7 @@ import { ledgerOwnerIdentity, sameLedgerOwner } from './owner.js';
 import { createGenerationDiagnosticScope, diagnosticMessage, makeDiagnosticError, runGenerationUiEffect } from '../../api/diagnostics.js';
 import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { ledgerEntryWithinCutoff } from './date.js';
+import { ledgerGenerationBlock } from './settings.js';
 // 刻度捕获纯依赖：只负责正文楼层/来源窗口与稳定性，不执行 API 或落库。
 export const LEDGER_EVENT_TYPES = `【什么算刻度事件】会随时间推移改变状态、或到某天该发生的事，典型三类：
 - 持续状态：身体伤情 / 病症、怀孕、会持续影响后续行为、关系或状态的情绪／心理影响等——会随天数自然演变（如割伤→结痂→愈合）。单场景的一过性心情不记。
@@ -398,6 +399,8 @@ function createPersistentLedgerCaptureController(options) {
             }
             const captureFloor = floorContext.floor;
             if (!checkpoint) {
+                const blocked = ledgerGenerationBlock(env.settings?.(), env.toast, manual, travel);
+                if (blocked) return blocked;
                 const prompt = env.appendTravel?.(buildCapturePrompt(first), travel) || buildCapturePrompt(first);
                 const recentVisible = visibleRecords.slice(-CAPTURE_CONTEXT_FLOORS);
                 let raw;
@@ -451,6 +454,8 @@ function createPersistentLedgerCaptureController(options) {
             progress = { done: checkpoint.nextBatchIndex, total: batches.length }; env.setProgress?.(progress.done, progress.total, ctrl);
             for (let i = checkpoint.nextBatchIndex; i < batches.length && checkpoint?.candidates?.length; i++) {
                 if (!current(ctrl, chatId, ownerSnapshot, travel, floorContext.floor)) return { status: 'cancelled', reason: ctrl.signal.aborted ? 'aborted' : 'source-stale-chat', stale: !ctrl.signal.aborted };
+                const blocked = ledgerGenerationBlock(env.settings?.(), env.toast, manual, travel);
+                if (blocked) return blocked;
                 const batch = batches[i], batchMap = ledgerSourceMap(batch.flatMap(record => record.sources || []));
                 // 本批请求发出前钉住刻度基线。API 等待期间的用户增删改锁
                 // 必须令本批保存失败，不能被请求返回后的新 revision 吸收。

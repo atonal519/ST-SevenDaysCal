@@ -24,6 +24,8 @@ function setup(chat = fixtureChat(), sourceToken = 'F5E') {
     const ctx = { chatId: 'ledger-fixture', characterId: 0, name1: 'User', name2: 'Character', characters: [{ avatar: 'fixture.png' }], chat };
     const requests = [], writes = [], toasts = [], entries = [];
     let onRequest = () => {};
+    let reconcile = async () => ({ summary: { changed: false } });
+    let confirm = async () => true;
     bindStoryClock({ loadCalendar: () => calendar, defaultCalendar: calendar, validMonthDay: value => value?.month >= 1 && value.month <= 12 && value.day >= 1 && value.day <= 31 ? value : null, validRealDate: () => true });
     bindLedgerSchema({ parseJudgedDate });
     bindLedgerCapture({ context: () => ctx, parseClock: parseStoryClock, parseDate: parseJudgedDate, calendarForFloor: () => calendar, stripTags: value => value.replace(/<!--\s*SDC-(?:start|end)[\s\S]*?-->/g, ''), settings: () => ({ ledgerHistoryScope: 'all' }), systemTypes: { HELP: 'help' } });
@@ -31,11 +33,57 @@ function setup(chat = fixtureChat(), sourceToken = 'F5E') {
     bindLedgerSelect({ ledgerDaysSince, ledgerDueInfo });
     const state = { initialized: true, checkpoint: null, ledgerRevision: 'fixture-revision' };
     const entry = { id: 'L1', 事由: '左手伤口', 类型: '持续状态', 现状: '仍在流血。', 标签: ['伤口'], 起始锚: { 楼层: 1, 历日期: date(1) } };
-    const common = { context: () => ctx, charKey: () => 'fixture-character', target: () => null, config: () => ({ url: 'offline', key: 'offline' }), calendar: () => calendar, validDate: value => value?.month && value?.day ? value : null, today: () => date(8), settings: () => ({ ledgerHistoryScope: 'all', notifyMode: 'off' }), toast: value => toasts.push(value), appendTravel: value => value };
+    const settings = { ledgerCaptureEnabled: true, ledgerHistoryScope: 'all', notifyMode: 'off' };
+    const common = { context: () => ctx, charKey: () => 'fixture-character', target: () => null, config: () => ({ url: 'offline', key: 'offline' }), calendar: () => calendar, validDate: value => value?.month && value?.day ? value : null, today: () => date(8), settings: () => settings, toast: value => toasts.push(value), appendTravel: value => value, confirm: () => confirm() };
     const capture = createLedgerCaptureController({ ...common, captureState: () => state, parseCaptureDetailed: parseLedgerCaptureDetailed, listEntries: () => entries, callApi: async (...args) => { requests.push(args); onRequest(); return `左手伤口｜持续状态｜Character｜伤口｜伤口仍在流血。｜｜｜${sourceToken}`; }, applyAtomic: async plan => { writes.push(plan); return { ok: true, commitState: 'local-applied', added: plan.additions, patched: plan.patches }; } });
-    const judge = createLedgerJudgeController({ ...common, floorContext: ledgerFloorDateContext, listJudgeable: () => [entry], fmtLedger: fmtLedgerForJudge, getEntry: () => entry, reconcile: async () => ({ summary: { changed: false } }), callApi: async (...args) => { requests.push(args); onRequest(); return 'L1｜伤口已止血。｜维持｜'; }, parseJudge: parseLedgerJudge, applyAtomic: async changes => { writes.push(changes); return { ok: true, commitState: 'local-applied' }; } });
-    return { ctx, requests, writes, toasts, state, entry, entries, capture, judge, onRequest: fn => { onRequest = fn; } };
+    const judge = createLedgerJudgeController({ ...common, floorContext: ledgerFloorDateContext, listJudgeable: () => [entry], fmtLedger: fmtLedgerForJudge, getEntry: () => entry, reconcile: () => reconcile(), callApi: async (...args) => { requests.push(args); onRequest(); return 'L1｜伤口已止血。｜维持｜'; }, parseJudge: parseLedgerJudge, applyAtomic: async changes => { writes.push(changes); return { ok: true, commitState: 'local-applied' }; } });
+    return { ctx, requests, writes, toasts, state, entry, entries, capture, judge, settings, onRequest: fn => { onRequest = fn; }, onReconcile: fn => { reconcile = fn; }, onConfirm: fn => { confirm = fn; } };
 }
+
+for (const kind of ['capture', 'judge']) {
+    test(`closing the ledger switch during ${kind} preparation blocks model dispatch`, async () => {
+        const fixture = kind === 'capture' ? setup(Array.from({ length: 8 }, (_, index) => ai(`AI ${index}`, 2))) : setup();
+        if (kind === 'capture') {
+            fixture.state.initialized = false;
+            fixture.onConfirm(async () => { fixture.settings.ledgerCaptureEnabled = false; return true; });
+        } else {
+            fixture.onReconcile(async () => { fixture.settings.ledgerCaptureEnabled = false; return { summary: { changed: false } }; });
+        }
+        const step = fixture[kind];
+        const outcome = await step.run(true);
+        assert.equal(fixture.settings.ledgerCaptureEnabled, false);
+        assert.equal(fixture.requests.length, 0);
+        assert.deepEqual(fixture.writes, []);
+        assert.equal(outcome.reason, 'ledger-disabled');
+        assert.deepEqual(fixture.toasts, ['请先开启刻度功能']);
+        assert.equal(step.isBusy, false);
+    });
+}
+
+test('ledger injection clears and restores when its feature switch changes', () => {
+    const h = setup();
+    h.settings.ledgerInject = true;
+    const prompts = [];
+    let reads = 0;
+    h.ctx.setExtensionPrompt = (key, value) => prompts.push([key, value]);
+    const injection = createLedgerInjectionController({
+        context: () => h.ctx, enabled: () => true, settings: () => h.settings,
+        entries: () => { reads++; return [h.entry]; }, select: entries => entries,
+    });
+    injection.refresh();
+    assert.match(prompts.at(-1)[1], /左手伤口/);
+    h.settings.ledgerCaptureEnabled = false;
+    injection.refresh();
+    assert.deepEqual(prompts.at(-1), ['sp_ledger_remind', '']);
+    assert.equal(reads, 1);
+    assert.deepEqual(injection.echo, []);
+    h.settings.ledgerCaptureEnabled = true;
+    injection.refresh();
+    assert.match(prompts.at(-1)[1], /左手伤口/);
+    h.settings.ledgerInject = false;
+    injection.refresh();
+    assert.deepEqual(prompts.at(-1), ['sp_ledger_remind', '']);
+});
 
 test('persistent capture bounds recent source tokens, request context and saved anchors to the previous eligible AI', async () => {
     const h = setup();
@@ -149,7 +197,7 @@ test('a legitimate stored latest-floor entry stays intact until the cutoff reach
     assert.equal(h.writes[0].patches.length, 0, 'older capture does not overwrite a later stored state');
     const prompts = [];
     h.ctx.setExtensionPrompt = (_key, text) => prompts.push(text);
-    const injection = createLedgerInjectionController({ context: () => h.ctx, floorContext: ledgerFloorDateContext, enabled: () => true, settings: () => ({ ledgerInject: true }), entries: () => [h.entry], select: selectLedgerForInject, daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo, narrative: message => !message.is_user && !message.is_system });
+    const injection = createLedgerInjectionController({ context: () => h.ctx, floorContext: ledgerFloorDateContext, enabled: () => true, settings: () => ({ ledgerCaptureEnabled: true, ledgerInject: true }), entries: () => [h.entry], select: selectLedgerForInject, daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo, narrative: message => !message.is_user && !message.is_system });
     injection.refresh();
     assert.equal(prompts.at(-1), '');
     assert.deepEqual(h.entry, before);
@@ -163,7 +211,7 @@ test('ledger injection and salience share the confirmed scene and explicit date'
     const entry = { ...h.entry, 事由: '归还借书', 类型: '约定待办', 标签: ['LATEST_UNCONFIRMED_BODY'], 到期锚: { 历日期: date(10) } };
     const prompts = [];
     h.ctx.setExtensionPrompt = (_key, value) => prompts.push(value);
-    const injection = createLedgerInjectionController({ context: () => h.ctx, floorContext: ledgerFloorDateContext, enabled: () => true, settings: () => ({ ledgerInject: true }), entries: () => [entry], select: selectLedgerForInject, today: () => date(8), daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo, narrative: message => !message.is_user && !message.is_system, stripTags: value => value });
+    const injection = createLedgerInjectionController({ context: () => h.ctx, floorContext: ledgerFloorDateContext, enabled: () => true, settings: () => ({ ledgerCaptureEnabled: true, ledgerInject: true }), entries: () => [entry], select: selectLedgerForInject, today: () => date(8), daysSince: ledgerDaysSince, dueInfo: ledgerDueInfo, narrative: message => !message.is_user && !message.is_system, stripTags: value => value });
     injection.refresh();
     assert.equal(prompts.at(-1), '', 'eight days before due is not injected via latest scene or axis date');
     entry.到期锚.历日期 = date(3);

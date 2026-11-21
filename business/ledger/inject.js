@@ -49,7 +49,8 @@ export function createLedgerInjectionController(options = {}) {
         refresh() {
             const ctx = options.context?.();
             if (typeof ctx?.setExtensionPrompt !== 'function') return;
-            if (!options.enabled?.() || options.settings?.().ledgerInject !== true) { clear(ctx); return; }
+            const settings = options.settings?.();
+            if (!options.enabled?.() || settings?.ledgerCaptureEnabled !== true || settings.ledgerInject !== true) { clear(ctx); return; }
             const floorContext = options.floorContext?.();
             if (floorContext && floorContext.floor == null) { clear(ctx); return; }
             const today = floorContext ? floorContext.date : options.today?.();

@@ -882,6 +882,82 @@ test('actions runExclusive invokes precheck and generation only once under concu
     assert.equal(prechecks, 1); assert.equal(generations, 1);
 });
 
+function manualLinesSwitchFixture({ linesEnabled, precheck = () => ({ proceed: true }), draw = () => drawTickets(1, { seed: 'manual-lines-switch' }) }) {
+    const settings = { linesEnabled };
+    const effects = [];
+    const toasts = [];
+    const chatId = 'manual-lines-switch';
+    let saved = { raw: '', ts: 1 };
+    const feature = createLinesFeature({
+        getSettings: () => settings,
+        chatId: () => chatId, cacheKey: () => chatId,
+        onBusyChange: busy => effects.push(busy ? 'busy' : 'idle'),
+        readSaved: () => saved, readRaw: () => saved.raw,
+        writeStore: (_key, value) => { effects.push('write'); saved = value; return true; },
+        actionsEnv: {
+            toast: message => toasts.push(message),
+            precheck: () => { effects.push('precheck'); return precheck(); },
+        },
+        generationEnv: {
+            chatId: () => chatId, cacheKey: () => chatId,
+            loadConfig: () => ({ url: 'fixture', key: 'fixture' }), readSaved: () => saved,
+            drawTickets: draw, vectorCapacity: 8,
+            buildPrompt: (_raw, _travel, { intent }) => intent,
+            callApi: async intent => { effects.push(`model:${intent}`); return freshRaw; },
+        },
+    });
+    return { feature, settings, effects, toasts, readSaved: () => saved };
+}
+
+test('manual line generation and advance stay idle until the feature is enabled', async () => {
+    const { feature, settings, effects, toasts, readSaved } = manualLinesSwitchFixture({ linesEnabled: false });
+
+    await feature.generate();
+    await feature.actions.advance();
+    assert.deepEqual(effects, [], 'disabled clicks leave busy state, memory, the model, and storage untouched');
+    assert.deepEqual(toasts, ['请先开启线功能', '请先开启线功能']);
+
+    settings.linesEnabled = true;
+    assert.equal((await feature.generate()).status, 'updated');
+    assert.deepEqual(effects, ['busy', 'precheck', 'model:reroll', 'write', 'idle']);
+    assert.equal(parseLines(readSaved().raw)[0].name, '主线');
+});
+
+test('closing the line switch while memory precheck waits prevents manual generation from starting', async () => {
+    let releasePrecheck;
+    const pending = new Promise(resolve => { releasePrecheck = resolve; });
+    const { feature, settings, effects, toasts } = manualLinesSwitchFixture({ linesEnabled: true, precheck: () => pending });
+
+    const task = feature.actions.advance();
+    assert.deepEqual(effects, ['busy', 'precheck']);
+    settings.linesEnabled = false;
+    releasePrecheck({ proceed: true });
+    await task;
+
+    assert.deepEqual(effects, ['busy', 'precheck', 'idle']);
+    assert.deepEqual(toasts, ['请先开启线功能']);
+});
+
+for (const silent of [false, true]) {
+    test(`closing the line switch while ${silent ? 'automatic' : 'manual'} generation draws tickets prevents model dispatch`, async () => {
+        let releaseTickets, startTickets;
+        const drawn = new Promise(resolve => { releaseTickets = resolve; });
+        const drawing = new Promise(resolve => { startTickets = resolve; });
+        const { feature, settings, effects, toasts } = manualLinesSwitchFixture({
+            linesEnabled: true,
+            draw: () => { startTickets(); return drawn; },
+        });
+        const task = silent ? feature.generation.run(true) : feature.actions.advance();
+        await drawing;
+        settings.linesEnabled = false;
+        releaseTickets(drawTickets(1, { seed: 'lines-switch-during-draw' }));
+        await task;
+
+        assert.deepEqual(effects, silent ? ['busy', 'idle'] : ['busy', 'precheck', 'idle']);
+        assert.deepEqual(toasts, silent ? [] : ['请先开启线功能']);
+    });
+}
+
 test('line preflight continues after the visible chat changes', async () => {
     const owners = createTaskOwnerManager(); let chatId = 'A'; let release; let generations = 0;
     const pending = new Promise(resolve => { release = resolve; });
@@ -1926,11 +2002,15 @@ test('lines local apply keeps a visible refresh failure and does not retry gener
     assert.match(panelBody, /内容已更新，界面刷新失败/);
 });
 
-test('automatic CMR coalesces to the newest captured floor with its original deadline', async () => {
-    let chat = [{ is_user: false, mes: '楼一' }]; let releaseFirst; const runs = [];
-    const runtime = { busy: false, start() { this.busy = true; }, finish() { this.busy = false; return true; }, abort() { this.busy = false; }, cache() {}, setHtml() {} };
+function queuedLineFixture() {
+    const chat = [], runs = [];
+    const settings = { linesEnabled: true, notifyMode: 'off' };
+    const runtime = createLinesRuntime();
+    const firstController = new AbortController();
+    let releaseFirst;
+    const first = new Promise(resolve => { releaseFirst = resolve; });
     const feature = createLinesFeature({
-        runtime, pluginEnabled: () => true, getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }),
+        runtime, pluginEnabled: () => true, getSettings: () => settings,
         getMode: () => 'turns', getInterval: () => 1, loadConfig: () => ({ url: 'u', key: 'k' }),
         chatId: () => 'queue-chat', boundaryEpoch: () => 1, chat: () => chat,
         contextSnapshot: () => ({ chat: chat.map(item => ({ ...item })) }),
@@ -1938,16 +2018,26 @@ test('automatic CMR coalesces to the newest captured floor with its original dea
         timeLimits: { totalMs: 10_000 },
         generation: { run: async (_silent, swipe, _travel, _preflight, _memory, trigger) => {
             runs.push({ swipe, trigger });
-            if (runs.length === 1) { runtime.busy = true; await new Promise(resolve => { releaseFirst = resolve; }); runtime.busy = false; }
+            if (runs.length === 1) {
+                runtime.start(firstController);
+                await first;
+                runtime.finish(firstController);
+            }
             return { status: 'updated' };
         } },
     });
-    feature.onMessageReceived({ messageId: 0, type: 'normal' }); await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
-    for (let turn = 0; !releaseFirst && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
-    chat = [...chat, { is_user: false, mes: '楼二' }];
-    feature.onMessageReceived({ messageId: 1, type: 'normal' }); await feature.onCharacterRendered({ messageId: 1, type: 'normal' });
-    chat = [...chat, { is_user: false, mes: '楼三' }];
-    feature.onMessageReceived({ messageId: 2, type: 'normal' }); await feature.onCharacterRendered({ messageId: 2, type: 'normal' });
+    return { feature, settings, runs, releaseFirst, addFloor: async mes => {
+        const messageId = chat.push({ is_user: false, mes }) - 1;
+        feature.onMessageReceived({ messageId, type: 'normal' });
+        await feature.onCharacterRendered({ messageId });
+    } };
+}
+
+test('automatic CMR coalesces to the newest captured floor with its original deadline', async () => {
+    const { feature, runs, releaseFirst, addFloor } = queuedLineFixture();
+    await addFloor('楼一');
+    await addFloor('楼二');
+    await addFloor('楼三');
     assert.equal(runs.length, 1, 'the second task does not run concurrently');
     releaseFirst(); await feature.awaitAutoAdvances();
     assert.equal(runs.length, 2, 'only the latest pending floor is retained');
@@ -1956,22 +2046,13 @@ test('automatic CMR coalesces to the newest captured floor with its original dea
     assert.ok(runs[1].trigger.deadlineAt <= Date.now() + 10_000, 'deadline was captured before dequeue');
 });
 
-test('aborting the active automatic CMR invalidates its pending tail before it can start', async () => {
-    let chat = [{ is_user: false, mes: '楼一' }]; let releaseFirst; let runs = 0;
-    const runtime = { busy: false, start() { this.busy = true; }, finish() { this.busy = false; return true; }, abort() { this.busy = false; }, cache() {}, setHtml() {} };
-    const feature = createLinesFeature({
-        runtime, pluginEnabled: () => true, getSettings: () => ({ linesEnabled: true, notifyMode: 'off' }),
-        getMode: () => 'turns', getInterval: () => 1, loadConfig: () => ({ url: 'u', key: 'k' }),
-        chatId: () => 'queue-abort-chat', boundaryEpoch: () => 1, chat: () => chat,
-        contextSnapshot: () => ({ chat: chat.map(item => ({ ...item })) }),
-        floorSignature: id => `${id}:${chat[id]?.mes || ''}`, swipeId: () => 0,
-        generation: { run: async () => { runs++; if (runs === 1) { runtime.busy = true; await new Promise(resolve => { releaseFirst = resolve; }); } return { status: 'updated' }; } },
-    });
-    feature.onMessageReceived({ messageId: 0, type: 'normal' }); await feature.onCharacterRendered({ messageId: 0, type: 'normal' });
-    for (let turn = 0; !releaseFirst && turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
-    chat = [...chat, { is_user: false, mes: '楼二' }];
-    feature.onMessageReceived({ messageId: 1, type: 'normal' }); await feature.onCharacterRendered({ messageId: 1, type: 'normal' });
-    feature.abortGeneration({ restore: false, reason: 'manual-abort' });
+for (const mode of ['abort', 'disable']) test(`automatic CMR skips a pending floor after ${mode}`, async () => {
+    const { feature, settings, runs, releaseFirst, addFloor } = queuedLineFixture();
+    await addFloor('楼一');
+    await addFloor('楼二');
+    assert.equal(runs.length, 1);
+    if (mode === 'abort') feature.abortGeneration({ restore: false, reason: 'manual-abort' });
+    else settings.linesEnabled = false;
     releaseFirst(); await feature.awaitAutoAdvances();
-    assert.equal(runs, 1, 'the invalidated queued floor must not start after abort');
+    assert.equal(runs.length, 1, 'the pending floor must not start');
 });

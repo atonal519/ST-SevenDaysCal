@@ -9,6 +9,7 @@ export function createLinesActions(env = {}) {
     let editToken = null;
     const refresh = () => { env.setCached?.(env.render?.(env.readRaw?.() || '')); env.refreshPanel?.(); env.refreshInline?.(); };
     const runExclusive = async (silent, options) => {
+        if (env.canGenerate?.(silent) === false) return;
         if (preparing || editing || env.isBusy?.()) { if (!silent) env.onBusy?.(); return; }
         const reservation = env.beginPreflight?.() || Object.freeze({ token: Symbol('lines-preflight') });
         preparing = reservation;
@@ -24,6 +25,7 @@ export function createLinesActions(env = {}) {
             if (!precheck) return;
             if (preparing !== reservation || env.preflightCurrent?.(reservation) === false) return { status: 'cancelled', reason: 'stale-preflight' };
             if (precheck.proceed === false) { preflightFailure = precheck.memoryError; return { status: 'failed', reason: 'memory-precheck' }; }
+            if (env.canGenerate?.(silent) === false) return;
             // Generation inherits this same absolute preparation deadline; do not restart it here.
             preparationDeadline.dispose();
             return await env.runGenerate?.(silent, options, null, reservation, precheck?.memorySnapshot ? { memorySnapshot: precheck.memorySnapshot, memoryOperationToken: reservation.token } : null);

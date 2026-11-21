@@ -45,7 +45,7 @@ test('explicit no-content reroll refreshes without filtering, writing, or removi
     const dashed = createDashedModule({
         keyDesc: () => 'dashed', readStore: () => saved,
         writeStore: () => { writes++; return true; }, removeStore: () => { removes++; },
-        getSettings: () => ({ dashedKeepCount: 15, dashedCleanupEnabled: true, notifyMode: 'full' }),
+        getSettings: () => ({ dashedEnabled: true, dashedKeepCount: 15, dashedCleanupEnabled: true, notifyMode: 'full' }),
         context: () => ({ name1: 'User', name2: 'Character' }), chatId: () => 'chat',
         loadConfig: () => ({ url: 'fixture', key: 'fixture' }),
         callApi: async (_ctx, _prompt, _cfg, _user, _char, _signal, _historyLimit, options) => {
@@ -66,6 +66,42 @@ test('explicit no-content reroll refreshes without filtering, writing, or removi
     assert.ok(toasts.includes('本次没有可用的新冷知识'));
 });
 
+test('the cold knowledge switch blocks manual creation and reroll, and quietly skips the line follow-up', async () => {
+    const settings = { dashedEnabled: false, notifyMode: 'off' };
+    const calls = [];
+    const toasts = [];
+    const saved = { ts: 1, items: [{ id: 'old', text: '旧冷知识。', locked: true }] };
+    const dashed = createDashedModule({
+        keyDesc: () => 'dashed', readStore: () => saved,
+        getSettings: () => settings, context: () => ({ name1: 'User', name2: 'Character' }), chatId: () => 'chat',
+        loadConfig: () => { calls.push('config'); return { url: 'fixture', key: 'fixture' }; },
+        writeStore: () => { calls.push('write'); return true; },
+        callApi: async () => { calls.push('model'); return '新冷知识。'; },
+        dialog: { selectMany: async () => {
+            calls.push('dialog');
+            settings.dashedEnabled = false;
+            return { values: ['world'] };
+        } },
+        escapeHtml: String, escapeAttr: String, toast: message => toasts.push(message),
+    });
+
+    await dashed.openDialog();
+    await dashed.run({ reroll: true });
+    await dashed.run();
+    assert.deepEqual(calls, []);
+    assert.deepEqual(toasts, ['请先开启冷知识功能', '请先开启冷知识功能']);
+    assert.match(dashed.panelHtml(), /旧冷知识/);
+
+    settings.dashedEnabled = true;
+    await dashed.openDialog();
+    assert.deepEqual(calls, ['dialog']);
+    assert.deepEqual(toasts, Array(3).fill('请先开启冷知识功能'));
+
+    settings.dashedEnabled = true;
+    assert.equal((await dashed.run({ reroll: true })).status, 'updated');
+    assert.deepEqual(calls, ['dialog', 'config', 'model', 'write']);
+});
+
 test('malformed reroll output fails without changing locked or unlocked rows', async () => {
     const saved = { ts: 9, items: [
         { id: 'locked', text: '锁定旧条目', createdAt: 1, locked: true },
@@ -76,7 +112,7 @@ test('malformed reroll output fails without changing locked or unlocked rows', a
     const dashed = createDashedModule({
         keyDesc: () => 'dashed', readStore: () => saved,
         writeStore: () => { writes++; return true; }, removeStore: () => { removes++; },
-        getSettings: () => ({ dashedKeepCount: 15, dashedCleanupEnabled: true, notifyMode: 'full' }),
+        getSettings: () => ({ dashedEnabled: true, dashedKeepCount: 15, dashedCleanupEnabled: true, notifyMode: 'full' }),
         context: () => ({ name1: 'User', name2: 'Character' }), chatId: () => 'chat',
         loadConfig: () => ({ url: 'fixture', key: 'fixture' }), callApi: async () => '{broken json}',
         filterRerollItems: items => { rerollFilters++; return items; },
@@ -99,7 +135,7 @@ test('dashed abort clears the old failure hint while preserving existing items',
         readStore: () => saved,
         writeStore: (_key, value) => { saved = value; return true; },
         removeStore: () => { saved = null; },
-        getSettings: () => ({ dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
+        getSettings: () => ({ dashedEnabled: true, dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
         context: () => ({ chatId: 'chat-A', name1: 'User', name2: 'Character' }),
         chatId: () => 'chat-A',
         loadConfig: () => ({}),
@@ -133,7 +169,7 @@ test('dashed displays locally applied items before the host save settles and ret
             return { ok: true, commitState: 'local-applied' };
         },
         removeStore: () => { saved = null; },
-        getSettings: () => ({ dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
+        getSettings: () => ({ dashedEnabled: true, dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
         context: () => ({ chatId: 'chat-B', name1: 'User', name2: 'Character' }),
         chatId: () => 'chat-B',
         loadConfig: () => ({ url: 'https://example.invalid', key: 'synthetic' }),
@@ -162,7 +198,7 @@ test('dashed keeps locally applied content and reports a refresh failure as UI-o
     const toasts = [];
     const dashed = createDashedModule({
         keyDesc: () => 'dashed', readStore: () => saved, writeStoreConfirmed: (_key, value) => { saved = value; return { ok: true, commitState: 'local-applied' }; },
-        getSettings: () => ({ dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
+        getSettings: () => ({ dashedEnabled: true, dashedKeepCount: 10, dashedCleanupEnabled: true, notifyMode: 'off' }),
         context: () => ({ chatId: 'chat-ui', name1: 'User', name2: 'Character' }), chatId: () => 'chat-ui',
         loadConfig: () => ({ url: 'fixture', key: 'fixture' }), callApi: async () => { apiCalls++; return '新增的冷知识内容。'; },
         refreshPanel: () => { refreshes++; if (saved) throw new Error('synthetic dashed UI failure'); }, refreshInline: () => {},

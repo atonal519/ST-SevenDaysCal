@@ -5,6 +5,7 @@ import { UI_REFRESH_FAILURE_TEXT } from '../ui/panel-failure.js';
 import { addCalendarDays } from '../calendar/date.js';
 import { ledgerContextThroughFloor } from './capture.js';
 import { ledgerEntryWithinCutoff } from './date.js';
+import { ledgerGenerationBlock } from './settings.js';
 export const JUDGE_FLOORS = 3;
 
 export function buildJudgePrompt(env, today, entries = env.listJudgeable?.() || [], maxFloor) {
@@ -73,6 +74,8 @@ export function createLedgerJudgeController(options = {}) {
             }
             if (!current(ctrl, owner, travel, floor)) return { status: 'cancelled', reason: 'source-stale-chat', reconcile, applied: [] };
             if (reconcile?.summary?.changed) { env.refreshInject?.(); env.refreshInline?.(true); env.render?.(); }
+            const blocked = ledgerGenerationBlock(env.settings?.(), env.toast, manual, travel);
+            if (blocked) return blocked;
             if (!env.charKey?.(ctx)) return { status: 'skipped', reason: 'no-character', reconcile, applied: [] };
             const judgeable = (env.listJudgeable?.(manual ? { includePending: true } : {}) || []).filter(entry => entry?.来源状态 !== '来源已删除' && (manual || entry?.来源状态 !== '待确认') && ledgerEntryWithinCutoff(entry, floor));
             if (reconcile?.summary) reconcile.summary.judgeable = judgeable.length;
