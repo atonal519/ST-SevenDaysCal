@@ -524,6 +524,7 @@ export function createLinesFeature(env = {}) {
         if (floor != null) swipeStore.clear(env.chatId?.(), floor);
     };
     const onGenerationStarted = ({ genType, dryRun } = {}) => {
+        injection?.refresh?.();
         if (!env.pluginEnabled?.() || dryRun) return;
         lifecycle.markGenerationStarted({ reroll: genType === 'regenerate', excludedAssistant: genType === 'regenerate' ? env.lastAssistant?.() : null });
     };

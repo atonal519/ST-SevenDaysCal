@@ -2996,7 +2996,7 @@ if (document.querySelector('#chat')) inlineFeature.init();
 // ─── 线·伏笔潜伏注入（隐形注入主楼 AI）────────────────────────────────────────
 // 把当前视角的活跃线（跳过终态 stage）以 SYSTEM 角色注入聊天上下文（IN_CHAT + depth），
 // 让主楼 AI「心里有数」、把伏笔当暗流自然呈现；聊天记录里不显示。默认关（opt-in）——
-// 改 AI 行为且增加 token。刷新时机跟内联块同步（见 sync/backfill + 开关 handler）。
+// 改 AI 行为且增加 token。生成前从当前存档补回酒馆重建聊天时清掉的注入。
 const LINES_INJECT_KEY   = 'sp_lines_latent';
 // 重设潜伏注入。读当前视角活跃线；关闭或无活跃线时清空。幂等，可随处多调。
 function refreshLinesInjection() {

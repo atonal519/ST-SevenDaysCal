@@ -9,7 +9,7 @@ import { createLinesFeature } from './feature.js';
 import { createLinesRuntime } from './runtime.js';
 import { createTaskOwnerManager } from '../../runtime/task-owner.js';
 import { createLinesLifecycle } from './lifecycle.js';
-import { createLinesInjectionController } from './injection.js';
+import { createLinesInjectionController, LINES_INJECT_KEY } from './injection.js';
 import { createSwipeLinesStore } from './swipe-store.js';
 import { createLinesActions } from './actions.js';
 import { mergePinned, editLineDescription, editLineFields } from './mutations.js';
@@ -1118,6 +1118,35 @@ test('injection excludes terminal lines and preserves the hidden-line contract',
     disabled.refresh();
     assert.equal(calls.at(-1)[1], '', 'the existing injection switch still clears the prompt');
 });
+
+test('host generation restores the current line injection after the prompt registry is cleared', () => {
+    const prompts = new Map();
+    const settings = { linesEnabled: true, linesInject: true };
+    let raw = '<storylines_widget>\nLine: 初次回信|推进|起线|今晚|world|false|false\nDesc: 港口来信\nNext: 看回信\n</storylines_widget>';
+    const feature = createLinesFeature({
+        pluginEnabled: () => true,
+        injectionEnv: {
+            context: { setExtensionPrompt: (key, text) => prompts.set(key, text) },
+            enabled: () => true,
+            settings: () => settings,
+            readRaw: () => raw,
+        },
+    });
+    feature.injection.refresh();
+    assert.match(prompts.get(LINES_INJECT_KEY), /初次回信/);
+
+    raw = raw.replace('初次回信', '灯塔回信');
+    for (const dryRun of [false, true]) {
+        prompts.clear();
+        feature.onGenerationStarted({ genType: 'normal', dryRun });
+        assert.match(prompts.get(LINES_INJECT_KEY) || '', /灯塔回信/);
+    }
+
+    settings.linesInject = false;
+    feature.onGenerationStarted({ genType: 'normal' });
+    assert.equal(prompts.get(LINES_INJECT_KEY), '');
+});
+
 test('panel and inline production render contain no level beads', () => {
     const feature = createLinesFeature({
         getSettings: () => ({ linesInlineEnabled: true }), stageColors: { 起线: '#123456' },
