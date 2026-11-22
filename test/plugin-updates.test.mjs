@@ -120,7 +120,7 @@ test('版本状态与公告共用紧凑控件', () => {
 test('custom弹窗挂载DOM内容、确认返回值并清理原管理器订阅', async () => {
   let overlay, subscriptions = 0, removed = 0, mounted;
   class Query {
-    constructor() { this[0] = { appendChild: node => { mounted = node; } }; this.children = new Map(); this.handlers = {}; }
+    constructor() { this[0] = Object.assign(new EventTarget(), { appendChild: node => { mounted = node; } }); this.children = new Map(); this.handlers = {}; }
     find(key) { if (!this.children.has(key)) this.children.set(key, new Query()); return this.children.get(key); }
     on(type, handler) { this.handlers[type] = handler; return this; }
     prop(name, value) { if (typeof name === 'object') { Object.assign(this[0], name); return this; } if (arguments.length === 1) return this[0][name]; this[0][name] = value; return this; }

@@ -1,4 +1,5 @@
 import { icon } from './utils/icons.js';
+import { bindOutsideClose } from './ui/panel-window.js';
 const OVERLAY_ID = 'sp-addon-dialog';
 
 function escapeHtml(value) {
@@ -44,6 +45,7 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
             if (activeCancel === externalClose) activeCancel = null;
             try { onClose?.(); }
             finally {
+                disposeOutsideClose();
                 unsubscribe();
                 $overlay.remove();
                 resolve(value);
@@ -51,8 +53,8 @@ export function createDialogManager({ $, mount, getRootClass = () => '', subscri
             return true;
         };
         const externalClose = () => finish(null);
+        const disposeOutsideClose = bindOutsideClose({ target: $overlay[0], panel: $overlay.find('.sp-dialog-sheet')[0], close: externalClose });
         activeCancel = externalClose;
-        $overlay.on('click', function (event) { if (event.target === this) externalClose(); });
         $overlay.on('keydown', event => {
             if (event.key !== 'Escape') return;
             event.preventDefault();

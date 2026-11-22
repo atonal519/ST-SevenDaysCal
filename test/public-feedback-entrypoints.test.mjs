@@ -7,7 +7,7 @@ class FakeQuery {
     constructor(selector = '', parent = null) {
         this.selector = selector;
         this.parent = parent;
-        this[0] = {};
+        this[0] = new EventTarget();
         this.children = new Map();
         this.handlers = new Map();
         this.attributes = {};
@@ -20,6 +20,7 @@ class FakeQuery {
     on(event, selector, handler) {
         if (typeof selector === 'function') handler = selector, selector = '';
         this.handlers.set(`${event} ${selector || ''}`.trim(), handler);
+        if (!selector) this[0].addEventListener(event, value => handler.call(this[0], value));
         return this;
     }
     handler(event, selector = '') { return this.handlers.get(`${event} ${selector}`.trim()); }
@@ -33,7 +34,7 @@ class FakeQuery {
     trigger() { return this; }
 }
 
-test('async picker separates load failure, legal empty result, and a selectable result', async () => {
+function dialogFixture() {
     let overlay;
     const $ = value => {
         if (value instanceof FakeQuery) return value;
@@ -42,6 +43,36 @@ test('async picker separates load failure, legal empty result, and a selectable 
         return new FakeQuery(String(value ?? ''));
     };
     const manager = createDialogManager({ $, mount: { appendChild() {} }, subscribeContextChange: () => () => {} });
+    return { manager, get overlay() { return overlay; } };
+}
+
+test('dialog text selection ending on the backdrop does not dismiss the editor', async () => {
+    const fixture = dialogFixture();
+    const input = { tagName: 'INPUT', value: 'https://fixture.invalid/v1' };
+    let closes = 0;
+    const pending = fixture.manager.custom({ content: input, submit: () => true, onClose: () => closes++ });
+    const backdrop = fixture.overlay[0];
+    const panel = fixture.overlay.find('.sp-dialog-sheet')[0];
+    const emit = (type, path, clientX) => {
+        const event = new Event(type);
+        Object.defineProperty(event, 'target', { value: path[0] });
+        Object.assign(event, { button: 0, pointerId: 1, clientX, clientY: 20, composedPath: () => path });
+        backdrop.dispatchEvent(event);
+    };
+
+    emit('pointerdown', [input, panel, backdrop], 120);
+    emit('pointerup', [backdrop], 20);
+    emit('click', [backdrop], 20);
+    assert.equal(closes, 0, 'the common click target is the backdrop even though the press began in an input');
+
+    for (const type of ['pointerdown', 'pointerup', 'click']) emit(type, [backdrop], 20);
+    assert.equal(await pending, null);
+    assert.equal(closes, 1, 'a separate click entirely on the backdrop still closes');
+});
+
+test('async picker separates load failure, legal empty result, and a selectable result', async () => {
+    const fixture = dialogFixture();
+    const { manager } = fixture;
     const waitForLoad = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
     const failed = manager.selectOneAsync({
@@ -50,25 +81,25 @@ test('async picker separates load failure, legal empty result, and a selectable 
         loadChoices: async () => { throw Object.assign(new Error('raw secret response body'), { code: 'config-missing' }); },
     });
     await waitForLoad();
-    const failedBody = overlay.find('.sp-dialog-async-body').html();
+    const failedBody = fixture.overlay.find('.sp-dialog-async-body').html();
     assert.match(failedBody, /请先填写自定义 API 的 URL 和 Key/);
     assert.doesNotMatch(failedBody, /没有得到可用方向|raw secret response body/);
-    assert.equal(overlay.find('.sp-dialog-input-error').html(), '');
-    overlay.find('.sp-dialog-cancel').handler('click')();
+    assert.equal(fixture.overlay.find('.sp-dialog-input-error').html(), '');
+    fixture.overlay.find('.sp-dialog-cancel').handler('click')();
     assert.equal(await failed, null);
 
     const empty = manager.selectOneAsync({ emptyText: '没有得到可用方向，请刷新重试', loadChoices: async () => [] });
     await waitForLoad();
-    assert.match(overlay.find('.sp-dialog-async-body').html(), /没有得到可用方向，请刷新重试/);
-    overlay.find('.sp-dialog-cancel').handler('click')();
+    assert.match(fixture.overlay.find('.sp-dialog-async-body').html(), /没有得到可用方向，请刷新重试/);
+    fixture.overlay.find('.sp-dialog-cancel').handler('click')();
     assert.equal(await empty, null);
 
     const valid = manager.selectOneAsync({ loadChoices: async () => [{ value: 'direction-a', label: '方向 A' }] });
     await waitForLoad();
-    assert.match(overlay.find('.sp-dialog-async-body').html(), /方向 A/);
-    const choose = overlay.handler('click', '.sp-dialog-single-option');
+    assert.match(fixture.overlay.find('.sp-dialog-async-body').html(), /方向 A/);
+    const choose = fixture.overlay.handler('click', '.sp-dialog-single-option');
     choose.call({ attributes: { 'data-dialog-value': 'direction-a' } });
-    overlay.find('.sp-dialog-submit').handler('click')();
+    fixture.overlay.find('.sp-dialog-submit').handler('click')();
     assert.equal(await valid, 'direction-a');
 });
 
