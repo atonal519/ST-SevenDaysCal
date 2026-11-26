@@ -82,6 +82,7 @@ export function createSpaceFeature(env = {}) {
         renderFailure();
     };
     const onChatChanged = ({ enabled = true } = {}) => {
+        chat.abort('chat-changed');
         chatRevision += 1;
         failureNotes.clearAll(); renderFailure();
         ui.clearWidgets();

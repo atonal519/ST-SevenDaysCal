@@ -197,7 +197,7 @@ export async function postChatCompletion(options = {}) {
     }
 }
 
-async function postChatCompletionCore({ cfg, messages, temperature, signal: inputSignal = null, userName = '', charName = '', allowEmptyOutput = false, diagnosticLifecycle = null, diagnosticTraceBase = null } = {}) {
+async function postChatCompletionCore({ cfg, messages, temperature, signal: inputSignal = null, userName = '', charName = '', allowEmptyOutput = false, diagnosticLifecycle = null, diagnosticTraceBase = null, redactDiagnosticImages = false } = {}) {
     const signal = normalizeAbortSignal(inputSignal);
     throwIfPreAborted(signal);
     // 总开关硬闸：插件关闭时挡住一切生成（手动 + 后台判定），防任何路径漏网。tag 供调用方识别、静默处理。
@@ -218,8 +218,11 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
     messages = si >= 0
         ? messages.map((m, idx) => idx === si ? { ...m, content: prependProcessingPrompt(m.content, requestPrefix) } : m)
         : [{ role: 'system', content: requestPrefix }, ...messages];
+    const diagnosticMessages = redactDiagnosticImages ? messages.map(message => Array.isArray(message.content)
+        ? { ...message, content: message.content.map(part => part?.type === 'image_url' ? { type: 'text', text: '【头像图像未写入诊断】' } : part) }
+        : message) : messages;
     // 调试面板「🐛 AI 输入」的数据源：记在共用提示词注入之后，展示真实请求。
-    _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages });
+    _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages: diagnosticMessages });
     const body = {
         chat_completion_source: 'openai',
         reverse_proxy         : normalizeApiUrl(cfg.url),
@@ -258,7 +261,7 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
         requestId: diagnosticTraceBase?.requestId,
         module: diagnosticTraceBase?.module || 'api',
         model: body.model,
-        messages,
+        messages: diagnosticMessages,
         parameters: {
             stream: body.stream === true,
             ...(Object.hasOwn(body, 'max_tokens') ? { maxTokens: body.max_tokens } : {}),
@@ -268,7 +271,7 @@ async function postChatCompletionCore({ cfg, messages, temperature, signal: inpu
         },
     });
     // 构画不指定输出上限；上游可能仍有自己的硬限制或默认长度。
-    _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages, outputLimit: null, outputLimitOmitted: true });
+    _bridge.setLastDebugPayload({ model: cfg.model || 'gpt-4o-mini', messages: diagnosticMessages, outputLimit: null, outputLimitOmitted: true });
 
     // 全生命周期超时：内部 AbortController 同时受外部 signal 与定时器控制，
     // 覆盖建连 + 非流式 JSON 读取 + 流式 SSE 读取。超时转成明确报错而非静默卡死。

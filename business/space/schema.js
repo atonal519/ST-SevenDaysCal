@@ -1,6 +1,7 @@
 import { normalizeOutlineResponse } from '../outline/schema.js';
 import { parseLineCard } from '../lines/schema.js';
 import { firstPointEventBlock, isCompletePointEvent, parsePointEventRecord, pointEventSignatures } from '../point/parse.js';
+import { normalizeSpaceQianQianJieEvidence } from './qianqianjie.js';
 
 export const spacePageId = message => message?.pageId === '2' ? '2' : '1';
 
@@ -37,6 +38,9 @@ export function appendSpaceAssistant(history, content, context = null) {
         if (normalized) savedContent = normalized;
     }
     const message = { role: 'assistant', content: savedContent, ...(context?.pageId ? { pageId: context.pageId } : {}) };
+    const qqjEvidence = normalizeSpaceQianQianJieEvidence(context?.qqjEvidence);
+    if (qqjEvidence) message.qqjEvidence = qqjEvidence;
+    else if (typeof context?.qqjEvidenceRef === 'string' && context.qqjEvidenceRef) message.qqjEvidenceRef = context.qqjEvidenceRef;
     if (Array.isArray(context?.pointBaselines)) message.pointBaselines = context.pointBaselines;
     if (Array.isArray(context?.lineBaselines)) message.lineBaselines = context.lineBaselines;
     // 预期卡型随 assistant 历史保存，刷新或重绘仍按原请求校验；旧历史缺字段时保持宽松兼容。

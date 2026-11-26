@@ -133,6 +133,22 @@ test('the first string system gets the prefix while multimodal and later systems
     }
 });
 
+test('an explicitly requested avatar reaches the model without retaining image bytes in diagnostics', async t => {
+    const { registerChatStorageContext, getChatDiagnostics } = await import('../runtime/chat-storage.js');
+    const chat = { chatId: 'avatar-fixture', chat: [{ mes: 'fixture source' }], chatMetadata: { 'sp-store': { version: 1, data: {} } } };
+    registerChatStorageContext(() => chat);
+    t.after(() => { registerChatStorageContext(() => null); client.bindApiClient({ setLastDebugPayload() {} }); });
+    let displayed;
+    client.bindApiClient({ setLastDebugPayload: value => { displayed = value; } });
+    const avatar = { type: 'image_url', image_url: { url: 'data:image/png;base64,ZmFrZQ==' } };
+    const messages = [{ role: 'user', content: [{ type: 'text', text: '看看头像' }, avatar] }];
+    await client.postChatCompletion({ cfg, messages, diagnosticModule: 'space', redactDiagnosticImages: true });
+    assert.deepEqual(requests.at(-1).messages.at(-1).content, messages[0].content);
+    assert.match(JSON.stringify(displayed), /头像图像未写入诊断/);
+    assert.match(JSON.stringify(getChatDiagnostics()[0].attempts.space.messages), /头像图像未写入诊断/);
+    assert.doesNotMatch(JSON.stringify([displayed, chat.chatMetadata]), /ZmFrZQ/);
+});
+
 test('JSON tasks retain machine instructions, quoted expressions and the exact returned structure', async () => {
     apiSettings.setProcessingPrompt('JSON_RULE');
     const messages = [{ role: 'system', content: '只返回JSON，缺失值固定为未知。' }, { role: 'user', content: '原文引用：没有证据表明其已离开，不代表他仍在场。' }];

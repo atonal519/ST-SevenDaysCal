@@ -90,8 +90,12 @@ function moduleHasContent(id, value) {
     });
 }
 
-function stripSpaceNoteLinks(value) {
-    for (const message of normalizeSpaceHistory(value)) delete message.coordinateNote;
+function stripSpaceLocalReferences(value) {
+    for (const message of normalizeSpaceHistory(value)) {
+        delete message.coordinateNote;
+        delete message.qqjEvidence;
+        delete message.qqjEvidenceRef;
+    }
     return value;
 }
 
@@ -105,7 +109,7 @@ function moduleFromRoots(id, roots = {}) {
     for (const [key, value] of Object.entries(data)) {
         if (!KEY_MATCHERS[id]?.(key)) continue;
         const entry = clone(decodeStoreEntry(key, value));
-        entries[key] = id === 'space' ? stripSpaceNoteLinks(entry) : entry;
+        entries[key] = id === 'space' ? stripSpaceLocalReferences(entry) : entry;
     }
     return { entries };
 }
@@ -187,7 +191,7 @@ export function parsePortableChatPackage(text, { maxBytes = PORTABLE_CHAT_MAX_BY
 }
 
 export function markImportedSpaceHistory(value) {
-    const messages = stripSpaceNoteLinks(clone(Array.isArray(value) ? value : value?.messages || [])).map(message => {
+    const messages = stripSpaceLocalReferences(clone(Array.isArray(value) ? value : value?.messages || [])).map(message => {
         if (message?.role !== 'assistant' || (!SPACE_WIDGET_RX.test(String(message.content || ''))
             && !(message.expectedWidgetKind === 'outline_widget' && normalizeOutlineResponse(message.content)))) return message;
         return { ...message, portableReadonly: true };

@@ -392,7 +392,7 @@ test('cancelled direct QQJ read propagates AbortError rather than empty material
     await assert.rejects(read({ query: '旧事' }), error => error.name === 'AbortError');
 });
 
-test('Space sends the opening question and continues the discussion when its memory source cannot be read', async () => {
+test('Space sends ordinary discussion without reading the globally selected QQJ memory source', async () => {
     const host = { chatId: 'opening', name1: '用户', name2: '角色', chat: [] };
     const settings = { useQianQianJie: true };
     let memoryStatus = 'not-ready';
@@ -435,13 +435,12 @@ test('Space sends the opening question and continues the discussion when its mem
     assert.match(requests[1][0].content, /灯塔上的钟停在午夜/);
     assert.ok(requests[1].some(message => message.content === '可以从灯塔说起。'));
     assert.equal(requests[1].at(-1).content, followUp);
-    assert.equal(memoryReads, 2);
+    assert.equal(memoryReads, 0);
 
     memoryStatus = 'stale';
-    const stale = await space.chat.send('再聊聊地点');
-    assert.equal(stale.status, 'failed');
-    assert.equal(stale.error.diagnosticCode, 'memory-stale');
-    assert.equal(requests.length, 2);
+    assert.equal((await space.chat.send('再聊聊地点')).status, 'updated');
+    assert.equal(requests.length, 3);
+    assert.equal(memoryReads, 0);
 });
 
 

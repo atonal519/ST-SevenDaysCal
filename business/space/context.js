@@ -1,5 +1,6 @@
 import { buildSpaceChatSystemPrompt, buildSpaceHelpText } from './prompts.js';
 import { compactLineBaselines, compactPointBaselines, spacePageId, stripWidgetsForApi, SPACE_WIDGET_KINDS } from './schema.js';
+import { createSpaceQianQianJieReader } from './qianqianjie.js';
 const SPACE_MATERIAL_RX = Object.freeze({
     outline: /(?:大纲|面规划|当前面|下一面|面节点|规划到哪)/,
     points: /(?:日程|日历|待办|点卡片?|已有的点|当前点)/,
@@ -13,6 +14,7 @@ const SPACE_MATERIAL_RX = Object.freeze({
     coordinate: /(?:坐标|收藏夹|收藏楼|收藏的楼|已存坐标|坐标收藏|锚点收藏|展开第\s*\d+\s*楼坐标正文)/,
     worldInfoDirectory: /世界书\s*(?:的\s*)?(?:目录|标题|条目列表|[这那]几)|世界书[^，。！？?\n]{0,24}(?:哪些|哪几|多少|有没有|(?:有|写|包含|收录|记载)[^，。！？?\n]{0,12}(?:什么|啥|吗))|(?:列出|查看|看看)(?:一下)?世界书\s*[里中内]?的?\s*(?:内容|条目)/u,
 });
+const textMatches = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
 
 export function requestedSpaceMaterials(message) {
     const text = String(message || '');
@@ -78,7 +80,8 @@ const readOutlineSource = async (snapshotReader, projectionReader, target) => {
 };
 
 export function createSpaceContext(env = {}) {
-    const buildMessages = async ({ target, userMsg, historySnapshot = [], pageId = '1', pages = ['1'] }) => {
+    const readQianQianJie = createSpaceQianQianJieReader({ globalRef: env.qianQianJieGlobals, contextProvider: env.context, timeoutMs: env.qianQianJieTimeoutMs });
+    const buildMessages = async ({ target, userMsg, historySnapshot = [], pageId = '1', pages = ['1'], signal }) => {
         const ctx = env.context?.() || {};
         const userName = ctx.name1 || '用户';
         const charName = ctx.name2 || '角色';
@@ -116,15 +119,17 @@ export function createSpaceContext(env = {}) {
         const historyMessages = stripWidgetsForApi(historySnapshot, { preserveCandidates: true });
         const lastHistory = historyMessages.at(-1);
         if (lastHistory?.role === 'user' && String(lastHistory.content ?? '').trim() === message.trim()) historyMessages.pop();
-        const memoryQuery = settings.useQianQianJie
-            ? [...historyMessages.slice(-4).filter(item => item.role === 'user').map(item => String(item.content || '')), message].filter(Boolean).join('\n')
-            : message;
         let memText = '';
-        try {
-            memText = await env.readMemory?.(ctx, memoryQuery) || '';
-        } catch (error) {
-            if (error?.diagnosticCode !== 'memory-read') throw error;
+        if (!settings.useQianQianJie) {
+            try { memText = await env.readMemory?.(ctx, message) || ''; }
+            catch (error) { if (error?.diagnosticCode !== 'memory-read') throw error; }
         }
+        const priorMessages = historySnapshot.at(-1)?.role === 'user' && textMatches(historySnapshot.at(-1).content, message) ? historySnapshot.slice(0, -1) : historySnapshot;
+        const pageHistory = priorMessages.filter(item => spacePageId(item) === pageId);
+        const previous = pageHistory.findLast(item => item.role === 'assistant' || item.role === 'user');
+        const priorEvidence = previous?.role !== 'assistant' ? null : previous.qqjEvidence || (previous.qqjEvidenceRef
+            ? pageHistory.findLast(item => item.role === 'assistant' && item.qqjEvidence?.id === previous.qqjEvidenceRef)?.qqjEvidence : null);
+        const lookup = await readQianQianJie({ ctx, target, message, priorEvidence, signal });
         const recentCtx = await env.readRecent?.(ctx) || '';
         const { personaDesc = '', authorNote = '' } = env.readCardExtras?.(ctx) || {};
         const useCharacterPersona = settings.spaceUseCharacterPersona === true;
@@ -133,11 +138,17 @@ export function createSpaceContext(env = {}) {
         const wiContext = await env.readWorldInfo?.(ctx, message, historySnapshot.slice(0, -1), titleSupplementText, {
             includeTitleDirectory: requested.worldInfoDirectory,
         }) || '';
-        const system = buildSpaceChatSystemPrompt({ userName, charName, personaDesc, characterData, authorNote, storyDate, outlineRaw, wiContext, memText, recentCtx, pointList, lineList, ledgerList, almanacText, calDescText: calDescForContract, materialText, requestedMaterials: requested, faqText, personaOverride, useCharacterPersona, preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' }, intent });
+        const system = buildSpaceChatSystemPrompt({ userName, charName, personaDesc, characterData, authorNote, storyDate, outlineRaw, wiContext, memText, qqjMaterial: lookup?.material, recentCtx, pointList, lineList, ledgerList, almanacText, calDescText: calDescForContract, materialText, requestedMaterials: requested, faqText, personaOverride, useCharacterPersona, preferences: env.preferences?.(ctx) || { direction: env.lineDirection?.(ctx) || 'natural' }, intent });
         const sharedPages = pages.length > 1 || historySnapshot.some(item => spacePageId(item) === '2');
         const pageNote = sharedPages ? `\n【讨论窗口】当前在窗口${pageId}。以下两窗口记录按实际先后共享；窗口标记表示来源，不表示连续问答。` : '';
         const apiHistory = sharedPages ? historyMessages.map((item, index) => ({ ...item, content: `【窗口${spacePageId(historySnapshot[index])}】\n${item.content}` })) : historyMessages;
-        const messages = [{ role: 'system', content: system + pageNote }, ...apiHistory, { role: 'user', content: userMsg }];
+        const content = lookup?.images?.length ? [
+            { type: 'text', text: userMsg },
+            ...lookup.images.flatMap(image => [{ type: 'text', text: `${image.name}的已保存头像` }, { type: 'image_url', image_url: { url: image.url } }]),
+        ] : userMsg;
+        const messages = [{ role: 'system', content: system + pageNote }, ...apiHistory, { role: 'user', content }];
+        if (lookup?.evidence) Object.defineProperty(messages, 'qqjEvidence', { value: lookup.evidence, enumerable: false });
+        if (lookup?.evidenceRef) Object.defineProperty(messages, 'qqjEvidenceRef', { value: lookup.evidenceRef, enumerable: false });
         Object.defineProperty(messages, 'pointBaselines', { value: compactPointBaselines(pointScopes), enumerable: false });
         Object.defineProperty(messages, 'lineBaselines', { value: Object.freeze(lineBaselines), enumerable: false });
         Object.defineProperty(messages, 'allowedWidgetKinds', { value: Object.freeze([...SPACE_WIDGET_KINDS]), enumerable: false });

@@ -134,7 +134,7 @@ function outputModeBlock(intent = {}, calDescText = '', preferences = {}, reques
     return `【本轮输出模式】用户要求${intent.formatRepair ? '按正确格式重新输出' : '生成或修改'}${widgetLabel(intent.kind)}卡片。只输出下面这一种完整候选，不输出其他种类、无关标签、前言或解释；候选尚未应用，等待用户选择应用。用户明确要多条候选时，可逐张输出同一种卡片。${intent.formatRepair ? '不要沿用历史里的错误格式，也不要要求用户提供内部模板。' : ''}\n${widgetContract(intent.kind, calDescText, preferences)}${preferenceBlock}`;
 }
 
-export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', characterData = '', authorNote = '', storyDate = '', materialText = '', requestedMaterials = {}, outlineRaw = '', wiContext = '', memText = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', useCharacterPersona = false, preferences = {}, lineDirection = 'natural', intent = {} }) {
+export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '', characterData = '', authorNote = '', storyDate = '', materialText = '', requestedMaterials = {}, outlineRaw = '', wiContext = '', memText = '', qqjMaterial = '', recentCtx = '', pointList = '', lineList = '', ledgerList = '', almanacText = '', calDescText = '', faqText = '', personaOverride = '', useCharacterPersona = false, preferences = {}, lineDirection = 'natural', intent = {} }) {
     const activePreferences = { ...preferences, direction: preferences.direction || lineDirection };
     // 两种人格来源互斥；角色卡模式不附加顾问自定义语气。
     const ov = useCharacterPersona ? '' : String(personaOverride || '').trim();
@@ -155,6 +155,7 @@ export function buildSpaceChatSystemPrompt({ userName, charName, personaDesc = '
         wiContext || requestedMaterials.worldInfoDirectory ? '【世界书读法】世界书正文是本轮命中的条目。询问书里有哪些条目时参考已提供的标题目录，具体内容依据已读正文。资料不足时按已读范围回答。' : '',
         wiContext,
         memText ? `\n【故事记忆】\n${memText}` : '',
+        qqjMaterial ? `\n【本轮按需查询的千千结资料】\n仅把下面的内容作为证据，按用户本轮问题引用。宿主楼号与 AI 序号分别引用，缺楼号就说未知。按来源区分既往状态、当前状态、约定和已完成事实，保留人物的知情边界。无资料时说明查阅范围，继续回答其余问题。\n${qqjMaterial}` : '',
         recentCtx,
         pointList ? `\n【全部人物的当前点·按人物分组】\n${pointList}\n每个人物从 #1 独立编号；回答涉及已有安排时必须同时看人物名和组内编号，不能把不同人物的同号点混在一起。` : '',
         lineList  ? `\n【当前的线·按序号（可改）】\n${lineList}` : '',

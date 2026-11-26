@@ -42,7 +42,9 @@ export function createSpaceChat(env = {}) {
                 pages: repository.pages(),
                 userMsg,
                 historySnapshot: [...history()],
+                signal: controller.signal,
             });
+            if (abortController !== controller || controller.signal.aborted) return Object.freeze({ status: 'cancelled' });
             const reply = await env.postCompletion?.({
                 config,
                 messages,
@@ -50,6 +52,7 @@ export function createSpaceChat(env = {}) {
                 signal: controller.signal,
                 diagnosticModule: 'space',
                 diagnosticSink: diagnostic.sink,
+                redactDiagnosticImages: Array.isArray(messages?.at(-1)?.content),
             });
             if (abortController !== controller || controller.signal.aborted) {
                 return Object.freeze({ status: 'cancelled' });
@@ -57,6 +60,8 @@ export function createSpaceChat(env = {}) {
             diagnostic.accepted({ phase: 'response' });
             const widgetContext = {
                 pageId,
+                ...(messages?.qqjEvidence ? { qqjEvidence: messages.qqjEvidence } : {}),
+                ...(messages?.qqjEvidenceRef ? { qqjEvidenceRef: messages.qqjEvidenceRef } : {}),
                 ...(Array.isArray(messages?.pointBaselines) ? { pointBaselines: messages.pointBaselines } : {}),
                 ...(Array.isArray(messages?.lineBaselines) ? { lineBaselines: messages.lineBaselines } : {}),
                 ...(messages?.expectedWidgetKind ? { expectedWidgetKind: messages.expectedWidgetKind } : {}),
