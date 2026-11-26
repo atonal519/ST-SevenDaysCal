@@ -36,7 +36,7 @@
 
 `ui/panel-window.js` 与 `index.js` 的视口同步共同管理位置。桌面使用浏览器可视范围，支持拖动、缩放及位置尺寸恢复。手机跟随可视视口变化，页面实际滚动时补偿根元素偏移。
 
-手机Safari与iPhone Firefox文本编辑期间保留主窗几何，主动打开、旋转与独立弹窗继续同步。原Safari反馈者已确认4.2.2解决问题；另一位用户更正为Firefox，本地已补FxiOS匹配，实机效果待确认。仓库回归与Chromium尺寸模拟分别记录；iPad Safari实机键盘行为仍待验证。
+iPhone/iPod 的 Safari 与 Firefox 文本编辑期间保留主窗几何，主动打开、旋转与独立弹窗继续同步。原 Safari 反馈者已确认 4.2.2 解决问题；Firefox 的 FxiOS 匹配已随 4.2.3 发布，实机效果待确认。Chrome iOS、Android 和 iPad 宽屏沿原流程。仓库回归与 Chromium 尺寸模拟分别记录；iPad Safari 实机键盘行为仍待验证。
 
 ## 楼内挂载与事件
 
